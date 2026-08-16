@@ -368,6 +368,9 @@ pub fn lowerCall(
 
     const resolved = (try self.resolveDeclared(call.callee, call.span, call.origin)) orelse
         return null;
+    if (self.analyzer.alias_names.get(resolved)) |alias_index| {
+        return lowerAliasCall(self, call, alias_index);
+    }
     if (self.analyzer.struct_names.get(resolved)) |layout_index| {
         return construct.lowerConstruct(self, call.arguments, call.span, layout_index);
     }
@@ -1007,6 +1010,14 @@ pub fn lowerMethod(
 ) Error!?Typed {
     switch (try methodNamespace(self, method)) {
         .resolved => |resolved| {
+            if (self.analyzer.alias_names.get(resolved)) |alias_index| {
+                const call: ast.Call = .{
+                    .callee = method.name,
+                    .arguments = method.arguments,
+                    .span = method.span,
+                };
+                return lowerAliasCall(self, call, alias_index);
+            }
             if (self.analyzer.struct_names.get(resolved)) |layout_index| {
                 return construct.lowerConstruct(self, method.arguments, method.span, layout_index);
             }
@@ -1056,6 +1067,70 @@ pub fn lowerMethod(
     }
 }
 
+/// A type alias in a call-shaped expression.  Nominal construction and enum
+/// lookup use the original declaration table; scalar aliases use the same
+/// conversion lowering as their target.  Every other type remains a type,
+/// not a callable value, and receives a direct diagnostic.
+fn lowerAliasCall(
+    self: *FunctionBuilder,
+    call: ast.Call,
+    alias_index: u32,
+) Error!?Typed {
+    const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, call.span)) orelse
+        return null;
+    return switch (target) {
+        .strukt => |layout| construct.lowerConstruct(self, call.arguments, call.span, layout),
+        .enumeration => |reference| construct.lowerEnumOfNumber(
+            self,
+            call.callee,
+            call.arguments,
+            call.span,
+            reference.index,
+        ),
+        .variant => |index| construct.failVariantAsCallee(self, call.callee, index, call.span),
+        .byte, .short, .int, .long, .half, .float, .double, .string => construct.lowerAliasConvert(self, call, target),
+        else => {
+            const declaration = self.analyzer.alias_decls.items[alias_index].declaration;
+            if (target == .heap) {
+                const heap = self.analyzer.heapOf(target).?;
+                switch (heap) {
+                    .list, .map, .array, .builder => {
+                        try self.fail(
+                            "luce.sema.call",
+                            call.span,
+                            "{s} is a type alias for {s}, not a callable value; construct it with new {s}",
+                            .{ declaration.name, try self.analyzer.typeName(target), declaration.name },
+                        );
+                    },
+                    .file => try self.fail(
+                        "luce.sema.call",
+                        call.span,
+                        "{s} is a type alias for file, not a callable value; open a file through std.files",
+                        .{declaration.name},
+                    ),
+                    .task => try self.fail(
+                        "luce.sema.call",
+                        call.span,
+                        "{s} is a type alias for {s}, not a callable value; spawn a function to create a task",
+                        .{ declaration.name, try self.analyzer.typeName(target) },
+                    ),
+                }
+                return null;
+            }
+            try self.fail(
+                "luce.sema.call",
+                call.span,
+                "{s} is a type alias for {s}, not a callable value",
+                .{
+                    declaration.name,
+                    try self.analyzer.typeName(target),
+                },
+            );
+            return null;
+        },
+    };
+}
+
 const NamespaceResolution = union(enum) {
     /// Not a namespace: lower as a method on a value.
     value,
@@ -1098,6 +1173,40 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     // one and not a namespace path (docs/ENUMS.md D3).  The same
     // shape as the imported-constant case below, one enum earlier.
     if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
+
+    // `Alias.member(...)` and `module.Alias.member(...)` use the
+    // declaration namespace of the alias target.  The alias itself never
+    // owns copied static/member declarations; rewriting the namespace here
+    // keeps one authoritative function/member table.
+    const namespace_written = joined[0 .. joined.len - method.name.len - 1];
+    const alias_key: ?[]const u8 = if (count == 1)
+        try naming.qualify(self.analyzer, self.prefix, namespace_written)
+    else if (naming.importsModule(self.analyzer, self.module, head))
+        try self.importedName(namespace_written)
+    else
+        null;
+    if (alias_key) |key| {
+        if (self.analyzer.alias_names.get(key)) |alias_index| {
+            const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, method.span)) orelse
+                return .reported;
+            const canonical = resolve.namespaceName(self.analyzer, target) orelse {
+                try self.fail(
+                    "luce.sema.call",
+                    method.span,
+                    "{s} is a type alias for {s}, which has no static members",
+                    .{ namespace_written, try self.analyzer.typeName(target) },
+                );
+                return .reported;
+            };
+            const member = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ canonical, method.name });
+            if (isNamespaceDeclaration(self, member)) {
+                return .{ .resolved = member };
+            }
+            try refusals.failNamespaceMember(self, namespace_written, method.name, member, method.span);
+            return .reported;
+        }
+    }
+
     const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
     if (self.analyzer.struct_names.contains(head_qualified) or
         self.analyzer.interface_names.contains(head_qualified) or
@@ -1123,6 +1232,7 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
             self.analyzer.interface_names.contains(key) or
             self.analyzer.enum_names.contains(key) or
             self.analyzer.variant_names.contains(key) or
+            self.analyzer.alias_names.contains(key) or
             self.analyzer.function_names.contains(key) or
             construct.variantMemberOfQualified(self, key) != null)
         {
@@ -1142,6 +1252,16 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     // the same refusal in expressions.zig.
     if (try refusals.failUnimportedNamespace(self, head, method.span)) return .reported;
     return .value;
+}
+
+fn isNamespaceDeclaration(self: *FunctionBuilder, qualified: []const u8) bool {
+    return self.analyzer.struct_names.contains(qualified) or
+        self.analyzer.interface_names.contains(qualified) or
+        self.analyzer.enum_names.contains(qualified) or
+        self.analyzer.variant_names.contains(qualified) or
+        self.analyzer.alias_names.contains(qualified) or
+        self.analyzer.function_names.contains(qualified) or
+        construct.variantMemberOfQualified(self, qualified) != null;
 }
 
 /// Builtin methods on values: strings, lists, arrays, maps, and

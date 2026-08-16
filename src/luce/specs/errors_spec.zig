@@ -3345,6 +3345,27 @@ test "luce.sema.private: a public alias cannot expose a private nominal type" {
     );
 }
 
+test "luce.sema.call: an alias is callable only when its target has constructor syntax" {
+    try expectSaying(
+        "alias Names = list(long)\n\nfunc main():\n    let values = Names()\n",
+        "luce.sema.call",
+        "construct it with new Names",
+    );
+    try expectSaying(
+        "alias Flag = bool\n\nfunc main():\n    let value = Flag(true)\n",
+        "luce.sema.call",
+        "Flag is a type alias for bool, not a callable value",
+    );
+}
+
+test "luce.sema.name: a bare alias is a type rather than a runtime value" {
+    try expectSaying(
+        "alias UserId = long\n\nfunc main():\n    let value = UserId\n",
+        "luce.sema.name",
+        "UserId is a type alias for long, not a value",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Names, declarations, reserved words — more paths
 // ---------------------------------------------------------------------------

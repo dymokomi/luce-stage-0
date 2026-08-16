@@ -108,6 +108,19 @@ pub fn resolveAlias(
     return target;
 }
 
+/// The declaration namespace carried by a resolved nominal type.  Aliases do
+/// not create a second namespace; expression sites rewrite through this name
+/// before looking up constructors, enum/union members, or static functions.
+/// Scalars and anonymous compound types have no declaration namespace.
+pub fn namespaceName(self: *Analyzer, target: Type) ?[]const u8 {
+    return switch (target) {
+        .strukt => |index| self.structs.items[index].name,
+        .enumeration => |reference| self.enums.items[reference.index].name,
+        .variant => |index| self.variants.items[index].name,
+        else => null,
+    };
+}
+
 /// The `?` that a container element may not carry.  Refused in v1
 /// (docs/FAILURE.md): `[1, none, none, 2]` would need a
 /// representation for an absent element that the containers do not

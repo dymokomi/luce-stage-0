@@ -20,7 +20,7 @@ test "scalar chains are interchangeable with their target at every boundary" {
         \\    return value else 0
         \\
         \\func main():
-        \\    let raw: long = 41
+        \\    let raw: long = UserId(41.4)
         \\    let named: UserId = identity(raw)
         \\    let back: long = named
         \\    print(string(present(back) + 1))
@@ -96,6 +96,9 @@ test "forward aliases name structs enums unions and interfaces" {
         \\
         \\struct Button: View:
         \\    offset: long
+        \\    static func shifted(offset: long) -> Button:
+        \\        return Button(offset = offset)
+        \\
         \\    func render(value: long) -> long:
         \\        return value + self.offset
         \\
@@ -118,10 +121,34 @@ test "forward aliases name structs enums unions and interfaces" {
         \\            return len(message)
         \\
         \\func main():
-        \\    let button: Item = Button(offset = 1)
-        \\    let method: Kind = Method.get
-        \\    assert(method == Method.get)
-        \\    print(string(draw(button, read(Outcome.okay(value = 41)))))
+        \\    let shift: func(long) -> Item = Item.shifted
+        \\    let make_answer: func(long) -> Answer = Answer.okay
+        \\    let button: Item = shift(1)
+        \\    let method: Kind = Kind.get
+        \\    assert(method == Kind.get)
+        \\    print(string(draw(button, read(make_answer(41)))))
+        \\
+    , "42\n");
+}
+
+test "aliases are transparent while file-scope constants fold" {
+    try agree.prints(
+        \\alias Count = long
+        \\alias Position = Point
+        \\alias Choice = Method
+        \\
+        \\struct Point:
+        \\    x: Count
+        \\
+        \\enum Method:
+        \\    first
+        \\    answer = 42
+        \\
+        \\const ORIGIN: Position = Position(x = Count(41.4))
+        \\const SELECTED: Choice = Choice.answer
+        \\
+        \\func main():
+        \\    print(string(ORIGIN.x + long(SELECTED) - 41))
         \\
     , "42\n");
 }
@@ -199,8 +226,9 @@ test "a public alias may re-export an imported nominal type" {
         \\import facade
         \\
         \\func main():
-        \\    let user: facade.User = facade.answer()
-        \\    assert(user.id == 42)
+        \\    let first: facade.User = facade.answer()
+        \\    let second = facade.User(id = 42)
+        \\    assert(first.id == second.id)
         \\
     , &.{ models, facade });
     defer program.deinit();

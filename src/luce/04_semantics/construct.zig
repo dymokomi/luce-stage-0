@@ -478,6 +478,29 @@ pub fn lowerEnumOfNumber(
 }
 
 pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
+    return lowerConvertAs(self, call, conversionNamed(call.callee).?);
+}
+
+/// A scalar alias used in constructor position.  The written alias stays in
+/// diagnostics, while conversion semantics are selected by the resolved
+/// target.  This is the expression-side half of alias transparency:
+/// `alias Id = long; Id(value)` behaves exactly like `long(value)`.
+pub fn lowerAliasConvert(self: *FunctionBuilder, call: ast.Call, target: Type) Error!?Typed {
+    const produces: types.Builtin = switch (target) {
+        .byte => .byte,
+        .short => .short,
+        .int => .int,
+        .long => .long,
+        .half => .half,
+        .float => .float,
+        .double => .double,
+        .string => .string,
+        else => unreachable, // the alias-call dispatcher admits only these
+    };
+    return lowerConvertAs(self, call, produces);
+}
+
+fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builtin) Error!?Typed {
     // One slot, named `value` like the reference spells it
     // (docs/ARGS.md D1: names are optional everywhere, so the
     // constructors take theirs too).
@@ -485,7 +508,6 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
         try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
         return null;
     }
-    const produces = conversionNamed(call.callee).?;
     // **A constructor is a written-down type, so its argument lands
     // on it.**  Without this `double(0.1)` reads `0.1` at binary32
     // and then widens the wrong number, which is the same
@@ -519,7 +541,7 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
     // different feature, refused here by being absent.
     if (value.value_type == .variant) {
         if (produces == .string) return lowerVariantName(self, value, call.span);
-        return failConvert(self, call, value);
+        return failConvert(self, call, value, produces);
     }
     // `string(f)` is the function's **name** (docs/FUNCTIONS.md
     // D3) — the enum arm above, one type later, and the same act:
@@ -561,9 +583,9 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
                     );
                     return null;
                 }
-                return failConvert(self, call, value);
+                return failConvert(self, call, value, produces);
             },
-            else => return failConvert(self, call, value),
+            else => return failConvert(self, call, value, produces),
         }
         // Fresh bytes nothing parked: the statement's end reclaims
         // them unless a place adopts them (docs/STRINGS.md).
@@ -601,7 +623,7 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
     if (value.value_type.eql(target)) return value;
-    if (!value.value_type.isNumeric()) return failConvert(self, call, value);
+    if (!value.value_type.isNumeric()) return failConvert(self, call, value, produces);
     return .{
         .node = try recorder.recordCallNode(
             self,
@@ -730,12 +752,17 @@ fn lowerVariantName(self: *FunctionBuilder, value: Typed, span: Span) Error!?Typ
 /// It used to be spelled per constructor as "long() converts double,
 /// not X" — which stopped being true the moment `long(long)` was an
 /// identity and `long` accepted both numeric types.
-fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
+fn failConvert(
+    self: *FunctionBuilder,
+    call: ast.Call,
+    value: Typed,
+    produces: types.Builtin,
+) Error!?Typed {
     // A family, not a list of widths.  There are four arithmetic
     // types now and there will be seven (docs/TYPES.md §11), and
     // a message that enumerates them is a message that goes stale
     // every time the ladder grows a rung.
-    const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
+    const takes: []const u8 = if (produces == .string)
         "a number, a bool, a string, an enum, a union member, or a function value"
     else
         "a number";

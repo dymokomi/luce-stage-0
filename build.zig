@@ -420,6 +420,8 @@ pub fn build(b: *std.Build) void {
             "specs.errors_spec.test.luce.sema.reserved: an alias",
             "specs.errors_spec.test.luce.sema.duplicate: aliases",
             "specs.errors_spec.test.luce.sema.private: a public alias",
+            "specs.errors_spec.test.luce.sema.call: an alias",
+            "specs.errors_spec.test.luce.sema.name: a bare alias",
             "specs.modules_spec.test.a private type alias",
         },
         .test_runner = progress_test_runner,

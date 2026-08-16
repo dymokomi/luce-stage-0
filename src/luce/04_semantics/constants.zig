@@ -782,6 +782,34 @@ pub fn fold(
                 return .{ .value = .{ .long = codepoint }, .value_type = .long };
             }
             const qualified = try naming.qualify(analyzer, analyzer.modules[module].prefix, call.callee);
+            if (analyzer.alias_names.get(qualified)) |alias_index| {
+                const target = (try resolve.resolveAlias(analyzer, module, alias_index, call.span)) orelse
+                    return null;
+                switch (target) {
+                    .strukt => |layout_index| return foldConstruct(analyzer, module, call.arguments, call.span, layout_index),
+                    .enumeration => |reference| {
+                        return constantError(
+                            analyzer,
+                            call.span,
+                            "{s}(…) is a runtime lookup that answers {s}?; name a constant member through {s}.member",
+                            .{ call.callee, analyzer.enums.items[reference.index].name, call.callee },
+                        );
+                    },
+                    .byte, .short, .int, .long, .half, .float, .double, .string => {
+                        if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
+                            return constantError(analyzer, call.span, "{s}(value) takes one argument", .{call.callee});
+                        }
+                        const operand = (try fold(analyzer, module, call.arguments[0].value, null)) orelse return null;
+                        return foldConvertAs(analyzer, call, operand, builtinForScalar(target));
+                    },
+                    else => return constantError(
+                        analyzer,
+                        call.span,
+                        "{s} is a type alias for {s}, not a constant constructor",
+                        .{ call.callee, try analyzer.typeName(target) },
+                    ),
+                }
+            }
             if (analyzer.struct_names.get(qualified)) |layout_index| {
                 return foldConstruct(analyzer, module, call.arguments, call.span, layout_index);
             }
@@ -813,6 +841,31 @@ pub fn fold(
                 const head = method.target.name.text;
                 if (naming.importsModule(analyzer, module, head)) {
                     const joined = try naming.importedName(analyzer, module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, method.name }));
+                    if (analyzer.alias_names.get(joined)) |alias_index| {
+                        const target = (try resolve.resolveAlias(analyzer, module, alias_index, method.span)) orelse
+                            return null;
+                        switch (target) {
+                            .strukt => |layout_index| return foldConstruct(analyzer, module, method.arguments, method.span, layout_index),
+                            .byte, .short, .int, .long, .half, .float, .double, .string => {
+                                if (method.arguments.len != 1 or !helpers.argumentMayName(method.arguments[0], "value")) {
+                                    return constantError(analyzer, method.span, "{s}(value) takes one argument", .{method.name});
+                                }
+                                const operand = (try fold(analyzer, module, method.arguments[0].value, null)) orelse return null;
+                                const call: ast.Call = .{
+                                    .callee = method.name,
+                                    .arguments = method.arguments,
+                                    .span = method.span,
+                                };
+                                return foldConvertAs(analyzer, call, operand, builtinForScalar(target));
+                            },
+                            else => return constantError(
+                                analyzer,
+                                method.span,
+                                "{s}.{s} is a type alias for {s}, not a constant constructor",
+                                .{ head, method.name, try analyzer.typeName(target) },
+                            ),
+                        }
+                    }
                     if (analyzer.struct_names.get(joined)) |layout_index| {
                         return foldConstruct(analyzer, module, method.arguments, method.span, layout_index);
                     }
@@ -874,11 +927,23 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
     const index = found: {
         if (chain.count == 1) {
             const local = try naming.qualify(analyzer, analyzer.modules[module].prefix, written.items);
-            break :found analyzer.enum_names.get(local) orelse return null;
+            if (analyzer.enum_names.get(local)) |index| break :found index;
+            if (analyzer.alias_names.get(local)) |alias_index| {
+                const target = (try resolve.resolveAlias(analyzer, module, alias_index, field.span)) orelse
+                    return null;
+                if (target == .enumeration) break :found target.enumeration.index;
+            }
+            return null;
         }
         if (!naming.importsModule(analyzer, module, chain.head())) return null;
         const imported = try naming.importedName(analyzer, module, written.items);
-        break :found analyzer.enum_names.get(imported) orelse return null;
+        if (analyzer.enum_names.get(imported)) |index| break :found index;
+        if (analyzer.alias_names.get(imported)) |alias_index| {
+            const target = (try resolve.resolveAlias(analyzer, module, alias_index, field.span)) orelse
+                return null;
+            if (target == .enumeration) break :found target.enumeration.index;
+        }
+        return null;
     };
     const info = analyzer.enum_decls.items[index];
     if (info.declaration.visibility == .private and info.module != module) {
@@ -909,7 +974,15 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
 }
 
 fn foldConvert(analyzer: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
-    const produces = types.conversionNamed(call.callee).?;
+    return foldConvertAs(analyzer, call, operand, types.conversionNamed(call.callee).?);
+}
+
+fn foldConvertAs(
+    analyzer: *Analyzer,
+    call: ast.Call,
+    operand: TypedConstant,
+    produces: types.Builtin,
+) Error!?TypedConstant {
     // An enum's two conversions fold like everything else here, and
     // to the same answers a run gives: `string(m)` is the member's
     // *name* and every numeric constructor is its number at that
@@ -920,10 +993,10 @@ fn foldConvert(analyzer: *Analyzer, call: ast.Call, operand: TypedConstant) Erro
             const member = declared.memberOfValue(operand.value.long).?;
             return .{ .value = .{ .string = declared.members[member].name }, .value_type = .string };
         }
-        return foldConvert(analyzer, call, .{
+        return foldConvertAs(analyzer, call, .{
             .value = operand.value,
             .value_type = declared.backing.asType(),
-        });
+        }, produces);
     }
     if (produces == .string) {
         // The same text a run would print, spelled by the same
@@ -1004,6 +1077,20 @@ fn foldConvert(analyzer: *Analyzer, call: ast.Call, operand: TypedConstant) Erro
         return constantError(analyzer, call.span, "constant conversion out of range", .{});
     }
     return .{ .value = .{ .long = @intFromFloat(rounded) }, .value_type = target };
+}
+
+fn builtinForScalar(target: Type) types.Builtin {
+    return switch (target) {
+        .byte => .byte,
+        .short => .short,
+        .int => .int,
+        .long => .long,
+        .half => .half,
+        .float => .float,
+        .double => .double,
+        .string => .string,
+        else => unreachable,
+    };
 }
 
 fn foldConstruct(

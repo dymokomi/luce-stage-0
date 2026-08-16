@@ -121,6 +121,12 @@ fn offerDeclarations(self: *FunctionBuilder, suggestion: *helpers.Suggestion) vo
         if (info.declaration.visibility == .private and info.module != self.module) continue;
         if (visibleName(self, entry.key_ptr.*)) |name| suggestion.offer(name);
     }
+    var aliases = self.analyzer.alias_names.iterator();
+    while (aliases.next()) |entry| {
+        const info = self.analyzer.alias_decls.items[entry.value_ptr.*];
+        if (info.declaration.visibility == .private and info.module != self.module) continue;
+        if (visibleName(self, entry.key_ptr.*)) |name| suggestion.offer(name);
+    }
     var constants = self.analyzer.constant_names.iterator();
     while (constants.next()) |entry| {
         const info = self.analyzer.constant_infos.items[entry.value_ptr.*];
@@ -257,6 +263,20 @@ pub fn failNotAValue(
         );
         return true;
     }
+    if (self.analyzer.alias_names.get(qualified)) |index| {
+        const info = self.analyzer.alias_decls.items[index];
+        const target = if (info.state == .ready)
+            try self.analyzer.typeName(info.resolved)
+        else
+            "an unresolved type";
+        try self.fail(
+            "luce.sema.name",
+            span,
+            "{s} is a type alias for {s}, not a value; use it in a type annotation or constructor",
+            .{ written, target },
+        );
+        return true;
+    }
     return false;
 }
 
@@ -374,6 +394,12 @@ pub fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Sp
     var structs = self.analyzer.struct_names.iterator();
     while (structs.next()) |entry| {
         const info = self.analyzer.struct_decls.items[entry.value_ptr.*];
+        if (info.declaration.visibility == .private and info.module != self.module) continue;
+        if (visibleName(self, entry.key_ptr.*)) |name| suggestion.offer(name);
+    }
+    var aliases = self.analyzer.alias_names.iterator();
+    while (aliases.next()) |entry| {
+        const info = self.analyzer.alias_decls.items[entry.value_ptr.*];
         if (info.declaration.visibility == .private and info.module != self.module) continue;
         if (visibleName(self, entry.key_ptr.*)) |name| suggestion.offer(name);
     }

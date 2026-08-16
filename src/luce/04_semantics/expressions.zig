@@ -588,10 +588,23 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
     const index = found: {
         if (chain.count == 1) {
             const local = try naming.qualify(self.analyzer, self.prefix, spelled);
-            break :found self.analyzer.enum_names.get(local) orelse return .not_a_member;
+            if (self.analyzer.enum_names.get(local)) |index| break :found index;
+            if (self.analyzer.alias_names.get(local)) |alias_index| {
+                const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                    return .reported;
+                if (target == .enumeration) break :found target.enumeration.index;
+            }
+            return .not_a_member;
         }
         if (!naming.importsModule(self.analyzer, self.module, chain.head())) return .not_a_member;
-        break :found self.analyzer.enum_names.get(try self.importedName(spelled)) orelse return .not_a_member;
+        const imported = try self.importedName(spelled);
+        if (self.analyzer.enum_names.get(imported)) |index| break :found index;
+        if (self.analyzer.alias_names.get(imported)) |alias_index| {
+            const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                return .reported;
+            if (target == .enumeration) break :found target.enumeration.index;
+        }
+        return .not_a_member;
     };
     const info = self.analyzer.enum_decls.items[index];
     if (info.declaration.visibility == .private and info.module != self.module) {
@@ -671,10 +684,23 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
     const index = found: {
         if (chain.count == 1) {
             const local = try naming.qualify(self.analyzer, self.prefix, spelled);
-            break :found self.analyzer.variant_names.get(local) orelse return .not_a_member;
+            if (self.analyzer.variant_names.get(local)) |index| break :found index;
+            if (self.analyzer.alias_names.get(local)) |alias_index| {
+                const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                    return .reported;
+                if (target == .variant) break :found target.variant;
+            }
+            return .not_a_member;
         }
         if (!naming.importsModule(self.analyzer, self.module, chain.head())) return .not_a_member;
-        break :found self.analyzer.variant_names.get(try self.importedName(spelled)) orelse return .not_a_member;
+        const imported = try self.importedName(spelled);
+        if (self.analyzer.variant_names.get(imported)) |index| break :found index;
+        if (self.analyzer.alias_names.get(imported)) |alias_index| {
+            const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                return .reported;
+            if (target == .variant) break :found target.variant;
+        }
+        return .not_a_member;
     };
     const info = self.analyzer.variant_decls.items[index];
     if (info.declaration.visibility == .private and info.module != self.module) {
@@ -780,6 +806,22 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         }
         // Words.classify — a struct of this module as a namespace.
         const head_qualified = try naming.qualify(self.analyzer, self.prefix, base);
+        if (self.analyzer.alias_names.get(head_qualified)) |alias_index| {
+            const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                return null;
+            const namespace = resolve.namespaceName(self.analyzer, target) orelse {
+                try self.fail(
+                    "luce.sema.name",
+                    field.span,
+                    "{s} is a type alias for {s}, which has no static members",
+                    .{ base, try self.analyzer.typeName(target) },
+                );
+                return null;
+            };
+            const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ namespace, field.name });
+            try refusals.failNamespaceMember(self, base, field.name, joined, field.span);
+            return null;
+        }
         if (self.analyzer.struct_names.contains(head_qualified)) {
             const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ head_qualified, field.name });
             try refusals.failNamespaceMember(self, base, field.name, joined, field.span);

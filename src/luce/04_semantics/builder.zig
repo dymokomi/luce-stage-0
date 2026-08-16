@@ -488,6 +488,20 @@ pub const FunctionBuilder = struct {
             if (self.analyzer.struct_names.contains(local_head)) {
                 return try naming.qualify(self.analyzer, self.prefix, written);
             }
+            if (self.analyzer.alias_names.get(local_head)) |alias_index| {
+                const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, span)) orelse
+                    return null;
+                const namespace = resolve.namespaceName(self.analyzer, target) orelse {
+                    try self.fail(
+                        "luce.sema.name",
+                        span,
+                        "{s} is a type alias for {s}, which has no static members",
+                        .{ head, try self.analyzer.typeName(target) },
+                    );
+                    return null;
+                };
+                return try std.fmt.allocPrint(self.arena(), "{s}{s}", .{ namespace, written[dot..] });
+            }
             if (naming.importsModule(self.analyzer, self.module, head)) {
                 return try self.importedName(written);
             }
@@ -642,6 +656,15 @@ pub const FunctionBuilder = struct {
         }
         if (self.analyzer.variant_names.get(head)) |index| {
             return self.analyzer.variants.items[index].findMember(parts[0]) != null;
+        }
+        if (self.analyzer.alias_names.get(head)) |alias_index| {
+            const info = self.analyzer.alias_decls.items[alias_index];
+            if (info.state != .ready) return false;
+            return switch (info.resolved) {
+                .enumeration => |reference| self.analyzer.enums.items[reference.index].findMember(parts[0]) != null,
+                .variant => |index| self.analyzer.variants.items[index].findMember(parts[0]) != null,
+                else => false,
+            };
         }
         return false;
     }
@@ -1017,7 +1040,8 @@ pub const FunctionBuilder = struct {
         written: []const u8,
         signature: u32,
     ) Error!expressions.MemberAccess {
-        const qualified = try naming.qualify(self.analyzer, self.prefix, written);
+        const qualified = (try self.resolveDeclared(written, field.span, .written)) orelse
+            return .reported;
         const found = construct.variantMemberOfQualified(self, qualified) orelse
             return .not_a_member;
         const declared = self.analyzer.variants.items[found.variant];
