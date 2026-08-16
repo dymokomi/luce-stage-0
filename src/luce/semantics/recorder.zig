@@ -141,6 +141,7 @@ pub const RecordedOperand = struct {
     node: nodes.NodeRef,
     slot: u32,
     copied: bool = false,
+    moved: bool = false,
 };
 
 /// Assemble one recorded operand batch — written operands first,
@@ -156,16 +157,19 @@ pub fn recordOperandBatch(
     const operands = try self.arena().alloc(nodes.NodeRef, entries.len);
     const slots = try self.arena().alloc(u32, entries.len);
     const borrow_copy = try self.arena().alloc(bool, entries.len);
-    for (entries, operands, slots, borrow_copy) |entry, *operand, *slot, *copied| {
+    const moved = try self.arena().alloc(bool, entries.len);
+    for (entries, operands, slots, borrow_copy, moved) |entry, *operand, *slot, *copied, *move| {
         operand.* = entry.node;
         slot.* = entry.slot;
         copied.* = entry.copied;
+        move.* = entry.moved;
     }
     return .{
         .written = @intCast(written),
         .operands = operands,
         .slots = slots,
         .borrow_copy = borrow_copy,
+        .move = moved,
     };
 }
 
@@ -247,15 +251,24 @@ pub fn closeStatementFrame(self: *FunctionBuilder, span: Span) Error!nodes.Block
     };
 }
 
-/// Close a frame that captured exactly one statement — the guarded
-/// form's attempt — answering it, or null when its family left a
-/// gap.  No scope belongs to this frame, so there are no releases
-/// to read.
-pub fn closeCaptureFrame(self: *FunctionBuilder) ?nodes.Statement {
+/// Close the guarded form's attempt, answering one statement directly or a
+/// release-free block when semantic bookkeeping follows the written store.
+/// A captured-mutable assignment is the important two-statement case: the
+/// fallible store opens the success/handler split, then its successful arm
+/// mirrors the new value into the shared closure cell. A gap still answers
+/// null. No scope belongs to this frame, so there are no releases to read.
+pub fn closeCaptureFrame(self: *FunctionBuilder, span: Span) Error!?nodes.Statement {
     var frame = self.recorded_blocks.pop().?;
     defer frame.statements.deinit(self.temporary());
-    if (frame.statements.items.len != 1) return null;
-    return frame.statements.items[0];
+    return switch (frame.statements.items.len) {
+        0 => null,
+        1 => frame.statements.items[0],
+        else => .{ .block = .{
+            .statements = try self.arena().dupe(nodes.Statement, frame.statements.items),
+            .releases = &.{},
+            .span = span,
+        } },
+    };
 }
 
 /// Declare one slot of the tree's locals table (nodes.Body.locals)

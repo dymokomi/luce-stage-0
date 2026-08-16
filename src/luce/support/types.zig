@@ -664,6 +664,11 @@ pub const StructLayout = struct {
     /// function field is valid. Source structs keep the ordinary rule that
     /// function fields must be optional.
     interface: bool = false,
+    /// ARC storage synthesized for a closure environment or a captured
+    /// mutable cell. These layouts are never source-addressable, and may
+    /// therefore carry the closure's always-present function values without
+    /// weakening the source rule above.
+    closure_storage: bool = false,
     /// A `class` is a **reference type** (docs/MEMORY.md D1): shared
     /// identity, heap-allocated, ARC-freed. A plain `struct` is a value.
     /// Recorded from stage 3; read by the runtime and MIR once ARC lands.

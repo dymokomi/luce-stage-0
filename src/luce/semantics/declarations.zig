@@ -83,6 +83,7 @@ const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
 const signatures = @import("signatures.zig");
 const interfaces = @import("interfaces.zig");
+const closures = @import("closures.zig");
 
 // The check/lower seam's far side (hir.zig): the walk below checks
 // and records the typed tree, and `hir.lower` is the one emission —
@@ -220,6 +221,8 @@ pub const Analyzer = struct {
     /// anything reads this.
     entry_function: ?u32 = null,
     standard_specializations: std.ArrayList(signatures.StandardSpecialization) = .empty,
+    /// Compiler-generated ARC cell layouts used by mutable captures.
+    closure_cells: std.ArrayList(context.ClosureCellLayout) = .empty,
     /// The program's string constants.  A `Program` field, so the
     /// pool and its interning live in stage 6; this stage fills it as
     /// literals type-check.
@@ -486,8 +489,11 @@ pub const Analyzer = struct {
             .is_deinitializer = info.is_deinitializer,
             .static_member = info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
+            .closure_captures = info.closure_captures,
         };
         defer builder.deinitScratch();
+
+        try closures.prepareFunction(&builder, info.declaration.body);
 
         try builder.pushScope();
 

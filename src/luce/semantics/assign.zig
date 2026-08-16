@@ -258,7 +258,20 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         const combined = (try compoundCombine(self, op, current_type, placed, assign.span)) orelse return;
         break :kind storedKindOf(self, current_type, combined);
     } else ledger.ownedForStoreKind(self, placed);
-    const place: nodes.Place = .{ .chain = .{ .root = root_local, .steps = recorded_steps } };
+    var place_root = root_local;
+    var place_steps = recorded_steps;
+    if (info.capture_cell) |cell| {
+        const with_cell = try self.arena().alloc(nodes.Place.Step, recorded_steps.len + 1);
+        with_cell[0] = .{ .field = .{
+            .layout = cell.layout,
+            .field = 0,
+            .weak = cell.weak,
+        } };
+        @memcpy(with_cell[1..], recorded_steps);
+        place_root = cell.local;
+        place_steps = with_cell;
+    }
+    const place: nodes.Place = .{ .chain = .{ .root = place_root, .steps = place_steps } };
     const value_copied = run.copied[run.copied.len - 1];
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
@@ -465,7 +478,10 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
         }
     }
     var store_kind: nodes.StoreKind = .plain;
-    const owns_storage = recorder.localOwnsStorage(self, local);
+    const owns_storage = if (info.capture_cell) |cell|
+        !cell.weak and shapes.ownsStorage(self.analyzer, local_type)
+    else
+        recorder.localOwnsStorage(self, local);
     if (assign.compound) |op| {
         var combined = (try compoundCombine(self, op, combine_type, value, assign.span)) orelse return;
         // A narrowed place wraps the combination back to `T?` —
@@ -479,12 +495,21 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
         // (docs/STRINGS.md).
         store_kind = ledger.ownedForStoreKind(self, value);
     }
+    const place: nodes.Place = if (info.capture_cell) |cell|
+        .{ .field = .{
+            .base = cell.local,
+            .layout = cell.layout,
+            .field = 0,
+            .narrowed = narrowed_place,
+        } }
+    else
+        .{ .local = local };
     // The recorded statement: the sugar as written — the compound
     // form keeps its operator and its right side, and lower spells
     // the read-combine-narrow (hir.zig's own picture).
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
-            .place = .{ .local = local },
+            .place = place,
             .op = compoundOperation(op),
             .value = value.node,
             .store = store_kind,
@@ -492,7 +517,7 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
         } });
     } else {
         try recorder.recordStatement(self, .{ .assign = .{
-            .place = .{ .local = local },
+            .place = place,
             .value = value.node,
             .store = store_kind,
             .span = assign.span,
@@ -543,9 +568,18 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
     const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
     const value = lifecycle_value: {
         const previous_permission = self.allow_deinitializer_self;
-        defer self.allow_deinitializer_self = previous_permission;
+        const previous_destination = self.closure_destination;
+        defer {
+            self.allow_deinitializer_self = previous_permission;
+            self.closure_destination = previous_destination;
+        }
         if (self.is_deinitializer and layout.fields[field_index].weak and builder.isBareSelf(assign.value)) {
             self.allow_deinitializer_self = true;
+        }
+        const holds_function = expected == .function or
+            (expected == .optional and expected.optional == .function);
+        if (std.mem.eql(u8, target.base, "self") and holds_function) {
+            self.closure_destination = .{ .field = target.field, .span = target.span };
         }
         break :lifecycle_value ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
     };
@@ -559,9 +593,23 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         const combined = (try compoundCombine(self, op, expected, value, assign.span)) orelse return;
         break :kind storedKindOf(self, expected, combined);
     } else ledger.ownedForStoreKind(self, value);
+    const place: nodes.Place = if (info.capture_cell) |cell| captured: {
+        const steps = try self.arena().alloc(nodes.Place.Step, 2);
+        steps[0] = .{ .field = .{
+            .layout = cell.layout,
+            .field = 0,
+            .weak = cell.weak,
+        } };
+        steps[1] = .{ .field = .{
+            .layout = layout_index,
+            .field = field_index,
+            .weak = layout.fields[field_index].weak,
+        } };
+        break :captured .{ .chain = .{ .root = cell.local, .steps = steps } };
+    } else .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } };
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
-            .place = .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } },
+            .place = place,
             .op = compoundOperation(op),
             .value = value.node,
             .store = store_kind,
@@ -569,7 +617,7 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         } });
     } else {
         try recorder.recordStatement(self, .{ .assign = .{
-            .place = .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } },
+            .place = place,
             .value = value.node,
             .store = store_kind,
             .span = assign.span,

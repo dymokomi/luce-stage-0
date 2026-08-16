@@ -165,6 +165,7 @@ pub fn parkDerivedTemp(self: *FunctionBuilder, value_type: Type, span: Span) Err
 pub fn takeDerivedStorage(self: *FunctionBuilder, index: usize) bool {
     const temp = &self.temps.items[index];
     if (temp.taken or !temp.storage) return false;
+    self.recorded_locals.items[temp.local].boxed_storage = true;
     self.recorded_locals.items[temp.local].owns_storage = false;
     temp.storage = false;
     temp.taken = true;
@@ -236,6 +237,7 @@ fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
         // settled answer is that the place, not the slot, owns the
         // storage (coupling #3), and `hir.lower` reads exactly
         // this settled row.
+        self.recorded_locals.items[temp.local].boxed_storage = true;
         self.recorded_locals.items[temp.local].owns_storage = false;
         // Emptied rather than forgotten: the record is what keeps
         // one value from being parked twice, and every index into
@@ -309,4 +311,18 @@ pub fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!
     if (value.provenance() != .fresh) return;
     if (parkedForStorage(self, value.node)) return;
     try registerTemp(self, value, true, false, span);
+}
+
+/// Explicitly park both halves of a fresh owning value before the generic
+/// expression boundary sees it. Interface fitting is the important caller:
+/// it constructs and retains bound witnesses during operand landing, then its
+/// early storage park would otherwise prevent `lowerExpression` from adding
+/// the matching object release.
+pub fn parkFreshValue(self: *FunctionBuilder, value: Typed, span: Span) Error!void {
+    if (parkedAlready(self, value.node)) return;
+    const storage = value.provenance() == .fresh and
+        shapes.ownsStorage(self.analyzer, value.value_type);
+    const objects = nodes.freshObject(value.node) and
+        shapes.carriesObjects(self.analyzer, value.value_type);
+    if (storage or objects) try registerTemp(self, value, storage, objects, span);
 }

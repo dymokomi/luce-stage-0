@@ -399,6 +399,21 @@ pub const FunctionDeclInfo = struct {
     /// reachable from here.  Null for every declared function, which
     /// has no enclosing frame to speak of.
     enclosing_locals: ?[]const EnclosingLocal = null,
+    /// Compiler-written block-closure prologue bindings. Ordinary
+    /// declarations and concise capture-free lambdas leave this empty.
+    closure_captures: []const ClosureCaptureInfo = &.{},
+};
+
+/// One source name materialized from a block closure's environment at
+/// function entry. Mutable entries additionally name the shared ARC cell.
+pub const ClosureCaptureInfo = struct {
+    name: []const u8,
+    value_type: Type,
+    mutable: bool = false,
+    cell_name: ?[]const u8 = null,
+    cell_layout: ?u32 = null,
+    weak_cell: bool = false,
+    declared_at: Span,
 };
 
 /// A collected enum declaration with its module (docs/ENUMS.md).  The
@@ -567,6 +582,25 @@ pub const LocalInfo = struct {
     /// invalidate the collection under the loop's feet (the
     /// iterator-invalidation guard).
     iterating: bool = false,
+    /// A captured mutable keeps its ordinary slot for fast reads and flow
+    /// facts, plus one shared ARC cell mirrored by every replacing store.
+    capture_cell: ?CaptureCell = null,
+};
+
+pub const CaptureCell = struct {
+    local: LocalId,
+    layout: u32,
+    cell_type: Type,
+    value_type: Type,
+    weak: bool = false,
+};
+
+/// One interned compiler-generated capture-cell class.
+pub const ClosureCellLayout = struct {
+    value_type: Type,
+    weak: bool,
+    layout: u32,
+    cell_type: Type,
 };
 
 /// One local this scope has to release on the way out: the storage in

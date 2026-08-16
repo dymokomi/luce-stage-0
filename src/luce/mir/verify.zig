@@ -104,12 +104,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     };
     for (program.structs) |layout| {
         if (layout.interface and layout.reference) return error.BadStruct;
+        if (layout.closure_storage and (!layout.reference or layout.interface))
+            return error.BadStruct;
         if (layout.deinitializer) |function| {
-            if (!layout.reference or layout.interface or function >= program.functions.len)
+            if (!layout.reference or layout.interface or layout.closure_storage or function >= program.functions.len)
                 return error.BadStruct;
         }
         for (layout.fields) |field| {
-            try verifyFieldType(program, field.field_type, layout.interface);
+            try verifyFieldType(program, field.field_type, layout.interface or layout.closure_storage);
             if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
                 return error.BadStruct;
         }
@@ -150,7 +152,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         if (function.parameter_count > function.locals.len) return error.BadLocal;
         for (function.locals, 0..) |local, index| {
             if (local.weak) {
-                if (index < function.parameter_count or local.inout or local.owns_storage)
+                if (index < function.parameter_count or local.inout or local.owns_storage or local.boxed_storage)
                     return error.BadLocal;
                 if (!isWeakTarget(program, local.local_type)) return error.BadLocal;
             }
@@ -291,8 +293,9 @@ fn nominalType(program: *const Program, layout: u32) VerifyError!Type {
 }
 
 /// Source structs cannot declare bare function fields, but compiler-generated
-/// interface layouts use them as private dispatch slots. Keep the distinction
-/// in the module so a decoded ordinary struct cannot smuggle one through.
+/// interface witness layouts and closure storage use them as private slots.
+/// Keep the distinction in the module so a decoded ordinary struct cannot
+/// smuggle one through.
 fn verifyFieldType(program: *const Program, of: Type, allow_function: bool) VerifyError!void {
     if (of == .function and !allow_function) return error.BadStruct;
     try verifyType(program, of);
@@ -561,20 +564,20 @@ fn verifyFunction(
     try verifyType(program, function.return_type);
     for (function.locals) |local| {
         try verifyType(program, local.local_type);
-        // `owns_storage` selects the physical local representation in both
-        // engines: a boxed Runtime.Value for storage-bearing values, and
-        // the type's direct ABI shape otherwise.  A decoded module must
-        // not be able to make those choices disagree with the type graph.
-        if (local.owns_storage and !typeCanOwnStorage(local.local_type)) {
+        // An owner or an explicit bridge selects the boxed Runtime.Value
+        // representation. A decoded module must not attach either storage
+        // claim to a type with no storage representation.
+        if ((local.owns_storage or local.boxed_storage) and !typeCanOwnStorage(local.local_type)) {
             return error.BadLocal;
         }
+        if (local.owns_storage and local.boxed_storage) return error.BadLocal;
     }
     for (function.result_types) |result_type| try verifyType(program, result_type);
     for (function.locals[0..function.parameter_count]) |local| {
         // Ordinary parameters borrow value storage from their caller; only
         // a writing receiver, an explicit inout place, may carry a boxed
         // value slot.
-        if (!local.inout and local.owns_storage) return error.BadLocal;
+        if (!local.inout and (local.owns_storage or local.boxed_storage)) return error.BadLocal;
     }
 
     var defined = std.AutoHashMapUnmanaged(Register, void){};
@@ -1142,6 +1145,9 @@ fn verifyInstruction(
             if (call.arguments.len + 1 != callee.parameter_count) return error.BadFunction;
             try expectType(function.locals[call.receiver].local_type, callee.locals[0].local_type);
             if (function.locals[call.receiver].owns_storage != callee.locals[0].owns_storage) {
+                return error.BadLocal;
+            }
+            if (function.locals[call.receiver].boxed_storage != callee.locals[0].boxed_storage) {
                 return error.BadLocal;
             }
             for (call.arguments, 1..) |argument, index| {

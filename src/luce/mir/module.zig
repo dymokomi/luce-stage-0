@@ -196,10 +196,13 @@ pub const magic = "LUCE";
 ///
 /// 51 — final class identity joins the heap descriptor table.
 ///
-/// 52 — reference layouts may name a hidden deinitializer function, and
-/// `class_resurrection` joins the trap vocabulary. A 51 module cannot say
-/// which class release executes user code and must not be guessed at.
-pub const format_version: u32 = 52;
+/// 52 — reference layouts may name a hidden deinitializer function.
+///
+/// 53 — closure storage becomes an explicit layout kind, and a local can
+/// preserve the boxed storage representation without owning it. A 52 module
+/// can describe neither a trusted compiler environment nor the inline-safe
+/// bridge into a mutable cell, and would misread every later field.
+pub const format_version: u32 = 53;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -236,6 +239,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     for (program.structs) |layout| {
         try writer.blob(layout.name);
         try writer.int(u8, @intFromBool(layout.interface));
+        try writer.int(u8, @intFromBool(layout.closure_storage));
         try writer.int(u8, @intFromBool(layout.reference));
         try writer.int(u8, @intFromBool(layout.deinitializer != null));
         if (layout.deinitializer) |function| try writer.int(u32, function);
@@ -404,6 +408,7 @@ const Writer = struct {
             try self.blob(local.name);
             try self.valueType(local.local_type);
             try self.int(u8, @intFromBool(local.owns_storage));
+            try self.int(u8, @intFromBool(local.boxed_storage));
             try self.int(u8, @intFromBool(local.weak));
             try self.int(u8, @intFromBool(local.inout));
         }
@@ -572,6 +577,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (structs) |*layout| {
         layout.name = try arena.dupe(u8, try reader.blob());
         layout.interface = (try reader.int(u8)) != 0;
+        layout.closure_storage = (try reader.int(u8)) != 0;
         layout.reference = (try reader.int(u8)) != 0;
         layout.deinitializer = if ((try reader.int(u8)) != 0)
             try reader.int(u32)
@@ -837,6 +843,7 @@ const Reader = struct {
             local.name = try arena.dupe(u8, try self.blob());
             local.local_type = try self.valueType();
             local.owns_storage = (try self.int(u8)) != 0;
+            local.boxed_storage = (try self.int(u8)) != 0;
             local.weak = (try self.int(u8)) != 0;
             local.inout = (try self.int(u8)) != 0;
         }
@@ -1386,6 +1393,38 @@ test "weak locals, fields, and operations round-trip through the current format"
     try testing.expect(std.mem.indexOf(u8, dump, "weak target: list[i64]?") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "weak_local_get") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "weak_struct_set") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "a boxed storage bridge survives the module round trip without becoming an owner" {
+    var program = try compileScript(
+        \\func main():
+        \\    var text = "forty"
+        \\    let finish: func() -> str = func():
+        \\        text += "-two"
+        \\        return text
+        \\    assert(finish() == "forty-two")
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    var found_bridge = false;
+    for (loaded.functions) |function| {
+        for (function.locals) |local| {
+            if (!std.mem.eql(u8, local.name, "text")) continue;
+            if (!local.boxed_storage or local.owns_storage) continue;
+            found_bridge = true;
+        }
+    }
+    try testing.expect(found_bridge);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -2010,6 +2049,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // not move an inch and the wire did.
     inline for (comptime std.meta.fieldNames(types.Type)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(types.HeapType)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(types.StructLayout)) |name| hasher.update(name);
     // And the signature table's own shape, for the same reason: a
     // parameter's verb travels as a byte beside its type, so a field
     // added to `Signature.Parameter` moves the wire (docs/FUNCTIONS.md).
@@ -2089,8 +2129,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // layouts an ARC object-handle machine type.
     // 51 -> 52: class layouts name their hidden deinitializer and the trap
     // vocabulary appends class_resurrection.
-    try testing.expectEqual(@as(u32, 52), format_version);
-    try testing.expectEqual(@as(u64, 17758753207193102360), hasher.final());
+    // 52 -> 53: layouts record private closure storage so bare function
+    // captures remain valid without making them legal source fields, and
+    // locals distinguish a boxed representation bridge from a storage owner.
+    try testing.expectEqual(@as(u32, 53), format_version);
+    try testing.expectEqual(@as(u64, 9736862314927419250), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

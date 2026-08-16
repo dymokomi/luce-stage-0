@@ -89,6 +89,7 @@ const LocalId = mir.LocalId;
 // per concern, listed in the header above.  Two of them own a type
 // this walker holds — the ledger's slot and the recorder's frame.
 const calls = @import("calls.zig");
+const closures = @import("closures.zig");
 const construct = @import("construct.zig");
 const expressions = @import("expressions.zig");
 const flow = @import("flow.zig");
@@ -143,6 +144,15 @@ pub fn isBareSelf(expression: *const ast.Expression) bool {
 /// destructuring statement, refused in an ordinary value position, or
 /// returned directly (docs/RETURNS.md and the SELF polish ruling).
 pub const ShapePosition = enum { refused, receive, returning };
+
+/// A closure expression is currently landing in a field of its own class.
+/// `closures.zig` uses this one-hop context to reject the direct ARC cycle
+/// `self.callback = func(): use(self)` while still accepting a closure that
+/// does not capture `self` or captures it weakly.
+pub const ClosureDestination = struct {
+    field: []const u8,
+    span: Span,
+};
 
 /// A fallible call awaiting the `try` or `catch` written in front
 /// of it.
@@ -326,6 +336,15 @@ pub const FunctionBuilder = struct {
     /// (`context.FunctionDeclInfo.enclosing_locals`).  Read by the
     /// capture refusal and by lambda-parameter no-shadowing checks.
     enclosing_locals: ?[]const EnclosingLocal = null,
+    /// Mutable names a block closure in this function may capture. A syntax
+    /// prepass fills this before lowering so their cells exist on every path.
+    captured_mutables: std.StringHashMapUnmanaged(void) = .empty,
+    /// Prologue metadata when this function is a block closure body.
+    closure_captures: []const context.ClosureCaptureInfo = &.{},
+    /// The class field the next closure literal would be stored into, when
+    /// checking a direct `self.field = ...` assignment. Saved and restored by
+    /// assignment lowering so nested expressions cannot leak the context.
+    closure_destination: ?ClosureDestination = null,
     /// Set for exactly one hop.  `try` and `catch` raise it, and the
     /// very next `lowerExpressionInner` reads and clears it, so the
     /// permission reaches the call they are written in front of and
@@ -440,6 +459,7 @@ pub const FunctionBuilder = struct {
         self.temps.deinit(self.temporary());
         self.undeclared.deinit(self.temporary());
         self.narrowed.deinit(self.temporary());
+        self.captured_mutables.deinit(self.temporary());
         for (self.recorded_blocks.items) |*frame| frame.statements.deinit(self.temporary());
         self.recorded_blocks.deinit(self.temporary());
         self.recorded_locals.deinit(self.temporary());
@@ -769,7 +789,7 @@ pub const FunctionBuilder = struct {
                     // the statement ledger until the call either adopts it
                     // or the statement unwinds; without this park the hidden
                     // function slots (and their owned receiver copies) leak.
-                    try ledger.parkFreshStorage(self, converted, value.node.span());
+                    try ledger.parkFreshValue(self, converted, value.node.span());
                     return converted;
                 }
             }
@@ -1785,6 +1805,9 @@ pub const FunctionBuilder = struct {
                 };
                 const local = found.info.local;
                 const local_type = recorder.localType(self, local);
+                if (try closures.readCapturedMutable(self, local, name.span)) |captured| {
+                    return captured;
+                }
                 // A narrowed local reads as its payload: the value is
                 // the same bits, and the flow analysis has already
                 // proved it is there.
@@ -1892,6 +1915,7 @@ pub const FunctionBuilder = struct {
             .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
             .spawn => |worker| return calls.lowerSpawn(self, worker, as_statement),
             .lambda => |written| return self.lowerLambda(expression, written, wanted_function),
+            .closure => |written| return closures.lowerClosure(self, written, wanted_function),
         }
     }
 
@@ -2027,7 +2051,7 @@ pub const FunctionBuilder = struct {
     /// nested inside it could mistake a grandparent local for a module
     /// or top-level declaration.  Built only where a lambda is
     /// (`FunctionDeclInfo.enclosing_locals`).
-    fn visibleLocals(self: *FunctionBuilder) Error![]const EnclosingLocal {
+    pub fn visibleLocals(self: *FunctionBuilder) Error![]const EnclosingLocal {
         var names: std.ArrayList(EnclosingLocal) = .empty;
         errdefer names.deinit(self.arena());
         var depth = self.scopes.items.len;

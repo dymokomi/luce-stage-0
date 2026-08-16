@@ -44,6 +44,8 @@ pub const errors = @import("specs/errors_spec.zig");
 /// Functions as values: named functions, lambdas, and the call through
 /// one (docs/FUNCTIONS.md).
 pub const functions = @import("specs/functions_spec.zig");
+/// ARC environments, shared mutable cells, weak captures, and snapshots.
+pub const closures = @import("specs/closures_spec.zig");
 /// Nominal interface contracts and dispatch through an interface value.
 pub const interfaces = @import("specs/interfaces_spec.zig");
 /// Transparent compile-time type aliases.
@@ -111,6 +113,7 @@ comptime {
         _ = unions;
         _ = errors;
         _ = functions;
+        _ = closures;
         _ = interfaces;
         _ = aliases;
         _ = weak_references;

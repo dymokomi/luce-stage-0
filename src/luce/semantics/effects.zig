@@ -38,6 +38,17 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         // top-level function, and the value here is its name
         // (docs/FUNCTIONS.md D2).
         .lambda => false,
+        // Making a closure runs only explicit snapshot expressions. Reading
+        // inferred/strong/weak captures and allocating the environment cannot
+        // mutate a source container.
+        .closure => |written| blk: {
+            for (written.captures) |capture| {
+                if (capture.value) |value| {
+                    if (mayMutateContainers(value)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
         .try_call => true,
         // Nothing is known about what a function value does, so a call
         // through one disturbs everything a declared call could.

@@ -511,6 +511,19 @@ pub fn build(b: *std.Build) void {
         &addProgressTestRun(b, class_runtime_tests, "class-runtime").step,
     );
 
+    const closure_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{ "specs.closures_spec.", "closure:" },
+        .test_runner = progress_test_runner,
+    });
+    const test_closures_step = b.step(
+        "test-closures",
+        "Run capturing-closure ownership and diagnostic specifications",
+    );
+    test_closures_step.dependOn(
+        &addProgressTestRun(b, closure_tests, "closures").step,
+    );
+
     const thread_registry_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{ "full table", "closes publication" },
@@ -811,7 +824,10 @@ pub fn build(b: *std.Build) void {
 
     const mir_wire_tests = b.addTest(.{
         .root_module = luce,
-        .filters = &.{"the wire surface is fingerprinted: change it, bump format_version"},
+        .filters = &.{
+            "the wire surface is fingerprinted: change it, bump format_version",
+            "a boxed storage bridge survives the module round trip",
+        },
     });
     const test_mir_wire_step = b.step(
         "test-mir-wire",

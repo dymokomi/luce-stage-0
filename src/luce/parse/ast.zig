@@ -167,6 +167,34 @@ pub const Spawn = struct { call: *Expression, span: Span };
 /// statements immediately wants the enclosing scope, which is capture.
 pub const Lambda = struct { parameters: []Name, body: *Expression, span: Span };
 
+/// One entry in a block closure's optional capture list.
+///
+/// `[model]` keeps the reference strongly, `[weak model]` keeps a zeroing
+/// optional reference, and `[name = expression]` evaluates one snapshot when
+/// the closure is made. Names omitted from the list are inferred from the
+/// body; this list changes how a capture is held, not which lexical names the
+/// body may use.
+pub const ClosureCaptureMode = enum { strong, weak, snapshot };
+
+pub const ClosureCapture = struct {
+    name: Name,
+    mode: ClosureCaptureMode,
+    /// Present only for `name = expression`.
+    value: ?*Expression = null,
+    span: Span,
+};
+
+/// `[captures] func(a, b): BLOCK` — a closure with a real lexical
+/// environment. Parameter and result types come from the function-typed place
+/// exactly as they do for a concise lambda; the block supplies statements,
+/// local declarations, and capture-bearing behavior.
+pub const Closure = struct {
+    captures: []ClosureCapture,
+    parameters: []Name,
+    body: Block,
+    span: Span,
+};
+
 pub const Expression = union(enum) {
     int_literal: Literal,
     float_literal: Literal,
@@ -210,6 +238,9 @@ pub const Expression = union(enum) {
     /// (a, b) -> expr — a lambda, which stage 4 turns into a
     /// compiler-named top-level function (docs/FUNCTIONS.md D2).
     lambda: Lambda,
+    /// `[weak model] func(event): ...` — a block closure carrying an
+    /// ARC-managed lexical environment.
+    closure: Closure,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {

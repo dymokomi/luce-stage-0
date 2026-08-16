@@ -1780,6 +1780,147 @@ test "luce.sema.name: self: a lambda cannot capture the implicit receiver" {
     , "luce.sema.name", "a lambda carries no environment, and self belongs to the scope around it");
 }
 
+// Capturing block closures -------------------------------------------------
+
+test "closure: a block closure needs a contextual function type" {
+    try expectSaying(
+        \\func main():
+        \\    let answer = func():
+        \\        return 42
+        \\
+    , "luce.sema.type", "a closure needs a place that expects a function");
+}
+
+test "closure: parameter arity must match the contextual function type" {
+    try expectSaying(
+        \\func main():
+        \\    let answer: func(i64) -> i64 = func():
+        \\        return 42
+        \\
+    , "luce.sema.type", "this place takes 1 parameter; this closure writes 0");
+}
+
+test "closure: duplicate parameters and captures are rejected" {
+    try expectSaying(
+        \\func main():
+        \\    let answer: func(i64, i64) -> i64 = func(value, value):
+        \\        return value
+        \\
+    , "luce.sema.duplicate", "duplicate closure parameter value");
+    try expectSaying(
+        \\func main():
+        \\    let value = 42
+        \\    let answer: func() -> i64 = [value, value] func():
+        \\        return value
+        \\
+    , "luce.sema.duplicate", "value is captured twice");
+}
+
+test "closure: a snapshot name cannot also be a parameter" {
+    try expectSaying(
+        \\func main():
+        \\    let value = 42
+        \\    let answer: func(i64) -> i64 = [copy = value] func(copy):
+        \\        return copy
+        \\
+    , "luce.sema.duplicate", "copy is both a capture and a parameter");
+}
+
+test "closure: explicit captures must name local values" {
+    try expectSaying(
+        \\func main():
+        \\    let answer: func() -> i64 = [missing] func():
+        \\        return missing
+        \\
+    , "luce.sema.closure.capture", "missing is not a local value available to this closure");
+}
+
+test "closure: weak capture accepts ARC references only" {
+    try expectSaying(
+        \\func main():
+        \\    let number = 42
+        \\    let answer: func() -> i64 = [weak number] func():
+        \\        return 0
+        \\
+    , "luce.sema.closure.capture", "weak capture requires a class, list, map, array, or builder reference, not i64");
+}
+
+test "closure: an immutable capture cannot be assigned" {
+    try expectSaying(
+        \\func main():
+        \\    let number = 1
+        \\    let update: func() -> i64 = func():
+        \\        number = 2
+        \\        return number
+        \\
+    , "luce.sema.let", "number is let-bound; use var for reassignment");
+}
+
+test "closure: lifted bodies cannot shadow an enclosing local" {
+    try expectSaying(
+        \\func main():
+        \\    let number = 1
+        \\    let answer: func() -> i64 = func():
+        \\        let number = 42
+        \\        return number
+        \\
+    , "luce.sema.duplicate", "number is already declared in the enclosing scope");
+}
+
+test "closure: a typed body must return on every path" {
+    try expectSaying(
+        \\func main():
+        \\    let answer: func(bool) -> i64 = func(ok):
+        \\        if ok:
+        \\            return 42
+        \\
+    , "luce.sema.return", "must return i64 on every path");
+}
+
+test "closure: deinit cannot capture its dying self" {
+    try expectSaying(
+        \\class Resource:
+        \\    value: i64
+        \\    deinit:
+        \\        let read: func() -> i64 = func():
+        \\            return self.value
+        \\
+        \\func main():
+        \\    let resource = Resource(value = 42)
+        \\
+    , "luce.sema.class.lifecycle", "deinit cannot capture self in a closure");
+}
+
+test "closure: storing a strong self capture diagnoses the direct ARC cycle" {
+    try expectSaying(
+        \\class Node:
+        \\    value: i64
+        \\    callback: (func() -> i64)?
+        \\    func install():
+        \\        self.callback = func():
+        \\            return self.value
+        \\
+        \\func main():
+        \\    let node = Node(value = 42, callback = none)
+        \\    node.install()
+        \\
+    , "luce.sema.closure.cycle", "strongly captures self creates an ARC cycle");
+}
+
+test "closure: a capturing function value cannot cross a worker boundary" {
+    try expectSaying(
+        \\func apply(operation: func(i64) -> i64, value: i64) -> i64:
+        \\    return operation(value)
+        \\
+        \\func main():
+        \\    let offset = 1
+        \\    let add: func(i64) -> i64 = func(value):
+        \\        return value + offset
+        \\    let job = spawn apply(add, 41)
+        \\
+    , "luce.sema.own", "a function value borrows the receiver it may carry");
+}
+
 // ---------------------------------------------------------------------------
 // Entry contract
 // ---------------------------------------------------------------------------

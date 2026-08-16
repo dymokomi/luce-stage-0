@@ -385,6 +385,47 @@ pub fn registerLambda(
     return index;
 }
 
+/// Register a block closure. Its compiler-generated ARC environment is
+/// parameter zero of the hidden function and the receiver carried by the
+/// public function value; the written signature therefore covers every
+/// parameter after it. The declaration includes that hidden parameter so the
+/// ordinary body checker can materialize capture prologue bindings without a
+/// second function-body path.
+pub fn registerClosure(
+    self: *Analyzer,
+    declaration: *const ast.FuncDecl,
+    module: usize,
+    environment: Type,
+    signature: types.Signature,
+    captures: []const context.ClosureCaptureInfo,
+) Error!u32 {
+    const parameter_types = try self.arena.alloc(Type, signature.parameters.len + 1);
+    const parameter_defaults = try self.arena.alloc(?TypedConstant, parameter_types.len);
+    parameter_types[0] = environment;
+    parameter_defaults[0] = null;
+    for (signature.parameters, parameter_types[1..], parameter_defaults[1..]) |parameter, *held, *default| {
+        held.* = parameter.value_type;
+        default.* = null;
+    }
+    const results = try self.arena.alloc(Type, if (signature.result == .none) 0 else 1);
+    if (results.len == 1) results[0] = signature.result;
+    const index: u32 = @intCast(self.functions.items.len);
+    try self.functions.append(self.arena, .{
+        .declaration = declaration,
+        .name = declaration.name,
+        .module = module,
+        .parameter_types = parameter_types,
+        .parameter_defaults = parameter_defaults,
+        .results = results,
+        .channel = results,
+        .return_type = signature.result,
+        .fallible = false,
+        .is_entry = false,
+        .closure_captures = captures,
+    });
+    return index;
+}
+
 /// Instantiate one closed, compiler-owned standard-library
 /// template at concrete monomorphic parameter types.
 ///

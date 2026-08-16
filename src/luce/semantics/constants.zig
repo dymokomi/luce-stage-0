@@ -967,7 +967,7 @@ pub fn fold(
         // A lambda becomes a function value, which is deliberately not
         // one of the initializer forms a file-scope `const` accepts
         // (docs/FUNCTIONS.md, As built).
-        .lambda => {
+        .lambda, .closure => {
             return constantError(analyzer, expression.span(), "a function value is not a constant initializer; declare it with func [FUNCTIONS.md]", .{});
         },
     }

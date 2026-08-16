@@ -2208,7 +2208,7 @@ pub const Parser = struct {
     /// keyword that opened it, so a missing or empty body can say which
     /// header is waiting for statements rather than which token the
     /// parser wanted.
-    fn block(self: *Parser, opener: []const u8) Error!?ast.Block {
+    pub fn block(self: *Parser, opener: []const u8) Error!?ast.Block {
         if (!try self.colonOrLayout("':' to open the block")) return null;
         if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
         const opened = (try self.blockBody(opener)) orelse return null;
@@ -2431,7 +2431,9 @@ pub const Parser = struct {
             );
             return null;
         }
-        try self.endOfStatement("end of line after the binding");
+        // A block closure consumed its own newline, indentation, and closing
+        // dedent. The next token is already the next statement at this level.
+        if (value.* != .closure) try self.endOfStatement("end of line after the binding");
         const span: Span = .{ .start = start.span.start, .end = value.span().end };
         if (mutable) {
             return .{ .variable = .{
@@ -2837,7 +2839,7 @@ pub const Parser = struct {
             last = (try self.expression()) orelse return null;
             try values.append(self.arena, last);
         }
-        try self.endOfStatement("end of line after return");
+        if (last.* != .closure) try self.endOfStatement("end of line after return");
         return .{ .return_statement = .{
             .values = try values.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = last.span().end },
@@ -2899,7 +2901,7 @@ pub const Parser = struct {
                 return null;
             }
             if (try self.handlerOnOneLine(left)) return null;
-            try self.endOfStatement("end of line after the expression");
+            if (left.* != .closure) try self.endOfStatement("end of line after the expression");
             return .{ .expression = .{ .value = left, .span = left.span() } };
         }
         _ = self.advance(); // '=' or 'OP='
@@ -2929,7 +2931,7 @@ pub const Parser = struct {
             return self.guarded(assigned);
         }
         if (try self.handlerOnOneLine(value)) return null;
-        try self.endOfStatement("end of line after the assignment");
+        if (value.* != .closure) try self.endOfStatement("end of line after the assignment");
         return assigned;
     }
 

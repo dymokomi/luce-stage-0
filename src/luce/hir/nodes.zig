@@ -114,6 +114,13 @@ pub const Park = struct {
 /// coupling #3).
 pub const StoreKind = enum { plain, take, copy };
 
+/// How a source-level binding participates in an ARC closure cell.
+/// Ordinary bindings own their stored value. A transferred binding is a
+/// lowering bridge whose prepared value moves immediately into a new cell;
+/// a borrowed binding is a closure-body spelling for a value the existing
+/// cell already owns. Neither non-normal form is released as a local.
+pub const BindingOwnership = enum { normal, transfer, borrow };
+
 /// One slot a scope releases on the way out — the storage under it that
 /// the release gives back (`drop_storage`).  The recorded home for
 /// scope-exit storage releases: every `Block` carries its own, in
@@ -139,6 +146,11 @@ pub const LocalDecl = struct {
     /// by an adopting store (`takeStorage`) is recorded post-
     /// retraction, per coupling #3.
     owns_storage: bool,
+    /// Preserve the boxed Runtime.Value representation even though this
+    /// slot does not release the storage it bridges. Captured mutable
+    /// initialization is the source form: an inline string moves through
+    /// the slot into its cell without becoming a pointer into scratch.
+    boxed_storage: bool = false,
     /// The physical slot holds an internal weak handle; `local_type` is the
     /// logical optional type produced by each read.
     weak: bool = false,
@@ -366,6 +378,11 @@ pub const Expression = union(enum) {
         field: u32,
         /// The layout field is non-owning; lower emits an owned upgrade.
         weak: bool = false,
+        /// A captured optional may be flow-proven present. The field still
+        /// stores the optional representation, while this expression answers
+        /// its payload after lower emits the ordinary unwrap.
+        stored: ?Type = null,
+        narrowed: bool = false,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -666,6 +683,9 @@ pub const Expression = union(enum) {
     pub const LambdaRef = struct {
         /// The synthesized declaration's function table index.
         function: u32,
+        /// A block closure's compiler-generated ARC environment. Null for the
+        /// concise capture-free `(x) -> expression` form.
+        environment: ?NodeRef = null,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -803,6 +823,10 @@ pub const OperandBatch = struct {
     /// storage a later writing operand in the same batch may replace
     /// (`f(s, s.change())` — docs/STRINGS.md).
     borrow_copy: []const bool,
+    /// Compiler-generated closure cells may adopt the declaration's initial
+    /// value directly. The source slot is retired at the same semantic point,
+    /// so these entries bypass the normal copy/retain store preparation.
+    move: []const bool = &.{},
 };
 
 /// One lowered operand with `OperandBatch`'s per-operand rewrite
@@ -847,7 +871,15 @@ pub const Place = union(enum) {
     /// descended through, mirroring the rebuild the store performs.
     chain: Chain,
 
-    pub const Field = struct { base: LocalId, layout: u32, field: u32 };
+    pub const Field = struct {
+        base: LocalId,
+        layout: u32,
+        field: u32,
+        /// A captured optional local was flow-proven present for compound
+        /// assignment; unwrap for the combine and wrap the result back into
+        /// the cell field.
+        narrowed: bool = false,
+    };
     /// The base and subscripts carry their batch rewrite flag
     /// (`Operand`): the indexed store lowers one operand run — base,
     /// subscripts, value — and a replay needs the borrow-copy fact for
@@ -911,6 +943,11 @@ pub const Statement = union(enum) {
         /// `ownedForStore`'s decision (hir.zig, coupling #3), made
         /// for the zero fill too.
         store: StoreKind,
+        /// Captured mutables use their source slot only to bridge lowering:
+        /// `transfer` prepares one owned initial value that the new cell moves;
+        /// `borrow` materializes a closure-body name without owning a second
+        /// copy beside the already-owned cell.
+        ownership: BindingOwnership = .normal,
         span: Span,
     };
 
@@ -921,12 +958,19 @@ pub const Statement = union(enum) {
         value: NodeRef,
         /// The per-name store decisions, parallel to `locals`.
         stores: []const StoreKind,
+        /// Parallel to `locals` when one or more mutable results move into
+        /// closure cells. Empty means every binding is ordinary.
+        ownerships: []const BindingOwnership = &.{},
         span: Span,
     };
 
     pub const AssignMany = struct {
         /// The existing slots being replaced, in written order.
         targets: []const LocalId,
+        /// A captured target stores into its shared cell instead of the
+        /// retired source slot. Empty for bodies compiled before any target
+        /// needed a cell; otherwise parallel to `targets`.
+        cells: []const ?Place.Field = &.{},
         value: NodeRef,
         /// The per-target store decisions, parallel to `targets`.
         stores: []const StoreKind,
@@ -1098,7 +1142,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         // as the tape predicates read it.
         .narrowed_get => .plain,
         // Views into a run something else holds.
-        .field_get => |payload| if (payload.weak) .fresh else .view,
+        .field_get => |payload| if (payload.narrowed) .plain else if (payload.weak) .fresh else .view,
         .variant_payload, .index_get => .view,
         // A folded constant materializes as its value does: a struct
         // default is built whole and owns its run; everything else is

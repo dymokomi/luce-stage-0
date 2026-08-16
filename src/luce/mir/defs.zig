@@ -1105,6 +1105,10 @@ pub const Local = struct {
     /// starts *empty* rather than at a shared zero, and that a trap
     /// unwinding past every release can still give the storage back.
     owns_storage: bool = false,
+    /// Use the boxed Runtime.Value slot shape without claiming ownership.
+    /// This is distinct from `owns_storage`: a closure bridge must preserve
+    /// inline text while the destination cell, not the bridge, releases it.
+    boxed_storage: bool = false,
     /// The slot contains a runtime weak handle while `local_type` remains
     /// the logical optional type seen by instruction results.
     weak: bool = false,

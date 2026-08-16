@@ -34,6 +34,7 @@ const LocalId = mir.LocalId;
 
 const assign = @import("assign.zig");
 const builder = @import("builder.zig");
+const closures = @import("closures.zig");
 const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
@@ -831,6 +832,7 @@ fn lowerBinding(
         .store = store,
         .span = span,
     } });
+    if (mutable) try closures.captureMutableBinding(self, name, local, value.value_type, weak, name_span);
 }
 
 const ReceivedShape = struct { value: Typed, layout: StructLayout };
@@ -917,6 +919,11 @@ fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
             .stores = stores,
             .span = bind.span,
         } });
+        if (bind.mutable) {
+            for (bind.names, locals, received.layout.fields) |name, local, field| {
+                try closures.captureMutableBinding(self, name.text, local, field.field_type, false, name.span);
+            }
+        }
     }
 }
 
@@ -925,6 +932,7 @@ const ExistingTarget = struct {
     local: LocalId,
     value_type: Type,
     owns_storage: bool,
+    capture_cell: ?context.CaptureCell,
 };
 
 const PreparedTarget = struct {
@@ -973,7 +981,11 @@ fn existingTarget(self: *FunctionBuilder, name: ast.Name) Error!?ExistingTarget 
         .name = name,
         .local = info.local,
         .value_type = recorder.localType(self, info.local),
-        .owns_storage = recorder.localOwnsStorage(self, info.local),
+        .owns_storage = if (info.capture_cell) |cell|
+            !cell.weak and shapes.ownsStorage(self.analyzer, recorder.localType(self, info.local))
+        else
+            recorder.localOwnsStorage(self, info.local),
+        .capture_cell = info.capture_cell,
     };
 }
 
@@ -1043,9 +1055,18 @@ fn lowerAssignMany(self: *FunctionBuilder, assigned: ast.AssignMany) Error!void 
         }
     }
     const target_locals = try self.arena().alloc(LocalId, targets.len);
-    for (targets, target_locals) |target, *slot| slot.* = target.local;
+    const cells = try self.arena().alloc(?nodes.Place.Field, targets.len);
+    for (targets, target_locals, cells) |target, *slot, *cell_slot| {
+        slot.* = target.local;
+        cell_slot.* = if (target.capture_cell) |cell| .{
+            .base = cell.local,
+            .layout = cell.layout,
+            .field = 0,
+        } else null;
+    }
     try recorder.recordStatement(self, .{ .assign_many = .{
         .targets = target_locals,
+        .cells = cells,
         .value = received.value.node,
         .stores = stores,
         .span = assigned.span,
@@ -1136,6 +1157,7 @@ fn lowerLateDeclaration(
         .store = store,
         .span = span,
     } });
+    try closures.captureMutableBinding(self, name, local, declared, weak, name_span);
 }
 
 fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Typed {
@@ -1584,7 +1606,7 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     // node — not the surrounding block — carries it whole.
     try recorder.openStatementFrame(self);
     try lowerStatement(self, guarded.attempt.*);
-    const attempt_recorded = recorder.closeCaptureFrame(self);
+    const attempt_recorded = try recorder.closeCaptureFrame(self, guarded.attempt.span());
     self.allow_fallible = false;
     const opened = self.opened orelse {
         // The binding is named in the refusal when there is one:

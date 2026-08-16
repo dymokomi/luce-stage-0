@@ -126,6 +126,14 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
         .try_call => |attempt| deeperThan(attempt.operand, left),
         .spawn => |worker| deeperThan(worker.call, left),
         .lambda => |written| deeperThan(written.body, left),
+        // The closure body is checked as its synthesized function and gets a
+        // fresh depth budget. Only creation-time snapshot expressions belong
+        // to the surrounding expression tree.
+        .closure => |written| for (written.captures) |capture| {
+            if (capture.value) |value| {
+                if (deeperThan(value, left)) break true;
+            }
+        } else false,
         .binary => |binary| deeperThan(binary.left, left) or deeperThan(binary.right, left),
         .call => |call| anyDeeperArgument(call.arguments, left),
         .value_call => |written| deeperThan(written.callee, left) or

@@ -79,6 +79,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_not,
         .keyword_spawn,
         .keyword_try,
+        .keyword_func,
         .minus,
         .tilde,
         .left_paren,
@@ -661,9 +662,13 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             if ((try self.expectClose(.right_paren, opener)) == null) return null;
             return inner;
         },
-        .left_bracket => return listLiteral(self),
+        .left_bracket => {
+            if (captureListFollows(self)) return blockClosure(self, true);
+            return listLiteral(self);
+        },
         .left_brace => return mapLiteral(self),
         .keyword_new => return newObject(self),
+        .keyword_func => return blockClosure(self, false),
         // `!` is the fallibility mark on a return type and nothing
         // else.  It used to be refused by the lexer, which is where
         // the `not` hint lived; now that it lexes, the hint belongs
@@ -852,6 +857,94 @@ fn lambda(self: *Parser) Error!?*ast.Expression {
         .parameters = try parameters.toOwnedSlice(self.arena),
         .body = body,
         .span = .{ .start = opener.span.start, .end = body.span().end },
+    } });
+}
+
+/// Whether the bracket under the cursor is a closure capture list. The token
+/// immediately after its matching `]` is decisive, so ordinary list literals
+/// retain their grammar and no expression inside the list has to be guessed.
+fn captureListFollows(self: *Parser) bool {
+    var depth: usize = 0;
+    var ahead: usize = 0;
+    while (true) : (ahead += 1) {
+        switch (self.peekAhead(ahead)) {
+            .left_bracket => depth += 1,
+            .right_bracket => {
+                depth -= 1;
+                if (depth == 0) return self.peekAhead(ahead + 1) == .keyword_func;
+            },
+            .end_of_file => return false,
+            else => {},
+        }
+    }
+}
+
+/// `[capture, weak owner, copy = expression] func(a, b): BLOCK`, or the same
+/// form beginning directly with `func`. Capture entries are intentionally
+/// small: inference is the default, and the list exists only to request weak
+/// storage or an explicitly named snapshot.
+fn blockClosure(self: *Parser, has_capture_list: bool) Error!?*ast.Expression {
+    const start = self.peek().span.start;
+    var captures: std.ArrayList(ast.ClosureCapture) = .empty;
+    defer captures.deinit(self.arena);
+
+    if (has_capture_list) {
+        const opener = self.advance(); // [
+        while (!endsList(self.peekKind(), .right_bracket)) {
+            const weak = self.accept(.keyword_weak) != null;
+            const named = if (self.accept(.keyword_self)) |receiver|
+                receiver
+            else
+                (try self.expect(.identifier, "a captured name")) orelse return null;
+            if (named.kind == .identifier) try self.refuseWildcardName(named);
+            var mode: ast.ClosureCaptureMode = if (weak) .weak else .strong;
+            var value: ?*ast.Expression = null;
+            var end = named.span.end;
+            if (self.accept(.assign) != null) {
+                if (weak) {
+                    try self.report(
+                        "luce.parse.closure",
+                        named.span,
+                        "a capture is either weak or a value snapshot, not both; remove 'weak' or '= ...'",
+                        .{},
+                    );
+                    return null;
+                }
+                mode = .snapshot;
+                value = (try expression(self)) orelse return null;
+                end = value.?.span().end;
+            }
+            try captures.append(self.arena, .{
+                .name = .{
+                    .text = if (named.kind == .keyword_self) "self" else self.text(named),
+                    .span = named.span,
+                },
+                .mode = mode,
+                .value = value,
+                .span = .{ .start = if (weak) named.span.start - "weak ".len else named.span.start, .end = end },
+            });
+            if (self.accept(.comma) == null) break;
+        }
+        if ((try self.expectClose(.right_bracket, opener)) == null) return null;
+    }
+
+    _ = (try self.expect(.keyword_func, "'func' after the capture list")) orelse return null;
+    const opener = (try self.expect(.left_paren, "'(' after 'func'")) orelse return null;
+    var parameters: std.ArrayList(ast.Name) = .empty;
+    defer parameters.deinit(self.arena);
+    while (!endsList(self.peekKind(), .right_paren)) {
+        const name = (try self.expect(.identifier, "a parameter name")) orelse return null;
+        try self.refuseWildcardName(name);
+        try parameters.append(self.arena, .{ .text = self.text(name), .span = name.span });
+        if (self.accept(.comma) == null) break;
+    }
+    if ((try self.expectClose(.right_paren, opener)) == null) return null;
+    const body = (try self.block("closure")) orelse return null;
+    return make(self, .{ .closure = .{
+        .captures = try captures.toOwnedSlice(self.arena),
+        .parameters = try parameters.toOwnedSlice(self.arena),
+        .body = body,
+        .span = .{ .start = start, .end = body.span.end },
     } });
 }
 

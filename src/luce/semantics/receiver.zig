@@ -192,6 +192,16 @@ fn expressionWritesReceiver(
         // synthesized function and must not change the enclosing
         // method's receiver classification.
         .lambda => false,
+        // A closure body runs later and owns its own receiver classification.
+        // Only explicit snapshot expressions run while this method does.
+        .closure => |written| blk: {
+            for (written.captures) |capture| {
+                if (capture.value) |value| {
+                    if (expressionWritesReceiver(self, info, value)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
         .name,
         .int_literal,
         .float_literal,

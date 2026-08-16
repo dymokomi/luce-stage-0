@@ -98,6 +98,10 @@ pub fn fieldReachable(
     field_index: u32,
     span: Span,
 ) Error!bool {
+    // Closure environments and mutable cells are compiler-only layouts. They
+    // have no source declaration or cross-module visibility surface, so they
+    // deliberately have no `struct_decls` row to index here.
+    if (self.analyzer.structs.items[layout_index].closure_storage) return true;
     const info = self.analyzer.struct_decls.items[layout_index];
     if (info.module == self.module) return true;
     if (field_index >= info.field_visibility.len) return true;
@@ -424,6 +428,16 @@ pub fn failUnknownField(
     span: Span,
 ) Error!void {
     const layout = self.analyzer.structs.items[layout_index];
+    if (layout.closure_storage) {
+        var generated = helpers.Suggestion.init(field);
+        for (layout.fields) |candidate| generated.offer(candidate.name);
+        if (generated.best()) |closest| {
+            try self.fail(code, span, "{s} has no field {s}; did you mean {s}?", .{ layout.name, field, closest });
+            return;
+        }
+        try self.fail(code, span, "{s} has no field {s}", .{ layout.name, field });
+        return;
+    }
     const info = self.analyzer.struct_decls.items[layout_index];
     var suggestion = helpers.Suggestion.init(field);
     for (layout.fields, 0..) |candidate, index| {

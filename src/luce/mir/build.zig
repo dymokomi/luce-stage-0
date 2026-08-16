@@ -246,15 +246,23 @@ pub const Lowering = struct {
         self.locals.items[local].owns_storage = owns_storage;
     }
 
+    /// Keep a non-owning local in the boxed storage representation. The
+    /// slot transports a value whose inline/outside form must survive, but
+    /// another place owns and releases it.
+    pub fn boxStorage(self: *Lowering, local: LocalId) void {
+        std.debug.assert(!self.locals.items[local].weak);
+        self.locals.items[local].boxed_storage = true;
+    }
+
     /// Retract a temporary's claim on its storage: something else took
     /// it and will give it back instead (docs/STRINGS.md).
     ///
-    /// Only ever called on a hidden slot that is written and never
-    /// loaded, so the store into it becomes dead and `optimize`
-    /// removes it — a slot that stopped owning storage would hand a
-    /// load the register shape, and a string's form does not survive
-    /// that round trip.
+    /// The slot remains boxed after the ownership claim moves. Write-only
+    /// parks normally disappear in `optimize`; if a bridge survives and is
+    /// read, the box preserves inline text and value-run representation
+    /// without making this slot their second owner.
     pub fn disownStorage(self: *Lowering, local: LocalId) void {
+        self.locals.items[local].boxed_storage = true;
         self.locals.items[local].owns_storage = false;
     }
 

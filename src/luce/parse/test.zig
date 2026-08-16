@@ -2841,6 +2841,66 @@ test "a call is a postfix suffix, on the same footing as an index" {
     try testing.expect(fourth.value_call.callee.value_call.callee.* == .call);
 }
 
+test "block closures parse inferred, strong, weak, and snapshot captures" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    var total: i64 = 0
+        \\    let advance: func(i64) -> i64 = func(amount):
+        \\        total += amount
+        \\        return total
+        \\    let render: func() -> str = [model, weak owner, title = current_title] func():
+        \\        return title
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body.statements;
+    try testing.expect(body[1].let.value.* == .closure);
+    try testing.expectEqual(@as(usize, 0), body[1].let.value.closure.captures.len);
+    try testing.expectEqual(@as(usize, 1), body[1].let.value.closure.parameters.len);
+    try testing.expectEqual(@as(usize, 2), body[1].let.value.closure.body.statements.len);
+
+    const captures = body[2].let.value.closure.captures;
+    try testing.expectEqual(@as(usize, 3), captures.len);
+    try testing.expectEqual(ast.ClosureCaptureMode.strong, captures[0].mode);
+    try testing.expectEqual(ast.ClosureCaptureMode.weak, captures[1].mode);
+    try testing.expectEqual(ast.ClosureCaptureMode.snapshot, captures[2].mode);
+    try testing.expect(captures[2].value.?.* == .name);
+    try testing.expectEqualStrings("current_title", captures[2].value.?.name.text);
+}
+
+test "a closure capture list accepts the implicit self binding" {
+    var parsed = try expectClean(
+        \\class Item:
+        \\    callback: (func() -> i64)?
+        \\    func install():
+        \\        self.callback = [weak self] func():
+        \\            return 0
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    const closure = parsed.program.structs[0].functions[0].body.statements[0].assign.value;
+    try testing.expect(closure.* == .closure);
+    try testing.expectEqual(@as(usize, 1), closure.closure.captures.len);
+    try testing.expectEqualStrings("self", closure.closure.captures[0].name.text);
+    try testing.expectEqual(ast.ClosureCaptureMode.weak, closure.closure.captures[0].mode);
+}
+
+test "a capture list is distinguished from an ordinary list by following func" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    let names = [first, second]
+        \\    let work: func() = [first] func():
+        \\        print(first)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body.statements;
+    try testing.expect(body[0].let.value.* == .list_literal);
+    try testing.expect(body[1].let.value.* == .closure);
+}
+
 test "a call suffix does not cross a line break" {
     // The suffix ends at a newline exactly as an index chain does, and
     // for the same reason: the lexer suspends newlines only inside an

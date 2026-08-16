@@ -231,6 +231,10 @@ test "local storage claims agree with the value representation" {
     defer scalar.deinit();
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &scalar));
 
+    scalar.functions[0].locals[0].owns_storage = false;
+    scalar.functions[0].locals[0].boxed_storage = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &scalar));
+
     var handle = try programOf(.{
         .instructions = &.{.{ .ret = null }},
         .result_types = &.{.none},
@@ -241,6 +245,10 @@ test "local storage claims agree with the value representation" {
     handle.heap_types = try handle.arena.allocator().dupe(types.HeapType, &.{.{ .list = .i64 }});
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &handle));
 
+    handle.functions[0].locals[0].owns_storage = false;
+    handle.functions[0].locals[0].boxed_storage = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &handle));
+
     var parameter = try programOf(.{
         .instructions = &.{.{ .ret = null }},
         .result_types = &.{.none},
@@ -249,6 +257,10 @@ test "local storage claims agree with the value representation" {
         .locals = &.{.{ .name = "text", .local_type = .str, .owns_storage = true }},
     });
     defer parameter.deinit();
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &parameter));
+
+    parameter.functions[0].locals[0].owns_storage = false;
+    parameter.functions[0].locals[0].boxed_storage = true;
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &parameter));
 
     var optional = try programOf(.{
@@ -263,6 +275,11 @@ test "local storage claims agree with the value representation" {
     });
     defer optional.deinit();
     try verify_mod.verify(testing.allocator, &optional);
+    optional.functions[0].locals[0].owns_storage = false;
+    optional.functions[0].locals[0].boxed_storage = true;
+    try verify_mod.verify(testing.allocator, &optional);
+    optional.functions[0].locals[0].owns_storage = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &optional));
 
     var function = try programOf(.{
         .instructions = &.{.{ .ret = null }},
@@ -1424,6 +1441,19 @@ test "bare function fields are rejected while optional function fields remain st
     // refused.
     struct_fields[0].field_type = .{ .optional = .{ .function = 0 } };
     try verify_mod.verify(testing.allocator, &program);
+
+    // A closure environment is private compiler storage. It may hold the
+    // function value directly, but only when it is also an ARC reference
+    // layout; neither source structs nor value-shaped forged environments
+    // inherit this exception.
+    struct_fields[0].field_type = .{ .function = 0 };
+    program.structs[0].closure_storage = true;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    program.structs[0].reference = true;
+    try verify_mod.verify(testing.allocator, &program);
+    program.structs[0].closure_storage = false;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    program.structs[0].reference = false;
 
     const member_fields = try arena.dupe(types.StructField, &.{.{
         .name = "callback",

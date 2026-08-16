@@ -301,6 +301,7 @@ const Replay = struct {
             else
                 try self.code.hiddenLocal(row.local_type, false);
             std.debug.assert(id == index);
+            if (row.boxed_storage) self.code.boxStorage(id);
         }
     }
 
@@ -589,7 +590,8 @@ const Replay = struct {
             },
             .field_get => |read| field: {
                 const target = try self.replayValue(read.target);
-                break :field try self.code.emit(
+                const stored_type = read.stored orelse read.result;
+                const stored = try self.code.emit(
                     if (read.weak) .{ .weak_struct_get = .{
                         .target = target,
                         .layout = read.layout,
@@ -599,6 +601,13 @@ const Replay = struct {
                         .layout = read.layout,
                         .field = read.field,
                     } },
+                    stored_type,
+                );
+                if (!read.narrowed) break :field stored;
+                const arguments = try self.arena().alloc(Register, 1);
+                arguments[0] = stored;
+                break :field try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = arguments } },
                     read.result,
                 );
             },
@@ -680,10 +689,21 @@ const Replay = struct {
                 .{ .const_function = .{ .function = named.function } },
                 named.result,
             ),
-            .lambda_ref => |made| try self.code.emit(
-                .{ .const_function = .{ .function = made.function } },
-                made.result,
-            ),
+            .lambda_ref => |made| closure: {
+                const receiver = if (made.environment) |environment| held: {
+                    const value = try self.replayValue(environment);
+                    const owned = try self.ownedForStore(
+                        value,
+                        environment.result(),
+                        nodes.provenance(environment),
+                    );
+                    break :held owned.register;
+                } else null;
+                break :closure try self.code.emit(.{ .const_function = .{
+                    .function = made.function,
+                    .receiver = receiver,
+                } }, made.result);
+            },
             .bound_method => |bound| bind: {
                 const receiver = try self.replayValue(bound.receiver);
                 // A bound function is an owning value.  A fresh receiver can
@@ -1606,9 +1626,11 @@ const Replay = struct {
         const entries = try self.replayWrittenOperands(batch);
         defer self.scratch().free(entries);
         const registers = try self.arena().alloc(Register, fields.len);
-        for (entries[0..batch.written], batch.slots[0..batch.written]) |*entry, slot| {
+        for (entries[0..batch.written], batch.slots[0..batch.written], 0..) |*entry, slot, position| {
             try self.applyWrappers(entry);
             if (fields[slot].weak) {
+                registers[slot] = entry.register;
+            } else if (batch.move.len != 0 and batch.move[position]) {
                 registers[slot] = entry.register;
             } else {
                 const stored = try self.ownedForStore(
@@ -1926,16 +1948,42 @@ const Replay = struct {
         if (declared.value) |value| {
             const register = try self.replayValue(value);
             const local = self.takeRecordedSlot(declared.local);
-            try self.storeOwned(local, register, row.local_type, nodes.provenance(value), declared.store);
-            try self.noteOwned(local);
+            switch (declared.ownership) {
+                .normal => {
+                    try self.storeOwned(local, register, row.local_type, nodes.provenance(value), declared.store);
+                    try self.noteOwned(local);
+                },
+                .transfer => {
+                    const stored = try self.ownedForStore(register, row.local_type, nodes.provenance(value));
+                    std.debug.assert(stored.kind == declared.store);
+                    try self.code.store(local, stored.register);
+                },
+                .borrow => {
+                    std.debug.assert(declared.store == .plain);
+                    try self.code.store(local, register);
+                },
+            }
             return;
         }
         // The zero fill of a late declaration, re-derived from the
         // slot's type (S40).
         const zero = try self.code.zeroOf(row.local_type);
         const local = self.takeRecordedSlot(declared.local);
-        try self.storeOwned(local, zero, row.local_type, nodes.zeroOf(row.local_type), declared.store);
-        try self.noteOwned(local);
+        switch (declared.ownership) {
+            .normal => {
+                try self.storeOwned(local, zero, row.local_type, nodes.zeroOf(row.local_type), declared.store);
+                try self.noteOwned(local);
+            },
+            .transfer => {
+                const stored = try self.ownedForStore(zero, row.local_type, nodes.zeroOf(row.local_type));
+                std.debug.assert(stored.kind == declared.store);
+                try self.code.store(local, stored.register);
+            },
+            .borrow => {
+                std.debug.assert(declared.store == .plain);
+                try self.code.store(local, zero);
+            },
+        }
     }
 
     /// Enter a declared binding in its scope's owned list when it holds
@@ -1984,8 +2032,22 @@ const Replay = struct {
                 .field = @intCast(position),
             } }, field.field_type);
             const local = self.takeRecordedSlot(expected);
-            try self.storeOwned(local, held, field.field_type, .view, recorded);
-            try self.noteOwned(local);
+            const ownership = if (bind.ownerships.len == 0) .normal else bind.ownerships[position];
+            switch (ownership) {
+                .normal => {
+                    try self.storeOwned(local, held, field.field_type, .view, recorded);
+                    try self.noteOwned(local);
+                },
+                .transfer => {
+                    const stored = try self.ownedForStore(held, field.field_type, .view);
+                    std.debug.assert(stored.kind == recorded);
+                    try self.code.store(local, stored.register);
+                },
+                .borrow => {
+                    std.debug.assert(recorded == .plain);
+                    try self.code.store(local, held);
+                },
+            }
         }
     }
 
@@ -2025,7 +2087,15 @@ const Replay = struct {
                     fitted_type = target_type;
                 }
             }
-            if (self.code.localOwnsStorage(target)) {
+            const cell = if (assign.cells.len == 0) null else assign.cells[position];
+            const weak_cell = if (cell) |place|
+                self.code.structs[place.layout].fields[place.field].weak
+            else
+                false;
+            if (weak_cell) {
+                std.debug.assert(recorded == .plain);
+                prepared[position] = fitted;
+            } else if (self.code.localOwnsStorage(target) or cell != null) {
                 const stored = try self.ownedForStore(fitted, target_type, .view);
                 std.debug.assert(stored.kind == recorded);
                 prepared[position] = stored.register;
@@ -2041,7 +2111,28 @@ const Replay = struct {
         // The new values were prepared (and any borrow retained) above, so
         // each target's old reference and old storage can go now, before
         // the new value replaces it — the object first, as everywhere else.
-        for (assign.targets, prepared) |target, staged| {
+        for (assign.targets, prepared, 0..) |target, staged, position| {
+            if (assign.cells.len != 0) {
+                if (assign.cells[position]) |cell| {
+                    const base = try self.code.load(cell.base);
+                    const field = self.code.structs[cell.layout].fields[cell.field];
+                    _ = try self.code.emit(
+                        if (field.weak) .{ .weak_struct_set = .{
+                            .target = base,
+                            .layout = cell.layout,
+                            .field = cell.field,
+                            .value = staged,
+                        } } else .{ .struct_set = .{
+                            .target = base,
+                            .layout = cell.layout,
+                            .field = cell.field,
+                            .value = staged,
+                        } },
+                        .none,
+                    );
+                    continue;
+                }
+            }
             if (try self.carriesObjects(self.code.localType(target))) try self.code.releaseObject(target);
             try self.code.release(target, self.code.localOwnsStorage(target));
             try self.code.store(target, staged);
@@ -2203,14 +2294,32 @@ const Replay = struct {
         var stored = register;
         var provenance = nodes.provenance(value);
         if (compound) |op| {
-            const old_value = try self.code.emit(.{ .struct_get = .{
+            var old_value = try self.code.emit(.{ .struct_get = .{
                 .target = current,
                 .layout = place.layout,
                 .field = place.field,
             } }, field_type);
-            const combined = try self.replayCombine(op, old_value, field_type, register, true);
+            const combine_type = if (place.narrowed) field_type.held().? else field_type;
+            if (place.narrowed) {
+                const unwrap = try self.arena().alloc(Register, 1);
+                unwrap[0] = old_value;
+                old_value = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = unwrap } },
+                    combine_type,
+                );
+            }
+            const combined = try self.replayCombine(op, old_value, combine_type, register, true);
             stored = combined.register;
             provenance = combined.provenance;
+            if (place.narrowed) {
+                const arguments = try self.arena().alloc(Register, 1);
+                arguments[0] = stored;
+                stored = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
+                    field_type,
+                );
+                provenance = .plain;
+            }
         }
         const stored_field = if (field.weak)
             StoredValue{ .register = stored, .kind = .plain }

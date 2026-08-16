@@ -3152,12 +3152,12 @@ const Body = struct {
     /// shape it always had, which is what keeps a str parameter's
     /// inner loop two words in registers.
     fn slotType(self: *Body, local: mir.Local) Error!Builder.Type {
-        if (local.owns_storage or local.weak) return self.module.value_type;
+        if (local.owns_storage or local.boxed_storage or local.weak) return self.module.value_type;
         return self.module.valueType(local.local_type);
     }
 
     fn slotAlignment(local: mir.Local) Builder.Alignment {
-        if (local.owns_storage or local.weak) return value_alignment;
+        if (local.owns_storage or local.boxed_storage or local.weak) return value_alignment;
         return Module.valueAlignment(local.local_type);
     }
 
@@ -3188,7 +3188,7 @@ const Body = struct {
             }
             const stored = if (index < function.parameter_count)
                 self.wip.arg(@intCast(index + 3))
-            else if (local.owns_storage)
+            else if (local.owns_storage or local.boxed_storage)
                 // A slot that owns its storage starts empty, not at
                 // the shared zero: `structZero` is one constant run
                 // per layout, and a release must never hand a shared
@@ -3196,7 +3196,7 @@ const Body = struct {
                 try self.emptyValue(local.local_type)
             else
                 try self.zeroValue(local.local_type);
-            if (local.owns_storage) {
+            if (local.owns_storage or local.boxed_storage) {
                 try self.fillBoxShape(slot, local.local_type);
                 try self.fillBoxValue(slot, local.local_type, stored);
                 continue;
@@ -5643,7 +5643,7 @@ const Body = struct {
             .local_get => |local| {
                 const held = self.function.locals[local];
                 const slot = self.local_slots[local];
-                if (held.owns_storage) {
+                if (held.owns_storage or held.boxed_storage) {
                     self.produced[register].value = try self.unboxed(
                         held.local_type,
                         slot,
@@ -5836,7 +5836,7 @@ const Body = struct {
     fn emitLocalSet(self: *Body, local: mir.LocalId, value: mir.Register) Error!void {
         const held = self.function.locals[local];
         const slot = self.local_slots[local];
-        if (!held.owns_storage) {
+        if (!held.owns_storage and !held.boxed_storage) {
             _ = try self.wip.store(
                 .normal,
                 self.produced[value].value,

@@ -357,6 +357,9 @@ fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expres
         .field => |field| return parameterRead(declaration, field.target),
         .spawn => |worker| return parameterRead(declaration, worker.call),
         .lambda => |written| return parameterRead(declaration, written.body),
+        // A block closure is not a constant default. The folder reports that
+        // directly; its body runs later and is not evaluated here.
+        .closure => return null,
         .call => |call| {
             for (call.arguments) |argument| {
                 if (parameterRead(declaration, argument.value)) |read| return read;
