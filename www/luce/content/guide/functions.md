@@ -217,7 +217,7 @@ A class initializer can instead require a present function field and assign it
 before the object exists. That field uses the bare type; the compiler's
 definite-initialization check supplies the guarantee that a zero could not:
 
-```luce module
+```luce module file=action.luc
 class Action:
     apply: func(i64) -> i64
 

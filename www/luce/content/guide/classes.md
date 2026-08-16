@@ -94,7 +94,7 @@ object early; returning a value is invalid.
 
 An initializer that can reject input writes `-> !`:
 
-```luce module
+```luce module file=port.luc
 class Port:
     number: i64
 
