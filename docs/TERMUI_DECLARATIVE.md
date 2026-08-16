@@ -87,30 +87,39 @@ right representation because termui owns the complete set of traversal rules
 and must exhaustively define drawing, cursor discovery and event routing for
 each variant.
 
-The first surface contains only variants required by the editor:
+The public facade contains only components required by the editor:
 
 ```text
-empty
-text(lines)
-lines(total, top, selected, render, selected_style)
-row(items, spacing)
-column(items, spacing)
-overlay(children)
-frame(content, title, style, edges)
-events(content, respond)
-cursor(content, locate)
+Empty()
+Label(text, style)
+StyledText(lines)
+Rows(total, top, anchor, selected, render, selected_style)
+Fill(glyph, style)
+HStack(items, spacing)
+VStack(items, spacing)
+ZStack(children)
+Panel(title, content, style, edges)
 ```
 
-`row` and `column` receive `Item { size, content }`, pairing geometry with its
-child so mismatched length and child lists are impossible. `lines` is the
+`HStack` and `VStack` receive `Item { size, content }`, pairing geometry with
+its child so mismatched length and child lists are impossible. A view produces
+that pair with `.sized(length)`. `Rows` is the
 general visible-window primitive for source, file and output rows. A provider
 answers one styled `Line`; the view owns clipping, selection fill and visible
-range traversal.
+range traversal. Its optional `anchor` is kept visible independently from its
+optional highlighted `selected` row, so a text cursor can drive scrolling
+without painting a whole source line.
 
 Applications compose reusable views with ordinary functions returning
 `View`. A new framework variant is added only when it needs a new traversal
 rule. There is no public mutable widget base class and no retained widget
 tree.
+
+Mutable runtime owners are classes: `Surface` owns the changing front/back
+cell grids, `Stream` owns input iteration, and applications are expected to be
+classes whose callbacks share one identity. Descriptions and observations stay
+values: `View`, `Rect`, `Style`, `Line`, `Length`, `Event` and `Snapshot` can be
+built, passed and discarded without hidden lifecycle.
 
 ### Layout
 
@@ -137,7 +146,7 @@ ideal and maximum values in `body`; termui owns the one correct solver.
 Methods on `View` return a wrapping `View`:
 
 ```text
-content.framed(...)
+content.sized(length)
 content.on_event(callback)
 content.cursor(callback)
 ```
@@ -167,7 +176,7 @@ Routing is deterministic:
 1. A modifier sees an event before its wrapped content. This lets a root
    handler own global commands.
 2. Pointer events enter only rectangles containing the pointer.
-3. Rows and columns visit children in display order; overlays visit the
+3. Stacks visit children in display order; `ZStack` visits the
    visually topmost child first.
 4. Keyboard and text events continue until the active child accepts them.
 5. `closed` and `resize` are lifecycle events owned by `run`, not application
@@ -238,7 +247,7 @@ input.luc        host event vocabulary and snapshot decoding
 layout.luc       total one-axis solver
 canvas.luc       cell buffer, clipping, diff and snapshots
 view.luc         recursive view value, render and event traversal
-application.luc  Application and the sole terminal loop
+runtime.luc      Application and the sole terminal loop
 ```
 
 These are knowledge boundaries, not execution phases. The facade aliases the
@@ -256,7 +265,7 @@ The editor becomes two layers:
   styled line providers and routes view-scoped events.
 
 The imperative `editor/layout.luc`, `editor/paint.luc` and hand-written loop
-disappear. Pane geometry is declared by row and column items. File, source,
+disappear. Pane geometry is declared by `HStack` and `VStack` items. File, source,
 output and status regions each receive their own event and cursor modifiers.
 Global shortcuts live on the root modifier. Pointer drags are captured by the
 application class after a divider press and handled at the root until release.
@@ -271,8 +280,8 @@ The rewrite is complete only when all of these are true:
 - a smallest useful app contains no loop, renderer, surface, flush or input
   read;
 - package tests cover empty and tiny layouts, compression order, nested
-  composition, modifier order, pointer bounds, overlay order, cursor choice,
-  styled lines, frame junctions, snapshots and repeated ARC cleanup;
+  composition, modifier order, pointer bounds, `ZStack` order, cursor choice,
+  styled lines, panel junctions, snapshots and repeated ARC cleanup;
 - the editor's pure domain tests remain independent of a terminal;
 - editor snapshot tests prove its principal pane combinations and focus
   cursors;
@@ -282,4 +291,3 @@ The rewrite is complete only when all of these are true:
 - repository and online package documentation describe only v0.3; and
 - `zig build test`, the installed product build and the documentation-site
   gate finish cleanly.
-

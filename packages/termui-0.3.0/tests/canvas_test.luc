@@ -2,7 +2,7 @@ import canvas
 import model
 
 func test_writes_clip_to_the_assigned_rectangle():
-    var surface = canvas.Surface.of(3, 6)
+    let surface = canvas.Surface(3, 6)
     surface.clear()
     let right = model.Rect(row = 0, column = 3, rows = 2, columns = 3)
     surface.write(right, 0, 0, "abcdef", model.Style(foreground = 2))
@@ -13,7 +13,7 @@ func test_writes_clip_to_the_assigned_rectangle():
     assert(frame.cell(0, 3).style.foreground == 2)
 
 func test_a_snapshot_owns_characters_styles_and_cursor():
-    var surface = canvas.Surface.of(2, 5)
+    let surface = canvas.Surface(2, 5)
     surface.clear()
     surface.write(surface.area(), 0, 0, "hé", model.Style(foreground = 3))
     let frame = surface.snapshot(model.Cursor(row = 0, column = 2))
@@ -23,9 +23,11 @@ func test_a_snapshot_owns_characters_styles_and_cursor():
     assert(frame.cursor != none)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.column == 2)
+    surface.put(0, 0, "x", model.Style())
+    assert(frame.cell(0, 0).text == "h")
 
 func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
-    var surface = canvas.Surface.of(2, 3)
+    let surface = canvas.Surface(2, 3)
     surface.clear()
     assert(surface.present().cells == 6)
     assert(surface.present().cells == 0)
@@ -34,7 +36,7 @@ func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
     assert(surface.present().cells == 12)
 
 func test_a_one_cell_change_is_one_diff_run():
-    var surface = canvas.Surface.of(2, 4)
+    let surface = canvas.Surface(2, 4)
     surface.clear()
     surface.present()
     surface.put(1, 2, "x", model.Style(foreground = 4))

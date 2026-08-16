@@ -22,26 +22,40 @@ import console
 import session
 import keymap
 import focus
-import layout as panes
-import termui.input as input
-import termui.rows as rows
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
 const indent_unit = "    "
 
-# Which divider a mouse is dragging, between a press on it and release.
-enum Drag:
-    idle
-    files
-    output
+# The file pane's ordinary domain state. Geometry belongs to the declarative
+# view; this value only remembers which result is selected and where its
+# visible window begins.
+struct Selection:
+    count: i64 = 0
+    top: i64 = 0
+    selected: i64 = 0
 
-struct Editor:
+    func adjust(height: i64):
+        if self.count <= 0:
+            self.top = 0
+            self.selected = 0
+            return
+        self.selected = clamp(self.selected, 0, self.count - 1)
+        if self.selected < self.top:
+            self.top = self.selected
+        if height > 0 and self.selected >= self.top + height:
+            self.top = self.selected - height + 1
+        self.top = clamp(self.top, 0, max(self.count - 1, 0))
+
+    func move_by(steps: i64):
+        self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
+
+class Editor:
     buffers: list[document.Buffer]
     histories: list[history.Stacks]
     names: list[str]
     search_matches: list[i64]
-    files: rows.Rows = rows.Rows()
+    files: Selection = Selection()
     path: str = ""
     content: str = ""
     message: str = ""
@@ -54,11 +68,6 @@ struct Editor:
     output_scroll: i64 = 0
     search_current: i64 = -1
     last_draft_ms: i64 = 0
-    # The sizes a person has dragged the pane dividers to; zero is the
-    # auto default the layout picks (editor/layout.luc).
-    files_width: i64 = 0
-    output_height: i64 = 0
-    dragging: Drag = Drag.idle
     file_pane: bool = false
     output_pane: bool = false
     dirty: bool = false
@@ -66,6 +75,29 @@ struct Editor:
     coalescing: bool = false
     quit: bool = false
     focus: focus.Focus = focus.Focus.editor
+
+    init(
+        buffers: list[document.Buffer],
+        histories: list[history.Stacks],
+        names: list[str],
+        search_matches: list[i64],
+        path: str = "",
+        content: str = "",
+        message: str = "",
+        cursor: i64 = 0,
+        scroll: i64 = 0,
+        dirty: bool = false,
+    ):
+        self.buffers = buffers
+        self.histories = histories
+        self.names = names
+        self.search_matches = search_matches
+        self.path = path
+        self.content = content
+        self.message = message
+        self.cursor = cursor
+        self.scroll = scroll
+        self.dirty = dirty
 
     # --- switching between buffers -----------------------------------
 
@@ -290,68 +322,6 @@ struct Editor:
             else:
                 self.focus = focus.Focus.editor
 
-    func pointer(mouse: input.Mouse, view: panes.Layout):
-        if mouse.kind == input.Pointer.wheel:
-            if self.focus == focus.Focus.output:
-                self.output_scroll = max(self.output_scroll - mouse.wheel, 0)
-            elif self.focus == focus.Focus.editor:
-                self.scroll = max(self.scroll - mouse.wheel, 0)
-            return
-        # A release ends any drag; a drag in progress moves the divider it
-        # started on.  The layout clamps the raw size next frame, so the
-        # rule cannot be dragged past where the panes stay usable.
-        if mouse.kind == input.Pointer.release:
-            self.dragging = Drag.idle
-            return
-        if mouse.kind == input.Pointer.drag:
-            if self.dragging == Drag.files:
-                self.files_width = mouse.column
-            elif self.dragging == Drag.output:
-                self.output_height = view.status.row - mouse.row
-            return
-        if mouse.kind != input.Pointer.press or mouse.button != 0:
-            return
-        # A press on a divider begins a resize and does nothing else.
-        let files_divider = view.files_handle()
-        if files_divider != none:
-            if files_divider.hit(mouse.row, mouse.column):
-                self.dragging = Drag.files
-                return
-        let output_divider = view.output_handle()
-        if output_divider != none:
-            if output_divider.hit(mouse.row, mouse.column):
-                self.dragging = Drag.output
-                return
-        let where = view.pane_at(mouse.row, mouse.column)
-        if where == none:
-            return
-        match where:
-            files:
-                self.focus = focus.Focus.files
-                if mouse.row > 0:
-                    let index = self.files.top + mouse.row - 1
-                    if index < len(self.names):
-                        self.files.selected = index
-                        self.open_row(index)
-                        self.focus = focus.Focus.files
-            output:
-                self.focus = focus.Focus.output
-                let line = mouse.row - view.output.row - 1
-                if line >= 0:
-                    self.output_scroll = max(line, 0)
-            editor:
-                self.focus = focus.Focus.editor
-                let line_index = self.scroll + mouse.row
-                if line_index < document.count_lines(self.content):
-                    let start = document.line_at(self.content, line_index)
-                    let wanted = max(mouse.column - view.text_start(), 0)
-                    self.cursor = document.at_column(self.content, start, wanted)
-                    # A click moves the cursor, so a run typed after it is
-                    # its own undo group, as a keyboard move already is.
-                    self.coalescing = false
-            search:
-                self.focus = focus.Focus.search
-
     # --- build and save ----------------------------------------------
 
     func build():
@@ -386,15 +356,6 @@ struct Editor:
             return
         self.last_draft_ms = now
         session.save_draft(self.path, self.content)
-
-    # --- scrolling ---------------------------------------------------
-
-    func adjust(visible: i64):
-        let cursor_line = document.line_of(self.content, self.cursor)
-        if cursor_line < self.scroll:
-            self.scroll = cursor_line
-        elif cursor_line >= self.scroll + visible:
-            self.scroll = cursor_line - visible + 1
 
     func vertical(target_line: i64):
         let total = document.count_lines(self.content)

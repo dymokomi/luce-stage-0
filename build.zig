@@ -2,22 +2,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const test_suites = @import("tools/test_suites.zig");
 
-/// termui's modules, entry module first (docs/TERMUI_EDITOR_REWRITE.md).
-/// The package is userland, and three things in this file need to name its
-/// files: the editor's compiles (it imports them), the specs (they
-/// compile the editor), and the package's own test run.  v0.2 is the
-/// clean rewrite (docs/TERMUI_EDITOR_REWRITE.md): the deep core plus the
-/// three modules v0.1 lacked — layout (the constraint solver), text
-/// (styled spans), and frame (junction-aware boxes) — with the widget
-/// layer reduced to the two the editor uses (rows, viewport).
-const termui_version = "0.2.0";
-const termui_modules = [_][]const u8{ "termui", "surface", "text", "layout", "frame", "input", "view", "rows", "viewport", "renderer" };
+/// termui's modules, entry module first (docs/TERMUI_DECLARATIVE.md).
+/// The public facade is small; model, input, layout, canvas and view form the
+/// hidden declarative engine, and runtime owns the terminal loop.
+const termui_version = "0.3.0";
+const termui_modules = [_][]const u8{ "termui", "model", "input", "layout", "canvas", "view", "runtime" };
 
 /// The editor's own modules, its root (`editor`) first.  The specs
 /// compile the editor from these, and both its compile and its test run
 /// name them as inputs so editing one re-runs what depends on it.
-const editor_modules = [_][]const u8{ "editor", "focus", "keymap", "document", "history", "search", "highlight", "theme", "layout", "browser", "console", "session", "state", "paint" };
-const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "layout", "state", "render" };
+const editor_modules = [_][]const u8{ "editor", "application", "focus", "keymap", "document", "history", "search", "highlight", "theme", "browser", "console", "session", "state" };
+const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "state", "application" };
 
 // LuciaOS v2 builds two executables from one language module:
 //
@@ -1412,7 +1407,7 @@ pub fn build(b: *std.Build) void {
         .{
             .directory = "termui-" ++ termui_version,
             .modules = &termui_modules,
-            .tests = &.{ "rect", "surface", "text", "layout", "frame", "input", "view", "rows", "viewport", "renderer" },
+            .tests = &.{ "model", "input", "layout", "canvas", "view", "facade" },
         },
     };
     for (packages) |package| {
@@ -1432,9 +1427,8 @@ pub fn build(b: *std.Build) void {
         test_packages_step.dependOn(&test_package.step);
     }
 
-    // The editor carries tests of its own now that its pure pieces —
-    // the layout arithmetic and the keymap — are a module a test can
-    // import (docs/TESTING.md).  Same runner, same shape as a
+    // The editor carries tests of its pure model and its complete declarative
+    // application projection (docs/TESTING.md). Same runner, same shape as a
     // package's, driven from the editor's own project root.
     const test_editor = b.addRunArtifact(compiler);
     test_editor.addArg("test");

@@ -4,74 +4,14 @@
 #   ^S save   ^B build/run   ^F find   ^Z undo   ^Y redo   ^Q quit
 #   ^E files  ^O output      ^W focus next pane
 #
-# The file draws through **termui** (docs/TERMUI.md): the library owns
-# the cell grid, the diff, the layout rectangles, the frames and the
-# event union, while the host owns raw mode and every escape u8.  This
-# file owns only the wiring and the loop — every decision about what a
-# keystroke means lives in `state`, and every cell drawn in `paint`.
+# `application.App` describes the screen. TermUI owns the application loop,
+# terminal lifecycle, layout, drawing, input routing and shutdown.
 
-import state
-import session
-import keymap
-import focus
-import history
-import document
-import layout as panes
-import paint
-import termui.renderer as renderer
-import termui.input as input
+import application
+import termui
 
 func main(args: list[str]):
     if len(args) == 0:
         print("usage: editor FILE [FILE ...]")
         return
-    var buffers = new list[document.Buffer]
-    var histories = new list[history.Stacks]
-    for path in args:
-        let loaded = session.load(path)
-        buffers.append(loaded.buffer)
-        histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-        # A recovered draft is undoable back to the file on disk.
-        if loaded.recovered:
-            histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
-    let first = buffers[0]
-    var editor = state.Editor(
-        buffers = buffers,
-        histories = histories,
-        names = new list[str],
-        search_matches = new list[i64],
-        path = first.path,
-        content = first.content,
-        message = first.message,
-        cursor = first.cursor,
-        scroll = first.scroll,
-        dirty = first.dirty,
-    )
-    # The app owns the loop: termui supplies a surface, a layout
-    # vocabulary and an event stream, and never takes control.
-    var ui = renderer.Renderer.open()
-    while not editor.quit:
-        let area = ui.begin()
-        let view = panes.Layout.of(area, editor.file_pane, editor.output_pane, editor.files_width, editor.output_height)
-        editor.adjust(view.text.rows)
-        if editor.file_pane:
-            editor.adjust_files(max(view.files.rows - 1, 0))
-        paint.frame(editor, ui.surface, view)
-        ui.present()
-        let cursor_row, cursor_column = paint.cursor_at(editor, view)
-        ui.cursor(cursor_row, cursor_column)
-        ui.flush()
-        editor.autosave(clock_ms())
-        match ui.next():
-            closed:
-                # The keyboard ran dry — a pipe closed — and there is no
-                # one left to ask about unsaved work, so the editor stops.
-                break
-            resize:
-                continue
-            key(pressed):
-                editor.key(keymap.intent_of(pressed), "", view.text.rows)
-            text(typed):
-                editor.key(keymap.Intent.insert_text, typed, view.text.rows)
-            mouse(pointer):
-                editor.pointer(pointer, view)
+    termui.run(application.open(args))

@@ -1,0 +1,99 @@
+# The editor's complete declarative screen, rendered without a terminal.
+
+import std.strings
+import application
+import document
+import focus
+import history
+import state
+import termui
+
+func model_of() -> state.Editor:
+    var buffers = new list[document.Buffer]
+    buffers.append(document.Buffer(path = "sample.luc"))
+    var histories = new list[history.Stacks]
+    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
+    let model = state.Editor(
+        buffers = buffers,
+        histories = histories,
+        names = ["a.luc", "b.luc"],
+        search_matches = new list[i64],
+        path = "sample.luc",
+        content = "func main():\n    let x = 42",
+    )
+    model.files.count = len(model.names)
+    model.output = "build ok"
+    return model
+
+func test_body_describes_source_status_and_cursor():
+    let app = application.App(model_of())
+    let screen = termui.snapshot(app.body(), 12, 60)
+    assert(strings.contains(screen.line(0), "1 func main():"))
+    assert(strings.contains(screen.line(1), "2     let x = 42"))
+    assert(strings.contains(screen.line(11), "sample.luc"))
+    assert(strings.contains(screen.line(11), "[editor]"))
+    let cursor = screen.cursor else termui.Cursor()
+    assert(cursor.row == 0)
+    assert(cursor.column == 5)
+
+func test_optional_panes_are_composed_by_the_same_body():
+    let app = application.App(model_of())
+    app.model.file_pane = true
+    app.model.output_pane = true
+    let screen = termui.snapshot(app.body(), 18, 78)
+    assert(strings.contains(screen.line(0), "files"))
+    assert(strings.contains(screen.line(0), "func main():"))
+    assert(strings.contains(screen.line(12), "output"))
+    assert(strings.contains(screen.line(13), "build ok"))
+    assert(strings.contains(screen.line(17), "sample.luc"))
+
+func test_source_events_update_the_model_and_the_next_body():
+    let app = application.App(model_of())
+    app.model.cursor = len(app.model.content)
+    let response = app.source_event(
+        termui.Event.text(typed = "!"),
+        termui.Rect(rows = 10, columns = 60),
+    )
+    assert(response == termui.Response.handled)
+    assert(strings.ends_with(app.model.content, "!"))
+    let screen = termui.snapshot(app.body(), 12, 60)
+    assert(strings.contains(screen.line(1), "let x = 42!"))
+
+func test_global_commands_and_search_are_reflected_declaratively():
+    let app = application.App(model_of())
+    assert(app.global_event(
+        termui.Event.key(pressed = termui.Key.ctrl_f),
+        termui.Rect(rows = 12, columns = 60),
+    ) == termui.Response.handled)
+    assert(app.model.focus == focus.Focus.search)
+    app.source_event(
+        termui.Event.text(typed = "let"),
+        termui.Rect(rows = 11, columns = 60),
+    )
+    let screen = termui.snapshot(app.body(), 12, 60)
+    assert(strings.contains(screen.line(11), "find: let"))
+    assert(strings.contains(screen.line(11), "1 of 1"))
+
+func test_divider_drag_state_lives_at_the_application_boundary():
+    let app = application.App(model_of())
+    app.model.file_pane = true
+    let pane = termui.Rect(rows = 11, columns = 20)
+    assert(app.files_frame_event(
+        termui.Event.mouse(pointer = termui.Mouse(
+            kind = termui.Pointer.press,
+            row = 3,
+            column = 19,
+            button = 0,
+        )),
+        pane,
+    ) == termui.Response.handled)
+    app.global_event(
+        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.drag, row = 3, column = 13)),
+        termui.Rect(rows = 12, columns = 60),
+    )
+    assert(app.files_width == 14)
+    app.global_event(
+        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.release, row = 3, column = 13)),
+        termui.Rect(rows = 12, columns = 60),
+    )
+    assert(app.dragging == application.Drag.idle)

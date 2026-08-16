@@ -10,11 +10,10 @@
 //! conversion that missed it would move the cursor by the wrong number
 //! of bytes and nothing would have noticed.
 //!
-//! So the scripts here drive the editor through every key it handles
-//! and compare the whole terminal transcript byte for byte, on **both
-//! engines** (`specs/agree.zig`).  The transcript below was recorded
-//! from the editor as it stood before the merge into `struct State`;
-//! the same bytes after it are the proof the memo asked for.
+//! The scripts here drive the editor through every key it handles and compare
+//! the whole terminal transcript byte for byte on **both engines**
+//! (`specs/agree.zig`). The program now supplies a declarative `App.body`;
+//! termui owns the loop and routes each event through the tree just drawn.
 //!
 //! The first script is deliberately one long one rather than several
 //! short ones: what is under test is a state machine, and the
@@ -32,15 +31,12 @@ const testing = std.testing;
 /// transcript against its own inline copy of a program pins nothing.
 const editor = @embedFile("editor.luc");
 
-/// The editor's own modules and the package it draws through, served the
-/// way a store serves them (docs/PACKAGES.md D4): the consumer spells
-/// `termui.frame`, the package's files spell `frame`, and both rows
-/// carry the same root token and path, so the two spellings are one
-/// module across the boundary.  The editor's modules come **first**, so
-/// a name it shares with the package (`layout`) resolves to the
-/// editor's when the editor imports it — the loader returns the first
-/// match, and the editor's imports are the ones that ask for it.
+/// The editor's own modules and the package it draws through, served the way
+/// a store serves them (docs/PACKAGES.md D4). Package internals carry both
+/// bare and qualified names because their own imports are bare while the
+/// editor imports only the `termui` facade.
 const editor_files = [_]agree.File{
+    .{ .name = "application", .source = @embedFile("application.luc") },
     .{ .name = "focus", .source = @embedFile("focus.luc") },
     .{ .name = "keymap", .source = @embedFile("keymap.luc") },
     .{ .name = "document", .source = @embedFile("document.luc") },
@@ -48,25 +44,20 @@ const editor_files = [_]agree.File{
     .{ .name = "search", .source = @embedFile("search.luc") },
     .{ .name = "highlight", .source = @embedFile("highlight.luc") },
     .{ .name = "theme", .source = @embedFile("theme.luc") },
-    .{ .name = "layout", .source = @embedFile("layout.luc") },
     .{ .name = "browser", .source = @embedFile("browser.luc") },
     .{ .name = "console", .source = @embedFile("console.luc") },
     .{ .name = "session", .source = @embedFile("session.luc") },
     .{ .name = "state", .source = @embedFile("state.luc") },
-    .{ .name = "paint", .source = @embedFile("paint.luc") },
 } ++ termui_files;
 
-const termui_root = "termui-0.2.0";
+const termui_root = "termui-0.3.0";
 const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
-    package("surface", @embedFile("termui/surface.luc")) ++
-    package("text", @embedFile("termui/text.luc")) ++
-    package("layout", @embedFile("termui/layout.luc")) ++
-    package("frame", @embedFile("termui/frame.luc")) ++
+    package("model", @embedFile("termui/model.luc")) ++
     package("input", @embedFile("termui/input.luc")) ++
+    package("layout", @embedFile("termui/layout.luc")) ++
+    package("canvas", @embedFile("termui/canvas.luc")) ++
     package("view", @embedFile("termui/view.luc")) ++
-    package("rows", @embedFile("termui/rows.luc")) ++
-    package("viewport", @embedFile("termui/viewport.luc")) ++
-    package("renderer", @embedFile("termui/renderer.luc"));
+    package("runtime", @embedFile("termui/runtime.luc"));
 
 /// One package module under both of its spellings.  Every bare spelling
 /// but the entry module's is pinned with `from` to the package's own
@@ -147,16 +138,13 @@ test "the editor draws the same frames, key for key, on both engines" {
     // update by pasting whatever came out.  A number cannot be updated
     // that way without noticing.  What a person *can* read is the file
     // the keys left behind, which the test below pins in full.
-    // Re-recorded when the editor migrated onto termui
-    // (docs/TERMUI.md step 5).  **The number itself is the headline**:
-    // the same eighteen keys over the same file used to leave 31,856
-    // bytes of terminal traffic and now leave 5,817 — the editor
-    // repainted all 1,920 cells of every frame, and the surface it
-    // draws on now emits only the cells that changed (D2).  If this
-    // moves, the program draws something else.
-    try testing.expectEqual(@as(usize, 5817), session.printed().len);
+    // Re-recorded for declarative termui v0.3. The same eighteen keys over
+    // the same file once left 31,856 bytes of terminal traffic; the retained
+    // front buffer now needs 5,216. If this moves, the program drew something
+    // else, so the readable state assertions below must justify the change.
+    try testing.expectEqual(@as(usize, 5216), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 16879993375888331344),
+        @as(u64, 5925325842466829948),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }

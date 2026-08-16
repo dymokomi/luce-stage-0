@@ -17,12 +17,12 @@ class Counter: termui.Application:
         return termui.Response.ignored
 
     func body() -> termui.View:
-        let status = termui.text("count " + str(self.value)).on_event(self.increment)
+        let status = termui.Label("count " + str(self.value)).on_event(self.increment)
         let items: list[termui.Item] = [
-            termui.item(termui.Length.grow(weight = 1, minimum = 0), termui.fill(".")),
-            termui.item(termui.Length.fixed(cells = 1), status),
+            termui.Fill(".").sized(termui.Length.grow(weight = 1, minimum = 0)),
+            status.sized(termui.Length.fixed(cells = 1)),
         ]
-        return termui.column(items)
+        return termui.VStack(items)
 
 func test_the_public_facade_describes_and_updates_an_application():
     let app = Counter(41)

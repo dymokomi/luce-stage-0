@@ -6,7 +6,7 @@
 # The host's key names never reach the editor — termui.input answers a
 # `Key`, and the table below is the whole translation.
 
-import termui.input as input
+import termui
 
 # What a key does.  A key the editor does not bind is `ignored` — a
 # member, so the `match` that handles it must say so out loud, and an
@@ -40,28 +40,28 @@ enum Intent:
     ignored
 
 const INTENTS = {
-    input.Key.left: Intent.move_left,
-    input.Key.right: Intent.move_right,
-    input.Key.up: Intent.move_up,
-    input.Key.down: Intent.move_down,
-    input.Key.page_up: Intent.page_up,
-    input.Key.page_down: Intent.page_down,
-    input.Key.home: Intent.line_start,
-    input.Key.end: Intent.line_end,
-    input.Key.backspace: Intent.erase_left,
-    input.Key.delete: Intent.erase_right,
-    input.Key.enter: Intent.newline,
-    input.Key.tab: Intent.indent,
-    input.Key.ctrl_s: Intent.save,
-    input.Key.ctrl_b: Intent.build,
-    input.Key.ctrl_e: Intent.toggle_files,
-    input.Key.ctrl_o: Intent.toggle_output,
-    input.Key.ctrl_w: Intent.next_pane,
-    input.Key.ctrl_f: Intent.find,
-    input.Key.ctrl_z: Intent.undo,
-    input.Key.ctrl_y: Intent.redo,
-    input.Key.escape: Intent.escape,
-    input.Key.ctrl_q: Intent.quit,
+    termui.Key.left: Intent.move_left,
+    termui.Key.right: Intent.move_right,
+    termui.Key.up: Intent.move_up,
+    termui.Key.down: Intent.move_down,
+    termui.Key.page_up: Intent.page_up,
+    termui.Key.page_down: Intent.page_down,
+    termui.Key.home: Intent.line_start,
+    termui.Key.end: Intent.line_end,
+    termui.Key.backspace: Intent.erase_left,
+    termui.Key.delete: Intent.erase_right,
+    termui.Key.enter: Intent.newline,
+    termui.Key.tab: Intent.indent,
+    termui.Key.ctrl_s: Intent.save,
+    termui.Key.ctrl_b: Intent.build,
+    termui.Key.ctrl_e: Intent.toggle_files,
+    termui.Key.ctrl_o: Intent.toggle_output,
+    termui.Key.ctrl_w: Intent.next_pane,
+    termui.Key.ctrl_f: Intent.find,
+    termui.Key.ctrl_z: Intent.undo,
+    termui.Key.ctrl_y: Intent.redo,
+    termui.Key.escape: Intent.escape,
+    termui.Key.ctrl_q: Intent.quit,
 }
 
 # How far a movement intent scrolls a list: one row, or a page of eight.
@@ -74,7 +74,7 @@ const STEPS = {
 }
 
 # What a key means.  A key the editor does not bind is `ignored`.
-func intent_of(pressed: input.Key) -> Intent:
+func intent_of(pressed: termui.Key) -> Intent:
     let found = INTENTS.get(pressed)
     if found == none:
         return Intent.ignored

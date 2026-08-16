@@ -9,20 +9,21 @@ import canvas
 
 union View:
     empty
-    text(lines: list[model.Line])
+    label(lines: list[model.Line])
     lines(
         total: i64,
         top: i64,
+        anchor: i64?,
         selected: i64?,
         render: (func(i64) -> model.Line)?,
         selected_style: model.Style,
     )
     fill(glyph: str, style: model.Style)
-    row(items: list[Item], spacing: i64)
-    column(items: list[Item], spacing: i64)
-    overlay(children: list[View])
-    frame(
-        frame_children: list[View],
+    hstack(items: list[Item], spacing: i64)
+    vstack(items: list[Item], spacing: i64)
+    zstack(children: list[View])
+    panel(
+        panel_children: list[View],
         title: str,
         style: model.Style,
         edges: model.Edges,
@@ -38,13 +39,8 @@ union View:
 
     # Modifiers wrap rather than mutate. Their order is therefore represented
     # directly in the tree and interpreted by the same traversal as built-ins.
-    func framed(
-        title: str = "",
-        style: model.Style = model.Style(),
-        edges: model.Edges = model.Edges(),
-    ) -> View:
-        let content: list[View] = [self]
-        return View.frame(frame_children = content, title = title, style = style, edges = edges)
+    func sized(size: layout.Length) -> Item:
+        return Item(size = size, content = self)
 
     func on_event(respond: func(input.Event, model.Rect) -> model.Response) -> View:
         let content: list[View] = [self]
@@ -223,15 +219,15 @@ func draw(node: View, surface: canvas.Surface, area: model.Rect) -> model.Cursor
     match node:
         empty:
             return none
-        text(lines):
+        label(lines):
             for at_row, line in lines:
                 if at_row >= area.rows:
                     break
                 draw_line(surface, area, at_row, line, none)
             return none
-        lines(total, top, selected, render, selected_style):
+        lines(total, top, anchor, selected, render, selected_style):
             let provider = render else blank_line
-            let start = visible_top(top, total, selected, area.rows)
+            let start = visible_top(top, total, anchor, area.rows)
             let chosen = selected else -1
             for at_row in range(0, area.rows):
                 let index = start + at_row
@@ -251,28 +247,28 @@ func draw(node: View, surface: canvas.Surface, area: model.Rect) -> model.Cursor
         fill(glyph, style):
             surface.fill(area, glyph, style)
             return none
-        row(items, spacing):
+        hstack(items, spacing):
             let rectangles = layout.row(area, spacing, item_lengths(items))
             var cursor: model.Cursor? = none
             for index in range(0, min(len(items), len(rectangles))):
                 cursor = first_cursor(cursor, draw(items[index].content, surface, rectangles[index]))
             return cursor
-        column(items, spacing):
+        vstack(items, spacing):
             let rectangles = layout.column(area, spacing, item_lengths(items))
             var cursor: model.Cursor? = none
             for index in range(0, min(len(items), len(rectangles))):
                 cursor = first_cursor(cursor, draw(items[index].content, surface, rectangles[index]))
             return cursor
-        overlay(children):
+        zstack(children):
             var cursor: model.Cursor? = none
             for child in children:
                 let found = draw(child, surface, area)
                 if found != none:
                     cursor = found
             return cursor
-        frame(frame_children, title, style, edges):
+        panel(panel_children, title, style, edges):
             let interior = draw_frame(surface, area, title, style, edges)
-            return draw(first(frame_children), surface, interior)
+            return draw(first(panel_children), surface, interior)
         events(event_children, respond):
             return draw(first(event_children), surface, area)
         cursor_modifier(cursor_children, locate):
@@ -320,17 +316,17 @@ func dispatch(node: View, event: input.Event, area: model.Rect) -> model.Respons
             match node:
                 empty:
                     return model.Response.ignored
-                text(lines):
+                label(lines):
                     return model.Response.ignored
-                lines(total, top, selected, render, selected_style):
+                lines(total, top, anchor, selected, render, selected_style):
                     return model.Response.ignored
                 fill(glyph, style):
                     return model.Response.ignored
-                row(items, spacing):
+                hstack(items, spacing):
                     return dispatch_children(items, layout.row(area, spacing, item_lengths(items)), event)
-                column(items, spacing):
+                vstack(items, spacing):
                     return dispatch_children(items, layout.column(area, spacing, item_lengths(items)), event)
-                overlay(children):
+                zstack(children):
                     var index = len(children) - 1
                     while index >= 0:
                         let response = dispatch(children[index], event, area)
@@ -338,8 +334,8 @@ func dispatch(node: View, event: input.Event, area: model.Rect) -> model.Respons
                             return response
                         index -= 1
                     return model.Response.ignored
-                frame(frame_children, title, style, edges):
-                    return dispatch(first(frame_children), event, frame_interior(area, edges))
+                panel(panel_children, title, style, edges):
+                    return dispatch(first(panel_children), event, frame_interior(area, edges))
                 events(event_children, respond):
                     let handler = respond
                     if handler != none:
@@ -351,7 +347,7 @@ func dispatch(node: View, event: input.Event, area: model.Rect) -> model.Respons
                     return dispatch(first(cursor_children), event, area)
 
 func snapshot(content: View, rows: i64, columns: i64) -> canvas.Snapshot:
-    var surface = canvas.Surface.of(rows, columns)
+    let surface = canvas.Surface(rows, columns)
     surface.clear()
     let cursor = draw(content, surface, surface.area())
     return surface.snapshot(cursor)

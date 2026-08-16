@@ -8,7 +8,7 @@ import input
 import layout
 import canvas
 import view
-import application as app_runtime
+import runtime as app_runtime
 
 alias Color = model.Color
 alias Style = model.Style
@@ -33,19 +33,20 @@ alias Application = app_runtime.Application
 func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
 
-func empty() -> View:
+func Empty() -> View:
     return View.empty
 
-func text(content: str, style: Style = Style()) -> View:
+func Label(content: str, style: Style = Style()) -> View:
     let one_line: list[Line] = [plain(content, style)]
-    return View.text(lines = one_line)
+    return View.label(lines = one_line)
 
-func block(content_lines: list[Line]) -> View:
-    return View.text(lines = content_lines)
+func StyledText(content_lines: list[Line]) -> View:
+    return View.label(lines = content_lines)
 
-func lines(
+func Rows(
     total: i64,
     top: i64,
+    anchor: i64?,
     selected: i64?,
     render: func(i64) -> Line,
     selected_style: Style = Style(),
@@ -53,25 +54,32 @@ func lines(
     return View.lines(
         total = total,
         top = top,
+        anchor = anchor,
         selected = selected,
         render = render,
         selected_style = selected_style,
     )
 
-func fill(glyph: str = " ", style: Style = Style()) -> View:
+func Fill(glyph: str = " ", style: Style = Style()) -> View:
     return View.fill(glyph = glyph, style = style)
 
-func item(size: Length, content: View) -> Item:
-    return Item(size = size, content = content)
+func HStack(items: list[Item], spacing: i64 = 0) -> View:
+    return View.hstack(items = items, spacing = spacing)
 
-func row(items: list[Item], spacing: i64 = 0) -> View:
-    return View.row(items = items, spacing = spacing)
+func VStack(items: list[Item], spacing: i64 = 0) -> View:
+    return View.vstack(items = items, spacing = spacing)
 
-func column(items: list[Item], spacing: i64 = 0) -> View:
-    return View.column(items = items, spacing = spacing)
+func ZStack(children: list[View]) -> View:
+    return View.zstack(children = children)
 
-func overlay(children: list[View]) -> View:
-    return View.overlay(children = children)
+func Panel(
+    title: str,
+    content: View,
+    style: Style = Style(),
+    edges: Edges = Edges(),
+) -> View:
+    let children: list[View] = [content]
+    return View.panel(panel_children = children, title = title, style = style, edges = edges)
 
 func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
     return view.visible_top(top, total, selected, height)

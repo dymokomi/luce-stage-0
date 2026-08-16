@@ -1,0 +1,413 @@
+# The editor's declarative terminal application.
+#
+# `App` is the only seam between editing state and termui. Its `body` describes
+# what should be visible now. Bound methods turn events back into state changes;
+# termui owns the application loop, geometry traversal, rendering and shutdown.
+
+import std.strings
+import termui
+import document
+import focus
+import highlight
+import history
+import keymap
+import session
+import state
+import theme
+
+const gutter_width: i64 = 5
+
+enum Drag:
+    idle
+    files
+    output
+
+func pane_style(active: bool) -> termui.Style:
+    if active:
+        return theme.palette.pane_active
+    return theme.palette.pane_border
+
+func focus_label(where: focus.Focus) -> str:
+    match where:
+        editor:
+            return "  [editor]"
+        files:
+            return "  [files]"
+        output:
+            return "  [output]"
+        search:
+            return "  [search]"
+
+func is_global(intent: keymap.Intent) -> bool:
+    match intent:
+        save:
+            return true
+        build:
+            return true
+        toggle_files:
+            return true
+        toggle_output:
+            return true
+        next_pane:
+            return true
+        find:
+            return true
+        undo:
+            return true
+        redo:
+            return true
+        escape:
+            return true
+        quit:
+            return true
+        else:
+            return false
+
+class App: termui.Application:
+    model: state.Editor
+    files_width: i64
+    output_height: i64
+    dragging: Drag
+
+    init(model: state.Editor):
+        self.model = model
+        self.files_width = 0
+        self.output_height = 0
+        self.dragging = Drag.idle
+
+    # --- data providers ---------------------------------------------
+
+    func source_line(index: i64) -> termui.Line:
+        var spans = new list[termui.Span]
+        var gutter_style = theme.palette.gutter
+        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        if index == cursor_line and self.model.focus == focus.Focus.editor:
+            gutter_style = theme.palette.gutter_current
+        spans.append(termui.Span(
+            text = strings.pad_left(str(index + 1), gutter_width - 1) + " ",
+            style = gutter_style,
+        ))
+        let start = document.line_at(self.model.content, index)
+        let finish = document.line_end(self.model.content, start)
+        for token in highlight.tokens(self.model.content, start, finish):
+            spans.append(termui.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
+        return termui.Line(spans = spans)
+
+    func file_line(index: i64) -> termui.Line:
+        return termui.plain(self.model.name_at(index), theme.palette.plain)
+
+    func output_line(index: i64) -> termui.Line:
+        let start = document.line_at(self.model.output, index)
+        let finish = document.line_end(self.model.output, start)
+        return termui.plain(self.model.output[start:finish], theme.palette.plain)
+
+    # --- cursor projections -----------------------------------------
+
+    func source_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.editor or area.is_empty():
+            return none
+        let line = document.line_of(self.model.content, self.model.cursor)
+        let total = document.count_lines(self.model.content)
+        let top = termui.visible_top(self.model.scroll, total, line, area.rows)
+        let column = document.column_of(self.model.content, self.model.cursor)
+        return termui.Cursor(
+            row = area.row + clamp(line - top, 0, max(area.rows - 1, 0)),
+            column = clamp(area.column + gutter_width + column, area.column, max(area.column + area.columns - 1, area.column)),
+        )
+
+    func file_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.files or area.is_empty():
+            return none
+        let top = termui.visible_top(
+            self.model.files.top,
+            len(self.model.names),
+            self.model.files.selected,
+            area.rows,
+        )
+        return termui.Cursor(
+            row = area.row + clamp(self.model.files.selected - top, 0, max(area.rows - 1, 0)),
+            column = area.column,
+        )
+
+    func output_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.output or area.is_empty():
+            return none
+        return termui.Cursor(row = area.row, column = area.column)
+
+    func status_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.search or area.is_empty():
+            return none
+        return termui.Cursor(
+            row = area.row,
+            column = min(area.column + 7 + self.model.search_query.width(), area.column + area.columns - 1),
+        )
+
+    # --- event handlers ---------------------------------------------
+
+    func global_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        self.model.autosave(clock_ms())
+        match event:
+            key(pressed):
+                let intent = keymap.intent_of(pressed)
+                if not is_global(intent):
+                    return termui.Response.ignored
+                self.model.key(intent, "", max(area.rows - 1, 0))
+                if self.model.quit:
+                    return termui.Response.quit
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.release and self.dragging != Drag.idle:
+                    self.dragging = Drag.idle
+                    return termui.Response.handled
+                if pointer.kind == termui.Pointer.drag:
+                    if self.dragging == Drag.files:
+                        self.files_width = max(pointer.column - area.column + 1, 0)
+                        return termui.Response.handled
+                    if self.dragging == Drag.output:
+                        self.output_height = max(area.row + area.rows - 1 - pointer.row, 0)
+                        return termui.Response.handled
+                return termui.Response.ignored
+            else:
+                return termui.Response.ignored
+
+    func source_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.editor and self.model.focus != focus.Focus.search:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                return termui.Response.handled
+            text(typed):
+                if self.model.focus != focus.Focus.editor and self.model.focus != focus.Focus.search:
+                    return termui.Response.ignored
+                self.model.key(keymap.Intent.insert_text, typed, area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.editor
+                    self.model.scroll = max(self.model.scroll - pointer.wheel, 0)
+                    return termui.Response.handled
+                if pointer.kind != termui.Pointer.press or pointer.button != 0:
+                    return termui.Response.ignored
+                self.model.focus = focus.Focus.editor
+                let total = document.count_lines(self.model.content)
+                let cursor_line = document.line_of(self.model.content, self.model.cursor)
+                let top = termui.visible_top(self.model.scroll, total, cursor_line, area.rows)
+                let line = top + pointer.row - area.row
+                if line < total:
+                    let start = document.line_at(self.model.content, line)
+                    let wanted = max(pointer.column - area.column - gutter_width, 0)
+                    self.model.cursor = document.at_column(self.model.content, start, wanted)
+                    self.model.coalescing = false
+                return termui.Response.handled
+            else:
+                return termui.Response.ignored
+
+    func files_frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.column == area.column + area.columns - 1:
+                    self.dragging = Drag.files
+                    return termui.Response.handled
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+    func file_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.files:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                self.model.adjust_files(area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.files
+                    var files = self.model.files
+                    files.move_by(-pointer.wheel)
+                    self.model.files = files
+                    self.model.adjust_files(area.rows)
+                    return termui.Response.handled
+                if pointer.kind != termui.Pointer.press or pointer.button != 0:
+                    return termui.Response.ignored
+                self.model.focus = focus.Focus.files
+                let top = termui.visible_top(
+                    self.model.files.top,
+                    len(self.model.names),
+                    self.model.files.selected,
+                    area.rows,
+                )
+                let index = top + pointer.row - area.row
+                if index >= 0 and index < len(self.model.names):
+                    self.model.files.selected = index
+                    self.model.open_row(index)
+                    self.model.focus = focus.Focus.files
+                return termui.Response.handled
+            else:
+                return termui.Response.ignored
+
+    func output_frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.row == area.row:
+                    self.dragging = Drag.output
+                    return termui.Response.handled
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+    func output_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.output:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.output
+                    self.model.output_scroll = max(self.model.output_scroll - pointer.wheel, 0)
+                    return termui.Response.handled
+                if pointer.kind == termui.Pointer.press and pointer.button == 0:
+                    self.model.focus = focus.Focus.output
+                    self.model.output_scroll = max(self.model.output_scroll + pointer.row - area.row, 0)
+                    return termui.Response.handled
+                return termui.Response.ignored
+            else:
+                return termui.Response.ignored
+
+    # --- view composition -------------------------------------------
+
+    func source_view() -> termui.View:
+        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        return termui.Rows(
+            document.count_lines(self.model.content),
+            self.model.scroll,
+            cursor_line,
+            none,
+            self.source_line,
+        ).on_event(self.source_event).cursor(self.source_cursor)
+
+    func files_view() -> termui.View:
+        let listing = termui.Rows(
+            len(self.model.names),
+            self.model.files.top,
+            self.model.files.selected,
+            self.model.files.selected,
+            self.file_line,
+            theme.palette.selected,
+        ).on_event(self.file_event).cursor(self.file_cursor)
+        return termui.Panel(
+            "files",
+            listing,
+            style = pane_style(self.model.focus == focus.Focus.files),
+            edges = termui.Edges(bottom = false),
+        ).on_event(self.files_frame_event)
+
+    func output_view() -> termui.View:
+        let output = termui.Rows(
+            document.count_lines(self.model.output),
+            self.model.output_scroll,
+            none,
+            none,
+            self.output_line,
+        ).on_event(self.output_event).cursor(self.output_cursor)
+        return termui.Panel(
+            "output",
+            output,
+            style = pane_style(self.model.focus == focus.Focus.output),
+            edges = termui.Edges(bottom = false),
+        ).on_event(self.output_frame_event)
+
+    func status_text() -> str:
+        if self.model.focus == focus.Focus.search:
+            var prompt = f" find: {self.model.search_query}"
+            if len(self.model.search_matches) > 0:
+                prompt += f"    {self.model.search_current + 1} of {len(self.model.search_matches)}"
+            elif self.model.search_query != "":
+                prompt += "    no matches"
+            return prompt + "    Enter next   Esc close"
+        let line = document.line_of(self.model.content, self.model.cursor)
+        let column = document.column_of(self.model.content, self.model.cursor)
+        var flag = ""
+        if self.model.dirty:
+            flag = " +"
+        var left = f" {self.model.path}{flag}  {line + 1}:{column + 1}"
+        if len(self.model.message) > 0:
+            left += f"  — {self.model.message}"
+        return left + focus_label(self.model.focus)
+
+    func status_view() -> termui.View:
+        let line = self.status_text()
+        let background = termui.Fill(" ", theme.palette.status)
+        if self.model.focus == focus.Focus.search:
+            let children: list[termui.View] = [background, termui.Label(line, theme.palette.status)]
+            return termui.ZStack(children).cursor(self.status_cursor)
+        let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
+        let pieces: list[termui.Item] = [
+            termui.Label(line, theme.palette.status).sized(termui.Length.grow(weight = 1, minimum = line.width())),
+            termui.Label(hint, theme.palette.status).sized(
+                termui.Length.preferred(low = 0, ideal = hint.width(), high = hint.width()),
+            ),
+        ]
+        let children: list[termui.View] = [
+            background,
+            termui.HStack(pieces),
+        ]
+        return termui.ZStack(children).cursor(self.status_cursor)
+
+    func body() -> termui.View:
+        var body_items = new list[termui.Item]
+        if self.model.file_pane:
+            var files_size = termui.Length.ratio(low = 8, high = 24, percent = 25)
+            if self.files_width > 0:
+                files_size = termui.Length.preferred(low = 8, ideal = self.files_width, high = 240)
+            body_items.append(self.files_view().sized(files_size))
+        body_items.append(self.source_view().sized(termui.Length.grow(weight = 1, minimum = gutter_width + 1)))
+
+        var screen_items = new list[termui.Item]
+        screen_items.append(termui.HStack(body_items).sized(termui.Length.grow(weight = 1, minimum = 1)))
+        if self.model.output_pane:
+            var output_size = termui.Length.ratio(low = 3, high = 8, percent = 33)
+            if self.output_height > 0:
+                output_size = termui.Length.preferred(low = 3, ideal = self.output_height, high = 80)
+            screen_items.append(self.output_view().sized(output_size))
+        screen_items.append(self.status_view().sized(termui.Length.fixed(cells = 1)))
+        return termui.VStack(screen_items).on_event(self.global_event)
+
+# Build an editor model from command-line paths. File and draft loading belongs
+# at this application boundary; the TermUI runtime remains host-agnostic apart
+# from its terminal service.
+func open(paths: list[str]) -> App:
+    var buffers = new list[document.Buffer]
+    var histories = new list[history.Stacks]
+    for path in paths:
+        let loaded = session.load(path)
+        buffers.append(loaded.buffer)
+        histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
+        if loaded.recovered:
+            histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
+    let first = buffers[0]
+    let model = state.Editor(
+        buffers = buffers,
+        histories = histories,
+        names = new list[str],
+        search_matches = new list[i64],
+        path = first.path,
+        content = first.content,
+        message = first.message,
+        cursor = first.cursor,
+        scroll = first.scroll,
+        dirty = first.dirty,
+    )
+    return App(model)

@@ -13,8 +13,8 @@ interface Application:
 # drawn and then receives the event, so pointer geometry can never be newer or
 # older than what the person saw.
 func run(app: Application):
-    var surface = canvas.Surface.of(term.rows(), term.cols())
-    var events = input.Stream()
+    let surface = canvas.Surface(term.rows(), term.cols())
+    let events = input.Stream()
     while true:
         surface.resize(term.rows(), term.cols())
         surface.clear()

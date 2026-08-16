@@ -77,8 +77,11 @@ union Event:
 
 # The host keeps event details in mutable slots. Stream copies every slot
 # before returning, so a held Event never changes under a later read.
-struct Stream:
-    last_name: str = ""
+class Stream:
+    last_name: str
+
+    init():
+        self.last_name = ""
 
     func next() -> Event:
         let name = term.io.read()
