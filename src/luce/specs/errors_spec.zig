@@ -923,7 +923,7 @@ test "existing-name destructuring checks every target before replacing any" {
         \\    var other = 0
         \\    number, other = pair()
         \\
-    , "luce.sema.type", "other is i32, but value 2 from pair is str");
+    , "luce.sema.type", "other is i64, but value 2 from pair is str");
 
     try expectSaying(
         \\func pair() -> (i64, i64)!:
@@ -2169,13 +2169,8 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // ---------------------------------------------------------------------------
 
 // The mismatch message ends with a fact, not with advice.  It used to
-// offer "conversions are explicit, so write long(...) or double(...)",
-// because `long` against `double` was the one mismatch a constructor
-// could repair; `long` widens to `double` on its own now
-// (docs/NUMERICS.md), so every pair that still reaches the message
-// genuinely has nothing between it, and the sentence says so.  What
-// those three programs do *instead* of failing is pinned in
-// behavior_spec.zig, on both engines.
+// offer one particular conversion. Concrete numeric conversions are
+// explicit now, while unrelated types genuinely have no conversion.
 
 test "luce.sema.type: a mismatch with no conversion says so" {
     try expectOnlySayingAt(
@@ -2186,7 +2181,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
         \\
     ,
         "luce.sema.type",
-        "operands of + are i32 and str, and there is no conversion between them",
+        "operands of + are i64 and str, and there is no conversion between them",
         4,
         13,
     );
@@ -2196,16 +2191,14 @@ test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
         "func main():\n    let s: str = 1\n",
         "luce.sema.type",
-        "s declared str but initialized with i32, and there is no conversion between them",
+        "s declared str but initialized with i64, and there is no conversion between them",
         2,
         5,
     );
 }
 
-// Promotion is one direction.  A `double` never becomes an `long`
-// without being asked, which is what stops float contagion silently:
-// it is refused at the first place an `long` is required, by a message
-// that was already in the tree (docs/NUMERICS.md §9).
+// Integer division always answers f64. It cannot be stored back into an
+// integer place without choosing integer division or converting it.
 
 test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
     // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
@@ -2218,7 +2211,7 @@ test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
         \\
     ,
         "luce.sema.type",
-        "/ answers f64 and this place is i32; write '//=' for the integer quotient",
+        "/ answers f64 and this place is i64; write '//=' for the integer quotient",
         3,
         5,
     );
@@ -2356,7 +2349,7 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
         \\
     ,
         "luce.sema.type",
-        "s declared str but initialized with i32, and there is no conversion between them",
+        "s declared str but initialized with i64, and there is no conversion between them",
         2,
         5,
     );
@@ -2453,7 +2446,7 @@ test "luce.sema.type: a bad left operand of and is named, and underlined alone" 
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be bool, not i32", 3, 8, 9);
+    , "luce.sema.type", "the left operand of and must be bool, not i64", 3, 8, 9);
 }
 
 test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
@@ -2465,7 +2458,7 @@ test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
         \\    if total + 1 or false:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of or must be bool, not i32", 3, 8, 17);
+    , "luce.sema.type", "the left operand of or must be bool, not i64", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
@@ -2475,7 +2468,7 @@ test "luce.sema.type: a bad right operand of or is named, and underlined alone" 
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be bool, not i32", 3, 16, 17);
+    , "luce.sema.type", "the right operand of or must be bool, not i64", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
@@ -2611,7 +2604,7 @@ test "luce.sema.convert: string() names its value domain and build() for a build
         \\
     ,
         "luce.sema.convert",
-        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i32]",
+        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i64]",
         3,
         16,
     );
@@ -2686,7 +2679,7 @@ test "luce.sema.method: map get takes exactly its key" {
         \\    var m = new map[str, i64]
         \\    let x = m.get(7)
         \\
-    , "luce.sema.type", "argument 1 of get is str, got i32", 3, 19);
+    , "luce.sema.type", "argument 1 of get is str, got i64", 3, 19);
 }
 
 test "luce.sema.loop: two-name for needs a map or a sequence" {
@@ -3147,14 +3140,14 @@ test "luce.sema.type: the bit set works on integers, said with the fact that ref
     try expectSayingAt(
         "func main():\n    let x = 1.5\n    let b = x << 2.0\n",
         "luce.sema.type",
-        "<< works on integers; f32 has no bits a program may see",
+        "<< works on integers; f64 has no bits a program may see",
         3,
         13,
     );
     try expectSayingAt(
         "func main():\n    let x = 1.5\n    let b = ~x\n",
         "luce.sema.type",
-        "~ works on integers; f32 has no bits a program may see",
+        "~ works on integers; f64 has no bits a program may see",
         3,
         13,
     );
@@ -4426,7 +4419,7 @@ test "luce.sema.literal: a float literal that is not finite is rejected" {
     try expectRejected("func main():\n    let a = -1e400\n", "luce.sema.literal");
 }
 
-test "luce.sema.const: a non-finite f32 constant is rejected as well" {
+test "luce.sema.const: a non-finite default f64 constant is rejected as well" {
     try expectRejected("const a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
@@ -4908,7 +4901,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i32]",
+        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i64]",
         6,
         30,
     );
@@ -5879,7 +5872,7 @@ test "luce.sema.type: a nested place and a compound assignment check their own t
         \\    var held = Outer(inner = Inner(value = 1))
         \\    held.inner.value = 1.5
         \\
-    , "luce.sema.type", "this place holds i64 but the value is f32");
+    , "luce.sema.type", "this place holds i64 but the value is f64");
     // `compoundCombine`'s own "needs matching types" has no case
     // here, and cannot: all four callers — name, field, element,
     // chain — compare the place with the value before they combine,
@@ -6077,7 +6070,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
         \\    var b = new builder
         \\    b.append(65)
         \\
-    , "luce.sema.type", "argument 1 of append is str, got i32", 3, 14);
+    , "luce.sema.type", "argument 1 of append is str, got i64", 3, 14);
     // The map says what its key and value types *are*, rather than
     // calling them "the map's key and value types".
     try expectSayingAt(
@@ -6085,7 +6078,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
         \\    var m = new map[str, i64]
         \\    let x = m.get(1)
         \\
-    , "luce.sema.type", "argument 1 of get is str, got i32", 3, 19);
+    , "luce.sema.type", "argument 1 of get is str, got i64", 3, 19);
 }
 
 test "luce.sema.type: a T? argument to a method earns the same advice it earns anywhere" {
@@ -6448,7 +6441,7 @@ test "luce.sema.enum: a member past the backing width is refused, naming the wid
     );
 }
 
-test "luce.sema.enum: the backing type is one of the four integer widths" {
+test "luce.sema.enum: the backing type is one of the eight integer widths" {
     try expectSaying(
         \\enum Method(f64):
         \\    stored
@@ -6458,7 +6451,7 @@ test "luce.sema.enum: the backing type is one of the four integer widths" {
         \\
     ,
         "luce.sema.enum",
-        "an enum is stored at an integer width: u8, i16, i32, or i64 — not f64",
+        "an enum is stored at an integer width: u8, u16, u32, u64, i8, i16, i32, or i64 — not f64",
     );
 }
 
@@ -6585,7 +6578,7 @@ test "luce.sema.match: the scrutinee is an enum and nothing else" {
         \\
     ,
         "luce.sema.match",
-        "match dispatches over an enum or a union, and i32 is neither",
+        "match dispatches over an enum or a union, and i64 is neither",
     );
 }
 
@@ -6620,7 +6613,7 @@ test "luce.sema.type: a member is not a number and a number is not a member" {
         \\
     ,
         "luce.sema.type",
-        "operands of == are Method and i32, and there is no conversion between them",
+        "operands of == are Method and i64, and there is no conversion between them",
     );
     try expectSaying(
         \\enum Method:
@@ -6632,7 +6625,7 @@ test "luce.sema.type: a member is not a number and a number is not a member" {
         \\
     ,
         "luce.sema.type",
-        "m declared Method but initialized with i32",
+        "m declared Method but initialized with i64",
     );
     try expectSaying(
         \\enum Method:
@@ -6662,7 +6655,7 @@ test "luce.sema.convert: Method(x) reads a whole number" {
         \\
     ,
         "luce.sema.convert",
-        "Method(value) reads a whole number and answers Method?; f32 is not one",
+        "Method(value) reads a whole number and answers Method?; f64 is not one",
     );
 }
 
@@ -6762,11 +6755,7 @@ test "private on an enum gates nothing inside its own file" {
     );
 }
 
-test "luce.sema.type: a map keys by an enum, and by nothing else new" {
-    // An enum keys a map (docs/ENUMS.md, As built 2026-08-12): it is an
-    // integer at a chosen width whose whole comparison surface is
-    // equality.  What is *not* a key is unchanged, and `map(int, V)` is
-    // still refused — the narrow widths are storage, not a key type.
+test "luce.sema.type: a map keys by every integer width, str, or an enum" {
     try expectCompiles(
         \\enum Method:
         \\    stored
@@ -6789,13 +6778,12 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\    assert(chosen["a"] == Method.deflated)
         \\
     );
-    try expectSaying(
+    try expectCompiles(
         \\func main():
         \\    var counts = new map[i32, i64]
+        \\    counts[i32(1)] = 2
+        \\    assert(counts[i32(1)] == 2)
         \\
-    ,
-        "luce.sema.type",
-        "map keys are i64, str or an enum, got i32",
     );
     try expectSaying(
         \\func main():
@@ -6803,7 +6791,7 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\
     ,
         "luce.sema.type",
-        "map keys are i64, str or an enum, got f64",
+        "map keys are an integer, str or an enum, got f64",
     );
     try expectSaying(
         \\struct Point:
@@ -6814,7 +6802,7 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\
     ,
         "luce.sema.type",
-        "map keys are i64, str or an enum, got Point",
+        "map keys are an integer, str or an enum, got Point",
     );
     try expectSaying(
         \\func main():
@@ -6822,7 +6810,7 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\
     ,
         "luce.sema.type",
-        "map keys are i64, str or an enum, got list[i64]",
+        "map keys are an integer, str or an enum, got list[i64]",
     );
 }
 
@@ -6881,7 +6869,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\
     ,
         "luce.sema.type",
-        "argument 1 of has is Key, got i32",
+        "argument 1 of has is Key, got i64",
     );
     // A union is still refused, with the advice that is its own.
     try expectSaying(

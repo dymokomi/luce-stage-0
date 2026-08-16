@@ -432,6 +432,25 @@ pub fn build(b: *std.Build) void {
     );
     test_aliases_step.dependOn(&addProgressTestRun(b, alias_tests, "aliases").step);
 
+    const explicit_type_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "specs.behavior_spec.",
+            "specs.enums_spec.",
+            "specs.errors_spec.",
+            "specs.binding_spec.",
+            "specs.constants_spec.",
+        },
+        .test_runner = progress_test_runner,
+    });
+    const test_explicit_types_step = b.step(
+        "test-explicit-types",
+        "Run explicit-width numeric, enum, binding, and constant specifications",
+    );
+    test_explicit_types_step.dependOn(
+        &addProgressTestRun(b, explicit_type_tests, "explicit-types").step,
+    );
+
     // Keep the highest-risk function/union ownership composition seams addressable
     // without waiting for the bundled applications.  This is a focused
     // differential specification, not a replacement for the full suite.

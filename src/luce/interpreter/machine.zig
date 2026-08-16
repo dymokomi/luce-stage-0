@@ -681,7 +681,7 @@ pub const Machine = struct {
                     try containers.indexSet(
                         &self.runtime,
                         current.*,
-                        &.{self.constantKey(entry.key)},
+                        &.{self.constantKey(entry.key, pair.key)},
                         held,
                     );
                 }
@@ -753,15 +753,26 @@ pub const Machine = struct {
         return made;
     }
 
-    /// A map key is borrowed for `indexSet`, which takes its own copy
-    /// only when a new entry keeps it.  Constant keys are exactly long
-    /// or String, as verified by the MIR boundary — an enum key folds to
-    /// its member's number and is stored as the `long` every enum key is
-    /// stored as (`mir.mapKeyStorage`), which is the same slot a lookup
-    /// will hash.
-    fn constantKey(self: *const Machine, encoded: mir.ConstantValue) RuntimeValue {
+    /// A map key is borrowed for `indexSet`, which takes its own copy only
+    /// when a new entry keeps it. Integers retain their explicit width and
+    /// an enum uses its backing width, exactly as a later lookup does.
+    fn constantKey(
+        self: *const Machine,
+        encoded: mir.ConstantValue,
+        written: types.Type,
+    ) RuntimeValue {
         return switch (encoded) {
-            .integer => |held| .ofI64(@intCast(held)),
+            .integer => |held| switch (mir.mapKeyStorage(written)) {
+                .u8 => .ofU8(@intCast(held)),
+                .u16 => .ofU16(@intCast(held)),
+                .u32 => .ofU32(@intCast(held)),
+                .u64 => .ofU64(@intCast(held)),
+                .i8 => .ofI8(@intCast(held)),
+                .i16 => .ofI16(@intCast(held)),
+                .i32 => .ofI32(@intCast(held)),
+                .i64 => .ofI64(@intCast(held)),
+                else => unreachable,
+            },
             .str => |index| .ofStr(self.program.constants[index]),
             else => unreachable,
         };

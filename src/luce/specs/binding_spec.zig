@@ -136,7 +136,7 @@ test "an enum receiver binds exactly as a struct receiver does" {
         \\    ten = 10
         \\
         \\    func from(n: i64) -> i64:
-        \\        return n + i32(self)
+        \\        return n + i64(i32(self))
         \\
         \\func apply(n: i64, f: func(i64) -> i64) -> i64:
         \\    return f(n)

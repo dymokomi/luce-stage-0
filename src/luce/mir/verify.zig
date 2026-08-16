@@ -76,19 +76,12 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (element == .function) return error.BadStruct;
             try verifyType(program, element);
         },
-        // **A key is a `long`, a `string`, or an enum** (docs/ENUMS.md,
-        // As built 2026-08-12).  The enum is admitted here because it
-        // *is* an integer at a chosen width whose whole comparison
-        // surface is equality, which is exactly what a key needs — and
-        // because it reaches the runtime as the integer a `long` key
-        // would be (`mir.mapKeyStorage`), so the two payloads the
-        // runtime hashes and compares are still the only two there are.
-        // Its row and width are checked like any other enum's.
+        // A key is an explicit integer width, `str`, or an enum. An enum
+        // reaches the runtime at its backing width (`mir.mapKeyStorage`).
         .map => |pair| {
-            switch (pair.key) {
-                .i64, .str, .enumeration => try verifyType(program, pair.key),
-                else => return error.BadStruct,
-            }
+            if (!pair.key.isInteger() and pair.key != .str and pair.key != .enumeration)
+                return error.BadStruct;
+            try verifyType(program, pair.key);
             // A map's missing-key answer already supplies the one
             // optional layer (`get` is `V?`).  Stage 4 therefore refuses
             // `map(K, V?)`, including the storable function spelling;

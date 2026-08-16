@@ -101,11 +101,11 @@ test "references: a struct and a union carry, share, and release their fields" {
     // census, which is what proves the fields were released.
     try agreeOk(
         \\struct Box:
-        \\    items: list[i32]
+        \\    items: list[i64]
         \\
         \\union Node:
-        \\    leaf(value: i32)
-        \\    branch(kids: list[i32])
+        \\    leaf(value: i64)
+        \\    branch(kids: list[i64])
         \\
         \\func make() -> Box:
         \\    let xs = [1, 2, 3]
@@ -148,7 +148,7 @@ test "the bit set: & | ^ ~ at both widths, in hex and binary spellings" {
     );
 }
 
-test "the bit set: shifts transport bits, sign-extend, and check the count" {
+test "the bit set: shifts transport bits at the operand's explicit width" {
     try agreeOk(
         \\func main():
         \\    assert(1 << 4 == 16)
@@ -157,12 +157,12 @@ test "the bit set: shifts transport bits, sign-extend, and check the count" {
         \\    # `>>` is arithmetic: the operands are signed (D3).
         \\    assert(-8 >> 1 == -4)
         \\    assert(-1 >> 5 == -1)
-        \\    # `<<` discards high bits without trapping (R2): at i32,
-        \\    # 1 << 31 lands on the sign bit.
-        \\    var one = 1
-        \\    assert(one << 31 == -2147483648)
+        \\    # Left shift is checked arithmetic; legal shifts preserve
+        \\    # the source width and unsigned right shift zero-fills.
+        \\    var byte: u8 = 1
+        \\    assert(byte << 7 == 128)
+        \\    assert(u8(240) >> 4 == 15)
         \\    var wide: i64 = 1
-        \\    assert(wide << 63 == -9223372036854775808)
         \\    assert(wide << 62 == 4611686018427387904)
         \\
     );
@@ -204,17 +204,15 @@ test "the bit set: compound forms write back like every other operator" {
     );
 }
 
-test "the bit set: storage widths widen before the operator, like arithmetic" {
+test "the bit set: every integer width computes in place" {
     try agreeOk(
         \\func main():
         \\    var cells = new array[u8](2)
         \\    cells[0] = 0xF0
         \\    cells[1] = 0x0F
-        \\    # A u8 widens to i32 before the operator sees it (D2),
-        \\    # so no expression ever has an 8-bit type.
         \\    assert(cells[0] | cells[1] == 0xFF)
         \\    assert(cells[0] >> 4 == 0xF)
-        \\    assert(~cells[1] == -16)
+        \\    assert(~cells[1] == 0xF0)
         \\
     );
 }
@@ -224,8 +222,8 @@ test "the bit set: a shift count out of range traps, at either width and either 
     // is what these prove, on both engines at the same instruction.
     try agree.trap(
         \\func main():
-        \\    var x = 1
-        \\    var count = 32
+        \\    var x: u8 = 1
+        \\    var count: u8 = 8
         \\    let y = x << count
         \\
     , .shift_out_of_range);
@@ -344,44 +342,35 @@ test "str(x) folds in a constant, in the same bytes a run would print" {
     );
 }
 
-// `long(x)` **rounds half away from zero** — the same rounding
-// `math.round` was always documented as, because a language with two
-// roundings that disagree has a bug in it (docs/NUMERICS.md §7).
-// `trunc(x)` is how truncation is spelled now, completing the four:
-// `floor`, `ceil`, `trunc`, and round.
-
-test "long(x) rounds half away from zero, and trunc keeps truncation" {
+test "integer conversion truncates toward zero" {
     try agreeOk(
         \\func main():
-        \\    assert(i64(2.5) == 3)
-        \\    assert(i64(-2.5) == -3)
-        \\    assert(i64(0.5) == 1)
-        \\    assert(i64(-0.5) == -1)
+        \\    assert(i64(2.5) == 2)
+        \\    assert(i64(-2.5) == -2)
+        \\    assert(i64(0.5) == 0)
+        \\    assert(i64(-0.5) == 0)
         \\    assert(i64(2.4) == 2)
         \\    assert(i64(-2.4) == -2)
-        \\    assert(i64(2.6) == 3)
-        \\    assert(i64(-2.6) == -3)
-        \\    assert(i64(3.9) == 4)
-        \\    assert(i64(-3.9) == -4)
+        \\    assert(i64(2.6) == 2)
+        \\    assert(i64(-2.6) == -2)
+        \\    assert(i64(3.9) == 3)
+        \\    assert(i64(-3.9) == -3)
         \\    assert(i64(7) == 7)
         \\    # Toward zero has a spelling of its own again.
         \\    assert(trunc(2.9) == 2.0)
         \\    assert(trunc(-2.9) == -2.0)
         \\    assert(i64(trunc(-2.9)) == -2)
-        \\    # And the four roundings are four different answers.
+        \\    # Explicit integer conversion is the same toward-zero
+        \\    # direction as trunc, but returns an integer.
         \\    assert(floor(-2.5) == -3.0)
         \\    assert(ceil(-2.5) == -2.0)
         \\    assert(trunc(-2.5) == -2.0)
-        \\    assert(i64(-2.5) == -3)
+        \\    assert(i64(-2.5) == -2)
         \\
     );
 }
 
-test "long(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
-    // `0.49999999999999994 + 0.5` rounds up to exactly 1.0 in
-    // binary64, so the floor of it is 1 where the answer is 0.  That
-    // is how `math.round` used to be written; both now split at
-    // `trunc`, which is exact.
+test "integer conversion and math.round remain deliberately distinct" {
     try agreeOk(
         \\import std.math
         \\
@@ -390,9 +379,13 @@ test "long(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
         \\    assert(i64(nearly) == 0)
         \\    assert(math.round(nearly) == 0.0)
         \\    assert(floor(nearly + 0.5) == 1.0)
+        \\    assert(i64(2.5) == 2)
+        \\    assert(math.round(2.5) == 3.0)
+        \\    assert(i64(-2.5) == -2)
+        \\    assert(math.round(-2.5) == -3.0)
         \\    for step in range(-40, 41):
         \\        let x = f64(step) / 4.0
-        \\        assert(f64(i64(x)) == math.round(x))
+        \\        assert(f64(i64(x)) == trunc(x))
         \\
     );
 }
@@ -433,7 +426,6 @@ test "integers: / is real division and answers a double" {
         \\    assert(7 / 2 == 3.5)
         \\    assert(-7 / 2 == -3.5)
         \\    assert(6 / 3 == 2.0)
-        \\    assert(6 / 3 == 2)
         \\    let total = 10
         \\    let count = 4
         \\    assert(total / count == 2.5)
@@ -581,10 +573,6 @@ test "floats: % floors with the integer operator, and // is its floor" {
         \\    assert(7.0 // -3.0 == -3.0)
         \\    assert(-7.0 // -3.0 == 2.0)
         \\    assert(-5.5 % 2.0 == 0.5)
-        \\    # Promotion crosses the line without a seam in it.
-        \\    assert(-7 % 3.0 == 2.0)
-        \\    assert(-7.0 % 3 == 2.0)
-        \\    assert(-7 // 3.0 == -3.0)
         \\
     );
 }
@@ -680,7 +668,7 @@ test "a minus does not move where a literal lands" {
         \\    let plain: f64 = 0.1
         \\    assert(small == 0.0 - plain)
         \\    let narrow: f32 = -0.1
-        \\    assert(narrow != small)
+        \\    assert(f64(narrow) != small)
         \\    let wide: i64 = -3000000000
         \\    assert(wide + 3000000000 == 0)
         \\    assert(wide < -2147483648)
@@ -741,39 +729,39 @@ test "the conversions are still spelled where a program spells them" {
         \\    let x = 2.0
         \\    assert(f64(n) / x == 3.5)
         \\    assert(i64(x) + n == 9)
-        \\    assert(f64(i64(3.9)) == 4.0)
+        \\    assert(f64(i64(3.9)) == 3.0)
         \\
     );
 }
 
-test "mixing: long widens to double in every arithmetic operator" {
+test "explicit conversion composes integer and float arithmetic" {
     try agreeOk(
         \\func main():
         \\    let n = 7
         \\    let x = 2.0
-        \\    assert(n + x == 9.0)
-        \\    assert(x + n == 9.0)
-        \\    assert(n - x == 5.0)
-        \\    assert(x - n == -5.0)
-        \\    assert(n * x == 14.0)
-        \\    assert(x * n == 14.0)
-        \\    assert(n / x == 3.5)
-        \\    assert(x / n == 0.2857142857142857)
-        \\    assert(n % x == 1.0)
-        \\    assert(x % n == 2.0)
+        \\    assert(f64(n) + x == 9.0)
+        \\    assert(x + f64(n) == 9.0)
+        \\    assert(f64(n) - x == 5.0)
+        \\    assert(x - f64(n) == -5.0)
+        \\    assert(f64(n) * x == 14.0)
+        \\    assert(x * f64(n) == 14.0)
+        \\    assert(f64(n) / x == 3.5)
+        \\    assert(x / f64(n) == 0.2857142857142857)
+        \\    assert(f64(n) % x == 1.0)
+        \\    assert(x % f64(n) == 2.0)
         \\
     );
 }
 
-test "mixing: a promoted operator answers a double, printed as one" {
+test "an explicitly converted operator answers a float, printed as one" {
     // `string` of a whole double is its shortest round-trip, so "8" and
     // not "8.0" — the division below is what shows the type moved.
     try agree.printsGiven(
         \\func main():
         \\    let n = 7
-        \\    print(str(n + 1.0))
-        \\    print(str(1 + 0.5))
-        \\    print(str(n / 2.0))
+        \\    print(str(f64(n) + 1.0))
+        \\    print(str(f64(1) + 0.5))
+        \\    print(str(f64(n) / 2.0))
         \\    var f = 2.0
         \\    f += 1
         \\    f *= 2
@@ -782,7 +770,7 @@ test "mixing: a promoted operator answers a double, printed as one" {
     , budget, "8\n1.5\n3.5\n0.75\n");
 }
 
-test "mixing: promotion reaches annotations, arguments, returns, and fields" {
+test "contextual literals reach annotations, arguments, returns, and fields" {
     try agreeOk(
         \\struct Point:
         \\    x: f64
@@ -806,7 +794,7 @@ test "mixing: promotion reaches annotations, arguments, returns, and fields" {
         \\    assert(whole() == 3.0)
         \\    let p = Point(x = 1, y = 2.5)
         \\    assert(p.x == 1.0)
-        \\    # The two widenings compose, in the one order that works.
+        \\    # Presence narrowing exposes the contextually typed value.
         \\    let held = maybe_whole(true)
         \\    if held != none:
         \\        assert(held == 4.0)
@@ -851,7 +839,7 @@ test "types: the language's own names are lowercase" {
         \\    text.append(s)
         \\    let p = Point(x = 1, y = r)
         \\    assert(total(xs) == 10)
-        \\    assert(i64(r) == 3)
+        \\    assert(i64(r) == 2)
         \\    assert(f64(n) == 7.0)
         \\    assert(str(grid[0, 0] + p.x) == "2.5")
         \\    assert(counts["a"] == 1)
@@ -896,7 +884,7 @@ test "literals: a number lands on the type its context names" {
     );
 }
 
-test "mixing: promotion reaches container elements and min/max/clamp" {
+test "container literals are contextual and numeric builtins stay exact" {
     try agreeOk(
         \\func main():
         \\    var xs: list[f64] = [1, 2, 3]
@@ -905,15 +893,12 @@ test "mixing: promotion reaches container elements and min/max/clamp" {
         \\    assert(xs[0] == 9.0)
         \\    assert(xs[3] == 4.0)
         \\    assert(len(xs) == 4)
-        \\    let mixed = [1, 2.5, 3]
-        \\    assert(mixed[0] == 1.0)
-        \\    assert(mixed[2] == 3.0)
         \\    let plain = [1, 2, 3]
         \\    assert(plain[0] == 1)
         \\    let x = 7.5
-        \\    assert(clamp(x, 0, 5) == 5.0)
-        \\    assert(min(x, 8) == 7.5)
-        \\    assert(max(1, x) == 7.5)
+        \\    assert(clamp(x, f64(0), f64(5)) == 5.0)
+        \\    assert(min(x, f64(8)) == 7.5)
+        \\    assert(max(f64(1), x) == 7.5)
         \\
     );
 }
@@ -924,23 +909,16 @@ test "mixing: promotion reaches container elements and min/max/clamp" {
 // above it they part company, which is the whole reason this is a
 // call and not a cast (docs/NUMERICS.md §5).
 
-test "mixing: comparison across the line is exact at 2^53, both sides" {
+test "explicit conversion at 2^53 makes the chosen rounding visible" {
     try agreeOk(
         \\func main():
         \\    var two53: i64 = 9007199254740992
         \\    var as_float: f64 = 9007199254740992.0
-        \\    assert(two53 == as_float)
-        \\    assert(two53 <= as_float)
-        \\    assert(as_float == two53)
-        \\    # The number that does not survive widening.
-        \\    assert(two53 + 1 != as_float)
-        \\    assert(two53 + 1 > as_float)
-        \\    assert(as_float < two53 + 1)
-        \\    assert(not (two53 + 1 == as_float))
-        \\    assert(not (two53 + 1 <= as_float))
-        \\    # And its neighbour on the other side.
-        \\    assert(two53 - 1 < as_float)
-        \\    assert(as_float > two53 - 1)
+        \\    assert(f64(two53) == as_float)
+        \\    # The next integer rounds to the same binary64 value.
+        \\    assert(f64(two53 + 1) == as_float)
+        \\    assert(i64(as_float) == two53)
+        \\    assert(f64(two53 - 1) < as_float)
         \\
     );
 }
@@ -951,23 +929,15 @@ test "mixing: comparison across the line is exact at 2^53, both sides" {
 // `float` gets the same treatment 2^53 got, rather than an argument
 // that it is unlikely.
 
-test "mixing: comparison across the line is exact at 2^24, for int against float" {
+test "explicit conversion at 2^24 exposes binary32 rounding" {
     try agreeOk(
         \\func main():
         \\    var two24: i32 = 16777216
         \\    var as_float: f32 = 16777216.0
-        \\    assert(two24 == as_float)
-        \\    assert(two24 <= as_float)
-        \\    assert(as_float == two24)
-        \\    # The number that does not survive widening.
-        \\    assert(two24 + 1 != as_float)
-        \\    assert(two24 + 1 > as_float)
-        \\    assert(as_float < two24 + 1)
-        \\    assert(not (two24 + 1 == as_float))
-        \\    assert(not (two24 + 1 <= as_float))
-        \\    # And its neighbour on the other side.
-        \\    assert(two24 - 1 < as_float)
-        \\    assert(as_float > two24 - 1)
+        \\    assert(f32(two24) == as_float)
+        \\    assert(f32(two24 + 1) == as_float)
+        \\    assert(i32(as_float) == two24)
+        \\    assert(f32(two24 - 1) < as_float)
         \\
     );
 }
@@ -976,7 +946,7 @@ test "mixing: comparison across the line is exact at 2^24, for int against float
 // is one where a literal read at the wrong width would be *silently*
 // wrong — a legal widening of the wrong number, not a diagnostic.
 
-test "a constructor lands its argument, so double(0.1) is binary64's" {
+test "a conversion constructor contextualizes its literal argument" {
     // `double(0.1)` reading `0.1` at binary32 and widening the result
     // gives 0.10000000149011612 — a different number, and one that
     // reaches its place through a conversion the language allows.
@@ -985,7 +955,7 @@ test "a constructor lands its argument, so double(0.1) is binary64's" {
         \\    let annotated: f64 = 0.1
         \\    assert(f64(0.1) == annotated)
         \\    assert(f64(0.1) != f64(f32(0.1)))
-        \\    assert(f32(0.1) != annotated)
+        \\    assert(f64(f32(0.1)) != annotated)
         \\    # And the integer direction: the constructor's own type is
         \\    # the place, so a value past an `i32` is not refused for
         \\    # overflowing one nobody wrote.
@@ -1005,7 +975,7 @@ test "the width-polymorphic builtins land their arguments too" {
         \\    let wide: f64 = sqrt(2.0)
         \\    assert(wide == sqrt(two))
         \\    let narrow: f32 = sqrt(2.0)
-        \\    assert(wide != narrow)
+        \\    assert(wide != f64(narrow))
         \\    # abs, min, max and clamp keep the same rule.
         \\    let held: f64 = abs(-0.1)
         \\    assert(held == 0.1)
@@ -1017,7 +987,7 @@ test "the width-polymorphic builtins land their arguments too" {
     );
 }
 
-test "mixing: an int against a double is exact everywhere, ends included" {
+test "explicit integer-to-float comparison is exact where f64 can represent it" {
     // §5's first row, and the one place the lowering may skip the
     // intrinsic: every `int` is exactly a `double`, so `sitofp` and an
     // ordinary `fcmp` answer what comparing the numbers would.  The
@@ -1029,37 +999,37 @@ test "mixing: an int against a double is exact everywhere, ends included" {
         \\    var low: i32 = -2147483648
         \\    var high_double: f64 = 2147483647.0
         \\    var low_double: f64 = -2147483648.0
-        \\    assert(high == high_double)
-        \\    assert(not (high < high_double))
-        \\    assert(not (high > high_double))
-        \\    assert(low == low_double)
-        \\    assert(high > high_double - 0.5)
-        \\    assert(high < high_double + 0.5)
-        \\    assert(low < low_double + 0.5)
-        \\    assert(low > low_double - 0.5)
+        \\    assert(f64(high) == high_double)
+        \\    assert(not (f64(high) < high_double))
+        \\    assert(not (f64(high) > high_double))
+        \\    assert(f64(low) == low_double)
+        \\    assert(f64(high) > high_double - 0.5)
+        \\    assert(f64(high) < high_double + 0.5)
+        \\    assert(f64(low) < low_double + 0.5)
+        \\    assert(f64(low) > low_double - 0.5)
         \\
     );
 }
 
-test "mixing: ordering, equality, and the fraction that breaks a tie" {
+test "explicit conversion orders integers with fractional floats" {
     try agreeOk(
         \\func main():
-        \\    assert(1 < 1.5)
-        \\    assert(1.5 > 1)
-        \\    assert(2 > 1.5)
-        \\    assert(1.5 < 2)
-        \\    assert(1 == 1.0)
-        \\    assert(1.0 == 1)
-        \\    assert(1 != 1.5)
-        \\    assert(-1 > -1.5)
-        \\    assert(-2 < -1.5)
-        \\    assert(0 >= -0.0)
-        \\    assert(0 <= -0.0)
+        \\    assert(f64(1) < 1.5)
+        \\    assert(1.5 > f64(1))
+        \\    assert(f64(2) > 1.5)
+        \\    assert(1.5 < f64(2))
+        \\    assert(f64(1) == 1.0)
+        \\    assert(1.0 == f64(1))
+        \\    assert(f64(1) != 1.5)
+        \\    assert(f64(-1) > -1.5)
+        \\    assert(f64(-2) < -1.5)
+        \\    assert(f64(0) >= -0.0)
+        \\    assert(f64(0) <= -0.0)
         \\
     );
 }
 
-test "mixing: infinity and NaN compare with a long without widening it" {
+test "explicit conversion compares an integer with infinity and NaN" {
     try agreeOk(
         \\func main():
         \\    var one: f64 = 1.0
@@ -1067,35 +1037,35 @@ test "mixing: infinity and NaN compare with a long without widening it" {
         \\    let infinity = one / zero
         \\    let nan = zero / zero
         \\    var big: i64 = 9223372036854775807
-        \\    assert(big < infinity)
-        \\    assert(infinity > big)
-        \\    assert(0 - big - 1 > 0.0 - infinity)
+        \\    assert(f64(big) < infinity)
+        \\    assert(infinity > f64(big))
+        \\    assert(f64(0 - big - 1) > 0.0 - infinity)
         \\    # NaN is unordered with everything, so only != holds.
-        \\    assert(0 != nan)
-        \\    assert(not (0 == nan))
-        \\    assert(not (0 < nan))
-        \\    assert(not (0 > nan))
-        \\    assert(not (0 >= nan))
-        \\    assert(not (0 <= nan))
+        \\    assert(f64(0) != nan)
+        \\    assert(not (f64(0) == nan))
+        \\    assert(not (f64(0) < nan))
+        \\    assert(not (f64(0) > nan))
+        \\    assert(not (f64(0) >= nan))
+        \\    assert(not (f64(0) <= nan))
         \\
     );
 }
 
-test "mixing: an exact comparison folds the same way in a constant" {
+test "explicit numeric conversion folds the same way in a constant" {
     try agreeOk(
         \\const two53: i64 = 9007199254740992
         \\const after53: i64 = 9007199254740993
         \\const as_double: f64 = 9007199254740992.0
-        \\const below = two53 == as_double
-        \\const above = after53 == as_double
-        \\const ordered = as_double < after53
-        \\const widened = 1 + 2.5
+        \\const below = f64(two53) == as_double
+        \\const above = f64(after53) == as_double
+        \\const ordered = as_double < f64(after53 + 1)
+        \\const converted = f64(1) + 2.5
         \\
         \\func main():
         \\    assert(below)
-        \\    assert(not above)
+        \\    assert(above)
         \\    assert(ordered)
-        \\    assert(widened == 3.5)
+        \\    assert(converted == 3.5)
         \\
     );
 }
@@ -1361,7 +1331,7 @@ test "trap: a plain read of a missing key is untouched by the compound rule" {
 }
 
 test "trap: a compound store that defines an entry and then traps frees cleanly" {
-    // The define stands in front of the arithmetic, so a `byte` place
+    // The define stands in front of the arithmetic, so a `u8` place
     // that goes out of range leaves the entry behind at zero and the
     // trap unwinds over a map with one more key in it than the
     // program ever managed to write.  Both engines have to agree on
@@ -1373,7 +1343,7 @@ test "trap: a compound store that defines an entry and then traps frees cleanly"
         \\    m["b"] -= 1
         \\    assert(len(m) == 2)
         \\
-    , .conversion_range);
+    , .integer_overflow);
 }
 
 test "trap: descending through a map key to reach a field is still a read" {
@@ -1420,11 +1390,7 @@ test "trap: a compound store into an array cell keeps its bounds trap" {
     , .index_bounds);
 }
 
-test "compound assignment on a storage width combines at its arithmetic type" {
-    // D5: no operator computes at a storage width, so `b += 1` on a
-    // `byte` is `b = byte(b + 1)` — promote to `int`, combine, narrow
-    // back.  Every place form, because the promotion is stated once
-    // in `compoundCombine` and all four of them go through it.
+test "compound assignment computes at the place's explicit width" {
     try agreeOk(
         \\struct Pixel:
         \\    level: u8
@@ -1455,18 +1421,14 @@ test "compound assignment on a storage width combines at its arithmetic type" {
     );
 }
 
-test "trap: a storage-width compound assignment narrows back with the range check" {
-    // The half of D5 that makes the promotion honest.  `b += 1` at 255
-    // is not 0: the narrowing back into the place is the same checked
-    // conversion `byte(b + 1)` pays for, so it stops the program
-    // rather than wrapping.
+test "trap: compound assignment checks overflow at the place's width" {
     try agreeTrap(
         \\func main():
         \\    var b: u8 = 255
         \\    b += 1
         \\    assert(b == 0)
         \\
-    , .conversion_range);
+    , .integer_overflow);
 }
 
 test "a compound index target evaluates its index expression once" {
@@ -1695,7 +1657,7 @@ test "ord of a literal is a compile-time constant" {
     var compiled = try agree.program(
         \\func main():
         \\    let text = "(x)"
-        \\    assert(text.byte_at(0) == ord("("))
+        \\    assert(i64(text.byte_at(0)) == ord("("))
         \\
     );
     defer compiled.deinit();
@@ -1723,7 +1685,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
         \\func main():
         \\    assert(open_paren == 40)
         \\    assert(lambda == 955)
-        \\    assert("(a)".byte_at(0) == open_paren)
+        \\    assert(i64("(a)".byte_at(0)) == open_paren)
         \\
     );
     // A literal with no codepoint is left to the run time, so the
@@ -2018,9 +1980,9 @@ test "returns: existing vars receive one snapshot through every call surface" {
     );
 }
 
-test "returns: assignment fits each value and prepares all string storage before replacement" {
+test "returns: assignment keeps exact types and prepares string storage before replacement" {
     try agreeOk(
-        \\func mixed() -> (i32, i64, i64?):
+        \\func mixed() -> (f64, i64?, i64?):
         \\    return 7, 9, none
         \\
         \\func flipped(left: str, right: str) -> (str, str):
@@ -2032,7 +1994,7 @@ test "returns: assignment fits each value and prepares all string storage before
         \\    var missing: i64? = 1
         \\    wide, present, missing = mixed()
         \\    assert(wide == 7.0)
-        \\    assert(present + 1 == 10)
+        \\    assert((present else 0) + 1 == 10)
         \\    assert((missing else 0) == 0)
         \\    var inside = "left"
         \\    var outside = "a string long enough to own outside bytes"
@@ -2514,7 +2476,7 @@ test "builtins: the table is the signature, so a call may name its slots" {
         \\    assert(abs(value = -7) == 7)
         \\    assert(chr(code = 65) == "A")
         \\    assert(ord(text = "A") == 65)
-        \\    assert(i64(value = 2.5) == 3)
+        \\    assert(i64(value = 2.5) == 2)
         \\
     );
 }
@@ -4836,7 +4798,7 @@ test "checked string intrinsics slice and inspect UTF-8 bytes" {
 }
 
 test "string intrinsics implement multiline UTF-8-safe edits" {
-    try agreeOk("func continuation(code: i64) -> bool:\n" ++
+    try agreeOk("func continuation(code: u8) -> bool:\n" ++
         "    return code >= 128 and code < 192\n" ++
         "\n" ++
         "func previous(value: str, cursor: i64) -> i64:\n" ++
@@ -5299,10 +5261,10 @@ test "a runaway recursion reports a capped trace and counts the rest" {
 }
 
 // ---------------------------------------------------------------------------
-// The storage widths: `byte`, `short`, `half` (docs/TYPES.md step 5)
+// Explicit narrow widths compute at their declared width
 // ---------------------------------------------------------------------------
 
-test "storage: the three widths hold what the ladder says they hold" {
+test "explicit widths: narrow integers hold their complete ranges" {
     try agreeOk(
         \\func main():
         \\    let low: u8 = 0
@@ -5319,48 +5281,119 @@ test "storage: the three widths hold what the ladder says they hold" {
     );
 }
 
-test "storage: an operator promotes, so nothing wraps at 8 or 16 bits" {
-    // D5's whole point: `byte + byte` is an `int`, so 255 + 1 is 256
-    // and not 0.  There is no arithmetic at a storage width to
-    // overflow, which is why `byte` needs no checked arithmetic.
+test "explicit widths: every integer range and operator survives both engines" {
     try agreeOk(
         \\func main():
-        \\    var a: u8 = 255
-        \\    var b: u8 = 1
-        \\    assert(a + b == 256)
-        \\    assert(a * a == 65025)
-        \\    var s: i16 = 32767
-        \\    assert(s + s == 65534)
-        \\    var h: f16 = 0.5
-        \\    assert(h + h == 1.0)
-        \\    assert(h * 4.0 == 2.0)
+        \\    let u8_high: u8 = 255
+        \\    let u16_high: u16 = 65535
+        \\    let u32_high: u32 = 4294967295
+        \\    let u64_high: u64 = 18446744073709551615
+        \\    let i8_low: i8 = -128
+        \\    let i16_low: i16 = -32768
+        \\    let i32_low: i32 = -2147483648
+        \\    let i64_low: i64 = -9223372036854775808
+        \\    assert(u8_high - 1 == 254)
+        \\    assert(u16_high - 1 == 65534)
+        \\    assert(u32_high - 1 == 4294967294)
+        \\    assert(u64_high - 1 == 18446744073709551614)
+        \\    assert(i8_low + 1 == -127)
+        \\    assert(i16_low + 1 == -32767)
+        \\    assert(i32_low + 1 == -2147483647)
+        \\    assert(i64_low + 1 == -9223372036854775807)
+        \\    assert(~u8(0) == u8(255))
+        \\    assert(~u16(0) == u16(65535))
+        \\    assert(~u32(0) == u32(4294967295))
+        \\    assert(~u64(0) == u64(18446744073709551615))
+        \\    assert(i8(-8) >> 1 == i8(-4))
+        \\    assert(i16(-8) >> 1 == i16(-4))
+        \\    assert(i32(-8) >> 1 == i32(-4))
+        \\    assert(i64(-8) >> 1 == i64(-4))
+        \\    assert(u8(9) // u8(2) == u8(4))
+        \\    assert(u16(9) % u16(2) == u16(1))
+        \\    assert(i32(-9) // i32(2) == i32(-5))
+        \\    assert(i64(-9) % i64(2) == i64(1))
         \\
     );
 }
 
-test "storage: a byte widens as a magnitude and a short as a sign" {
-    // D4: a `byte`'s bits are read as a magnitude (`zext`), and every
-    // other integer's carry a sign (`sext`).  128 is the value that
-    // tells the two apart — as a signed 8-bit pattern it would be -128.
+test "explicit widths: every integer width is a distinct map key" {
+    try agreeOk(
+        \\func main():
+        \\    var u8s = new map[u8, str]
+        \\    var u16s = new map[u16, str]
+        \\    var u32s = new map[u32, str]
+        \\    var u64s = new map[u64, str]
+        \\    var i8s = new map[i8, str]
+        \\    var i16s = new map[i16, str]
+        \\    var i32s = new map[i32, str]
+        \\    var i64s = new map[i64, str]
+        \\    u8s[u8(255)] = "u8"
+        \\    u16s[u16(65535)] = "u16"
+        \\    u32s[u32(4294967295)] = "u32"
+        \\    u64s[u64(18446744073709551615)] = "u64"
+        \\    i8s[i8(-128)] = "i8"
+        \\    i16s[i16(-32768)] = "i16"
+        \\    i32s[i32(-2147483648)] = "i32"
+        \\    i64s[i64(-9223372036854775808)] = "i64"
+        \\    assert(u8s[u8(255)] == "u8" and u8s.has(u8(255)))
+        \\    assert(u16s[u16(65535)] == "u16" and u16s.has(u16(65535)))
+        \\    assert(u32s[u32(4294967295)] == "u32" and u32s.has(u32(4294967295)))
+        \\    assert(u64s[u64(18446744073709551615)] == "u64" and u64s.has(u64(18446744073709551615)))
+        \\    assert(i8s[i8(-128)] == "i8" and i8s.has(i8(-128)))
+        \\    assert(i16s[i16(-32768)] == "i16" and i16s.has(i16(-32768)))
+        \\    assert(i32s[i32(-2147483648)] == "i32" and i32s.has(i32(-2147483648)))
+        \\    assert(i64s[i64(-9223372036854775808)] == "i64" and i64s.has(i64(-9223372036854775808)))
+        \\
+    );
+}
+
+test "explicit widths: arithmetic computes in place" {
+    try agreeOk(
+        \\func main():
+        \\    var a: u8 = 200
+        \\    var b: u8 = 1
+        \\    assert(a + b == 201)
+        \\    assert(a * b == 200)
+        \\    var s: i16 = 16000
+        \\    assert(s + s == 32000)
+        \\    var h: f16 = 0.5
+        \\    assert(h + h == 1.0)
+        \\    assert(h * f16(4.0) == 2.0)
+        \\
+    );
+}
+
+test "explicit widths: narrow arithmetic traps at its own boundary" {
+    try agreeTrap(
+        \\func main():
+        \\    var high: u8 = 255
+        \\    high += 1
+        \\
+    , .integer_overflow);
+    try agreeTrap(
+        \\func main():
+        \\    var high: i16 = 32767
+        \\    high += 1
+        \\
+    , .integer_overflow);
+}
+
+test "explicit widths: integer conversions preserve value" {
     try agreeOk(
         \\func main():
         \\    var b: u8 = 128
-        \\    var n: i64 = b
+        \\    var n: i64 = i64(b)
         \\    assert(n == 128)
         \\    assert(b > 127)
         \\    var s: i16 = -128
-        \\    var m: i64 = s
+        \\    var m: i64 = i64(s)
         \\    assert(m == -128)
         \\    assert(s < 0)
         \\
     );
 }
 
-test "storage: byte_at answers a byte, and the high bytes stay positive" {
-    // The §9 exception, and the reason it is one: a UTF-8 lead byte is
-    // 0..255 on both engines and always has been, so every ordered
-    // comparison against 128, 192 or 194 in the corpus keeps reading
-    // the way it is written.
+test "explicit widths: byte_at answers u8 and high bytes stay positive" {
     try agreeOk(
         \\func main():
         \\    let text = "é"
@@ -5378,12 +5411,12 @@ test "storage: byte_at answers a byte, and the high bytes stay positive" {
 
 // -- conversions, both directions, at every boundary ------------------------
 
-test "storage: narrowing to a byte keeps its range and traps outside it" {
+test "explicit widths: checked integer conversions preserve ranges" {
     try agreeOk(
         \\func main():
         \\    assert(u8(0) == 0)
         \\    assert(u8(255) == 255)
-        \\    assert(u8(254.6) == 255)
+        \\    assert(u8(254.6) == 254)
         \\    assert(u8(0.4) == 0)
         \\    assert(i16(-32768) == -32768)
         \\    assert(i16(32767) == 32767)
@@ -5393,28 +5426,23 @@ test "storage: narrowing to a byte keeps its range and traps outside it" {
     );
 }
 
-test "storage: a byte reaches a float as a magnitude, not as a sign" {
-    // The other half of D4, and the half an integer-to-integer test
-    // cannot reach: a `byte` above 127 has its top bit set, so a
-    // conversion that read the bits as signed would answer -56 for
-    // 200 — and `double(b)` is the widening every mixed expression
-    // inserts for itself.
+test "explicit widths: integer-to-float conversion preserves magnitude" {
     try agreeOk(
         \\func main():
         \\    var high: u8 = 200
         \\    assert(f64(high) == 200.0)
         \\    assert(f32(high) == 200.0)
-        \\    assert(high * 1.0 == 200.0)
+        \\    assert(f64(high) * 1.0 == 200.0)
         \\    assert(f64(u8(255)) == 255.0)
         \\    var top: u8 = 128
         \\    assert(f64(top) == 128.0)
-        \\    var widened: f64 = top
+        \\    var widened: f64 = f64(top)
         \\    assert(widened == 128.0)
         \\
     );
 }
 
-test "storage: byte(256) traps rather than wrapping to zero" {
+test "explicit widths: u8(256) traps rather than wrapping to zero" {
     try agreeTrap(
         \\func main():
         \\    var over: i64 = 256
@@ -5424,7 +5452,7 @@ test "storage: byte(256) traps rather than wrapping to zero" {
     , .conversion_range);
 }
 
-test "storage: byte(-1) traps rather than becoming 255" {
+test "explicit widths: u8(-1) traps rather than becoming 255" {
     try agreeTrap(
         \\func main():
         \\    var under: i64 = -1
@@ -5434,7 +5462,7 @@ test "storage: byte(-1) traps rather than becoming 255" {
     , .conversion_range);
 }
 
-test "storage: short(32768) and short(-32769) both trap" {
+test "explicit widths: i16 conversions outside the range trap" {
     try agreeTrap(
         \\func main():
         \\    var over: i64 = 32768
@@ -5451,21 +5479,24 @@ test "storage: short(32768) and short(-32769) both trap" {
     , .conversion_range);
 }
 
-test "storage: a float landing on a byte is checked after it rounds" {
-    // The range check runs on what rounding produced, so 255.5 rounds
-    // to 256 and is refused rather than truncated back into range.
+test "explicit widths: float-to-integer conversion checks after truncation" {
+    try agreeOk(
+        \\func main():
+        \\    assert(u8(255.9) == 255)
+        \\
+    );
     try agreeTrap(
         \\func main():
-        \\    var edge: f64 = 255.5
+        \\    var edge: f64 = 256.0
         \\    var narrowed = u8(edge)
         \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
 
-// -- half: binary16, bit-exact on both engines ------------------------------
+// -- f16: binary16, bit-exact on both engines -------------------------------
 
-test "half: the boundary values round-trip bit-exactly" {
+test "f16: the boundary values round-trip bit-exactly" {
     // 65504 is the largest finite binary16; 2^-14 is the smallest
     // normal and 2^-24 the smallest subnormal.  The last assert is
     // §3's "shortest representation that round-trips *at its own
@@ -5485,7 +5516,7 @@ test "half: the boundary values round-trip bit-exactly" {
     );
 }
 
-test "half: integers are exact to 2048 and step by two after it" {
+test "f16: integers are exact to 2048 and step by two after it" {
     try agreeOk(
         \\func main():
         \\    assert(f64(f16(2048.0)) == 2048.0)
@@ -5496,7 +5527,7 @@ test "half: integers are exact to 2048 and step by two after it" {
     );
 }
 
-test "half: overflow reaches infinity rather than trapping" {
+test "f16: overflow reaches infinity rather than trapping" {
     // Float to narrower float is IEEE and does not trap (§3), so
     // 1e300 lands on `inf` — and `half` acquires one far more easily
     // than `double` does, which is the whole reason the language does
@@ -5513,7 +5544,7 @@ test "half: overflow reaches infinity rather than trapping" {
     );
 }
 
-test "half: rounds to nearest, ties to even" {
+test "f16: rounds to nearest, ties to even" {
     // 2049 sits exactly between 2048 and 2050 at binary16; ties to
     // even takes 2048.  2051 sits between 2050 and 2052 and takes
     // 2052 for the same reason.
@@ -5527,7 +5558,7 @@ test "half: rounds to nearest, ties to even" {
     );
 }
 
-test "half: double to half rounds once, not twice through binary32" {
+test "f16: f64 to f16 rounds once, not twice through f32" {
     // §7's claim, with a value that can tell the difference — the
     // first draft of this test used 1 + 2^-11 and proved nothing,
     // because a detour through binary32 gives the same answer there.
@@ -5550,7 +5581,7 @@ test "half: double to half rounds once, not twice through binary32" {
     );
 }
 
-test "half: a non-finite half landing on an integer traps" {
+test "f16: a non-finite value converted to an integer traps" {
     // The bound `int` names is not finite at binary16, so the check
     // that catches this is the one that includes its bound rather than
     // excluding it.
@@ -5564,9 +5595,9 @@ test "half: a non-finite half landing on an integer traps" {
     , .conversion_range);
 }
 
-// -- array(byte, n): one byte an element ------------------------------------
+// -- arrays retain each element's declared width ----------------------------
 
-test "storage: an array of bytes stores and reads every value 0..255" {
+test "explicit widths: an array[u8] stores and reads every value 0..255" {
     try agreeOk(
         \\func main():
         \\    var cells = new array[u8](256)
@@ -5580,14 +5611,14 @@ test "storage: an array of bytes stores and reads every value 0..255" {
         \\    var total = 0
         \\    at = 0
         \\    while at < 256:
-        \\        total += cells[at]
+        \\        total += i64(cells[at])
         \\        at += 1
         \\    assert(total == 32640)
         \\
     );
 }
 
-test "storage: arrays of short and half keep their own widths" {
+test "explicit widths: arrays of i16 and f16 retain their widths" {
     try agreeOk(
         \\func main():
         \\    var shorts = new array[i16](4)
@@ -5606,7 +5637,7 @@ test "storage: arrays of short and half keep their own widths" {
     );
 }
 
-test "storage: a store past a byte element's range traps" {
+test "explicit widths: an array store past a u8 element's range traps" {
     try agreeTrap(
         \\func main():
         \\    var cells = new array[u8](4)
@@ -5617,10 +5648,7 @@ test "storage: a store past a byte element's range traps" {
     , .conversion_range);
 }
 
-test "storage: a list of bytes round-trips through the boxed path" {
-    // `List` stays boxed (§6) — this is the proof that a `byte`
-    // survives being boxed and read back, which is the path a list
-    // element takes and an array element does not.
+test "explicit widths: list[u8] round-trips through the boxed path" {
     try agreeOk(
         \\func main():
         \\    var xs = new list[u8]
@@ -5639,7 +5667,7 @@ test "storage: a list of bytes round-trips through the boxed path" {
     );
 }
 
-test "storage: a struct field may be a storage width" {
+test "explicit widths: struct fields retain their declared widths" {
     try agreeOk(
         \\struct Pixel:
         \\    red: u8
@@ -5651,12 +5679,12 @@ test "storage: a struct field may be a storage width" {
         \\    assert(p.red == 255)
         \\    assert(p.green == 128)
         \\    assert(p.blue == 0)
-        \\    assert(p.red + p.green + p.blue == 383)
+        \\    assert(i64(p.red) + i64(p.green) + i64(p.blue) == 383)
         \\
     );
 }
 
-test "storage: a parameter and a return may be a storage width" {
+test "explicit widths: parameters and returns retain their widths" {
     try agreeOk(
         \\func lighten(c: u8) -> u8:
         \\    if c > 200:

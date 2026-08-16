@@ -168,11 +168,11 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 /// checking the magnitude alone rejects the one number that most needs
 /// spelling — and the same is true of `-2147483648` at `int`.
 ///
-/// The answer is carried as an `i64` whatever the landing width,
-/// because that is how the IR carries an integer constant
-/// (`mir.Instruction.const_integer`); what `lands` decides is the
-/// range, not the carrier.  Null means out of that range.
-pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
+/// The answer is carried as an `i128` whatever the landing width. That
+/// carrier represents both `i64`'s minimum and `u64`'s maximum without
+/// changing their source value before the IR records the declared width.
+/// Null means out of that range.
+pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i128 {
     // Base 0 reads the `0x`/`0b` prefixes and steps over `_`
     // separators — both already validated by the lexer
     // (docs/BITWISE.md R3, D7).  `0o` never arrives: stage 2 refuses
@@ -185,7 +185,7 @@ pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
     const bounds = if (lands.isInteger()) lands.integerRange() else Type.integerRange(.i64);
     const signed: i128 = if (negated) -@as(i128, magnitude) else @as(i128, magnitude);
     if (signed < bounds.low or signed > bounds.high) return null;
-    return @intCast(signed);
+    return signed;
 }
 
 /// Parse a float literal, refusing one that is not a finite number.
@@ -526,15 +526,15 @@ fn everyArm(matched: ast.Match, comptime answers: fn (ast.Block) bool) bool {
 
 const testing = std.testing;
 
-test "long's minimum parses only when the sign folds into the literal" {
-    // The magnitude alone is one past the largest positive long, so
-    // checking it before applying the sign makes long.min unwritable.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false, .i64));
-    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true, .i64));
-    try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false, .i64));
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775809", true, .i64));
-    try testing.expectEqual(@as(?i64, -1), parseIntLiteral("1", true, .i64));
-    try testing.expectEqual(@as(?i64, 0), parseIntLiteral("0", true, .i64));
+test "i64 minimum and u64 maximum retain their full source values" {
+    try testing.expectEqual(@as(?i128, null), parseIntLiteral("9223372036854775808", false, .i64));
+    try testing.expectEqual(@as(?i128, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true, .i64));
+    try testing.expectEqual(@as(?i128, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false, .i64));
+    try testing.expectEqual(@as(?i128, null), parseIntLiteral("9223372036854775809", true, .i64));
+    try testing.expectEqual(@as(?i128, std.math.maxInt(u64)), parseIntLiteral("18446744073709551615", false, .u64));
+    try testing.expectEqual(@as(?i128, null), parseIntLiteral("18446744073709551616", false, .u64));
+    try testing.expectEqual(@as(?i128, -1), parseIntLiteral("1", true, .i64));
+    try testing.expectEqual(@as(?i128, 0), parseIntLiteral("0", true, .i64));
 }
 
 test "a float literal that is not finite is refused, and underflow is not" {
@@ -553,7 +553,7 @@ test "an integer literal landing on a float reads its digits, not a long" {
     // And the case that is the whole reason it reads the digits: a
     // magnitude past long's range is not a long, but it is a perfectly
     // ordinary float, and the type it landed on is the float.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false, .i64));
+    try testing.expectEqual(@as(?i128, null), parseIntLiteral("99999999999999999999", false, .i64));
     try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false, .f64));
     // Past every float as well is still refused, and so is nonsense.
     try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false, .f64));

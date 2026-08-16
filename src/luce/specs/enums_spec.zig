@@ -12,8 +12,8 @@
 //! Every program here runs twice, interpreted and compiled, and the
 //! two are compared on prints, traps, traces and the leak census
 //! (`specs/agree.zig`).  What that buys for enums specifically: a
-//! member is a constant at its backing width on one engine and an
-//! `i8`/`i16`/`i32`/`i64` on the other, and `string(m)` is the same
+//! member is a constant at its backing width on one engine and the
+//! matching explicit-width integer on the other, and `str(m)` is the same
 //! compare-and-branch tree on both — so a disagreement about a width
 //! or a name shows up here rather than in somebody's program.
 
@@ -81,27 +81,51 @@ test "members: a value folds like any constant expression" {
 // The backing width (D2)
 // ---------------------------------------------------------------------------
 
-test "backing: every rung of the ladder holds its members" {
+test "backing: every explicit integer width holds its members" {
     try agree.ok(
-        \\enum Small(u8):
-        \\    off = 0
-        \\    on = 255
+        \\enum U8Kind(u8):
+        \\    low = 0
+        \\    high = 255
         \\
-        \\enum Middle(i16):
+        \\enum U16Kind(u16):
+        \\    low = 0
+        \\    high = 65535
+        \\
+        \\enum U32Kind(u32):
+        \\    low = 0
+        \\    high = 4294967295
+        \\
+        \\enum U64Kind(u64):
+        \\    low = 0
+        \\    high = 18446744073709551615
+        \\
+        \\enum I8Kind(i8):
+        \\    low = -128
+        \\    high = 127
+        \\
+        \\enum I16Kind(i16):
         \\    low = -32768
         \\    high = 32767
         \\
-        \\enum Wide(i64):
-        \\    huge = 9223372036854775807
-        \\    tiny = -9223372036854775808
+        \\enum I32Kind(i32):
+        \\    low = -2147483648
+        \\    high = 2147483647
+        \\
+        \\enum I64Kind(i64):
+        \\    low = -9223372036854775808
+        \\    high = 9223372036854775807
         \\
         \\func main():
-        \\    assert(i32(Small.on) == 255)
-        \\    assert(i32(Middle.low) == -32768)
-        \\    assert(i64(Wide.huge) == 9223372036854775807)
-        \\    assert(i64(Wide.tiny) == -9223372036854775808)
-        \\    assert(Small.on == Small.on)
-        \\    assert(Middle.low != Middle.high)
+        \\    assert(u8(U8Kind.high) == 255)
+        \\    assert(u16(U16Kind.high) == 65535)
+        \\    assert(u32(U32Kind.high) == 4294967295)
+        \\    assert(u64(U64Kind.high) == 18446744073709551615)
+        \\    assert(i8(I8Kind.low) == -128)
+        \\    assert(i16(I16Kind.low) == -32768)
+        \\    assert(i32(I32Kind.low) == -2147483648)
+        \\    assert(i64(I64Kind.low) == -9223372036854775808)
+        \\    assert(U8Kind.high == U8Kind.high)
+        \\    assert(I16Kind.low != I16Kind.high)
         \\
     );
 }
@@ -175,7 +199,7 @@ test "Method(n): a member for a number that is one, none for a number that is no
         \\    deflated = 8
         \\
         \\func read(raw: i64) -> str:
-        \\    let m = Method(raw)
+        \\    let m = Method(i32(raw))
         \\    if m == none:
         \\        return "unknown"
         \\    return str(m)
@@ -192,7 +216,7 @@ test "Method(n): a member for a number that is one, none for a number that is no
     );
 }
 
-test "Method(n): a narrow backing is asked about numbers no byte could hold" {
+test "Method(n): a narrow backing returns none for an unused representable value" {
     try agree.ok(
         \\enum Small(u8):
         \\    off = 0
@@ -200,8 +224,7 @@ test "Method(n): a narrow backing is asked about numbers no byte could hold" {
         \\
         \\func main():
         \\    assert(Small(200) != none)
-        \\    assert(Small(300) == none)
-        \\    assert(Small(-1) == none)
+        \\    assert(Small(2) == none)
         \\    let found = Small(200)
         \\    if found != none:
         \\        assert(found == Small.on)
@@ -217,7 +240,7 @@ test "Method(n): the answer narrows and is then a member like any other" {
         \\    dynamic = 2
         \\
         \\func describe(raw: i64):
-        \\    let kind = Kind(raw)
+        \\    let kind = Kind(i32(raw))
         \\    if kind == none:
         \\        print("unknown block")
         \\        return
@@ -336,7 +359,7 @@ test "match: an else stands for every member the arms did not name" {
         \\
         \\func main():
         \\    for raw in range(0, 3):
-        \\        let c = Colour(raw) else trap("every raw here is a member")
+        \\        let c = Colour(i32(raw)) else trap("every raw here is a member")
         \\        match c:
         \\            green:
         \\                print("green")
@@ -448,7 +471,7 @@ test "methods: implied-self methods and a static enum function" {
         \\                return "deflated"
         \\
         \\    static func of(raw: i64) -> Method:
-        \\        return Method(raw) else Method.stored
+        \\        return Method(i32(raw)) else Method.stored
         \\
         \\func main():
         \\    let m = Method.deflated
@@ -777,6 +800,49 @@ test "a const keymap lives in the program root, keyed by the enum" {
     ,
         \\left move_left
         \\right move_right
+        \\
+    );
+}
+
+test "constant enum maps preserve all eight backing-width tags" {
+    try agree.ok(
+        \\enum U8Key(u8):
+        \\    value = 255
+        \\enum U16Key(u16):
+        \\    value = 65535
+        \\enum U32Key(u32):
+        \\    value = 4294967295
+        \\enum U64Key(u64):
+        \\    value = 18446744073709551615
+        \\enum I8Key(i8):
+        \\    value = -128
+        \\enum I16Key(i16):
+        \\    value = -32768
+        \\enum I32Key(i32):
+        \\    value = -2147483648
+        \\enum I64Key(i64):
+        \\    value = -9223372036854775808
+        \\
+        \\const U8_MAP = {U8Key.value: "u8"}
+        \\const U16_MAP = {U16Key.value: "u16"}
+        \\const U32_MAP = {U32Key.value: "u32"}
+        \\const U64_MAP = {U64Key.value: "u64"}
+        \\const I8_MAP = {I8Key.value: "i8"}
+        \\const I16_MAP = {I16Key.value: "i16"}
+        \\const I32_MAP = {I32Key.value: "i32"}
+        \\const I64_MAP = {I64Key.value: "i64"}
+        \\
+        \\func main():
+        \\    assert(U8_MAP[U8Key.value] == "u8" and U8_MAP.has(U8Key.value))
+        \\    assert(U16_MAP[U16Key.value] == "u16" and U16_MAP.has(U16Key.value))
+        \\    assert(U32_MAP[U32Key.value] == "u32" and U32_MAP.has(U32Key.value))
+        \\    assert(U64_MAP[U64Key.value] == "u64" and U64_MAP.has(U64Key.value))
+        \\    assert(I8_MAP[I8Key.value] == "i8" and I8_MAP.has(I8Key.value))
+        \\    assert(I16_MAP[I16Key.value] == "i16" and I16_MAP.has(I16Key.value))
+        \\    assert(I32_MAP[I32Key.value] == "i32" and I32_MAP.has(I32Key.value))
+        \\    assert(I64_MAP[I64Key.value] == "i64" and I64_MAP.has(I64Key.value))
+        \\    assert(U64_MAP.keys()[0] == U64Key.value)
+        \\    assert(I64_MAP.keys()[0] == I64Key.value)
         \\
     );
 }

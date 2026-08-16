@@ -195,7 +195,7 @@ test "constants: a runtime map literal is fresh, mutable, ordered, and owns valu
         \\    numbers[3] = "three"
         \\    numbers.remove(2)
         \\    assert(numbers.has(3) and not numbers.has(2) and key_total(numbers) == 4)
-        \\    var mixed = {"whole": 1, "fraction": 2.5}
+        \\    var mixed: map[str, f64] = {"whole": 1.0, "fraction": 2.5}
         \\    assert(mixed["whole"] == 1.0 and mixed["fraction"] == 2.5)
         \\    var nested: map[str, list[i64]] = {"row": [1, 2], "row": [7]}
         \\    nested["row"].append(8)
@@ -265,20 +265,20 @@ test "constants: a lambda may read a constant container" {
     );
 }
 
-test "constants: unary elements keep arithmetic promotion widths" {
+test "constants: unary elements retain their explicit widths" {
     try agree.ok(
         \\const SMALL: u8 = 1
         \\const NARROW: i16 = 2
         \\const FRACTION: f16 = 1.5
-        \\const INTEGERS: list[i32] = [~SMALL, ~NARROW, -SMALL, -NARROW]
-        \\const FLOATS: list[f32] = [-FRACTION]
+        \\const UNSIGNED: list[u8] = [~SMALL]
+        \\const SIGNED: list[i16] = [~NARROW, -NARROW]
+        \\const FLOATS: list[f16] = [-FRACTION]
         \\
         \\func main():
-        \\    assert(INTEGERS[0] == -2)
-        \\    assert(INTEGERS[1] == -3)
-        \\    assert(INTEGERS[2] == -1)
-        \\    assert(INTEGERS[3] == -2)
-        \\    assert(FLOATS[0] == f32(-1.5))
+        \\    assert(UNSIGNED[0] == u8(254))
+        \\    assert(SIGNED[0] == i16(-3))
+        \\    assert(SIGNED[1] == i16(-2))
+        \\    assert(FLOATS[0] == f16(-1.5))
         \\
     );
 }

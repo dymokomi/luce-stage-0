@@ -124,7 +124,7 @@ fn collectEnumName(
             try self.fail(
                 "luce.sema.enum",
                 written.span,
-                "an enum is stored at an integer width: u8, i16, i32, or i64 — not {s}",
+                "an enum is stored at an integer width: u8, u16, u32, u64, i8, i16, i32, or i64 — not {s}",
                 .{try self.typeName(resolved)},
             );
             return;
@@ -332,13 +332,12 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
             const slot = self.enums.items[index].findMember(written.name) orelse continue;
             var value: i128 = next;
             if (written.value) |expression| {
-                // Folded at `long` rather than at the backing
-                // width, so a value the width cannot hold is
-                // refused by *this* stage's sentence — the one that
-                // names the enum's width and the fix for it —
-                // rather than by the literal's, which would talk
-                // about a place the reader never wrote.
-                const folded = (try constants.fold(self, info.module, expression, .i64)) orelse continue;
+                // Fold at the widest type with the backing's signedness.
+                // That preserves the full `u64` domain while still letting
+                // this stage compare a narrower enum against its own range
+                // and name the declared backing in the diagnostic.
+                const evaluation_type: types.Type = if (backing.isUnsigned()) .u64 else .i64;
+                const folded = (try constants.fold(self, info.module, expression, evaluation_type)) orelse continue;
                 if (folded.value != .integer or !folded.value_type.isInteger()) {
                     try self.fail(
                         "luce.sema.enum",

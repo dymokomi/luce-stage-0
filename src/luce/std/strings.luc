@@ -303,7 +303,7 @@ func pad_right(s: str, cells: i64) -> str:
     return s + repeat(" ", cells - width(s))
 
 # A f64 as fixed-point text: format_float(2.5, 2) is "2.50",
-# rounded f16 away from zero.  Meant for display of ordinary
+# rounded halfway away from zero.  Meant for display of ordinary
 # magnitudes; |value| past ~1e15 falls back to str(value).
 func format_float(value: f64, decimals: i64) -> str:
     if decimals < 0:
@@ -326,13 +326,14 @@ func format_float(value: f64, decimals: i64) -> str:
     var scale: f64 = 1.0
     for i in range(0, decimals):
         scale *= 10.0
-    # `i64(x)` rounds (docs/NUMERICS.md), so the split at the
-    # integral part says `trunc` out loud — and the `+ 0.5` that used
-    # to hand-roll the rounding of the fraction is what `i64` does
-    # now, correctly, including at the values `floor(x + 0.5)` gets
-    # wrong.
+    # Numeric conversion itself truncates. Fixed-point formatting has
+    # its own display rule, so round the scaled fractional part before
+    # converting it and carry a full fractional unit into the whole.
     var whole = i64(trunc(magnitude))
-    var fraction = i64((magnitude - f64(whole)) * scale)
+    let scaled_fraction = (magnitude - f64(whole)) * scale
+    var fraction = i64(trunc(scaled_fraction))
+    if scaled_fraction - f64(fraction) >= 0.5:
+        fraction += 1
     if f64(fraction) >= scale:
         whole += 1
         fraction = 0

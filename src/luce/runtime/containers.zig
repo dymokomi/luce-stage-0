@@ -158,7 +158,7 @@ fn requireLongIndex(runtime: *Runtime, index: Value) Error!void {
 
 fn requireMapKey(runtime: *Runtime, key: Value) Error!void {
     switch (key.tag) {
-        .i64 => {},
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => {},
         .str => if (!key.hasValidStringRepresentation()) return runtime.fail(.not_owned),
         else => return runtime.fail(.not_owned),
     }
@@ -431,7 +431,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
     }
 }
 
-/// `m.keys()` — a fresh list of the keys.  Keys are long or String, so
+/// `m.keys()` — a fresh list of the keys. Integer and enum keys own no
 /// there is no object to own; a String key's bytes belong to the map's
 /// entry, so the list takes its own copy (docs/STRINGS.md).
 ///
@@ -439,11 +439,9 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 /// one: it names the *kind* the elements are stored at (`emptyList`).
 ///
 /// **That is also what gives an enum-keyed map its `list(Key)`.**  A key
-/// is stored as the integer a `long` key would be (docs/ENUMS.md), and
-/// the zero of an enum key names `.u8`/`.i16`/`.i32` cells — so
-/// `put` narrows each key into its own width on the way in, which is the
-/// exact inverse of the widening that stored it, and this function does
-/// not learn that enums exist.
+/// is stored at its exact backing width (docs/ENUMS.md), and the zero of
+/// an enum key names the corresponding packed cell kind. This function
+/// therefore does not need to know that enums exist.
 pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
