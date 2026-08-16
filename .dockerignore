@@ -1,0 +1,10 @@
+.git
+.llvm
+.zig-cache
+build
+zig-out
+www/*/out
+www/*/work
+.DS_Store
+*.lc
+*.o

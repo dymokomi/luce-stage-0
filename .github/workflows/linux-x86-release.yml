@@ -1,0 +1,37 @@
+name: Linux x86-64 release prefix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-x86-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v6
+
+      - name: Build and verify the glibc 2.28 prefix
+        run: |
+          mkdir -p "$RUNNER_TEMP/luce-prefix"
+          tools/linux-release/build.sh x86_64 "$RUNNER_TEMP/luce-prefix"
+
+      - name: Preserve executable permissions
+        run: |
+          tar -czf "$RUNNER_TEMP/luce-linux-x86_64-prefix.tar.gz" \
+            -C "$RUNNER_TEMP/luce-prefix" .
+
+      - name: Upload the verified prefix
+        uses: actions/upload-artifact@v7
+        with:
+          name: luce-linux-x86_64-prefix-${{ github.sha }}
+          path: ${{ runner.temp }}/luce-linux-x86_64-prefix.tar.gz
+          archive: false
+          retention-days: 3

@@ -18,6 +18,9 @@ Developer tooling that ships with the repo but isn't part of loom.
 - `linux-check/` — the container the tree is built and tested in on
   Linux, because it is developed on macOS and "portable by
   construction" is a claim until something runs it.
+- `linux-release/` — pinned manylinux 2.28 builders for the self-contained
+  ARM64 and x86-64 archives; this is separate from the faster development
+  image because a published compiler may not inherit its LLVM installation.
 - `testdata/` — inputs the guards above read.
 - `vscode-luce/` — generated syntax highlighting and brace-aware indentation
   for `.luc`.

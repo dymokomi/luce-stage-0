@@ -46,7 +46,9 @@ trap or be rejected without a host-language panic.
 default. `luce check`, `luce ir`, and `luce test` provide focused development
 workflows. `loom` loads a compiled `.lc` library when that artifact form is
 useful. The release also contains the terminal editor and a local VS Code or
-Cursor extension.
+Cursor extension. One checked installer publishes that toolchain for macOS
+ARM64 and glibc Linux 2.28+ on ARM64 and x86-64; the compiler contains its
+pinned LLVM and uses the host `cc` only for the final native link.
 
 The embedded standard library includes `std.math`, `std.files`,
 `std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,

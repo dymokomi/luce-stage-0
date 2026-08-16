@@ -221,6 +221,8 @@ test "curl is a person and a crawler is not" {
 test "the install line and the install are different requests" {
     try testing.expectEqual(Resource.install_script, resource("/install/0.18/install.sh"));
     try testing.expectEqual(Resource.archive, resource("/install/0.18/luce-0.18-macos-aarch64.tar.gz"));
+    try testing.expectEqual(Resource.archive, resource("/install/0.18/luce-0.18-linux-aarch64.tar.gz"));
+    try testing.expectEqual(Resource.archive, resource("/install/0.18/luce-0.18-linux-x86_64.tar.gz"));
     try testing.expectEqual(Resource.extension, resource("/install/0.18/luce-language-0.4.0.vsix"));
 }
 

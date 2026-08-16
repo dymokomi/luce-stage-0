@@ -14,7 +14,8 @@ page; you do not need them for your first program.
 
 ## Install a released toolchain
 
-On macOS with Apple Silicon, install the current release with one command:
+On macOS with Apple Silicon or glibc Linux 2.28+ on x86-64 or ARM64,
+install the current release with one command:
 
 ```sh
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
@@ -28,9 +29,15 @@ downloaded archive before replacing an existing installation. Run it again
 whenever you want a fresh copy. Open a new shell after installation, or
 source the profile it reports; reload the editor to activate highlighting.
 
-The published toolchain is currently macOS ARM64 only. A machine that only
-runs `.lc` files does not need LLVM; the released compiler already contains
-what it needs to compile Luce programs.
+The installer chooses the archive from the operating system and architecture.
+It refuses an unsupported machine, Linux with musl, a Linux glibc older than
+2.28, or a machine without a working `cc` before changing an existing
+installation. On a missing linker it names the platform package command to
+run and can then be rerun unchanged.
+
+No released machine needs LLVM installed: it is linked into the compiler. A
+machine that only runs `.lc` files does not invoke either LLVM or `cc`; native
+linking happens when a source program is built.
 
 The editor's Ctrl-B action uses the installed `luce` compiler beside it. The
 host adds that tool directory when it starts a shell command, so the action

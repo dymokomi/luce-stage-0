@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the Luce 0.18 macOS ARM64 toolchain.
+# Install the Luce 0.18 toolchain for macOS or glibc Linux.
 #
 # Usage:
 #
@@ -10,7 +10,6 @@
 set -eu
 
 version=0.18
-archive_name="luce-${version}-macos-aarch64.tar.gz"
 base_url="${LUCE_INSTALL_BASE_URL:-https://luce.luciaos.com/install/${version}}"
 install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
 editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
@@ -19,29 +18,90 @@ extension_id="luciaos.luce-language"
 extension_version=0.4.0
 termui_version=0.3.0
 
-case "$(uname -s)" in
-    Darwin) ;;
-    *)
-        echo "luce: this installer supports macOS ARM64 only" >&2
-        exit 1
+system=$(uname -s)
+machine=$(uname -m)
+case "$system:$machine" in
+    Darwin:arm64|Darwin:aarch64)
+        platform=macos-aarch64
+        platform_name='macOS arm64'
         ;;
-esac
-
-case "$(uname -m)" in
-    arm64|aarch64) ;;
-    *)
-        echo "luce: this release supports Apple Silicon (arm64) only" >&2
+    Darwin:*)
+        echo "luce: this macOS release requires Apple Silicon (arm64)" >&2
         echo "luce: use a native arm64 shell, not an x86_64/Rosetta shell" >&2
         exit 1
         ;;
+    Linux:x86_64|Linux:amd64)
+        platform=linux-x86_64
+        platform_name='Linux x86-64'
+        ;;
+    Linux:aarch64|Linux:arm64)
+        platform=linux-aarch64
+        platform_name='Linux arm64'
+        ;;
+    Linux:*)
+        echo "luce: this Linux release supports x86-64 and arm64, not $machine" >&2
+        exit 1
+        ;;
+    *)
+        echo "luce: this installer supports macOS and Linux, not $system" >&2
+        exit 1
+        ;;
 esac
+archive_name="luce-${version}-${platform}.tar.gz"
 
-for tool in awk cp curl date dirname grep mkdir mktemp mv rm shasum tar tr uname; do
+for tool in awk cp curl date dirname grep mkdir mktemp mv rm tar tr uname; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "luce: required command not found: $tool" >&2
         exit 1
     fi
 done
+
+if command -v sha256sum >/dev/null 2>&1; then
+    checksum_tool=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+    checksum_tool=shasum
+else
+    echo "luce: SHA-256 verification needs sha256sum or shasum" >&2
+    exit 1
+fi
+
+if [ "$system" = Linux ]; then
+    if ! command -v getconf >/dev/null 2>&1; then
+        echo "luce: this Linux release requires glibc 2.28 or newer (getconf is missing)" >&2
+        exit 1
+    fi
+    glibc_answer=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+    glibc_version=${glibc_answer#glibc }
+    if [ "$glibc_version" = "$glibc_answer" ] || ! printf '%s\n' "$glibc_version" | awk -F. '
+        NF >= 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+            ok = ($1 > 2 || ($1 == 2 && $2 >= 28))
+        }
+        END { exit ok ? 0 : 1 }
+    '; then
+        echo "luce: this Linux release requires glibc 2.28 or newer; musl is not supported yet" >&2
+        exit 1
+    fi
+fi
+
+# Luce emits the object itself and asks the host C driver to finish the native
+# link. Refuse before changing an installation if that required boundary is
+# absent; a successful installer must leave a compiler that can build its
+# first program.
+if ! command -v cc >/dev/null 2>&1 || ! cc --version >/dev/null 2>&1; then
+    echo "luce: a working C compiler driver named cc is required to link Luce programs" >&2
+    case "$system" in
+        Darwin)
+            echo "luce: install it with: xcode-select --install" >&2
+            ;;
+        Linux)
+            echo "luce: Debian/Ubuntu: sudo apt install build-essential" >&2
+            echo "luce: Fedora/RHEL:   sudo dnf install gcc" >&2
+            echo "luce: Arch:          sudo pacman -S base-devel" >&2
+            ;;
+    esac
+    echo "luce: install the linker, then run this command again" >&2
+    exit 1
+fi
 
 # Do not let an environment override turn a user installer into a request to
 # replace a system tree.  Require an absolute path as well, so the directory
@@ -54,7 +114,7 @@ case "$install_root" in
         ;;
 esac
 case "$install_root" in
-    /|/usr|/usr/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
+    /|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/lib64|/lib64/*|/proc|/proc/*|/run|/run/*|/sys|/sys/*|/usr|/usr/*|/var|/var/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
         echo "luce: refusing unsafe install directory: $install_root" >&2
         exit 1
         ;;
@@ -70,7 +130,7 @@ if [ -n "$editor_extensions_dir" ]; then
             ;;
     esac
     case "$editor_extensions_dir" in
-        /|/usr|/usr/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
+        /|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/lib64|/lib64/*|/proc|/proc/*|/run|/run/*|/sys|/sys/*|/usr|/usr/*|/var|/var/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
             echo "luce: refusing unsafe editor extensions directory: $editor_extensions_dir" >&2
             exit 1
             ;;
@@ -85,7 +145,7 @@ if [ -n "$profile_override" ]; then
             ;;
     esac
     case "$profile_override" in
-        /|/usr|/usr/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
+        /|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/lib64|/lib64/*|/proc|/proc/*|/run|/run/*|/sys|/sys/*|/usr|/usr/*|/var|/var/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
             echo "luce: refusing unsafe shell profile: $profile_override" >&2
             exit 1
             ;;
@@ -106,7 +166,7 @@ archive="$tmp/$archive_name"
 checksum="$tmp/$archive_name.sha256"
 cache_bust="$(date +%s)-$$"
 
-echo "==> downloading Luce $version for macOS arm64"
+echo "==> downloading Luce $version for $platform_name"
 curl --fail --location --silent --show-error --retry 3 \
     --header 'Cache-Control: no-cache' \
     "$base_url/$archive_name?fresh=$cache_bust" -o "$archive"
@@ -120,7 +180,10 @@ if ! printf '%s\n' "$expected" | awk \
     echo "luce: release checksum is not a SHA-256 digest" >&2
     exit 1
 fi
-actual=$(shasum -a 256 "$archive" | awk '{ print $1 }')
+case "$checksum_tool" in
+    sha256sum) actual=$(sha256sum "$archive" | awk '{ print $1 }') ;;
+    shasum) actual=$(shasum -a 256 "$archive" | awk '{ print $1 }') ;;
+esac
 if [ "$actual" != "$expected" ]; then
     echo "luce: release checksum does not match" >&2
     exit 1
@@ -246,6 +309,7 @@ install_editor_support() {
 install_editor_support
 
 add_shell_environment() {
+    shell_kind=posix
     if [ -n "$profile_override" ]; then
         profile=$profile_override
     else
@@ -254,16 +318,29 @@ add_shell_environment() {
         case "$shell_name" in
             zsh)
                 profile_dir=${ZDOTDIR:-$HOME}
-                profile="$profile_dir/.zprofile"
+                if [ "$system" = Darwin ]; then
+                    profile="$profile_dir/.zprofile"
+                else
+                    profile="$profile_dir/.zshrc"
+                fi
                 ;;
             bash)
-                if [ -f "$HOME/.bash_profile" ]; then
-                    profile="$HOME/.bash_profile"
-                elif [ -f "$HOME/.bash_login" ]; then
-                    profile="$HOME/.bash_login"
+                if [ "$system" = Darwin ]; then
+                    if [ -f "$HOME/.bash_profile" ]; then
+                        profile="$HOME/.bash_profile"
+                    elif [ -f "$HOME/.bash_login" ]; then
+                        profile="$HOME/.bash_login"
+                    else
+                        profile="$HOME/.bash_profile"
+                    fi
                 else
-                    profile="$HOME/.profile"
+                    profile="$HOME/.bashrc"
                 fi
+                ;;
+            fish)
+                profile_dir=${XDG_CONFIG_HOME:-$HOME/.config}
+                profile="$profile_dir/fish/config.fish"
+                shell_kind=fish
                 ;;
             *)
                 profile="$HOME/.profile"
@@ -274,7 +351,19 @@ add_shell_environment() {
     mkdir -p "$(dirname "$profile")"
     # The default path is written with $HOME so it remains valid if the home
     # directory is referred to through a different spelling in a later shell.
-    if [ "$install_root" = "$HOME/.local/luce" ]; then
+    if [ "$shell_kind" = fish ]; then
+        if [ "$install_root" = "$HOME/.local/luce" ]; then
+            path_line='fish_add_path --prepend "$HOME/.local/luce/bin"'
+            path_pattern='.local/luce/bin'
+            library_line='set -gx LUCE_LIB "$HOME/.local/luce/lib" $LUCE_LIB'
+            library_pattern='.local/luce/lib'
+        else
+            path_line="fish_add_path --prepend \"$install_root/bin\""
+            path_pattern="$install_root/bin"
+            library_line="set -gx LUCE_LIB \"$install_root/lib\" \$LUCE_LIB"
+            library_pattern="$install_root/lib"
+        fi
+    elif [ "$install_root" = "$HOME/.local/luce" ]; then
         path_line='export PATH="$HOME/.local/luce/bin:$PATH"'
         path_pattern='.local/luce/bin'
         library_line='export LUCE_LIB="$HOME/.local/luce/lib${LUCE_LIB:+:$LUCE_LIB}"'
@@ -289,7 +378,11 @@ add_shell_environment() {
         echo "==> PATH already contains $install_root/bin (in $profile)"
     elif printf '\n# Luce %s\n%s\n' "$version" "$path_line" >>"$profile"; then
         echo "==> added $install_root/bin to PATH in $profile"
-        echo "    Start a new shell, or run: . \"$profile\""
+        if [ "$shell_kind" = fish ]; then
+            echo "    Start a new shell, or run: source \"$profile\""
+        else
+            echo "    Start a new shell, or run: . \"$profile\""
+        fi
     else
         echo "luce: installed successfully, but could not update $profile" >&2
         echo "luce: add $install_root/bin to PATH before using luce" >&2

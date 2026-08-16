@@ -6,7 +6,7 @@
 # Contents: Zig pinned to the version build.zig.zon requires, LLVM 22
 # (the major vendor-llvm.sh pins) from apt.llvm.org, a C toolchain for
 # `cc`, Info-ZIP's zip/unzip so the zipper agreement test actually runs
-# rather than skipping, and python3.
+# rather than skipping, Node for the editor extension, and python3.
 FROM debian:trixie-slim
 
 ARG ZIG_VERSION=0.16.0
@@ -14,7 +14,7 @@ ARG LLVM_MAJOR=22
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg xz-utils \
-        build-essential git zip unzip python3 file less procps \
+        build-essential git zip unzip python3 nodejs file less procps \
     && rm -rf /var/lib/apt/lists/*
 
 # LLVM 22 from apt.llvm.org (Debian trixie ships 19, which predates the

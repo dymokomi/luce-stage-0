@@ -518,8 +518,8 @@ test "each --emit shape writes what it says, and the object links into a program
 
     // Linked by hand, exactly as the documentation says to: the
     // program's object, `main`, the semantics — and, where the C
-    // library keeps its math functions apart, the `-lm` float `%`
-    // needs.  Darwin gets those with libSystem.
+    // library keeps its thread and math functions apart, `-pthread`
+    // and `-lm`. Darwin gets both with libSystem.
     const object = try tree.at(gpa, "sums.o");
     defer gpa.free(object);
     const start = try tree.at(gpa, "lib/libluce_start.a");
@@ -534,7 +534,7 @@ test "each --emit shape writes what it says, and the object links into a program
             "-framework", "AppKit", "-framework", "Metal", "-framework", "QuartzCore",
         }
     else
-        &.{ "cc", "-o", linked, object, start, runtime, "-lm" };
+        &.{ "cc", "-o", linked, object, start, runtime, "-pthread", "-lm" };
     var link = try tree.spawn(gpa, by_hand, .{});
     defer link.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), link.status);

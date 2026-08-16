@@ -7,9 +7,10 @@ the details on a first read.
 
 ## Install Luce
 
-The current release is for macOS on Apple Silicon. It installs the compiler,
-runtime, terminal editor, maintained packages, and Luce highlighting for
-local VS Code, VS Code Insiders, or Cursor:
+The current release supports macOS on Apple Silicon and glibc Linux 2.28+ on
+x86-64 or ARM64. It installs the compiler, runtime, terminal editor,
+maintained packages, and Luce highlighting for local VS Code, VS Code
+Insiders, or Cursor:
 
 ```sh
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash

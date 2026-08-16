@@ -980,6 +980,22 @@ pub fn build(b: *std.Build) void {
     test_vscode_step.dependOn(&vscode_tests.step);
     test_tools_step.dependOn(test_vscode_step);
 
+    // The public curl script is a program too. Its successful path is proved
+    // against each release archive by `www/luce/install-smoke.sh`; these fast
+    // cases pin the more important failure property here in the ordinary
+    // repository gate: an unsupported platform, libc, linker or destination
+    // is refused before any download or replacement begins.
+    const installer_contract = b.addSystemCommand(&.{
+        "sh",
+        "www/luce/test-installer.sh",
+    });
+    installer_contract.addFileInput(b.path("www/luce/test-installer.sh"));
+    installer_contract.addFileInput(b.path(b.fmt(
+        "www/luce/install/{s}/install.sh",
+        .{project_version},
+    )));
+    test_tools_step.dependOn(&installer_contract.step);
+
     const grammar_tool = b.addExecutable(.{
         .name = "luce-grammar",
         .root_module = grammar_generator,
@@ -1635,8 +1651,13 @@ const Llvm = struct {
     libraries: []const []const u8,
     /// Absolute paths `llvm-config` handed back instead of `-l` names.
     objects: []const []const u8,
-    /// The C++ runtime LLVM was built against ("c++" or "stdc++").
-    cxx_runtime: []const u8,
+    /// How LLVM's C++ implementation dependency reaches the final compiler.
+    /// A shared GNU LLVM already records libstdc++ in its own DT_NEEDED list.
+    /// Static GNU LLVM instead needs the exact compiler support archives: Zig
+    /// deliberately maps the special `stdc++` library name to its own libc++,
+    /// which is a different ABI and cannot satisfy GNU LLVM's symbols.
+    cxx_runtime: enum { libcxx, shared_libstdcxx, static_libstdcxx },
+    cxx_objects: []const []const u8,
     /// `--version` and `--host-target`.  Nothing links against these:
     /// they name the optimizer that turns the lowering's bitcode into
     /// instructions, and the host triple `emit.hostTriple` will ask the
@@ -1687,6 +1708,19 @@ fn discoverLlvm(b: *std.Build) Llvm {
         , .{});
 
     const cxx_flags = ask(b, program, "--cxxflags");
+    const shared_mode = ask(b, program, "--shared-mode");
+    const host_target = ask(b, program, "--host-target");
+    // Apple Clang uses libc++ by default and therefore need not spell
+    // `-stdlib=libc++` in llvm-config's recorded flags.
+    const uses_libcxx = std.mem.indexOf(u8, cxx_flags, "-stdlib=libc++") != null or
+        std.mem.indexOf(u8, host_target, "apple") != null or
+        std.mem.indexOf(u8, host_target, "darwin") != null;
+    const cxx_runtime: @TypeOf(@as(Llvm, undefined).cxx_runtime) = if (uses_libcxx)
+        .libcxx
+    else if (std.mem.eql(u8, shared_mode, "static"))
+        .static_libstdcxx
+    else
+        .shared_libstdcxx;
     const linked = [_][]const u8{
         ask(b, program, "--libs"),
         ask(b, program, "--system-libs"),
@@ -1696,14 +1730,39 @@ fn discoverLlvm(b: *std.Build) Llvm {
         .lib_dir = ask(b, program, "--libdir"),
         .libraries = splitLinkerFlags(b, &linked, .names),
         .objects = splitLinkerFlags(b, &linked, .paths),
-        .cxx_runtime = if (std.mem.indexOf(u8, cxx_flags, "-stdlib=libc++") != null)
-            "c++"
+        .cxx_runtime = cxx_runtime,
+        .cxx_objects = if (cxx_runtime == .static_libstdcxx)
+            discoverStaticGnuCxxRuntime(b)
         else
-            "stdc++",
+            &.{},
         .version = ask(b, program, "--version"),
-        .host_target = ask(b, program, "--host-target"),
+        .host_target = host_target,
         .bin_dir = ask(b, program, "--bindir"),
     };
+}
+
+/// Find the ABI-matched GNU C++ and unwinder archives through the active C++
+/// compiler.  These are object-file inputs rather than a `stdc++` system
+/// library on purpose; Zig reserves that name for its bundled libc++.
+fn discoverStaticGnuCxxRuntime(b: *std.Build) []const []const u8 {
+    const compiler = b.findProgram(
+        &.{ "c++", "g++" },
+        &.{},
+    ) catch std.process.fatal(
+        "static LLVM uses libstdc++, but no C++ compiler is available to locate its runtime archives",
+        .{},
+    );
+    const names = [_][]const u8{ "libstdc++.a", "libgcc_eh.a", "libgcc.a" };
+    var archives: std.ArrayList([]const u8) = .empty;
+    for (names) |name| {
+        const path = ask(b, compiler, b.fmt("-print-file-name={s}", .{name}));
+        if (!std.fs.path.isAbsolute(path)) std.process.fatal(
+            "`{s}` could not locate {s}; install the static GNU C++ development runtime",
+            .{ compiler, name },
+        );
+        archives.append(b.allocator, path) catch @panic("OOM");
+    }
+    return archives.toOwnedSlice(b.allocator) catch @panic("OOM");
 }
 
 /// One `llvm-config` query, trimmed.
@@ -1743,7 +1802,13 @@ fn linkLlvm(module: *std.Build.Module, llvm: Llvm) void {
     module.addLibraryPath(.{ .cwd_relative = llvm.lib_dir });
     for (llvm.libraries) |name| module.linkSystemLibrary(name, .{});
     for (llvm.objects) |path| module.addObjectFile(.{ .cwd_relative = path });
-    module.linkSystemLibrary(llvm.cxx_runtime, .{});
+    switch (llvm.cxx_runtime) {
+        .libcxx => module.linkSystemLibrary("c++", .{}),
+        .shared_libstdcxx => {},
+        .static_libstdcxx => for (llvm.cxx_objects) |path| {
+            module.addObjectFile(.{ .cwd_relative = path });
+        },
+    }
     module.link_libc = true;
 }
 

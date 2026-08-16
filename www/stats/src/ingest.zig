@@ -474,7 +474,7 @@ test "the install line and the install are counted apart" {
     for ([_][]const u8{
         "/install/0.18/install.sh",
         "/install/0.18/install.sh",
-        "/install/0.18/luce-0.18-macos-aarch64.tar.gz",
+        "/install/0.18/luce-0.18-linux-x86_64.tar.gz",
     }) |uri| {
         const one = accessLine("luce.luciaos.com", uri, "curl/8.7.1", "9.9.9.9", 200);
         defer testing.allocator.free(one);

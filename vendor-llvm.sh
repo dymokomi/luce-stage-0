@@ -15,7 +15,7 @@
 # on sixteen cores and is needed once per pinned version — `zig build`
 # never triggers it.  Delete .llvm/ to go back to the system LLVM.
 #
-# Requires cmake and ninja.
+# Requires cmake and either ninja or make.
 
 set -e
 root="$(cd "$(dirname "$0")" && pwd)"
@@ -25,12 +25,34 @@ version=22.1.8
 sha256=922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
 url="https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/llvm-project-$version.src.tar.xz"
 
-for tool in cmake ninja; do
-    command -v "$tool" >/dev/null || {
-        echo "vendor-llvm: $tool is required (macOS: brew install $tool)" >&2
+command -v cmake >/dev/null || {
+    echo "vendor-llvm: cmake is required (macOS: brew install cmake)" >&2
+    exit 1
+}
+if command -v ninja >/dev/null; then
+    generator=Ninja
+elif command -v make >/dev/null; then
+    generator='Unix Makefiles'
+else
+    echo "vendor-llvm: either ninja or make is required (macOS: brew install ninja)" >&2
+    exit 1
+fi
+
+if [ -n "${LLVM_BUILD_JOBS:-}" ]; then
+    build_jobs=$LLVM_BUILD_JOBS
+elif command -v getconf >/dev/null 2>&1; then
+    build_jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
+elif command -v sysctl >/dev/null 2>&1; then
+    build_jobs=$(sysctl -n hw.ncpu 2>/dev/null || printf '1')
+else
+    build_jobs=1
+fi
+case "$build_jobs" in
+    ''|*[!0-9]*|0)
+        echo "vendor-llvm: LLVM_BUILD_JOBS must be a positive integer" >&2
         exit 1
-    }
-done
+        ;;
+esac
 
 work="$root/.llvm"
 tarball="$work/llvm-$version.src.tar.xz"
@@ -75,7 +97,7 @@ echo "$sha256  $tarball" | $checksum >/dev/null || {
 # because a .lc is portable and cross-compiling to wasm32 should not
 # require rebuilding LLVM.
 echo "vendor-llvm: configuring"
-cmake -G Ninja -S "$source_dir/llvm" -B "$build_dir" \
+cmake -G "$generator" -S "$source_dir/llvm" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DLLVM_TARGETS_TO_BUILD='AArch64;X86;WebAssembly' \
@@ -90,8 +112,8 @@ cmake -G Ninja -S "$source_dir/llvm" -B "$build_dir" \
     >/dev/null
 
 echo "vendor-llvm: building (this is the long part)"
-ninja -C "$build_dir"
-ninja -C "$build_dir" install >/dev/null
+cmake --build "$build_dir" --parallel "$build_jobs"
+cmake --install "$build_dir" >/dev/null
 
 "$prefix/bin/llvm-config" --version >/dev/null
 echo "vendor-llvm: installed $("$prefix/bin/llvm-config" --version) ($("$prefix/bin/llvm-config" --shared-mode)) in $prefix"

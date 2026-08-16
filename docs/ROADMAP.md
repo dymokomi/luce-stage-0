@@ -40,14 +40,15 @@ or another language.
 | Modules and packages | Consumer and local-authoring path complete | Rootless siblings, governed projects, exact package versions, path overrides, stores, shelves, `package new`, and `package version` work. | There is no registry, fetch/update client, lockfile solver, signing, or upload path. `package publish` refuses honestly. |
 | Standard library | Complete for its documented roster | Eleven embedded modules cover math, strings, lists, paths, files, OS facts, terminals, JSON, ZIP, GPU surfaces, and windows. | The UI/GPU host is implemented for macOS; other hosts fail closed. The APIs are intentionally low level. |
 | TermUI and editor | Complete terminal proof | TermUI 0.3 owns the application loop and composes `Panel`, stacks, labels, rows, styles, events, and cursor placement. The editor is an ordinary declarative Luce application. | This proves terminal UI and the class/callback model. It is not yet a native GUI framework over `std.ui` and `std.gpu`. |
-| Toolchain and release | Implemented, with two tracked UX defects | `luce` builds, checks, prints IR, tests, and maintains local packages; the installer supplies the compiler, editor, runtime libraries, TermUI, and VS Code extension. | No-argument help omits `luce test`, and a running test is not named until it finishes. The published one-command release is macOS ARM64 only. Luce remains pre-1.0 and promises no source compatibility between 0.x releases. |
+| Toolchain and release | Implemented, with two tracked UX defects | `luce` builds, checks, prints IR, tests, and maintains local packages; one checked installer supplies the compiler, editor, runtime libraries, TermUI, and VS Code extension on macOS ARM64 and glibc Linux ARM64/x86-64. Linux releases contain pinned static LLVM. | No-argument help omits `luce test`, and a running test is not named until it finishes. Windows and musl Linux are not published. Luce remains pre-1.0 and promises no source compatibility between 0.x releases. |
 
 The release gate at this baseline completed 549 internal tests and 1,345
 differential specifications with zero failures, skips, or leaked Luce objects.
-Package, editor, example, tooling, documentation, installer, and ARM64 release
-checks completed in the same clean gate. Counts are a dated audit snapshot,
-not a target to inflate; the test claim and its layer matter more than the
-number.
+Package, editor, example, tooling, and documentation checks completed in the
+same clean gate. The public release has a separate, slower proof for macOS
+ARM64 and glibc Linux ARM64/x86-64 so an ordinary language change does not
+rebuild two pinned LLVM containers. Counts are a dated audit snapshot, not a
+target to inflate; the test claim and its layer matter more than the number.
 
 ## What is actually missing
 
@@ -180,10 +181,11 @@ These are toolchain and host projects, not language syntax:
 - add fetch/install/update commands with exact hashes and reproducible local
   stores;
 - decide whether a lockfile adds information beyond exact manifest versions;
-- publish and test Linux and Windows toolchains;
+- publish and test a Windows toolchain, and decide whether musl Linux should
+  be a separate static release;
 - implement a Vulkan window/surface host on Linux and Windows; and
-- give every platform the same one-command install, editor discovery, package
-  shelf, and uninstall story.
+- give Windows the same one-command install, editor discovery, package shelf,
+  and uninstall story already used by macOS and glibc Linux.
 
 No client should report success before a real registry, authentication model,
 hash policy, and end-to-end test server exist.

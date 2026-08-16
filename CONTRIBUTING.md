@@ -32,6 +32,13 @@ existing builds, profile-free installs, and another user-owned prefix. Keep
 tests and benchmarks on their explicit `build/` paths; an installed snapshot
 must not silently become the thing they exercise.
 
+The public curl installer is a different release artifact. Run
+`./www/luce/build.sh` for the checked documentation feedback path and
+`./www/luce/release.sh` for the complete macOS ARM64 and glibc Linux
+ARM64/x86-64 archive matrix. The latter uses pinned Docker builders and is
+intentionally not part of every documentation edit; `www/luce/deploy.sh` runs
+both before publishing.
+
 `build.zig` finds LLVM by asking `llvm-config`, on `PATH` or in the
 usual Homebrew and distribution prefixes; `-Dllvm-config=PATH` points
 it somewhere else.  When the system LLVM is the wrong one,

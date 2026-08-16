@@ -17,6 +17,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 if [ "$1" != "--fast" ]; then
     "$here/build.sh" "$@"
+    "$here/release.sh"
 fi
 
 if [ ! -f "$here/out/index.html" ]; then

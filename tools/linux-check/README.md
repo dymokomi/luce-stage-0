@@ -5,7 +5,7 @@ portable by construction — Zig, one `llvm-config`, one `cc` — but
 "portable by construction" is a claim, and a claim nobody has run is a
 guess.  This is what runs it.
 
-`Dockerfile` builds a `linux/arm64` image with exactly the four things
+`Dockerfile` builds a `linux/arm64` image with exactly the things
 the build asks for and nothing else:
 
 - **Zig**, at the version `build.zig.zon` pins (`ZIG_VERSION`, the
@@ -21,6 +21,9 @@ the build asks for and nothing else:
   agreement test runs instead of skipping.  It is the one test that
   checks zipper against another implementation, and a machine without
   them says so and passes anyway — which is worth nothing.
+- **Node.js**, because the full release gate owns the dependency-free VS Code
+  extension tests too. A container that omitted it could prove the language
+  and still fail the repository's actual gate before those tests began.
 
 ## Running it
 
@@ -56,8 +59,9 @@ and is slow enough that it is worth doing only after arm64 is green.
 Three things this image exists to catch, all of them invisible on
 macOS and all of them now handled in the tree rather than here:
 
-- **libm is a library of its own.**  Float `%` is `fmod`, so every
-  link of an artifact needs `-lm`; Darwin's libSystem has it already.
+- **Threads and libm are separate at the compatibility floor.** glibc
+  before 2.34 needs `-pthread`, and float `%` needs `-lm`; Darwin's
+  libSystem has both already.
 - **`std.c` needs libc asked for.**  Darwin links libc into every
   binary, so a module that reads `std.c.environ` compiles there whether
   or not it said it needed libc.

@@ -516,11 +516,14 @@ pub fn link(
             "QuartzCore",
         });
     }
-    // Float `%` is `fmod`, so the runtime's semantics reach the C
-    // math functions.  Darwin keeps them in libSystem, which every
-    // link already gets; glibc keeps them in a library of their own
-    // and it has to be asked for, after the archive that wants it.
-    if (!@import("builtin").os.tag.isDarwin()) try arguments.append(gpa, "-lm");
+    // The runtime owns workers, and float `%` is `fmod`. Darwin keeps
+    // both families in libSystem, which every link already gets; older
+    // glibc systems keep them in libraries of their own. Keep the
+    // requests after the archive that needs them so static linking works.
+    if (!@import("builtin").os.tag.isDarwin()) {
+        try arguments.append(gpa, "-pthread");
+        try arguments.append(gpa, "-lm");
+    }
 
     const ran = std.process.run(gpa, io, .{ .argv = arguments.items }) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,

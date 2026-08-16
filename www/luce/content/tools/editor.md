@@ -1,6 +1,6 @@
 # Editor Support
 
-The macOS toolchain ships two local editing choices:
+The released macOS and Linux toolchains ship two local editing choices:
 
 - `editor`, a terminal editor written in Luce with the maintained `termui`
   package;
@@ -79,7 +79,7 @@ beside the file so the relationship is visible and recovery remains local.
 
 ## VS Code, Insiders, and Cursor
 
-The one-command macOS installer copies the dependency-free Luce extension
+The one-command installer copies the dependency-free Luce extension
 into the per-user extension shelf used by local VS Code, VS Code Insiders, or
 Cursor. Reload the editor window after installing or updating Luce.
 

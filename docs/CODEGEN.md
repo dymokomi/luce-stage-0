@@ -47,16 +47,15 @@ symbols beyond `libluce_rt`.  That last claim is proved by the link
 itself, which is why linking is part of the shipped path rather than
 only of a test.
 
-`libluce_rt` in turn declares none beyond the C library — with one
-name worth saying out loud, because it decides a link line: float `%`
-is `fmod`, so the runtime calls the C math functions.  Darwin keeps
-them in libSystem and a bare `cc` link already has them; every other
-platform this builds for keeps them in a library of its own, so the
-link `luce` runs adds `-lm` there, and a link you write by hand out of
-`--emit=object` has to as well:
+`libluce_rt` in turn declares none beyond the C platform libraries.
+Two are worth saying out loud because they decide a link line: the
+runtime owns workers, and float `%` calls `fmod`. Darwin keeps threads
+and math in libSystem, so a bare `cc` link has both. Linux needs the
+portable driver flags after the runtime archive, and a link you write
+by hand out of `--emit=object` has to include them too:
 
 ```sh
-cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a -lm
+cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a -pthread -lm
 ```
 
 On macOS, add the window host frameworks when linking a standalone program:
@@ -1491,6 +1490,15 @@ build elsewhere with, which wins over all three:
 ```sh
 zig build -Dllvm-config=/path/to/llvm-config
 ```
+
+The public Linux archives make that static property part of their release
+contract rather than depending on how a maintainer's workstation is set up.
+`tools/linux-release/` builds both architectures on the glibc 2.28 baseline,
+using immutable container bases, the checked Zig 0.16.0 download, and this
+same pinned LLVM source. Its final dependency audit refuses a `luce` that
+still names libLLVM, libstdc++, Z3, XML, zstd, libedit, or an unresolved
+library. `www/luce/install-smoke.sh` then builds and runs real programs in a
+container with no LLVM installation.
 
 `loom` does not link it and must not start doing so; the dependency is
 confined to the `emit` module (above), and `otool -L build/loom` is

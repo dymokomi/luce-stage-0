@@ -252,8 +252,11 @@ unknown identifiers; there is no compatibility-name table.
 User documentation lives in `www/luce/`. The generator compiles or refuses
 every classified sample, compares claimed output, checks links and anchors,
 and holds selected compiler surfaces to the Language Reference and Library.
-Build it with `www/luce/build.sh`; deploy only after the repository and site
-gates are clean.
+Build the short documentation feedback path with `www/luce/build.sh`.
+`www/luce/release.sh` separately builds and smoke-tests the macOS ARM64 and
+glibc Linux ARM64/x86-64 archives; keeping that Docker/LLVM matrix out of an
+ordinary prose edit is intentional. The default `www/luce/deploy.sh` runs both.
+Deploy only after the repository, site, and release gates are clean.
 
 `www/loom/`, `www/luciaos/`, and `www/stats/` are separate products. Shared
 web assets and publishing mechanics live under `www/shared/` and

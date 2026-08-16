@@ -2,9 +2,9 @@
 
 Luce is a small, statically typed language for programs that should be
 easy to read and predictable to run. The fastest way to try it is the
-released macOS Apple Silicon toolchain.
+released toolchain for macOS or Linux.
 
-## Install on macOS
+## Install
 
 Run this command in Terminal:
 
@@ -20,9 +20,9 @@ source the profile it names), then verify the installation:
 luce --version
 ```
 
-The release ships the `luce` compiler and `editor`, the runtime libraries, and
-the Luce VS Code extension (plugin) for local VS Code, VS Code Insiders, or
-Cursor installations.
+The release ships the `luce` compiler, `loom`, the terminal `editor`, runtime
+libraries, TermUI, and the Luce VS Code extension for local VS Code, VS Code
+Insiders, or Cursor installations.
 If an editor has not been opened yet, it prepares the standard VS Code
 extension shelf so the extension is picked up on first launch. Restart the
 editor (or reload its window) after installation.
@@ -30,8 +30,17 @@ Running the command again always downloads a fresh copy and replaces the
 previous installation only after the archive's checksum and contents have
 been checked.
 
-This release supports macOS on Apple Silicon (ARM64). Other platforms do
-not have a published installer yet.
+The same command selects the right archive for macOS on Apple Silicon or for
+glibc Linux 2.28+ on x86-64 or ARM64. Luce asks the system C driver (`cc`) to
+finish native links. The installer checks for it before replacing anything
+and, when it is missing, prints the exact Xcode, Debian/Ubuntu, Fedora/RHEL, or
+Arch command that supplies it. Linux with musl and macOS on Intel are not
+released yet.
+
+The language, compiler, terminal editor, TermUI, and non-graphical standard
+library run on all three released targets. `std.ui` and `std.gpu` still have a
+Metal host only on macOS; Linux reports that boundary instead of pretending a
+window opened.
 
 Your first program is only a few lines long. The [Tour](/tour/) shows the
 language's shape in one sitting and points to the detailed Guide.

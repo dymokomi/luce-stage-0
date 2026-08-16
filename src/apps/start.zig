@@ -9,7 +9,7 @@
 //! that `luce build --emit=exe` is one `cc` invocation:
 //!
 //! ```sh
-//! cc -o prog prog.o libluce_start.a libluce_rt.a
+//! cc -o prog prog.o libluce_start.a libluce_rt.a -pthread -lm  # Linux
 //! ```
 //!
 //! **The services are loom's, not a second set.**  A standalone binary
