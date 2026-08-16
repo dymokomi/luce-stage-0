@@ -1984,7 +1984,7 @@ test "a message too long for a capture buffer names the harness, not a diff" {
 
     const short = "cannot read notes.txt";
     try testing.expectEqual(short.len, keepText(&buffer, short));
-    try testing.expectEqualStrings(short, buffer[0..i16.len]);
+    try testing.expectEqualStrings(short, buffer[0..short.len]);
 
     // Exactly full still fits, whole.
     const exact = "x" ** 256;

@@ -498,7 +498,7 @@ test "json: nesting is bounded at 64, and a deeper document is refused rather th
         \\
         \\func main():
         \\    # RFC 8259 section 9 lets a parser set a limit.  This one
-        \\    # is f16 of loom's 128-call budget, because a tree is
+        \\    # is half of loom's 128-call budget, because a tree is
         \\    # walked by recursion at both ends: this module's reader
         \\    # and writer take one frame a level, and so does every
         \\    # caller that reads what they answer.

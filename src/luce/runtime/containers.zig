@@ -725,7 +725,12 @@ pub fn copyVerb(runtime: *Runtime, held: Value) Error!Value {
     // scalar or function value.
     switch (held.tag) {
         .object => _ = try runtime.resolve(held),
-        .strukt => {},
+        // A null composite run is a valid *unwritten result sentinel* for
+        // ownership cleanup, but it is not a value the explicit `copy`
+        // operation may read.  Keep the zero-width empty struct valid; it
+        // has no payload to dereference.
+        .strukt => if (held.bits == 0 and held.length != 0)
+            return runtime.fail(.not_owned),
         else => return runtime.fail(.not_owned),
     }
     return runtime.deepCopy(held);

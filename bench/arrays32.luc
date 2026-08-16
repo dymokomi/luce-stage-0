@@ -1,4 +1,4 @@
-# The integer f16 of the 32-bit pair: the same shape as
+# The integer half of the 32-bit pair: the same shape as
 # bench/arrays.luc — fill two arrays, then a repeated dot product —
 # but over `array[i32, n]` rather than `array[f64, n]`.  Four
 # `i32`s go into the vector register that holds two `i64`s, so this
@@ -29,5 +29,5 @@ func main():
         var sum: i32 = 0
         for i in range(0, n):
             sum += a[i] * b[i]
-        dot += sum
+        dot += i64(sum)
     print(str(dot))
