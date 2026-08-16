@@ -108,5 +108,6 @@ test {
     _ = artifact;
     _ = effects;
     _ = @import("codegen/loops.zig");
+    _ = @import("codegen/mutability.zig");
     _ = @import("codegen/builder.zig");
 }

@@ -90,6 +90,7 @@ const builtin = @import("builtin");
 const mir = @import("../mir.zig");
 const optimize = @import("../optimize.zig");
 const loops = @import("loops.zig");
+const mutability = @import("mutability.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
@@ -2839,6 +2840,9 @@ const Body = struct {
     produced: []Produced = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
+    /// Which heap registers might name immutable program constants, derived
+    /// from final MIR rather than trusted from a serialized flag.
+    writable: mutability.Plan = .{},
     /// The first LLVM block of each IR block.  An IR block that
     /// contains a checked operation continues into further LLVM blocks,
     /// which no jump ever targets.
@@ -2866,6 +2870,7 @@ const Body = struct {
         const gpa = self.module.gpa;
         gpa.free(self.produced);
         gpa.free(self.local_slots);
+        self.writable.deinit(gpa);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
         self.view_bounds.deinit(gpa);
@@ -2896,6 +2901,7 @@ const Body = struct {
         @memset(self.produced, .{});
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
+        self.writable = try mutability.plan(gpa, function);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
 
         if (function.return_type != .none) {
@@ -4539,15 +4545,18 @@ const Body = struct {
     /// which is `ownsNothing`.  A String, a struct and an object all
     /// go on calling `luce_rt_append`, which is the one place the
     /// ownership walk is written.
-    /// Trap `immutable_object` when an inline container write targets a
-    /// materialized program constant.  A runtime-routed write meets
-    /// `Runtime.requireMutable`; an inline write reaches the row itself,
-    /// so it reads `Object.constant` and traps the same way.  This is
-    /// guarded on every inline write — the retired owner-root analysis,
-    /// which proved where the guard was needless, left with that model,
-    /// and a redundant guard is the optimizer's to drop, never
-    /// correctness's to skip.
-    fn checkNotConstant(self: *Body, row: Builder.Value) Error!void {
+    /// Trap `immutable_object` when an inline container write may target a
+    /// materialized program constant. Runtime-routed writes meet
+    /// `Runtime.requireMutable`; an inline write reaches the row itself, so
+    /// it reads `Object.constant` and traps the same way. Final-MIR
+    /// provenance proves the check unnecessary only for locally created
+    /// rows; parameters, calls, constants, and hostile alias chains keep it.
+    fn checkNotConstant(
+        self: *Body,
+        target: mir.Register,
+        row: Builder.Value,
+    ) Error!void {
+        if (!self.writable.mayBeConstant(target)) return;
         const flag = try self.rowLoad(
             .normal,
             .i8,
@@ -4576,7 +4585,7 @@ const Body = struct {
         const one = try builder.intValue(.i64, 1);
 
         const row = try self.resolveRow(target);
-        try self.checkNotConstant(row);
+        try self.checkNotConstant(target, row);
         const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
         const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
         const capacity = try self.rowLoad(
@@ -7143,7 +7152,7 @@ const Body = struct {
                 if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
                         const view = try self.elementView(of[0], shape);
-                        try self.checkNotConstant(view.row);
+                        try self.checkNotConstant(of[0], view.row);
                         const address = try self.elementAddress(
                             view,
                             shape.element,

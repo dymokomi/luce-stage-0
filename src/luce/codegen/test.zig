@@ -2438,6 +2438,41 @@ test "array loops carry the two alias scopes, and runtime calls carry neither" {
     try std.testing.expect(element_store_scoped);
 }
 
+test "fresh container writes omit the constant guard and unknown aliases keep it" {
+    // ARC makes references shareable, but it does not make a row created by
+    // heap_new capable of becoming a program constant after the constants
+    // prologue. Keeping the guard out of this path is what lets LLVM
+    // vectorize a loop of writes; the final-MIR proof in mutability.zig is the
+    // authority, not a trusted source or serialized flag.
+    const gpa = std.testing.allocator;
+    const fresh = (try render(
+        \\func main():
+        \\    var values = new array(long, 64)
+        \\    for i in range(0, 64):
+        \\        values[i] = i
+        \\    print(string(values[63]))
+        \\
+    )).?;
+    defer gpa.free(fresh);
+    const immutable = mir.TrapCode.immutable_object.message();
+    try std.testing.expect(std.mem.indexOf(u8, fresh, immutable) == null);
+
+    // A parameter may be an alias of a file-scope constant, so its inline
+    // store keeps the runtime's immutable_object backstop.
+    const unknown = (try render(
+        \\const VALUES: array(long, _) = [1, 2]
+        \\
+        \\func change(values: array(long, _)):
+        \\    values[0] = 9
+        \\
+        \\func main():
+        \\    change(VALUES)
+        \\
+    )).?;
+    defer gpa.free(unknown);
+    try std.testing.expect(std.mem.indexOf(u8, unknown, immutable) != null);
+}
+
 test "a program that never spawns pays nothing for threads" {
     // **This is docs/THREADS.md D11, and it is structural rather than
     // measured.**  The claim is not that the effect lock is cheap; it
