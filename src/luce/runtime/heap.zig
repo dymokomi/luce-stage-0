@@ -1,15 +1,12 @@
 //! The object heap — the heart of `libluce_rt`.
 //!
-//! Luce's heap objects (`List`, `Map`, `Array`, `Builder`) are not
-//! freed while a program runs: a row lives from the `new` that made it
-//! until `Runtime.deinit` sweeps the whole table at the end of the run.
-//! What a program does not reclaim is a number in the leak census, and
-//! the final sweep gives the memory back regardless.  Value storage — a
-//! String's bytes and a struct value's field run — keeps its own owner
-//! and death point (`ownValue`/`dropStorage`); only object rows leak
-//! until exit.  The one lifetime distinction left between rows is
-//! `Object.constant`, a materialized program constant the sweep and a
-//! failed prologue treat specially.
+//! Luce's heap objects (`List`, `Map`, `Array`, `Builder`, and resources)
+//! are reference counted.  A row is destroyed when its last owning value
+//! is released; `Runtime.deinit` is the backstop that sweeps only genuine
+//! program leaks.  Value storage — a String's bytes and a struct or
+//! function value's run — has the same explicit copy/destroy boundary:
+//! `copyValue` duplicates storage and retains carried references, while
+//! `freeValue` releases those references and drops the storage.
 //!
 //! `Runtime` is the whole of a running program's state that is not the
 //! program: the two allocators a run draws on (`Memory`), the object
@@ -1543,24 +1540,21 @@ pub const Runtime = struct {
         return self.attach(.{ .data = .array, .dims = shape, .elements = stored });
     }
 
-    /// Every cell of `stored` set to `held`.  A cell owns whatever
-    /// storage it holds, so each one takes its own copy — `new
-    /// array(Point, 100)` is a hundred field runs, not one shared a
-    /// hundred times.  The zero of a String is empty text, which owns
-    /// nothing, so the common case is still one `@memset`.
+    /// Initialize every cell of a new run from the borrowed `held`.  Packed
+    /// scalar cells can be filled directly.  Every `Value` cell takes an
+    /// independent semantic copy so its storage and each carried reference
+    /// have exactly one matching destroy.
     pub fn fillElements(self: *Runtime, stored: Object.Elements, held: Value) Error!void {
-        // A value with no allocation of its own — a scalar, a handle,
-        // empty or inline text — is the same twenty-four bytes in
-        // every cell, so filling is one `@memset`.
-        if (stored.kind != .value or !held.ownsStorage()) {
+        if (stored.kind != .value) {
             stored.fill(held);
             return;
         }
         const cells = stored.cells(Value);
-        // A failed copy leaves the cells it already filled owned by the
-        // array, which the caller releases; the rest stay empty.
-        @memset(cells, .{ .tag = held.tag });
-        for (cells) |*cell| cell.* = try self.ownValue(held);
+        // The caller's rollback destroys every cell, including the suffix a
+        // failed copy never reached, so initialize that suffix to a harmless
+        // valid value first.
+        @memset(cells, Value.none);
+        for (cells) |*cell| cell.* = try self.copyValue(held);
     }
 
     /// Adopt an already-built run of elements as a new list — what the
@@ -1749,11 +1743,9 @@ pub const Runtime = struct {
         return self.makeRun(fields, .strukt);
     }
 
-    /// A function value's run: the same allocation `makeStruct` makes,
-    /// worn under the tag that says the objects inside it are borrowed
-    /// (docs/BINDING.md D4, D12).  A separate entry point rather than a
-    /// flag, because the two runs mean different things about ownership
-    /// and a caller that picked the wrong one would be picking that.
+    /// A function value's run: the same owned allocation `makeStruct`
+    /// makes.  Slot one may be a bound receiver, so function values carry
+    /// and release references exactly as structs do.
     pub fn makeFunction(self: *Runtime, slots: []const Value) Error!Value {
         if (slots.len != 2) return self.fail(.not_owned);
         return self.makeRun(slots, .function);
@@ -1767,15 +1759,11 @@ pub const Runtime = struct {
             return if (tag == .function) Value.ofFunction(&.{}) else Value.ofStruct(&.{});
         }
         const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
-            // A struct constructor consumes its fields, including object
-            // ownership.  A function run is different: its receiver is a
-            // borrow (BINDING.md D4), so an allocation failure must release
-            // only run/storage bytes and leave that receiver live.
-            for (fields) |field| switch (tag) {
-                .strukt => self.freeValue(field),
-                .function => self.dropStorage(field),
-                else => unreachable,
-            };
+            // Both constructors consume their fields.  In particular a
+            // bound function owns its receiver reference; consuming it here
+            // keeps allocation failure equivalent to destroying the value
+            // that could not be formed.
+            for (fields) |field| self.freeValue(field);
             return mistake;
         };
         @memcpy(stored, fields);
@@ -1986,10 +1974,8 @@ pub const Runtime = struct {
 
     /// Drop one reference to every object a value names, scheduling for
     /// destruction only those whose last reference this was.  A shared
-    /// object simply loses a count and survives — the difference between
-    /// ARC release and the old owning destroy.  A struct's fields are
-    /// walked; a function value stops at its run (its receiver is
-    /// released on its own, docs/MEMORY.md); a constant ignores the drop.
+    /// object simply loses a count and survives.  Struct and function runs
+    /// are both walked because either may carry references.
     fn releaseValue(self: *Runtime, held: Value, pending: *u32) void {
         if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
@@ -2002,8 +1988,7 @@ pub const Runtime = struct {
                 }
                 self.scheduleDestroy(handle, pending, false);
             },
-            .strukt => |fields| for (fields) |field| self.releaseValue(field, pending),
-            .function => {},
+            .strukt, .function => |fields| for (fields) |field| self.releaseValue(field, pending),
             else => {},
         }
     }
@@ -2071,20 +2056,27 @@ pub const Runtime = struct {
         self.releaseScheduled(&pending);
     }
 
-    /// Raise by one the reference count of every object a value names —
-    /// the object a handle names, or a struct's object fields
-    /// recursively.  Retaining is shallow: it counts the new name for the
-    /// value itself, never the elements the value already holds (they are
-    /// released only when the value's last reference goes).  A function
-    /// value stops at its run.
+    /// Raise by one the reference count of every object a value names.
+    /// Retaining is shallow: it counts the new value edge, never the
+    /// elements already owned by the referenced object.  Struct and
+    /// function runs are both walked.
     pub fn retainValue(self: *Runtime, held: Value) void {
         if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| self.retain(handle),
-            .strukt => |fields| for (fields) |field| self.retainValue(field),
-            .function => {},
+            .strukt, .function => |fields| for (fields) |field| self.retainValue(field),
             else => {},
         }
+    }
+
+    /// Make an independent owning value from a borrow.  This is the
+    /// semantic ARC copy operation: duplicate the value's private storage,
+    /// then retain each reference carried by that duplicate.  Its exact
+    /// inverse is `freeValue`.
+    pub fn copyValue(self: *Runtime, held: Value) Error!Value {
+        const copied = try self.ownValue(held);
+        self.retainValue(copied);
+        return copied;
     }
 
     /// Deep copy (S31): duplicate the object and everything it owns,
@@ -2347,8 +2339,8 @@ pub const Runtime = struct {
                     });
                 }
             },
-            // A function value copies its run and nothing more.  The
-            // run borrows any receiver object graph (BINDING.md D4).
+            // Functions cannot cross runtimes, but an in-runtime copy owns
+            // another receiver edge just like any other copied value.
             .function => {
                 // A borrowed receiver graph cannot cross a runtime.  The
                 // source front end refuses function values at a worker
@@ -2356,7 +2348,7 @@ pub const Runtime = struct {
                 // reach copyFrom, so keep a source-table handle from being
                 // installed in the destination table.
                 if (self != source) return self.fail(.not_owned);
-                const duplicate = try self.ownValue(task.source);
+                const duplicate = try self.copyValue(task.source);
                 task.destination.* = duplicate;
             },
             else => {

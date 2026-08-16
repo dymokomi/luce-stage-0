@@ -4569,6 +4569,21 @@ test "trap: unfilled object slot inside an array of objects" {
     , .null_object);
 }
 
+test "arrays: fill retains one shared object for every cell" {
+    try agree.prints(
+        \\func main():
+        \\    var seed = new list(long)
+        \\    seed.append(1)
+        \\    var cells = new array(list(long), 3)
+        \\    cells.fill(seed)
+        \\    seed = new list(long)
+        \\    cells[0].append(2)
+        \\    print(string(len(cells[1])))
+        \\    print(string(len(cells[2])))
+        \\
+    , "2\n2\n");
+}
+
 test "trap: chr of a codepoint beyond Unicode's range" {
     try agreeTrap(
         \\func main():

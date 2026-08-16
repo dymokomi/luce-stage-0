@@ -19,12 +19,9 @@
 //!     is a plain value from then on, it copies freely, it takes no
 //!     verbs, and the receiver it carries is its own — writing the
 //!     original afterwards does not reach it.
-//!   * **D4, as amended** — a carrying receiver is *borrowed*: the
-//!     value holds its own run and the handles inside it alias the
-//!     receiver's graph (S26), the census is zero when both die, and an
-//!     alias that outlives its owner meets `use_after_free` at the call
-//!     (S9).  A function value never owns objects, which is why it
-//!     needs no verb anywhere.
+//!   * **D4, as amended** — a carrying receiver owns retained references:
+//!     handles inside the copied receiver alias the same graph (S26), and
+//!     ARC keeps that graph alive as long as the function value.
 //!   * **D6** — `string(f)` answers the method's qualified name.
 //!   * **D11** — a union member constructor is a function value, with
 //!     the payload fields as parameters; a payload-less member stays a
@@ -293,7 +290,7 @@ test "string of a bound value is the method's qualified name" {
 }
 
 // ---------------------------------------------------------------------------
-// A carrying receiver is borrowed (D4, as amended)
+// A carrying receiver is retained (D4, as amended)
 // ---------------------------------------------------------------------------
 
 test "a bind of a carrying receiver aliases the receiver's graph" {
@@ -314,7 +311,7 @@ test "a bind of a carrying receiver aliases the receiver's graph" {
     , "7\n99\n");
 }
 
-test "a carrying receiver takes no verb at the bind, and the census is zero" {
+test "a carrying receiver needs no source verb, and the census is zero" {
     try agree.prints(
         \\struct Bag:
         \\    label: string
@@ -335,7 +332,7 @@ test "a carrying receiver takes no verb at the bind, and the census is zero" {
     , "counts\n6\n");
 }
 
-test "a bind of a borrowed parameter is answered out of the function that made it" {
+test "a carrying receiver outlives the scope that created it" {
     try agree.prints(
         \\struct Bag:
         \\    items: list(long)
@@ -343,12 +340,12 @@ test "a bind of a borrowed parameter is answered out of the function that made i
         \\    func at(i: long) -> long:
         \\        return self.items[i]
         \\
-        \\func reader(bag: Bag) -> func(long) -> long:
+        \\func reader() -> func(long) -> long:
+        \\    let bag = Bag(items = [7, 8])
         \\    return bag.at
         \\
         \\func main():
-        \\    var bag = Bag(items = [7, 8])
-        \\    let read = reader(bag)
+        \\    let read = reader()
         \\    print(string(read(0)))
         \\    print(string(read(1)))
         \\
@@ -675,9 +672,8 @@ test "a bound method is stored in a field and called out of it" {
 }
 
 test "a stored function value is released with what holds it" {
-    // The value owns its run and nothing else, so a list of them is a
-    // list of runs: the census is zero when the list dies, and the
-    // receiver's own graph is released by its own owner.
+    // The value owns its run and any receiver references.  The census is
+    // zero when the list and the receiver's other owner both die.
     try agree.prints(
         \\struct Scale:
         \\    factor: long
@@ -867,7 +863,7 @@ test "a nested place takes a union constructor, a match arm, a guarded call and 
 test "a union payload composes with a bound method and a stored callback" {
     // This is the deliberately cross-feature case: the union owns a
     // list of value structs, a match arm reads one of those structs,
-    // its method becomes a borrowed function value, and the enclosing
+    // its method becomes an owning function value, and the enclosing
     // value carries a second optional function value.  No layer gets
     // to treat one of those shapes as a special case.
     try agree.prints(

@@ -21,13 +21,6 @@ const Runtime = heap.Runtime;
 const Value = value.Value;
 const testing = std.testing;
 
-/// Sub-cut B: reference reclamation is not wired yet (objects leak until
-/// end-of-run until ARC retain/release emission lands), so tests that assert
-/// a mid-run live-object, leak, or reclamation count cannot pass yet.  A
-/// `var` rather than a `const` so the skip guard is not comptime-folded into
-/// an unreachable-code error; flip to `false` when ARC restores reclamation.
-var sub_cut_b_pending: bool = true;
-
 /// A runtime over test-owned memory, so a leak in the library is a
 /// leak the test allocator reports — including an object whose storage
 /// `freeObject` failed to give back, since object storage is
@@ -76,12 +69,19 @@ fn expectStale(runtime: *Runtime, mistake: anytype) !void {
     runtime.pending = null;
 }
 
-fn expectBorrowedFunctionReceiver(function: Value, receiver: Value) !void {
+fn expectFunctionReceiver(function: Value, receiver: Value) !void {
     try testing.expectEqual(value.Tag.function, function.tag);
     const slots = function.asStruct();
     try testing.expectEqual(@as(usize, 2), slots.len);
     try testing.expect(slots[1].tag == .object);
     try testing.expect(slots[1].asObject().same(receiver.asObject()));
+}
+
+/// Bind while preserving the caller's owning value.  `makeFunction`
+/// consumes its receiver slot, so the slot receives an ordinary ARC copy.
+fn makeBoundFunction(runtime: *Runtime, function: i64, receiver: Value) !Value {
+    const owned_receiver = try runtime.copyValue(receiver);
+    return runtime.makeFunction(&.{ Value.ofLong(function), owned_receiver });
 }
 
 /// A tiny deterministic generator for the ownership state machine.  The
@@ -103,11 +103,10 @@ fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
-/// Copy one function run through a failing object allocator.  The receiver
-/// is deliberately a carrying struct with outside text: a function value
-/// owns its run, but only borrows the receiver's object graph.  A failed
-/// copy must therefore return the new run and any nested value storage
-/// without touching the source graph.
+/// Copy one function run's private storage through a failing allocator.
+/// Reference retention is infallible and happens only after this storage
+/// copy succeeds, so a refusal must return every partial run without
+/// touching the source graph.
 fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var target: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
@@ -2591,7 +2590,6 @@ test "nested resource graph failures close every acquired file" {
 }
 
 test "fixed worker and resource lifecycle seeds preserve joins and closes" {
-    if (sub_cut_b_pending) return error.SkipZigTest; // Sub-cut B: re-enable when ARC emission restores reclamation
     for ([_]u64{
         0x0B_0700_0001,
         0x0B_0700_0021,
@@ -2601,7 +2599,6 @@ test "fixed worker and resource lifecycle seeds preserve joins and closes" {
 }
 
 test "fuzz: worker and resource lifecycles preserve ownership" {
-    if (sub_cut_b_pending) return error.SkipZigTest; // Sub-cut B: re-enable when ARC emission restores reclamation
     try testing.fuzz({}, fuzzLifecycle, .{ .corpus = &.{
         "worker resource lifecycle seed",
         "\x00\x01\x02\x03\x04\x05",
@@ -3525,7 +3522,7 @@ test "rank-zero arrays are rejected before allocation" {
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
-test "failed function-value copies return every nested storage allocation" {
+test "failed function-value storage copies return every nested allocation" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -3535,7 +3532,7 @@ test "failed function-value copies return every nested storage allocation" {
     ));
     const receiver = try bench.runtime.makeStruct(&.{label});
     const function = try bench.runtime.makeFunction(&.{ Value.ofLong(7), receiver });
-    defer bench.runtime.dropStorage(function);
+    defer bench.runtime.freeValue(function);
 
     try testing.checkAllAllocationFailures(
         testing.allocator,
@@ -3544,10 +3541,9 @@ test "failed function-value copies return every nested storage allocation" {
     );
 }
 
-test "failed list slices and map value lists roll copied rows back" {
-    if (sub_cut_b_pending) return error.SkipZigTest; // Sub-cut B: re-enable when ARC emission restores reclamation
-    try testing.expect((try expectDerivedCopyFailures(.list_slice)) >= 4);
-    try testing.expect((try expectDerivedCopyFailures(.map_values)) >= 4);
+test "failed list slices and map value lists roll ARC copies back" {
+    try testing.expect((try expectDerivedCopyFailures(.list_slice)) >= 1);
+    try testing.expect((try expectDerivedCopyFailures(.map_values)) >= 1);
 }
 
 test "failed list builders return their current owned value" {
@@ -3613,7 +3609,7 @@ test "failed worker argument transfer returns carried struct storage" {
     try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
 }
 
-test "failed struct construction releases objects but function runs keep receivers borrowed" {
+test "failed struct and function construction consume their owned fields" {
     var struct_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var struct_arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var struct_runtime: Runtime = .init(.{
@@ -3639,6 +3635,9 @@ test "failed struct construction releases objects but function runs keep receive
         .objects = function_objects.allocator(),
     });
     const receiver = try function_runtime.newList(Value.none);
+    // Keep one caller edge while handing another to the constructor.  Its
+    // allocation failure must consume only the edge it was given.
+    function_runtime.retainValue(receiver);
     function_objects.fail_index = function_objects.alloc_index;
 
     try testing.expectError(
@@ -5173,15 +5172,14 @@ test "map keys hash as they compare, for long and for String" {
     runtime.freeObject(numbers.asObject());
 }
 
-test "function values stay receiver-borrowed through every value container" {
+test "function values retain their receiver through every value container" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
     const runtime = &bench.runtime;
 
     // The receiver owns a second object and outside text.  Every function
-    // below names this same graph, but none of the function runs may become
-    // a second owner of either row.
+    // below names this same graph and owns one reference to it.
     const receiver = try runtime.newList(Value.none);
     const nested = try runtime.newList(Value.none);
     try containers.append(runtime, nested, try runtime.ownValue(Value.ofString(
@@ -5190,71 +5188,70 @@ test "function values stay receiver-borrowed through every value container" {
     try containers.append(runtime, receiver, nested);
 
     const list = try runtime.newList(Value.none);
-    var list_function = try runtime.makeFunction(&.{ Value.ofLong(1), receiver });
+    var list_function = try makeBoundFunction(runtime, 1, receiver);
     try containers.append(runtime, list, list_function);
     list_function = .none;
 
     const map = try runtime.newMap();
-    var map_function = try runtime.makeFunction(&.{ Value.ofLong(2), receiver });
+    var map_function = try makeBoundFunction(runtime, 2, receiver);
     try containers.indexSet(runtime, map, &.{Value.ofInlineText(.string, "callback")}, map_function);
     map_function = .none;
 
     // A function value is a value-shaped array element.  `arrayFill` makes a
     // fresh run per cell, so this covers both the array replacement buffer and
-    // repeated copies of a run whose receiver remains borrowed.
+    // one retained receiver edge per repeated value.
     const array = try runtime.newArray(&.{3}, Value.none);
-    var fill_function = try runtime.makeFunction(&.{ Value.ofLong(3), receiver });
+    var fill_function = try makeBoundFunction(runtime, 3, receiver);
     try containers.arrayFill(runtime, array, fill_function);
-    runtime.dropStorage(fill_function);
+    runtime.freeValue(fill_function);
     fill_function = .none;
 
-    var record_function = try runtime.makeFunction(&.{ Value.ofLong(4), receiver });
+    var record_function = try makeBoundFunction(runtime, 4, receiver);
     const record = try runtime.makeStruct(&.{record_function});
     record_function = .none;
 
-    try expectBorrowedFunctionReceiver(
+    try expectFunctionReceiver(
         try containers.indexGet(runtime, list, &.{Value.ofLong(0)}),
         receiver,
     );
-    try expectBorrowedFunctionReceiver(
+    try expectFunctionReceiver(
         try containers.mapGet(runtime, map, Value.ofInlineText(.string, "callback")),
         receiver,
     );
     for (0..3) |index| {
-        try expectBorrowedFunctionReceiver(
+        try expectFunctionReceiver(
             try containers.indexGet(runtime, array, &.{Value.ofLong(@intCast(index))}),
             receiver,
         );
     }
-    try expectBorrowedFunctionReceiver(record.asStruct()[0], receiver);
+    try expectFunctionReceiver(record.asStruct()[0], receiver);
 
-    // Copying every holder duplicates only the function run.  The receiver
-    // handle must remain the same borrowed handle in each copy.
+    // Copying every holder duplicates the function run and retains the same
+    // receiver identity.
     const copied_list = try runtime.deepCopy(list);
     const copied_map = try runtime.deepCopy(map);
     const copied_array = try runtime.deepCopy(array);
     const copied_record = try runtime.deepCopy(record);
-    try expectBorrowedFunctionReceiver(
+    try expectFunctionReceiver(
         try containers.indexGet(runtime, copied_list, &.{Value.ofLong(0)}),
         receiver,
     );
-    try expectBorrowedFunctionReceiver(
+    try expectFunctionReceiver(
         try containers.mapGet(runtime, copied_map, Value.ofInlineText(.string, "callback")),
         receiver,
     );
     for (0..3) |index| {
-        try expectBorrowedFunctionReceiver(
+        try expectFunctionReceiver(
             try containers.indexGet(runtime, copied_array, &.{Value.ofLong(@intCast(index))}),
             receiver,
         );
     }
-    try expectBorrowedFunctionReceiver(copied_record.asStruct()[0], receiver);
+    try expectFunctionReceiver(copied_record.asStruct()[0], receiver);
 
-    // Function values are not a hidden owner.  Retiring the receiver while
-    // the holders still contain stale borrowed handles must be safe, and
-    // releasing those holders must return only their own runs.
+    // Releasing the caller's edge does not retire a receiver still owned by
+    // bound values.  Releasing every holder then retires the full graph.
     runtime.freeValue(receiver);
-    try expectStale(runtime, runtime.resolve(receiver));
+    _ = try runtime.resolve(receiver);
 
     runtime.freeValue(copied_list);
     runtime.freeValue(copied_map);
@@ -5264,6 +5261,7 @@ test "function values stay receiver-borrowed through every value container" {
     runtime.freeValue(map);
     runtime.freeValue(array);
     runtime.freeValue(record);
+    try expectStale(runtime, runtime.resolve(receiver));
     try testing.expectEqual(@as(u32, 0), runtime.live);
     try testing.expectEqual(@as(i64, 0), runtime.leaked());
 }
@@ -5351,7 +5349,7 @@ test "array fill keeps its old values through every copy allocation failure" {
     }
 }
 
-test "array fill rolls borrowed function runs back at every allocation failure" {
+test "array fill rolls owned function values back at every allocation failure" {
     var failures: usize = 0;
     var completed = false;
 
@@ -5370,19 +5368,19 @@ test "array fill rolls borrowed function runs back at every allocation failure" 
         const receiver = try runtime.newList(Value.none);
         const nested = try runtime.newList(Value.none);
         try containers.append(&runtime, nested, try runtime.ownValue(Value.ofString(
-            "borrowed receiver graph remains outside function storage",
+            "owned receiver graph survives each failed function copy",
         )));
         try containers.append(&runtime, receiver, nested);
         const array = try runtime.newArray(&.{3}, Value.none);
-        const function = try runtime.makeFunction(&.{ Value.ofLong(9), receiver });
+        const function = try makeBoundFunction(&runtime, 9, receiver);
 
         objects.fail_index = objects.alloc_index + offset;
         const outcome = containers.arrayFill(&runtime, array, function);
         objects.fail_index = std.math.maxInt(usize);
 
-        // arrayFill borrows the source function.  Its storage is released
-        // here on both paths; any successful cell owns an independent copy.
-        runtime.dropStorage(function);
+        // arrayFill borrows the source function.  Destroy that source value
+        // on both paths; each successful cell owns an independent copy.
+        runtime.freeValue(function);
         if (outcome) |_| {
             for (0..3) |index| {
                 const cell = try containers.indexGet(
@@ -5416,12 +5414,13 @@ test "array fill rolls borrowed function runs back at every allocation failure" 
             failures += 1;
         }
 
-        // The receiver is never adopted by a function run.  Retire it before
-        // releasing the array so stale borrowed handles exercise the same
-        // no-object-walk rule on both successful and rollback paths.
+        // The caller and any successful array cells own the receiver.  Drop
+        // the caller first, then prove the array's edges keep it live until
+        // the array itself is destroyed.
         runtime.freeValue(receiver);
-        try expectStale(&runtime, runtime.resolve(receiver));
+        if (outcome) |_| _ = try runtime.resolve(receiver) else |_| {}
         runtime.freeValue(array);
+        try expectStale(&runtime, runtime.resolve(receiver));
         try testing.expectEqual(@as(u32, 0), runtime.live);
         runtime.deinit();
         arena.deinit();
@@ -5873,7 +5872,7 @@ test "sort and reverse work in place on lists and arrays alike" {
     try testing.expectEqual(@as(i64, 3), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
 }
 
-test "a list slice copies its object elements rather than sharing them" {
+test "a list slice shares object identity through retained references" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -5885,7 +5884,11 @@ test "a list slice copies its object elements rather than sharing them" {
 
     const original = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
     const copied = try containers.indexGet(runtime, taken, &.{Value.ofLong(0)});
-    try testing.expect(!original.asObject().same(copied.asObject()));
+    try testing.expect(original.asObject().same(copied.asObject()));
+    runtime.freeValue(held);
+    _ = try runtime.resolve(copied);
+    runtime.freeValue(taken);
+    try expectStale(runtime, runtime.resolve(copied));
 }
 
 // ---------------------------------------------------------------------------
@@ -7307,14 +7310,14 @@ test "allocating C doors preserve outputs and rows at every failure point" {
     }
 }
 
-test "a function value allocation failure preserves its borrowed receiver graph" {
+test "a function value allocation failure consumes only its receiver copy" {
     const long_text = "receiver storage that needs its own allocation";
     var failures: usize = 0;
     var completed = false;
 
     // The receiver is a struct with both an object edge and outside text.
-    // The function run receives a storage copy of that struct, but its
-    // object edge remains borrowed from the original receiver.
+    // The function constructor consumes a full value copy; failure destroys
+    // that copy while the original receiver remains intact.
     for (0..4) |failure_offset| {
         var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
         var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -7332,7 +7335,7 @@ test "a function value allocation failure preserves its borrowed receiver graph"
         try containers.append(&runtime, list, Value.ofLong(7));
         const owned_text = try runtime.ownValue(Value.ofString(long_text));
         const receiver = try runtime.makeStruct(&.{ list, owned_text });
-        const copied_receiver = try runtime.ownValue(receiver);
+        const copied_receiver = try runtime.copyValue(receiver);
         var slots = [_]Value{ Value.ofInt(3), copied_receiver };
         var out = Value.ofLong(99);
 
@@ -7342,7 +7345,7 @@ test "a function value allocation failure preserves its borrowed receiver graph"
 
         if (status == 0) {
             try testing.expect(out.tag == .function);
-            runtime.dropStorage(out);
+            runtime.freeValue(out);
             runtime.freeValue(receiver);
             completed = true;
         } else {
@@ -7369,7 +7372,6 @@ test "a function value allocation failure preserves its borrowed receiver graph"
 }
 
 test "allocating C value doors preserve graphs and slots at every failure point" {
-    if (sub_cut_b_pending) return error.SkipZigTest; // Sub-cut B: re-enable when ARC emission restores reclamation
     const long_text = "a C value door string long enough to require owned storage";
     const inline_text = Value.ofInlineText(.string, "inline return bytes");
     const previous_key = "the previous key text remains on a failed replacement";

@@ -2452,17 +2452,6 @@ fn objectMethod(
             }
             if (std.mem.eql(u8, name, "fill")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                // One value cannot own every slot (S21, S23):
-                // arrays of objects store per slot instead.
-                if (shapes.carriesObjects(self.analyzer, shape.element)) {
-                    try self.fail(
-                        "luce.sema.own",
-                        method.span,
-                        "fill copies one value into every slot; an array of objects stores each slot separately",
-                        .{},
-                    );
-                    return null;
-                }
                 return .{ .kind = .array_fill, .result = .none };
             }
             if (shape.rank != 1) {

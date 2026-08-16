@@ -465,6 +465,7 @@ pub fn build(b: *std.Build) void {
             "a give-taking function is a value, and the call through it needs the verb",
             "a give-taking function value moves its argument when called through the value",
             "a function value in a struct field is called through a grouping",
+            "a carrying receiver outlives the scope that created it",
         },
     });
     const test_function_ownership_step = b.step(
@@ -600,8 +601,8 @@ pub fn build(b: *std.Build) void {
             "failed retaining stores",
             "failed struct replacement consumes",
             "struct replacement rejects",
-            "function values stay receiver-borrowed",
-            "array fill rolls borrowed function runs",
+            "function values retain their receiver",
+            "array fill rolls owned function values",
             "whole-file reads stay within",
             "rank-zero arrays are rejected",
             "worker inputs fail closed",
@@ -621,7 +622,7 @@ pub fn build(b: *std.Build) void {
             "builder growth and snapshots",
             "allocating C doors preserve outputs",
             "allocating C value doors preserve graphs",
-            "a function value allocation failure preserves its borrowed receiver graph",
+            "a function value allocation failure consumes only its receiver copy",
             "waiting a task fails closed",
             "malformed worker outcomes fail closed",
             "nested tasks wait and release",

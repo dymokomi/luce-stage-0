@@ -405,9 +405,9 @@ test "a function value chosen by a branch dispatches to whichever was chosen" {
 }
 
 // A function value does not cross a worker boundary (docs/BINDING.md
-// D4, as amended): it borrows the receiver it may carry, a borrow
-// cannot cross, and a function type cannot say whether this one
-// carries anything.  Both refusals are proved in `errors_spec.zig`.
+// D4, as amended): code identity belongs to one module/runtime and a
+// function type cannot say whether this value carries a receiver.  Both
+// refusals are proved in `errors_spec.zig`.
 
 // ---------------------------------------------------------------------------
 // The call suffix: a call is a postfix operator
@@ -496,7 +496,7 @@ test "a stored bound method is called out of the map that holds it" {
 
 test "a bound method carries a union callback into another struct's function" {
     // This is the composition seam where three representations meet: the
-    // bound method borrows its Envelope receiver, the receiver contains a
+    // bound method owns a retained Envelope receiver, which contains a
     // tagged union with an optional function value, and Runner accepts that
     // value through an ordinary function-typed parameter.
     try agree.prints(

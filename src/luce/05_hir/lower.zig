@@ -216,12 +216,11 @@ const Replay = struct {
 
     /// Whether a value of this type names a reference object whose count a
     /// scope's end must lower — a container or a `file`/`task` resource, an
-    /// optional of one, or a struct or union value that carries one in a
-    /// field.  The walk stops at a `.heap` reference and never enters it,
-    /// so a value struct (which cannot contain itself, only a reference to
-    /// more of its kind) terminates; a function value's captured receiver
-    /// is not counted here yet, so a struct whose only reference is a bound
-    /// method still reads as carrying none.
+    /// optional of one, a function (whose run may own a bound receiver), or
+    /// a struct or union value that carries one in a field.  The walk stops
+    /// at a `.heap` reference and never enters it, so a value struct (which
+    /// cannot contain itself, only a reference to more of its kind)
+    /// terminates.
     fn carriesObjects(self: *const Replay, of: Type) Error!bool {
         // Two visited tables, one per aggregate index space, so a value
         // type that names itself — a `Node?` field on `Node` — is walked
@@ -239,6 +238,7 @@ const Replay = struct {
     fn carriesObjectsIn(self: *const Replay, of: Type, seen_structs: []bool, seen_variants: []bool) bool {
         return switch (of) {
             .heap => true,
+            .function => true,
             .optional => |payload| carriesObjectsIn(self, payload.asType(), seen_structs, seen_variants),
             .strukt => |layout| {
                 if (seen_structs[layout]) return false;
@@ -612,13 +612,19 @@ const Replay = struct {
                 const receiver = try self.replayValue(built.receiver);
                 const fields = try self.arena().alloc(Register, built.methods.len);
                 for (built.methods, fields) |method, *field| {
-                    // Each bound method owns an independent receiver slot.
-                    // The interface value therefore has one release path per
-                    // method without double-releasing the concrete value.
-                    const held = try self.code.ownStorage(receiver);
+                    // Each witness owns an independent value copy of the
+                    // receiver.  Treat the replayed receiver as a view for
+                    // every slot: copy its private storage, retain its
+                    // carried references, and leave the original temporary
+                    // to its own park.
+                    const held = try self.ownedForStore(
+                        receiver,
+                        built.receiver.result(),
+                        .view,
+                    );
                     field.* = try self.code.emit(.{ .const_function = .{
                         .function = method.function,
-                        .receiver = held,
+                        .receiver = held.register,
                     } }, .{ .function = method.signature });
                 }
                 break :interface try self.code.emit(.{ .struct_make = .{
@@ -642,19 +648,16 @@ const Replay = struct {
             ),
             .bound_method => |bound| bind: {
                 const receiver = try self.replayValue(bound.receiver);
-                // A function value owns the two-slot run that holds it and
-                // never owns the objects inside it (BINDING.md, "As built":
-                // D4 retired D3's owning bind).  The receiver's shell is
-                // copied in so the value carries its own state, but its heap
-                // children are *borrowed* — never retained — and the run's
-                // death is `drop_storage` alone.  Retaining them here (an
-                // owning store) leaked one reference per carrying receiver,
-                // because nothing releases what `drop_storage` leaves.  This
-                // is the same borrow `interface_make` above takes.
-                const held = try self.code.ownStorage(receiver);
+                // A bound function is an owning value.  A fresh receiver can
+                // move into it; a borrowed receiver is copied and retained.
+                const held = try self.ownedForStore(
+                    receiver,
+                    bound.receiver.result(),
+                    nodes.provenance(bound.receiver),
+                );
                 break :bind try self.code.emit(.{ .const_function = .{
                     .function = bound.function,
-                    .receiver = held,
+                    .receiver = held.register,
                 } }, bound.result);
             },
         };

@@ -54,6 +54,11 @@ const Analyzer = @import("declarations.zig").Analyzer;
 pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
     return switch (of) {
         .heap => true,
+        // A bound function owns the receiver stored in its value run.  The
+        // type does not distinguish bound from unbound functions, so every
+        // function follows the carrying path; an unbound receiver is `none`
+        // and retain/release are no-ops.
+        .function => true,
         .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
         // The OR over the members' fields (docs/UNION.md D9): the
         // predicate is static and type-level, so `Json` carries
@@ -73,12 +78,11 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
 /// the worker boundary and by nothing else that needs to see through a
 /// container — *is one of these anywhere in this type*.
 pub const Carried = enum {
-    /// A function value: it borrows the receiver it may carry
-    /// (docs/BINDING.md D4), and a borrow has nothing to borrow *from*
-    /// on the far side of a worker boundary.  The type cannot say
-    /// whether a given value carries a receiver, so the boundary
-    /// refuses the type — and since D7 a function value can sit in a
-    /// field or an element, the question has to see through those.
+    /// A function value cannot cross a worker boundary because its code
+    /// identity is local to one compiled module/runtime.  The type cannot
+    /// say whether a value is bound, so the boundary refuses the type — and
+    /// since a function can sit in a field or element, the question has to
+    /// see through those.
     function,
 };
 

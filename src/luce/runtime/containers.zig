@@ -7,11 +7,10 @@
 //! map, or an array) it is polymorphic here too: the object's own kind
 //! decides, exactly as it does in the language.
 //!
-//! **No object is freed while a program runs.**  An element overwritten,
-//! removed, or cleared leaks until the runtime's final sweep; only its
-//! *value storage* — a String's bytes, a struct value's field run — is
-//! given back at the store site, through `dropStorage`.  An object row
-//! is reclaimed only at `Runtime.deinit`.
+//! Every container cell owns its value.  Copying a cell duplicates its
+//! private storage and retains the references it carries; replacing,
+//! removing, or clearing it releases those references and drops the
+//! storage immediately.
 
 const std = @import("std");
 const heap = @import("heap.zig");
@@ -91,10 +90,8 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 /// already exists must not pay for a copy of a key it will not keep.
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
     const stored = held;
-    // `stored` is consumed.  On an error return its value storage goes
-    // back; any objects it carries leak until the run ends, like every
-    // other object.
-    errdefer runtime.dropStorage(stored);
+    // `stored` is consumed even on failure.
+    errdefer runtime.freeValue(stored);
     const object = try runtime.resolveMutable(target);
     try requireIndexRank(runtime, object, indices);
     switch (object.data) {
@@ -167,8 +164,9 @@ fn requireMapKey(runtime: *Runtime, key: Value) Error!void {
     }
 }
 
-/// `xs[a:b]` on a list.  Slices copy — including deep copies of object
-/// elements, since two containers can never own one object (S23, S31).
+/// `xs[a:b]` on a list.  The returned container owns an ordinary ARC copy
+/// of every selected value: private value storage is duplicated and object
+/// identity is shared through retained references.
 pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!Value {
     const object = try runtime.resolve(target);
     switch (object.data) {
@@ -183,9 +181,7 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
     try copied.ensureCapacity(runtime.objects, @intCast(end - start));
     var at: usize = @intCast(start);
     while (at < @as(usize, @intCast(end))) : (at += 1) {
-        // `source` is a copy of the row's run, so the buffer it names
-        // stays put while `deepCopy` allocates and moves the table.
-        const duplicate = try runtime.deepCopy(source.at(at));
+        const duplicate = try runtime.copyValue(source.at(at));
         copied.count += 1;
         copied.put(copied.count - 1, duplicate);
     }
@@ -208,9 +204,8 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     switch (object.data) {
         .list => {
             // A List consumes `held`, even when the immutable backstop
-            // rejects the write: on any error its value storage goes
-            // back and any objects it carries leak until the run ends.
-            errdefer runtime.dropStorage(held);
+            // rejects the write: the store consumes its input.
+            errdefer runtime.freeValue(held);
             try runtime.requireMutable(object);
             try object.elements.append(runtime.objects, held);
         },
@@ -249,7 +244,7 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
 /// `xs.insert(i, v)`.  **Consumes `held`** (docs/STRINGS.md), including
 /// on the out-of-range trap: its value storage always goes back.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
-    errdefer runtime.dropStorage(held);
+    errdefer runtime.freeValue(held);
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {},
@@ -410,21 +405,20 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
     };
 }
 
-/// `xs.clear()` — drops every element's value storage; the elements'
-/// objects, if any, leak until the final sweep.
+/// `xs.clear()` — destroys every owned element immediately.
 pub fn clear(runtime: *Runtime, target: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
             if (object.elements.kind == .value) {
-                for (object.elements.cells(Value)) |item| runtime.dropStorage(item);
+                for (object.elements.cells(Value)) |item| runtime.freeValue(item);
             }
             object.elements.clear();
         },
         .map => |*map| {
             for (map.entries.items) |entry| {
                 runtime.dropStorage(entry.key);
-                runtime.dropStorage(entry.value);
+                runtime.freeValue(entry.value);
             }
             map.clear();
         },
@@ -485,11 +479,10 @@ fn emptyList(zero: Value) heap.Object.Elements {
 /// stored boxed because its length is not a fact of the type.
 const text_list: heap.Object.Elements = .{ .kind = .value };
 
-/// Give back a half-built run and the value storage its elements own.
-/// Any objects among those elements leak until the final sweep.
+/// Give back a half-built run and every value it already owns.
 fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
     if (listed.kind == .value) {
-        for (listed.cells(Value)) |item| runtime.dropStorage(item);
+        for (listed.cells(Value)) |item| runtime.freeValue(item);
     }
     listed.deinit(runtime.objects);
 }
@@ -590,14 +583,10 @@ pub fn listOfArguments(
     return runtime.attachList(listed);
 }
 
-/// `m.values()` — the returned list independently owns its elements, so
-/// object values are deep-copied — two containers never own one object
-/// (S23, mirrors listSlice).  `zero` is the value type's zero — see
-/// `mapKeys`.
+/// `m.values()` — the returned list independently owns an ARC copy of each
+/// value.  Object identity is shared; value storage is not.  `zero` is the
+/// value type's zero — see `mapKeys`.
 pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
-    // The entries are read out before the loop: deepCopy allocates
-    // objects, which moves the object table, and the map's own entry
-    // buffer does not move with it.
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
         .map => |map| map.entries.items,
@@ -606,8 +595,8 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
-        const duplicate = try runtime.deepCopy(entry.value);
-        errdefer runtime.dropStorage(duplicate);
+        const duplicate = try runtime.copyValue(entry.value);
+        errdefer runtime.freeValue(duplicate);
         try listed.append(runtime.objects, duplicate);
     }
     return runtime.attachList(listed);
@@ -669,8 +658,8 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
             // storage the map frees with itself at the final sweep.
             const owned_key = try runtime.ownValue(key);
             errdefer runtime.dropStorage(owned_key);
-            const owned_zero = try runtime.ownValue(zero);
-            errdefer runtime.dropStorage(owned_zero);
+            const owned_zero = try runtime.copyValue(zero);
+            errdefer runtime.freeValue(owned_zero);
             try map.insert(runtime.objects, .{ .key = owned_key, .value = owned_zero });
             return owned_zero;
         },
@@ -687,17 +676,10 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
         .array => {},
         .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     }
-    // Stage 4 refuses an object-carrying fill: one borrowed graph cannot
-    // become the owner of every array slot.  Keep the same wall here for
-    // verified MIR obtained some other way, before any old cell is
-    // released.  This is double ownership, not specifically a cycle.
-    if (carriesObject(held)) return runtime.fail(.not_owned);
-
-    // A fill of a value with outside storage can fail once per cell.  Build
-    // that replacement off to the side first: releasing the old cells and
-    // then discovering an allocation failure would leave the destination
-    // half-filled and would make a failed store observable as a mutation.
-    if (object.elements.kind == .value and held.ownsStorage()) {
+    // A Value cell may need storage allocation and may carry references.
+    // Build the full replacement offside so allocation failure cannot make
+    // a partial mutation visible and every new reference has one owner.
+    if (object.elements.kind == .value) {
         const count = object.elements.count;
         if (count == 0) return;
         const byte_count = std.math.mul(usize, count, @sizeOf(Value)) catch
@@ -709,44 +691,18 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
             .count = count,
         };
         errdefer {
-            for (replacement.cells(Value)) |cell| runtime.dropStorage(cell);
+            for (replacement.cells(Value)) |cell| runtime.freeValue(cell);
             replacement.deinit(runtime.objects);
         }
         try runtime.fillElements(replacement, held);
 
-        const old = object.elements;
-        object.elements.bytes = replacement.bytes;
-        for (old.cells(Value)) |cell| runtime.dropStorage(cell);
-        runtime.objects.free(old.bytes);
+        var old = object.elements;
+        object.elements = replacement;
+        for (old.cells(Value)) |cell| runtime.freeValue(cell);
+        old.deinit(runtime.objects);
         return;
     }
-
-    if (object.elements.kind == .value) {
-        // The source language rejects object arrays at this method, but a
-        // decoded or hand-built runtime value can still have object cells.
-        // Replacing them drops their String/struct storage; the old
-        // objects, if any, leak until the final sweep.
-        for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
-    }
     try runtime.fillElements(object.elements, held);
-}
-
-fn carriesObject(held: Value) bool {
-    return switch (held.tag) {
-        .object => true,
-        .strukt => blk: {
-            const fields = held.asStruct();
-            for (fields) |field| {
-                if (carriesObject(field)) break :blk true;
-            }
-            break :blk false;
-        },
-        // A function value borrows the receiver it may carry and owns
-        // none of it (docs/BINDING.md D4), so nothing inside one is an
-        // object this value is answerable for.
-        .function => false,
-        else => false,
-    };
 }
 
 // ---------------------------------------------------------------------------
