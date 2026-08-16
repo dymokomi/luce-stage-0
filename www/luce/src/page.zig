@@ -5,9 +5,9 @@
 //! section's pages down the left, the content in the middle, and the
 //! page's own headings down the right where there is room for them.
 //!
-//! Everything the browser loads is served from this origin — one
-//! stylesheet, one small script, one SVG mark.  No fonts, no CDN, no
-//! analytics, nothing that phones anywhere.
+//! Everything the browser loads is served from this origin — the shared
+//! LuciaOS stylesheet, this site's frame, one small script, one SVG mark.
+//! No fonts, no CDN, no analytics, nothing that phones anywhere.
 
 const std = @import("std");
 const Buffer = @import("buffer.zig");
@@ -64,6 +64,8 @@ pub fn open(out: *Buffer, where: Where, headings: []const markdown.Heading) !voi
     try out.add("</title>\n<meta name=\"description\" content=\"");
     try out.addEscaped(where.description);
     try out.add("\">\n<link rel=\"stylesheet\" href=\"");
+    try prefix(out, where.url);
+    try out.add("assets/core.css\">\n<link rel=\"stylesheet\" href=\"");
     try prefix(out, where.url);
     try out.add("assets/style.css\">\n<link rel=\"icon\" href=\"");
     try prefix(out, where.url);
@@ -253,4 +255,23 @@ test "the asset prefix climbs exactly as far as the page is deep" {
         try prefix(&out, case.url);
         try std.testing.expectEqualStrings(case.want, out.text());
     }
+}
+
+test "the shared visual language loads before the documentation frame" {
+    const gpa = std.testing.allocator;
+    var out: Buffer = .init(gpa);
+    defer out.deinit();
+    try open(&out, .{
+        .url = "/guide/basics/",
+        .title = "The Basics",
+        .description = "A page",
+        .section = &site.sections[1],
+        .page = &site.sections[1].pages[0],
+    }, &.{});
+
+    const core = std.mem.indexOf(u8, out.text(), "../../assets/core.css");
+    const frame = std.mem.indexOf(u8, out.text(), "../../assets/style.css");
+    try std.testing.expect(core != null);
+    try std.testing.expect(frame != null);
+    try std.testing.expect(core.? < frame.?);
 }

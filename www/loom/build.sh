@@ -111,6 +111,7 @@ printf '%s\n' "$manifest" | while IFS= read -r row; do
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$(if [ -z "$slug" ]; then printf '%s' "$title"; else printf '%s &middot; loom' "$title"; fi)</title>
 <meta name="description" content="$description">
+<link rel="stylesheet" href="${depth}assets/core.css">
 <link rel="stylesheet" href="${depth}assets/style.css">
 <link rel="icon" href="${depth}assets/mark.svg" type="image/svg+xml">
 <script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
@@ -179,6 +180,8 @@ FOOT
 done
 
 cp -R "$here/assets" "$out/assets"
+cp "$here/../shared/core.css" "$out/assets/core.css"
+cmp "$here/../shared/core.css" "$out/assets/core.css"
 
 # ------------------------------------------------------------------- links
 

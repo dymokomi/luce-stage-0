@@ -76,7 +76,7 @@ www/stats/
     geo.zig           address -> country, from a file, offline
     day.zig           what UTC day a timestamp falls on
     sqlite.zig        the fifteen SQLite functions this uses
-  site/               the page: hand-written HTML, one CSS, one JS
+  site/               the page: hand-written HTML, dashboard CSS, one JS
   server/             what had to be added to the edge server, written
                       down: the log directives, the site block, the
                       systemd unit and timer, and the scripts that
@@ -84,6 +84,10 @@ www/stats/
   geo/refresh.sh      fetch DB-IP's monthly database and pack it
   vendor-sqlite.sh    fetch the pinned SQLite amalgamation
 ```
+
+The site build also copies `www/shared/core.css` into `out/assets/core.css`.
+The dashboard stylesheet loads after it and deliberately owns the data-view
+palette, chart typography, and layout.
 
 The collector is one statically linked binary built against a pinned
 SQLite amalgamation, so the server needs no library, no runtime and no

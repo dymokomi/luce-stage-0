@@ -105,7 +105,7 @@ www/luce/
   build.sh      toolchain -> generator -> pages
   deploy.sh     publish www/luce/out
   content/      the Markdown, one directory per section
-  assets/       CSS and anything else copied verbatim
+  assets/       this site's frame, script, and mark
   src/          the generator
     main.zig        walk content, render, check links
     site.zig        sections, slugs, ordering
@@ -118,3 +118,7 @@ www/luce/
   out/          generated; not committed
   work/         the generator binary and per-sample scratch; not committed
 ```
+
+`www/shared/core.css` is the visual source of truth shared by the public
+sites. The build copies it into `out/assets/core.css` and the page shell loads
+it before `assets/style.css`, which contains only Luce documentation layout.

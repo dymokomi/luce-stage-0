@@ -29,7 +29,12 @@ done
 echo "==> generator"
 mkdir -p "$here/work"
 zig_global_cache="$here/work/zig-global-cache"
+site_assets="$here/work/assets"
 mkdir -p "$zig_global_cache"
+rm -rf "$site_assets"
+mkdir -p "$site_assets"
+cp -R "$here/assets/." "$site_assets/"
+cp "$root/www/shared/core.css" "$site_assets/core.css"
 zig build-exe "$here/src/main.zig" \
     -O ReleaseSafe \
     --name lucedoc \
@@ -43,11 +48,12 @@ echo "==> pages"
 cd "$here"
 ./work/lucedoc \
     --content "$here/content" \
-    --assets "$here/assets" \
+    --assets "$site_assets" \
     --out "$here/out" \
     --toolchain "$root/build" \
     --work "$here/work/samples" \
     --repository "$root"
+cmp "$root/www/shared/core.css" "$here/out/assets/core.css"
 
 echo "==> release"
 release_version=$(tr -d '[:space:]' <"$root/VERSION")

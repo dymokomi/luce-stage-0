@@ -651,6 +651,7 @@ test "links resolve against the page that carries them" {
         .{ .from = "guide/basics/index.html", .href = "/guide/reference/types/", .want = "guide/reference/types/index.html" },
         .{ .from = "guide/reference/types/index.html", .href = "../expressions/", .want = "guide/reference/expressions/index.html" },
         .{ .from = "guide/index.html", .href = "/status/", .want = "status/index.html" },
+        .{ .from = "guide/basics/index.html", .href = "../../assets/core.css", .want = "assets/core.css" },
         .{ .from = "guide/basics/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
     };
     for (cases) |case| {

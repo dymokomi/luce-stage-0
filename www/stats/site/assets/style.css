@@ -1,11 +1,9 @@
-/* stats.luciaos.com — one stylesheet, no imports, no webfonts.
+/* stats.luciaos.com — the dashboard layer, no imports and no webfonts.
  *
  * The identity is the family's: warm cream paper, warm near-black ink,
  * one rust accent, an editorial serif on display text over a system
- * sans for prose.  The tokens are luce.luciaos.com's, copied rather
- * than imported — three sites on three roots cannot share a file, and
- * a stylesheet that fetched another host's would be exactly the kind
- * of third-party request this page exists to not make.
+ * sans for prose. The shared core is copied into this origin at build time;
+ * this layer deliberately overrides it for dense data display and charts.
  *
  * The chart colors are the one addition.  Three sites need three
  * hues that a reader can tell apart, including one who cannot see

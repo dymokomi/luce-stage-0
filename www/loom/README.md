@@ -15,10 +15,10 @@ for byte against what the program actually produced.  That machinery
 is the right machinery for a language reference and the wrong
 machinery for a page of shell transcripts about a binary.
 
-So this is a separate tree with a separate build.  The two sites share
-a visual identity — `assets/style.css` here is `www/luce/assets/style.css`
-with the same custom properties, value for value — and cross-link in
-both bars, but neither build can break the other.
+So this is a separate tree with a separate build. The public sites share
+`www/shared/core.css`; this build copies it into its own output and loads the
+loom-specific frame after it. They cross-link in both bars, but neither build
+depends on another origin.
 
 ## The contract
 
@@ -77,7 +77,7 @@ www/loom/
   deploy.sh     publish out/
   pages         the manifest: slug, nav label, title, description
   content/      one HTML fragment per page (the article body)
-  assets/       style.css, site.js, mark.svg — copied verbatim
+  assets/       loom's frame, site.js, and mark.svg
   out/          generated; not committed
 ```
 

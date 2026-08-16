@@ -66,6 +66,8 @@ echo "==> site"
 rm -rf "$out"
 mkdir -p "$out"
 cp -R "$here/site/." "$out/"
+cp "$here/../shared/core.css" "$out/assets/core.css"
+cmp "$here/../shared/core.css" "$out/assets/core.css"
 
 # A valid report with nothing in it, so the page is never broken —
 # the server's own collection replaces it within the hour.

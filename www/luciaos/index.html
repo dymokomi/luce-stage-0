@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LuciaOS — Good for humans. Good for computers.</title>
 <meta name="description" content="LuciaOS is a new operating system built from first principles, with the Luce programming language at its core.">
+<link rel="stylesheet" href="./core.css">
 <link rel="stylesheet" href="./style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='24' fill='none' stroke='%23181714' stroke-width='2.5'/><rect x='12' y='12' width='8' height='8' fill='%23c43e2f'/></svg>">
 <script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
@@ -16,8 +17,7 @@
   <div class="top-inner">
     <a class="mark" href="/">LuciaOS</a>
     <nav aria-label="Related projects">
-      <a href="https://luce.luciaos.com">Luce</a>
-      <a href="https://loom.luciaos.com">loom</a>
+      <a class="cross" href="https://luce.luciaos.com">Luce</a>
       <button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
     </nav>
   </div>
@@ -25,13 +25,9 @@
 
 <main id="content">
   <section class="hero">
-    <p class="kicker">A new operating system · early development</p>
     <h1>Good for humans.<br>Good for computers.</h1>
-    <p class="lead">LuciaOS is being built from first principles, starting with
-    the language at its center and growing outward deliberately.</p>
     <nav class="actions" aria-label="Start exploring">
       <a href="https://luce.luciaos.com">Learn Luce <span aria-hidden="true">→</span></a>
-      <a href="https://loom.luciaos.com">Meet loom <span aria-hidden="true">→</span></a>
     </nav>
   </section>
 
@@ -64,22 +60,12 @@
     </div>
   </section>
 
-  <section>
-    <h2>loom</h2>
-    <div class="section-body">
-      <p>loom is the small host and runner for Luce library artifacts. It gives
-      a program files, terminal events, workers, clocks, windows, and drawing
-      surfaces through one explicit boundary.</p>
-      <a class="text-link" href="https://loom.luciaos.com">See how Luce programs run <span aria-hidden="true">→</span></a>
-    </div>
-  </section>
 </main>
 
 <footer>
   <span>LuciaOS</span>
   <nav aria-label="Footer">
     <a href="https://luce.luciaos.com">Luce</a>
-    <a href="https://loom.luciaos.com">loom</a>
   </nav>
 </footer>
 

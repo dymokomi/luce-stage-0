@@ -1,0 +1,471 @@
+/* core.css — the shared visual language of LuciaOS, Luce, loom and the
+ * stats page.  This is the SINGLE source: it is edited here, under
+ * www/shared/, and each site's build copies it verbatim into its own
+ * origin (never fetched across hosts — every site still serves it
+ * first-party, so nothing loads from anywhere else and file:// preview
+ * keeps working).  A page links this first, then its own stylesheet,
+ * which carries only that site's layout and may override a default here.
+ *
+ * What lives here: the palette and fonts, the base, the header's
+ * pieces (the mark, the tabs, the theme toggle), the headings — set in
+ * small caps over a red mark with a rule beneath, the way the printed
+ * reference sets a header off from its text — prose, code blocks, the
+ * prose table, navigation cards, and the previous/next bar.
+ *
+ * What does NOT live here: each site's own frame (the doc shell and its
+ * rails, the landing's centered hero, the stats dashboard's tiles and
+ * charts), and the chart series colours, which are the stats page's own
+ * accessibility-validated addition. */
+
+:root {
+  color-scheme: light;
+  --ink: #181714;
+  --ink-soft: #5f5d56;
+  --ink-faint: #7b7971;
+  --paper: #f5f5f0;
+  --paper-soft: #e9e9e3;
+  --paper-raised: #ffffff;
+  --line: #b9b7ae;
+  --line-soft: #d7d5cd;
+  --line-strong: #181714;
+  --accent: #c43e2f;
+  --accent-soft: #f1dcd7;
+  --link: #181714;
+  --bad: #a22f2f;
+  --bad-soft: #f4dfdc;
+  --good: #4f702d;
+
+  --tok-comment: #76746d;
+  --tok-string: #4e702f;
+  --tok-number: #146b72;
+  --tok-keyword: #c43e2f;
+  --tok-verb: #8b3f75;
+  --tok-type: #365d91;
+  --tok-builtin: #5b568a;
+  --tok-decl: #181714;
+
+  --bar: 4rem;
+  --display: "Didot", "Bodoni 72", "Playfair Display", Georgia,
+    "Times New Roman", serif;
+  --face: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco,
+    Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ink: #efefe8; --ink-soft: #b8b7ae; --ink-faint: #97968e;
+    --paper: #191a17; --paper-soft: #2d2e28; --paper-raised: #23241f;
+    --line: #55564e; --line-soft: #3b3c36; --line-strong: #efefe8;
+    --accent: #ef6a59; --accent-soft: #472a25; --link: #efefe8;
+    --bad: #f08378; --bad-soft: #432725; --good: #a9c97c;
+    --tok-comment: #929188; --tok-string: #a9c97c; --tok-number: #73c5cb;
+    --tok-keyword: #ef6a59; --tok-verb: #dda1cd; --tok-type: #9db9e4;
+    --tok-builtin: #b8b2ef; --tok-decl: #efefe8;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #181714; --ink-soft: #5f5d56; --ink-faint: #7b7971;
+  --paper: #f5f5f0; --paper-soft: #e9e9e3; --paper-raised: #ffffff;
+  --line: #b9b7ae; --line-soft: #d7d5cd; --line-strong: #181714;
+  --accent: #c43e2f; --accent-soft: #f1dcd7; --link: #181714;
+  --bad: #a22f2f; --bad-soft: #f4dfdc; --good: #4f702d;
+  --tok-comment: #76746d; --tok-string: #4e702f; --tok-number: #146b72;
+  --tok-keyword: #c43e2f; --tok-verb: #8b3f75; --tok-type: #365d91;
+  --tok-builtin: #5b568a; --tok-decl: #181714;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #efefe8; --ink-soft: #b8b7ae; --ink-faint: #97968e;
+  --paper: #191a17; --paper-soft: #2d2e28; --paper-raised: #23241f;
+  --line: #55564e; --line-soft: #3b3c36; --line-strong: #efefe8;
+  --accent: #ef6a59; --accent-soft: #472a25; --link: #efefe8;
+  --bad: #f08378; --bad-soft: #432725; --good: #a9c97c;
+  --tok-comment: #929188; --tok-string: #a9c97c; --tok-number: #73c5cb;
+  --tok-keyword: #ef6a59; --tok-verb: #dda1cd; --tok-type: #9db9e4;
+  --tok-builtin: #b8b2ef; --tok-decl: #efefe8;
+}
+
+/* Base */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--face);
+  font-size: 1rem;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--link);
+  font-weight: 700;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: .2em;
+}
+
+a:hover { color: var(--accent); }
+
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skip {
+  position: absolute;
+  left: -100vw;
+  top: .5rem;
+  z-index: 50;
+  padding: .4rem .7rem;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+.skip:focus { left: .5rem; }
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Header pieces — the mark, the tabs, the cross-links and the theme
+ * toggle look the same everywhere; each site arranges them in its own
+ * header.top container (a doc grid, a landing bar, a dashboard flex). */
+
+/* The wordmark reads as part of the uppercase menu — a touch heavier
+ * and wider than the tabs, and no mark before it. */
+.mark {
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.mark:hover { color: var(--accent); text-decoration: none; }
+
+nav.tabs a,
+a.cross,
+.tab {
+  padding: .4rem 0;
+  color: var(--ink-faint);
+  border-bottom: 2px solid transparent;
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .085em;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+nav.tabs a:hover,
+a.cross:hover,
+.tab:hover { color: var(--accent); text-decoration: none; }
+
+nav.tabs a.here,
+.tab.here {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+}
+
+#theme {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--ink-faint);
+  background: transparent;
+  border: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  /* The ◑ glyph is drawn a hair low in its em box; a small lift puts it
+   * on the menu's optical line. */
+  transform: translateY(-0.02em);
+}
+
+#theme:hover { color: var(--ink); }
+
+/* Headings and prose */
+
+h1, h2, h3, h4 { scroll-margin-top: calc(var(--bar) + 1rem); }
+
+h1 {
+  margin: 0 0 1.7rem;
+  font-size: clamp(2.2rem, 5vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -.055em;
+  line-height: 1.08;
+}
+
+h2 {
+  margin: 3.25rem 0 1.35rem;
+  padding-bottom: .6rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line-strong);
+  font-size: .84rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+h3 {
+  margin: 2.4rem 0 .75rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+h4 {
+  margin: 2rem 0 .55rem;
+  color: var(--ink-soft);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+h2 .anchor, h3 .anchor, h4 .anchor {
+  margin-left: .4rem;
+  color: var(--ink-faint);
+  font-size: .8em;
+  font-weight: 500;
+  opacity: 0;
+  text-decoration: none;
+}
+
+h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus-visible { opacity: 1; }
+
+p { margin: 0 0 1.15rem; }
+li { margin-bottom: .4rem; }
+li > ul, li > ol { margin: .4rem 0 .35rem; padding-left: 1.35rem; }
+
+hr { margin: 2.8rem 0; border: 0; border-top: 1px solid var(--line-strong); }
+
+blockquote {
+  margin: 0 0 1.2rem;
+  padding: .2rem 0 .2rem 1rem;
+  color: var(--ink-soft);
+  border-left: 3px solid var(--accent);
+}
+
+blockquote p:last-child { margin-bottom: 0; }
+strong { color: var(--ink); font-weight: 800; }
+
+code {
+  padding: .08em .28em;
+  background: var(--paper-soft);
+  border-radius: 0;
+  font-family: var(--face);
+  font-size: .875em;
+  font-weight: 700;
+}
+
+a code { color: inherit; }
+
+/* Code blocks — a caption above a framed, scrollable listing, with the
+ * language's own token colours. */
+
+figure.sample { margin: 0 0 1.7rem; }
+
+.cap {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .38rem .8rem;
+  color: var(--ink-faint);
+  background: var(--paper-soft);
+  border: 1px solid var(--line-strong);
+  border-bottom: 0;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+}
+
+.cap cite { font-style: normal; }
+.cap.luc { color: var(--accent); background: var(--accent-soft); }
+.cap.out::before { content: "▸"; color: var(--good); }
+.cap.bad { color: var(--bad); background: var(--bad-soft); }
+.cap.bad::before { content: "■"; font-size: .6em; }
+.cap.shell::before { content: "$"; color: var(--ink-faint); }
+
+.code {
+  position: relative;
+  margin-bottom: 1.15rem;
+  overflow-x: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+figure.sample .code { margin-bottom: 0; }
+.cap + .code:not(:last-child) { border-bottom: 0; }
+.code + .cap { border-top: 0; }
+.code pre { margin: 0; padding: 1rem 1.05rem; }
+
+.code code, .code samp {
+  display: block;
+  padding: 0;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  font-family: var(--face);
+  font-size: .8125rem;
+  font-weight: 500;
+  line-height: 1.68;
+  white-space: pre;
+}
+
+.code.result { background: var(--paper-soft); }
+.code.result samp { color: var(--ink-soft); }
+.code.bad { background: var(--bad-soft); border-color: var(--bad); }
+.code.bad samp { color: var(--bad); }
+.code kbd { color: var(--ink); font: inherit; font-weight: 800; }
+.code .prompt { color: var(--ink-faint); user-select: none; }
+
+button.copy {
+  position: absolute;
+  top: .45rem;
+  right: .45rem;
+  z-index: 2;
+  padding: .15rem .45rem;
+  color: var(--ink-faint);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  font-family: var(--face);
+  font-size: .68rem;
+  line-height: 1.5;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.code:hover button.copy, button.copy:focus-visible { opacity: 1; }
+button.copy:hover { color: var(--ink); border-color: var(--line-strong); }
+
+.code .c { color: var(--tok-comment); font-style: italic; }
+.code .s { color: var(--tok-string); }
+.code .n { color: var(--tok-number); }
+.code .k { color: var(--tok-keyword); font-weight: 800; }
+.code .v { color: var(--tok-verb); font-weight: 800; }
+.code .t { color: var(--tok-type); }
+.code .b { color: var(--tok-builtin); }
+.code .d { color: var(--tok-decl); font-weight: 800; }
+
+/* Prose table (a site with data tables restyles table/th/td itself) */
+
+.table { margin: 0 0 1.5rem; overflow-x: auto; }
+
+table {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-collapse: collapse;
+  font-size: .86rem;
+}
+
+th, td {
+  padding: .55rem .65rem;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--line);
+}
+
+th {
+  color: var(--ink);
+  background: var(--paper-soft);
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+td code, th code { white-space: nowrap; }
+
+/* Navigation cards */
+
+.cards {
+  display: grid;
+  gap: 0;
+  margin: 1.6rem 0 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+.card-part { margin-top: 2.6rem; }
+.card-part h2 { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.card-part .cards { margin-top: 1.2rem; }
+
+.card {
+  display: block;
+  padding: .95rem .75rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  text-decoration: none;
+}
+
+.card:hover { color: var(--ink); background: var(--accent-soft); text-decoration: none; }
+.card strong { display: block; margin-bottom: .15rem; font-weight: 800; }
+.card strong::after { content: " →"; color: var(--accent); }
+.card span { display: block; color: var(--ink-faint); font-size: .86rem; line-height: 1.55; }
+
+/* Previous and next */
+
+nav.seq {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line-strong);
+}
+
+nav.seq a {
+  display: block;
+  max-width: 48%;
+  padding: .45rem 0;
+  color: var(--ink);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+nav.seq a:hover { color: var(--accent); }
+nav.seq a.on { margin-left: auto; text-align: right; }
+
+nav.seq span {
+  display: block;
+  margin-bottom: .15rem;
+  color: var(--ink-faint);
+  font-size: .66rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* Footer link styling is shared; each site sizes its own footer frame. */
+
+footer a { color: var(--ink); }
+footer a:hover { color: var(--accent); }
