@@ -56,28 +56,19 @@ Current common-path specs exercise that behavior on both engines.
 
 The repository itself records these open gaps:
 
-- Four runtime reclamation tests are skipped behind `sub_cut_b_pending`.
 - Four byte/zip file tests are skipped behind `resource_close_pending`
   because function-exit cleanup does not reliably close the handle yet.
 - The synthesized Luce test entry and the adventure specification relax their
   zero-census assertion around remaining container reclamation gaps.
-- A bound method owns its function-value storage but only borrows references
-  inside its copied struct receiver. It can therefore outlive the binding that
-  keeps those references alive and reach `use_after_free`.
-- Current interfaces are represented as bound method values and inherit that
-  carrying-receiver lifetime restriction.
-- A list slice and `map.values()` recursively clone copyable reference
-  elements. `array.fill` refuses reference elements. Those are remaining
-  single-owner rules, not the final ARC collection semantics.
-- Passing a container graph to `spawn` can invalidate the caller's reference;
-  even without caller reuse, the minimal transfer reports a leaked object.
+- An early control-flow edge in a `match` nested inside `for-in` can panic HIR
+  lowering instead of compiling or reporting a diagnostic.
 - The module damage hardening test is skipped around two decoder/verifier
   panic paths; [MISSING.md](MISSING.md) tracks the bug.
 
-Until Phase 0 closes these gaps, code must not rely on a file closing or an
-unfinished task joining at the exact last-release point. Runtime teardown is a
-backstop, not proof that mid-run ARC is complete. Public documentation must
-not describe the implementation as release-ready ARC.
+Until Phase 0 closes these gaps, code must not rely on a file closing at the
+exact last-release point. Runtime teardown is a backstop, not proof that
+mid-run ARC is complete. Public documentation must not describe the
+implementation as release-ready ARC.
 
 ## Completed ARC behavior
 

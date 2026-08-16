@@ -221,10 +221,9 @@ application.
 - The application keeps its model, providers, and event loop alive.
 - A `Renderer` keeps its `Surface` and `Events` fields.
 - A view receives the surface only for its `draw` call and must not store it.
-- A provider such as a `RowsView.render` bound function currently aliases the
-  application's reference fields without retaining them. Keep the concrete
-  provider value alive while the bound function is stored. This restriction
-  disappears when the ARC bound-receiver gap is closed.
+- A provider such as a `RowsView.render` bound function owns a snapshot of its
+  value receiver and retains any reference fields in that snapshot. It may be
+  stored independently of the concrete provider binding.
 - Do not hide a mutable application model behind `View` just to obtain dynamic
   dispatch; project the current state into value-only views.
 

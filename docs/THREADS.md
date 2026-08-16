@@ -9,11 +9,9 @@ The important boundary is not “references cannot cross.” Copyable reference
 graphs do cross. They are rebuilt in the receiving runtime, so their identity
 does not cross and no object is reachable from both threads.
 
-The worker boundary and explicit `wait()` behavior are implemented, but a
-current ARC bug in container-argument transfer can invalidate the caller's
-reference and leak the transferred object. Automatic join at the task's exact
-last release is also part of the incomplete ARC lifecycle gate described in
-`docs/MEMORY.md`.
+The worker boundary, explicit `wait()`, and last-release join behavior are
+implemented on both execution paths. The remaining ARC lifecycle gaps are
+listed in `docs/MEMORY.md`.
 
 ## Spawning
 
@@ -43,15 +41,10 @@ The boundary copier recursively rebuilds permitted data in the destination
 runtime:
 
 - numbers, `bool`, strings, enums, and plain value fields copy;
-- structs, unions, optionals, lists, maps, arrays, and builders copy as a
-  graph, preserving relationships inside the copied graph but sharing no
-  object with the source runtime; and
+- structs, unions, optionals, lists, maps, arrays, and builders copy as one
+  graph, preserving aliases within a root and between separate arguments but
+  sharing no object with the source runtime; and
 - the caller keeps its original argument graph.
-
-That final bullet is the contract, not reliable current behavior for a
-container argument. Until Phase 0 fixes the bug in `docs/MISSING.md`, do not
-reuse a reference argument after `spawn` or treat a clean result as proof of a
-clean census.
 
 The same rule runs in the other direction when `wait()` receives a result.
 This is an internal boundary operation, not a source-level clone operator.
@@ -82,10 +75,8 @@ task(double!)   answers a double or a recoverable error
 ```
 
 Task references may be stored in fields, optionals, containers, and unions.
-They all name one worker. The completed ARC contract joins an unfinished task
-when its last reference is released. Current development builds still have
-feature-gated lifecycle tests, so this is not yet an unconditional timing
-guarantee.
+They all name one worker. Releasing the last reference to an unfinished task
+joins its worker and discards the unobserved answer.
 
 ## Waiting
 
@@ -138,9 +129,9 @@ Coverage must include:
 - nested workers and teardown under allocation and host failure; and
 - graph-copy rollback with no leaked rows in either runtime.
 
-The existing suite proves most result and explicit-wait cases. Direct nested
-container-argument snapshot coverage and the feature-gated ARC lifecycle tests
-are named Phase 0 gaps in `docs/ROADMAP.md`.
+The suite proves argument snapshots, aliases across argument roots, results,
+explicit and implicit joins, transitive refusals, rollback, and both-runtime
+leak accounting.
 
 ## Deliberate limits
 

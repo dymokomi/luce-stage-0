@@ -98,23 +98,22 @@ program cannot mutate it directly.
 
 ## Interfaces and function values
 
-### M12 — carrying interface values have a current lifetime restriction {#m12}
+### M12 — interface dispatch retains carrying receivers {#m12}
 
 The current interface layout stores one bound function per method. A
-value-only concrete receiver is self-contained. A receiver with a reference
-field aliases that graph without retaining it through the dispatch values, so
-another live concrete value must keep the graph alive. Returning or storing a
-carrying interface independently is not yet a safe general contract.
+value-only concrete receiver is self-contained. Each dispatch value owns its
+copied receiver and retains any references that receiver carries, so a stored
+or returned interface may outlive the concrete binding that formed it.
 
 The planned owned existential replaces this representation with one payload,
 metadata, and witness table.
 
-### M13 — bound methods copy value receivers and borrow reference fields {#m13}
+### M13 — bound methods own their receiver snapshot {#m13}
 
 Reading `receiver.method` into a compatible function place copies the value
 receiver. Later writes to the original value fields do not change the bound
-snapshot. Reference fields still name the same objects, but the current bound
-value does not retain them; the original owner must outlive the function.
+snapshot. Reference fields still name the same objects and the bound value
+retains them until it is destroyed.
 
 Capture-free lambdas hold no enclosing-local environment.
 
@@ -127,25 +126,19 @@ graphs are rebuilt recursively in the receiving runtime. The source and
 destination share no object identity. A graph carrying a `file`, `task`, or
 function value is refused as an argument or result.
 
-The current container-argument path has an ARC bug: after `spawn`, the caller's
-still-live source reference may trap `use_after_free`, and a minimal transfer
-that does not reuse it still leaks one object. The graph-copy contract above is
-not complete until that bug and its both-runtime census tests are fixed.
+The copier preserves aliases within one graph and across separate argument
+roots. The caller keeps an independently mutable source graph. Allocation or
+transitive-shape refusal rolls the incomplete destination graph back without
+leaking either runtime.
 
-`wait()` observes a task result once. The completed ARC contract joins an
-unfinished worker at the task's last release; current lifecycle gaps must be
-closed before that timing is relied on.
+`wait()` observes a task result once. Releasing the last task reference joins
+an unfinished worker and discards its unobserved result.
 
 ## Current completion blockers
 
-- Four runtime tests are skipped by `sub_cut_b_pending`.
 - Four byte/zip tests are skipped by `resource_close_pending`.
 - Two language specs relax their zero-live-object assertion.
-- Bound values do not retain a carrying receiver's references.
-- List slices, map value lists, and reference array fill retain old
-  single-owner restrictions.
-- A container argument to `spawn` can invalidate the caller's reference and
-  leak an object.
+- An early edge from `match` inside `for-in` can panic HIR lowering.
 - The damaged-module mutation test is skipped around verifier panic paths.
 
 ARC is complete only when those gates are removed, all normal differential

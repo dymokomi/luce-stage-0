@@ -147,9 +147,8 @@ shows how a direct source folder becomes a versioned package.
 
 `spawn` starts a named function on a worker with its own runtime. `wait()`
 joins it and observes the task's result once. Value arguments and permitted
-results are copied between runtimes; live resources and function values do not
-cross. The recursive argument copier exists, but its current container ARC bug
-is tracked on [Status](/status/#ordered-work).
+reference graphs are copied between runtimes; aliases remain aliases inside
+the independent snapshot. Live resources and function values do not cross.
 
 ```luce run
 func square(n: long) -> long:

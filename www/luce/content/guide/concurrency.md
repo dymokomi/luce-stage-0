@@ -61,11 +61,9 @@ func main():
 
 The worker saw the original value snapshot while the caller changed its own
 struct. The boundary also has a recursive copier for permitted lists, maps,
-arrays, builders, structs, unions, and optionals. That container-argument path
-currently has an ARC bug: it can invalidate the caller's reference and leak an
-object. Do not pass a reference argument you need to keep using until the
-[Phase 0 blocker](/status/#ordered-work) is fixed. Returning a new graph from a
-worker, shown next, does work today.
+arrays, builders, structs, unions, and optionals. It preserves aliases within
+the copied graph and across separate arguments while sharing no identity with
+the caller. The caller can continue using and mutating its original graph.
 
 Resources and callable environments are different. A graph containing a
 `file`, `task`, or function value cannot cross. Open a file in the worker that

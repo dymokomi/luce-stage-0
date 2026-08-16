@@ -10,13 +10,10 @@ and called. Plain function values and lambdas have their own reference
 
 One sentence carries the feature: **a bound method is a function value
 that carries its receiver.** A value receiver — a plain `struct` or an
-`enum` — is copied into the value. Current function-value object walks stop at
-the function run, so reference fields inside that receiver are aliases but are
-not retained by the bind. The original owner must outlive a carrying bound
-method. This is a known incomplete-ARC lifetime gap, not the final contract
-(`docs/MEMORY.md`, `docs/ROADMAP.md`). User-defined class
-receivers and capturing closure environments are planned rather than
-current behavior.
+`enum` — is copied into the value. Reference fields inside that receiver remain
+aliases of the same objects and are retained by the bind until the function
+value dies. User-defined class receivers and capturing closure environments
+are planned rather than current behavior.
 
 ## The bind, spelled and typed
 
@@ -115,12 +112,11 @@ parentheses is a parenthesized type, two or more is a return shape.
 `writeTypeName` parenthesizes a function payload and nothing else, so a
 diagnostic's spelling reads back as the same type.
 
-Storage does not repair the current carrying-receiver gap. A plain function,
-lambda without captures, union constructor, or value-only bound receiver is
-self-contained. A bound receiver with a reference field may be stored only
-while another live value keeps that referenced graph alive. Full ARC must make
-the function value retain and release that graph so this qualification can be
-deleted.
+Every stored function value owns its two-slot run. A bound method also owns its
+copied value receiver and retains every reference that receiver carries. It
+may therefore be returned, placed in an aggregate, or called after the
+original receiver binding has ended. Destroying the function value releases
+those references exactly once.
 
 ### Where a function value stands, and why the map is different
 

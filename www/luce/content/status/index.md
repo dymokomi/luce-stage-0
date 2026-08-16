@@ -24,8 +24,8 @@ can use now and the language being designed. The [Tour](/tour/),
   directional failure matching, returns, optionals, and heterogeneous
   containers. Interface dispatch is read-only today.
 - Isolated workers. Permitted container graphs are copied between runtimes and
-  object identity is never shared, but the current container-argument ARC path
-  can invalidate the caller's source reference.
+  object identity is never shared. Aliases remain aliases inside the worker's
+  independent snapshot, and the caller keeps its source graph.
 - Modules, visibility, constants, exact-version package consumption, and Luce
   tests.
 
@@ -35,12 +35,10 @@ have retain/release operations, but feature-gated lifecycle tests remain. This
 development release must not be described as full ARC until those gates are
 removed.
 
-Current blockers are concrete: four runtime reclamation tests and four
-byte/zip file-lifecycle tests are skipped; two language specs relax their
-zero-object census; bound methods do not retain references inside carrying
-receivers; several collection operations retain old deep-copy/refusal rules;
-and passing a container graph to `spawn` can invalidate the caller's reference
-and leak an object. [Memory Management](/guide/reference/memory/#current-completion-blockers)
+Current blockers are concrete: four byte/zip file-lifecycle tests are skipped;
+two language specs relax their zero-object census; an early control-flow edge
+inside nested `match`/`for-in` can panic lowering; and damaged compiled-module
+inputs can reach two verifier/runtime panic paths. [Memory Management](/guide/reference/memory/#current-completion-blockers)
 lists the exact boundary.
 
 ### Toolchain and libraries

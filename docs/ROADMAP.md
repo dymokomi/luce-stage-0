@@ -29,23 +29,13 @@ The ARC pivot is partially implemented on both execution paths:
 
 It is not yet honest to call that full ARC:
 
-- `src/luce/runtime/test.zig` keeps four reclamation tests behind
-  `sub_cut_b_pending` and says objects may survive until runtime teardown;
 - `bytes_spec.zig` and `zip_spec.zig` skip four file lifecycle tests because a
   file opened in a function is not reliably closed at the function's last
   release;
 - the synthesized test entry and adventure spec relax their zero-census
   assertions around remaining container reclamation gaps;
-- a bound method still borrows reference fields in its receiver instead of
-  retaining them, so a carrying receiver must outlive the function value;
-- current interface dispatch is made from those bound values and inherits the
-  same lifetime restriction for a reference-carrying conformer;
-- list slices and `map.values()` still recursively clone copyable object
-  elements, while reference-valued `array.fill` remains refused—residue from
-  the retired single-owner model rather than normal ARC collection behavior;
-- passing a container graph to `spawn` can invalidate the caller's still-live
-  reference and leaves a leaked object even when that reference is not reused;
-  and
+- a `match` arm with an early control-flow edge inside a `for-in` can panic HIR
+  lowering; and
 - the damaged-module byte-mutation hardening test is skipped around two
   decoder/verifier panic paths.
 
@@ -315,9 +305,8 @@ considered complete, not after every prose or local implementation edit.
 
 ### Phase 0 — finish ARC and restore the release gate
 
-1. Fix every confirmed current bug in [MISSING.md](MISSING.md), beginning with
-   `try` inside a `match` arm inside `for` and the damaged-module verifier
-   panic.
+1. Fix every confirmed current bug in [MISSING.md](MISSING.md): the nested
+   early-edge lowering panic and the damaged-module verifier panic.
 2. Remove every feature-related skip and relaxed census assertion. Keep only
    genuine platform capability skips, and make the test summary distinguish
    them from product gaps.
@@ -325,19 +314,16 @@ considered complete, not after every prose or local implementation edit.
    local, assignment, argument, return, aggregate field, optional, failure,
    loop binding, interface, bound method, container element, synthesized test
    entry, file, task, and worker teardown.
-4. Make bound function values retain and release reference fields in their
-   receiver. Either make current interfaces inherit that safety immediately or
-   temporarily reject reference-carrying interface storage/return until the
-   owned existential lands; dangling callable state is not an acceptable
-   intermediate contract.
-5. Replace the last single-owner collection rules with ARC rules: list slices
-   and `map.values()` copy the outer value and retain reference elements;
-   reference-valued array fill retains once per cell. Keep recursive copying
-   only at the isolated-worker runtime boundary, where identity must not cross.
-6. Add direct worker-boundary specs for nested container arguments, snapshot
-   independence, caller liveness after `spawn`, alias preservation within the
-   copied graph, zero census across both runtimes, and transitive
-   resource/function refusals; fix the current argument-transfer failure.
+4. Keep the completed bound-function and interface receiver ARC proofs green:
+   a stored callable retains reference fields in its copied receiver and
+   releases them exactly once.
+5. Keep the completed collection ARC proofs green: list slices and
+   `map.values()` retain reference elements, and reference-valued array fill
+   retains once per cell. Recursive copying remains isolated to a worker
+   boundary, where identity cannot cross.
+6. Keep the completed worker-boundary proofs green: nested argument snapshots,
+   caller liveness, aliases within and between roots, both-runtime zero census,
+   rollback, and transitive resource/function refusals.
 7. Prove last-release destruction and rollback under success, recoverable
    error, trap, allocation failure, host failure, and runtime teardown on both
    engines. Include file close and unfinished-task join counts.

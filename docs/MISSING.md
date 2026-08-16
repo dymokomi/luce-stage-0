@@ -11,21 +11,6 @@ that context.
 
 Resolved bugs are removed from this file once the fix and its proof land.
 
-## Passing a container graph to `spawn` can invalidate the caller's reference
-
-A caller that creates a `list(long)`, passes it to a worker, and then mutates
-the original can trap `use_after_free` at that mutation. If the caller never
-touches the argument again, the same minimal program completes but the runtime
-reports one leaked object. The worker still receives the values and computes
-the expected answer, so this is an ARC transfer/lifecycle failure rather than
-a type-system refusal.
-
-The worker boundary contract is to rebuild the permitted graph in the worker
-runtime while leaving the caller's graph live and independently mutable. A
-fix needs differential specifications for direct and nested container
-arguments, caller reuse immediately after `spawn`, aliases inside the source
-graph, graph-copy rollback, and a zero-object census across both runtimes.
-
 ## An early control-flow edge in `match` inside `for-in` can panic lowering
 
 Two supported shapes reach `unreachable` in `src/luce/05_hir/lower.zig`

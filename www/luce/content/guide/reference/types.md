@@ -169,9 +169,8 @@ environment is that receiver), and a **union member constructor**
 (`Msg.query_changed`). One place holds any of them and no reader can
 tell which — which is also why a function value has no equality, and
 why one never crosses a worker boundary. A bound value copies its struct
-receiver into the function value. In the current implementation, references
-inside that receiver copy are borrowed rather than retained; the original
-concrete receiver must outlive the bound value.
+receiver into the function value and retains every reference carried by that
+copy. The bound value may outlive the original concrete binding.
 
 That lack of equality follows the value wherever a comparison reaches
 it: a struct holding a `(func(...) -> R)?` field is not compared with

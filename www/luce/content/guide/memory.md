@@ -137,25 +137,21 @@ teardown may be the operation that finally closes a handle.
 ## Interfaces and bound methods
 
 A current interface value carries bound dispatch values for one concrete
-struct. Value-only receivers are self-contained. For a receiver with reference
-fields, another concrete value must currently keep those objects alive.
-Interface dispatch is read-only today.
+struct. Each dispatch value owns its copied receiver and retains every
+reference that receiver carries. Interface dispatch is read-only today.
 
 A bound method also carries a receiver. A struct receiver is copied into the
-function value; reference fields remain shared but are not yet retained by the
-bound value. The original owner must outlive it.
+function value; reference fields remain shared and are retained by the bound
+value. The callable may outlive the binding it came from.
 
 ## Workers remain isolated
 
 Every worker has its own runtime and heap. Values copy directly, and permitted
 container graphs are rebuilt recursively in the receiving runtime. No object
-identity is shared. Graphs carrying a `file`, `task`, or function value are
-refused as arguments or results.
-
-Current container-argument transfer still has an ARC bug that can invalidate
-the caller's source reference and leak an object. Until the Phase 0 fix, do not
-reuse a reference argument after `spawn`; [the reference
-blockers](/guide/reference/memory/#current-completion-blockers) track the gate.
+identity is shared. Aliases within and between argument roots remain aliases
+inside the snapshot, and the caller's graph remains independently usable.
+Graphs carrying a `file`, `task`, or function value are refused as arguments
+or results.
 
 That rule makes data races over Luce objects unrepresentable without adding a
 second ownership language.

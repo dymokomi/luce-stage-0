@@ -93,10 +93,10 @@ struct receiver itself.
 ## Storage and heterogeneous collections
 
 Interface values may be local variables, return values, optional values,
-struct fields, and elements of lists, maps, and arrays. A value-only concrete
-receiver is self-contained. A receiver with a reference field is subject to
-the current bound-method gap: its interface dispatch values alias that graph
-without retaining it, so another live value must keep the graph alive.
+struct fields, and elements of lists, maps, and arrays. Each dispatch value
+owns its copied value receiver and retains the references that receiver
+carries, so an interface value may outlive the concrete binding that formed
+it.
 
 ```luce
 interface Named:

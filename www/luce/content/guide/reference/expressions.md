@@ -214,11 +214,10 @@ receiver, and the written type drops the receiver's parameter, so a
 method taking one `long` at its call site binds as a
 `func(long) -> long`. The receiver is copied into the value at the bind.
 Value fields form a snapshot; reference fields still name the same objects.
-The current bound value does not retain those references, so the original
-receiver must remain alive for as long as the function value. This is a
-documented [ARC completion gap](../memory/#m13), not the final contract. A
-value is called with ordinary parentheses, and its arguments are checked
-against the signature exactly as a direct call's are.
+The bound value retains those references until it is destroyed, so it may
+outlive the original receiver binding. A value is called with ordinary
+parentheses, and its arguments are checked against the signature exactly as a
+direct call's are.
 
 Two binds are refused, each by name: a **writing** method (call it on the
 mutable receiver directly) and a **fallible** method (a function type carries

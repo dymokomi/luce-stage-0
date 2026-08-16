@@ -597,9 +597,8 @@ not reach it.  A receiver that is a **reference** — a list, a map, an
 array, or a struct holding one — is shared: the bound value holds its
 own two-slot run whose receiver slot references the same object, so
 appending to the receiver's list is visible through the bound value,
-but the current bound value does not retain that object. The original
-receiver must remain alive for as long as the bound value; Phase 0 of
-`docs/ROADMAP.md` closes this lifetime hole.
+and the bound value retains that object until the callable itself dies.
+It may outlive the original receiver binding.
 
 Since a function type cannot say which of its values carries a
 receiver, two consequences follow: a function value has **no equality**
@@ -1848,19 +1847,15 @@ already had.
 **Data crosses; object identity does not.** A value — a number, a `string`, an
 enum, or a value field — copies directly. A permitted container graph is
 copied recursively into the receiving runtime, so a list argument and the
-caller's list must be independent after `spawn`. The current container-argument
-ARC path violates that rule: it may invalidate the caller's reference and
-leaks an object even when the caller does not reuse it (`docs/MISSING.md`). A
-`file`, `task`, or function
+caller's list are independent after `spawn`. Aliases within the graph and
+between arguments remain aliases inside the worker snapshot. A `file`, `task`, or function
 value is refused transitively because a host resource or callable environment
 cannot be rebuilt as ordinary data. The same boundary copier brings a
 worker's permitted result graph back through `wait()`.
 
 **A task is a reference resource**, made by `spawn` and by nothing else—there
-is no `new task`. The completed ARC contract makes its last release a join.
-That is the structured-concurrency destination; current lifecycle tests must
-prove it before the guarantee is claimed without qualification. `return t`
-hands the task reference to the caller.
+is no `new task`. Its last release joins an unfinished worker and discards an
+unobserved result. `return t` hands the task reference to the caller.
 
 **`t.wait()` moves the answer here, once.**  The type is written as the
 return shape it names — `task`, `task(!)`, `task(double)`,
