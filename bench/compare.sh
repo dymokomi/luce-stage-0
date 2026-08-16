@@ -86,7 +86,18 @@ host_stamp() {
     if [ -r /proc/cpuinfo ]; then
         awk -F: '/model name/{gsub(/^ +/, "", $2); print $2; exit}' /proc/cpuinfo
     else
-        sysctl -n machdep.cpu.brand_string 2>/dev/null
+        stamp=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)
+        if [ -z "$stamp" ]; then
+            stamp=$(system_profiler SPHardwareDataType 2>/dev/null |
+                awk -F: '/Chip:|Processor Name:/{gsub(/^ +/, "", $2); print $2; exit}' || true)
+        fi
+        if [ -z "$stamp" ]; then
+            stamp=$(sysctl -n hw.model 2>/dev/null || true)
+        fi
+        if [ -z "$stamp" ]; then
+            stamp="unknown $(uname -m) CPU"
+        fi
+        printf '%s\n' "$stamp"
     fi
 }
 echo "host: $(host_stamp) ($(uname -sm))"

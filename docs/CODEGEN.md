@@ -507,26 +507,31 @@ specification compares one representation rather than two.
 The static analyzer rejects a write while it can still see the root.
 Generated code carries the dynamic half for a parameter-hidden root:
 runtime mutators resolve through `resolveMutable`, and inline list or
-array stores compare the row owner against `.program` before touching
-the element.  The check stays next to the existing null, generation and
-bounds checks and traps `immutable_object`.
+array stores read the row's `constant` flag before touching the element.
+The check stays next to the existing null, generation and bounds checks
+and traps `immutable_object`.
 
-`codegen/roots.zig` derives the one case where that owner check may be
-omitted from the final verified MIR rather than trusting a bit a decoded
-module could forge.  Its fixed-point plan is deliberately conservative:
-parameters, inout slots, calls, `const_container`, and every other
-heap-producing instruction may name a root; only `heap_new` values that
-remain provably fresh while flowing through non-parameter locals do not.
-Thus fresh inline mutations recover the branch-free path, while aliases,
-parameters, calls and hostile MIR retain the runtime backstop.  This is
-compiler-internal analysis and changes neither the serialized format nor
-the host ABI.  An interleaved A/B against `ae0f39f` after the complete
-constants closeout found no benchmark regression; raw/compute deltas
-were loops -0.7/-0.8%, math +0.2/+0.2%, strings -1.2/-1.3%, arrays
--0.2/-0.3%, arrays32 +0.4/+0.4%, matmul -0.6/-1.1%, matmul32
-+0.3/-0.0%, stats -0.0/-0.1%, and lists +0.0/-0.2%.  Program roots are
-omitted from the user leak census while live and released last at
-runtime teardown.
+`codegen/mutability.zig` derives when that flag check may be omitted from
+the final verified MIR rather than trusting a bit a decoded module could
+forge.  Its fixed-point plan is deliberately conservative: parameters,
+inout slots, calls, `const_container`, and every other heap-producing
+instruction may name a constant; only `heap_new` values that remain
+provably fresh while flowing through non-parameter locals do not.  Thus
+fresh inline mutations recover the branch-free path, while aliases,
+parameters, calls and hostile MIR retain the runtime backstop.  ARC
+changes how those references live, not where program constants can come
+from.  This compiler-internal proof changes neither the serialized format
+nor the host ABI.
+
+The proof also guards performance: without it the constant-flag load sat
+inside `matmul`'s innermost loop and stopped vectorization.  The generated
+ARM64 code now carries two-lane `fmul`/`fadd` again.  An interleaved A/B
+against the last pre-ARC compiler (`8c06013`) measured raw deltas of
+loops -0.0%, math +0.6%, strings -5.3%, arrays -0.7%, arrays32 +2.2%,
+matmul +1.8%, matmul32 +0.1%, stats +1.3%, and lists -0.3%.  The whole
+suite is therefore within same-host noise, with strings modestly faster.
+Program roots are omitted from the user leak census while live and
+released last at runtime teardown.
 
 Locals are entry-block `alloca`s that mem2reg promotes.  Every
 `alloca`, including scratch slots created deep in the walk, is emitted
@@ -1300,23 +1305,23 @@ row it quotes the `compute` column here, and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  80.5 ms |  84.1 ms |  1.05x |   1.04x |
-| math      | 138.8 ms | 109.2 ms |  0.79x |   0.78x |
-| strings   |  19.9 ms |  50.0 ms |  2.51x |   2.75x |
-| arrays    |  43.5 ms |  46.9 ms |  1.08x |   1.07x |
-| arrays32  |   8.0 ms |  42.8 ms |  5.39x |   7.92x |
-| matmul    |  10.4 ms |  11.7 ms |  1.12x |   1.07x |
-| matmul32  |   6.7 ms |   7.7 ms |  1.15x |   1.09x |
-| stats     |  32.4 ms |  42.5 ms |  1.31x |   1.32x |
-| lists     |   8.1 ms |  16.7 ms |  2.05x |   2.53x |
-| floor     |   3.0 ms |   3.7 ms |      - |       - |
+| loops     |  80.1 ms |  90.8 ms |  1.13x |   1.05x |
+| math      | 137.7 ms | 115.4 ms |  0.84x |   0.78x |
+| strings   |  19.7 ms |  75.4 ms |  3.82x |   3.87x |
+| arrays    |  43.3 ms |  53.2 ms |  1.23x |   1.07x |
+| arrays32  |   7.8 ms |  48.7 ms |  6.26x |   7.77x |
+| matmul    |  10.5 ms |  17.6 ms |  1.68x |   1.02x |
+| matmul32  |   6.5 ms |  13.4 ms |  2.05x |   0.99x |
+| stats     |  32.2 ms |  49.0 ms |  1.52x |   1.34x |
+| lists     |   8.0 ms |  23.3 ms |  2.93x |   2.61x |
+| floor     |   2.8 ms |   9.7 ms |      - |       - |
 
-Two rows carry a story worth keeping.  **`stats` (1.32x compute) is
+Two rows carry a story worth keeping.  **`stats` (1.34x compute) is
 the price of the parked `llvm.minimumnum` vectorization** ("The
 extrema, and a vectorization that is parked" above): the extremum
 reduction is scalar compare/select until the intrinsic's x86-64
 lowering can be trusted, and the two extremum passes are a third of
-the row's work.  **`arrays32` (7.92x) is the price of checked integer
+the row's work.  **`arrays32` (7.77x) is the price of checked integer
 arithmetic in a reduction** — the section below shows it is not a
 32-bit problem.
 
@@ -1333,18 +1338,35 @@ undefined reference that binds to the real libc at load.  macOS needs
 no bundle and carries none.
 
 `strings` and `lists` are allocation-bound rather than
-code-generation-bound.  Everything else at 64 bits is at parity or
-ahead, and `math` is ahead because Luce's transcendental calls land in
-the same libm C's do while the surrounding loop vectorizes.
+code-generation-bound.  Five rows — `loops`, `math`, `arrays`,
+`matmul`, and `matmul32` — are within 7% of C or ahead after startup is
+removed.  `math` is ahead because Luce's transcendental calls land in
+the same libm C's do while the surrounding loop vectorizes; `stats`
+and `arrays32` carry the separately measured costs described here.
+
+### The Phase 0 resource baseline
+
+The runtime column above is the best-of-five measurement.  The other
+columns below are one warm macOS ARM64 run of `/usr/bin/time -l` around
+the release compiler or runner; peak memory is maximum resident set
+size.  `loops` is value-heavy, while `lists` allocates and grows the
+reference container that ARC must reclaim.  These are comparison
+anchors for later type, weak-reference, class, and closure phases, not
+cross-machine performance claims.
+
+| program | compile | artifact | runtime | compile peak RSS | runtime peak RSS |
+|---------|---------|----------|---------|------------------|------------------|
+| `loops` | 0.05 s  | 870,032 B | 90.8 ms | 41,844,736 B | 12,255,232 B |
+| `lists` | 0.10 s  | 886,544 B | 23.3 ms | 48,103,424 B | 28,016,640 B |
 
 ### The 32-bit rows
 
 **`matmul32` is the good news and it is unremarkable, which is the
-point.**  1.09x compute against 1.07x for the `double` twin: the
+point.**  0.99x compute against 1.02x for the `double` twin: the
 binary32 inner loop vectorizes on both sides, four lanes where the
 64-bit one got two, and Luce keeps pace.
 
-**`arrays32` is 7.92x, and it is not a 32-bit problem.**  The
+**`arrays32` is 7.77x, and it is not a 32-bit problem.**  The
 measurement that says so:
 
 | dot product | C       | luce    |
@@ -1368,7 +1390,7 @@ reassociates the sum and fills four lanes.
 That is also why no existing row showed it.  `arrays` is a *float*
 dot product, and a left-to-right float reduction cannot be
 reassociated **by C either** — so both sides stay scalar and the row
-sits at 1.05x.  `loops` and `stats` are checked integer loops too, but
+sits at 1.07x.  `loops` and `stats` are checked integer loops too, but
 neither is a reduction C can vectorize.  It took an integer reduction
 to separate the two, and that is what `arrays32` is.
 
@@ -1409,7 +1431,7 @@ byte did not remove the call.
 
 ### What removing the call bought
 
-**2.53x compute, where element access through boxed `Value` calls was
+**2.61x compute, where element access through boxed `Value` calls was
 29.10x.** The three changes are read in "Inline access": a `list(T)`'s storage
 kind became a fact of `T` rather than of whoever built the object,
 element access joined the inline path under the invalidation rule the

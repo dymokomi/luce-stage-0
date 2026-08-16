@@ -106,11 +106,11 @@ so a runtime trap prints `file:line:column` and a call trace.
 `--release` strips them for a smaller artifact — the program itself
 behaves identically (docs/MODES.md).
 
-All three compile through LLVM, which measures at 0.78-1.06x of C on
-six of the nine benchmarks; `strings` (2.67x), `lists` (2.60x) and
-`arrays32` (8.66x compute) are the three rows still behind — `arrays32`
-is the price of checked integer arithmetic in a reduction, which is
-what [docs/VECTOR.md](docs/VECTOR.md) is about, and what is left of
+All three compile through LLVM, which measures at 0.78-1.07x of C on
+five of the nine benchmarks; `strings` (3.87x), `lists` (2.61x),
+`arrays32` (7.77x compute), and `stats` (1.34x) are the four rows still
+behind — `arrays32` is the price of checked integer arithmetic in a
+reduction, which is what [docs/VECTOR.md](docs/VECTOR.md) is about, and what is left of
 `lists` is `append` alone, which has to keep a list's length in its
 row where C keeps it in a register
 ([docs/CODEGEN.md](docs/CODEGEN.md)).  Those are
