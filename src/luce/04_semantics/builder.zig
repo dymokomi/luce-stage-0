@@ -485,7 +485,11 @@ pub const FunctionBuilder = struct {
         if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
             const head = written[0..dot];
             const local_head = try naming.qualify(self.analyzer, self.prefix, head);
-            if (self.analyzer.struct_names.contains(local_head)) {
+            if (self.analyzer.struct_names.contains(local_head) or
+                self.analyzer.interface_names.contains(local_head) or
+                self.analyzer.enum_names.contains(local_head) or
+                self.analyzer.variant_names.contains(local_head))
+            {
                 return try naming.qualify(self.analyzer, self.prefix, written);
             }
             if (self.analyzer.alias_names.get(local_head)) |alias_index| {
