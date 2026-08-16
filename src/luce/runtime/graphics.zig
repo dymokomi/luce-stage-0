@@ -1,7 +1,7 @@
 //! The window and GPU host channel.
 //!
 //! `std.ui` and `std.gpu` deliberately do not know about Metal, Vulkan, or
-//! a window-system handle.  They receive the same scope-owned resource shape
+//! a window-system handle.  They receive the same ARC resource shape
 //! as `std.files`; this module is the one place that turns those resources
 //! into host callbacks and translates a refused operation into Luce's normal
 //! error channel.  A host that does not provide the channel fails closed with
@@ -222,7 +222,7 @@ pub fn backend(runtime: *Runtime) Error!i64 {
     return selected;
 }
 
-/// Open a native window and return a scope-owned resource.
+/// Open a native window and return a reference-counted resource.
 pub fn openWindow(runtime: *Runtime, title: []const u8, width: i64, height: i64) Error!?Value {
     const service = runtime.graphics.window_open orelse return runtime.fail(.host_unavailable);
     const closer = runtime.graphics.close orelse return runtime.fail(.host_unavailable);

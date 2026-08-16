@@ -1,11 +1,9 @@
 # Memory Management
 
-Luce is moving from explicit single-owner operations to automatic reference
-counting. The source syntax has completed that pivot; the implementation has
-not completed every last-release path. This page states both the current
-behavior and the contract that must be proved before ARC is marked complete.
-The teaching chapter is [Memory and ARC](/guide/memory/), and [Status](/status/)
-tracks the ordered work.
+Luce uses value semantics for values and automatic reference counting for
+references. The compiler derives retains and releases from types and control
+flow; source code has no ownership operations. The teaching chapter is
+[Memory and ARC](/guide/memory/), and [Status](/status/) tracks future types.
 
 ## Kinds
 
@@ -37,29 +35,23 @@ A runtime-created container or resource starts with one strong reference. The
 runtime exposes retain and release operations, and both execution paths can
 execute their MIR instructions.
 
-### M5 — retaining every longer-lived reference is incomplete {#m5}
+### M5 — every longer-lived reference is retained {#m5}
 
-The completed contract retains a reference stored in a binding, parameter,
-result, aggregate field, optional, container element, interface payload, or
-bound receiver. Many ordinary paths do this today, but current bound methods
-do not retain reference fields inside their receiver copy.
+The compiler retains a reference stored in a binding, parameter, result,
+aggregate field, optional, union, container element, interface witness, or
+bound receiver.
 
-### M6 — releasing every abandoned place is incomplete {#m6}
+### M6 — every abandoned place is released {#m6}
 
-The completed contract releases old contents on replacement and releases
-locals left by scope exit, `return`, `break`, `continue`, and recoverable-error
-propagation. Current common paths are wired, but the repository still disables
-reclamation and file-lifecycle tests around missing edges.
+Old contents release on replacement. Locals release when control leaves them
+through function return, `return`, `break`, `continue`, or recoverable-error
+propagation.
 
-### M7 — last-release destruction is the target gate {#m7}
+### M7 — the last strong release destroys {#m7}
 
-The required rule is that a zero strong count recursively releases contained
-references and destroys the object. A file closes and an unfinished task joins
-on that same last-release path.
-
-Do not depend on exact mid-run file close or task join timing in the current
-development build. Runtime teardown remains a backstop while Phase 0 closes
-the skipped lifecycle tests.
+A zero strong count recursively releases contained references and destroys
+the object. A file closes and an unfinished task joins on that same
+last-release path.
 
 ### M8 — there are no source ownership operations {#m8}
 
@@ -67,10 +59,10 @@ the skipped lifecycle tests.
 retain, release, borrow, move, clone, close, or manual-reference annotation in
 a function signature.
 
-An API constructs an independent value explicitly when it needs one. Current
-list slices and `map.values()` recursively copy copyable reference elements;
-the completed ARC collection rule will retain those elements instead. There is
-no universal graph-clone expression.
+An API constructs an independent value explicitly when it needs one. List
+slices and `map.values()` create a new outer list: value elements copy and
+reference elements are retained and remain shared. There is no universal
+graph-clone expression.
 
 ## Aggregates and control flow
 
@@ -78,7 +70,7 @@ no universal graph-clone expression.
 
 Structs, union payloads, optionals, multiple-return layouts, and receiver
 layouts are values. Their value fields copy and their reference fields share.
-The completed release walk releases each reference field exactly once.
+The release walk releases each reference field exactly once.
 
 ### M10 — errors release the path they leave {#m10}
 
@@ -134,15 +126,17 @@ leaking either runtime.
 `wait()` observes a task result once. Releasing the last task reference joins
 an unfinished worker and discards its unobserved result.
 
-## Current completion blockers
+## Implementation evidence
 
-- Four byte/zip tests are skipped by `resource_close_pending`.
-- Two language specs relax their zero-live-object assertion.
-- The damaged-module mutation test is skipped around verifier panic paths.
-
-ARC is complete only when those gates are removed, all normal differential
-specs end with zero live objects, resource close/join counts are exact, and the
-damaged-module corpus rejects or runs every mutation without a host panic.
+- Every successful differential specification requires zero live objects.
+- File and ZIP lifecycle programs run on both engines with exact close
+  behavior; unfinished tasks join at their last release.
+- Bound methods and interface witnesses retain receiver references.
+- List slices, `map.values()`, and array fill retain reference elements.
+- Worker snapshots preserve aliases and cycles, leave the caller graph alive,
+  and roll failed copies back.
+- The damaged-module corpus rejects or cleanly runs every mutation without a
+  host-language panic.
 
 Changes to retain/release instructions or type tags require a module-format
 bump. Changes to a published host-table representation require a host ABI

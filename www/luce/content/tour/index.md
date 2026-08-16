@@ -90,15 +90,12 @@ counting.
 Assigning a list or passing it to a function shares the same object. A
 mutation through either reference is visible through both. The compiler
 inserts retain and release operations. There are no memory-management keywords
-to write. The development compiler is still finishing last-release
-reclamation on every control-flow and resource path; [Status](/status/) names
-the remaining gates.
+to write.
 
-The completed ARC contract closes a file and joins an unfinished task at its
-last reference. Current development builds still have lifecycle gaps. Workers have
-separate runtimes; permitted container graphs are copied between them, and no
-object identity is shared. Container arguments currently have a caller-lifetime
-bug, so use value arguments for now. The [memory guide](/guide/memory/) and
+ARC closes a file and joins an unfinished task at its last reference. Workers
+have separate runtimes; permitted container graphs are copied between them,
+and no object identity is shared. Aliases in the copied graph stay aliases,
+while the caller keeps its independent source graph. The [memory guide](/guide/memory/) and
 [exact memory rules](/guide/reference/memory/) show every form.
 
 ## Absence and failure are different

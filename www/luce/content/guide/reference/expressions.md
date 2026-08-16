@@ -405,7 +405,7 @@ main.luc:3:17: list has no method has (has append insert remove pop sort reverse
 | `xs[i]` | list or rank-1 array element; bounds-checked |
 | `grid[r, c]` | multi-dimensional array element |
 | `m[k]` | map get; a missing key traps |
-| `xs[a:b]` | a **new list**; copyable reference elements are copied recursively; resource-carrying elements require equal compile-time `long` bounds, proving an empty slice |
+| `xs[a:b]` | a **new list**; value elements copy and reference elements are retained and remain shared |
 | `s[a:b]` | a `string` slice; still a value; checks UTF-8 boundaries |
 
 Open slice ends default to `0` and to the length.

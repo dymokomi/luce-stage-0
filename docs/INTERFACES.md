@@ -129,14 +129,12 @@ contract requested by the destination type.
 ## Runtime shape today
 
 The current implementation lowers an interface to a hidden value layout of
-bound function values, one per method. A bound value carries the concrete
-struct receiver snapshot, but current function-value release walks do not own
-references inside that snapshot. Copying the interface copies the value layout
-and does not repair that lifetime restriction.
+bound function values, one per method. Each bound value owns the concrete
+struct receiver snapshot and retains every reference inside it. Copying and
+destroying the interface therefore preserve the receiver graph correctly.
 
-This representation dispatches correctly for the proved lifetime but scales
-receiver storage with method count, is not independently safe for a carrying
-receiver, and cannot give mutable dispatch the semantics wanted for classes.
+This representation scales receiver storage with method count and cannot give
+mutable dispatch the semantics wanted for classes.
 It is explicitly scheduled for replacement, not documented as the final ABI.
 
 ## Deliberately absent today

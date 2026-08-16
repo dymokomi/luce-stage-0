@@ -1,19 +1,13 @@
 # Memory and ARC
 
 Luce's source language manages memory automatically: you do not write retain,
-release, move, clone, or free. The current development compiler implements the
-common ARC paths, but the conversion is not finished. In particular, several
-reclamation and file-close tests remain disabled. See [the current completion
-blockers](/guide/reference/memory/#current-completion-blockers) before relying
-on exact destruction timing.
+release, move, clone, or free. Values copy; references share identity and are
+reclaimed by automatic reference counting.
 
 The useful rule is short:
 
 > Values copy. References share one object. Automatic reference counting
 > frees that object after its last reference goes away.
-
-That sentence is the release gate, not yet an unconditional claim about every
-path in the current development build.
 
 ## Values copy
 
@@ -80,9 +74,9 @@ func main():
 3 4
 ```
 
-There is no universal deep-copy operator. A current list slice recursively
-copies copyable reference elements as well as the outer list; Phase 0 replaces
-that inherited single-owner behavior with ordinary ARC element sharing.
+There is no universal deep-copy operator. A list slice creates a new outer
+list. Value elements copy; reference elements remain shared and are retained
+by the new list.
 
 ## Structs may carry shared references
 
@@ -111,7 +105,7 @@ The titles are independent string values. The `values` fields refer to one
 list. This value/reference distinction is part of each field's type; it is not
 changed by how the enclosing struct is passed.
 
-## The completed release rule
+## The release rule
 
 Each reference-holding place contributes a strong reference. Reassignment
 releases the old value before the slot takes its new one. Leaving a function,
@@ -120,19 +114,13 @@ that control-flow edge leaves behind. A temporary releases at the end of its
 statement unless another place retained it.
 
 The optimizer may remove a retain/release pair only when that cannot change
-resource cleanup, traps, or any other observable result. Current common paths
-follow this rule, but the disabled lifecycle tests mean the rule is not yet
-proved for every edge.
+resource cleanup, traps, or any other observable result.
 
 ## Files and tasks must close deterministically
 
-A completed `file` implementation closes at its last release. A completed task
-implementation joins its worker at its last release, even when no code calls
-`wait()`. Sharing either reference shares one underlying resource.
-
-That deterministic cleanup is why Luce chose ARC. It is also a current
-implementation blocker: file lifecycle tests are still skipped, so runtime
-teardown may be the operation that finally closes a handle.
+A `file` closes at its last release. A task joins its worker at its last
+release, even when no code calls `wait()`. Sharing either reference shares one
+underlying resource.
 
 ## Interfaces and bound methods
 
@@ -158,10 +146,9 @@ second ownership language.
 
 ## What has not shipped yet
 
-Full last-release ARC is the first unfinished milestone. `class` is only a
-compiler scaffold; weak references, mutable owned interface values, and
-capturing closures have not shipped either. [Status](/status/) gives their
-order.
+ARC does not collect a strong cycle, and `weak` is not current syntax. `class`
+is only a compiler scaffold; mutable owned interface values and capturing
+closures have not shipped either. [Status](/status/) gives their order.
 
 The [Memory Management reference](/guide/reference/memory/) gives the exact
 current rules. [Concurrency](/guide/concurrency/) applies them at the worker

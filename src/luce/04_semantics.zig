@@ -36,13 +36,12 @@
 //!
 //! **This stage is the last word on the memory model.**  The MIR
 //! verifier checks structure and types, not meaning, so `let`
-//! immutability, poisoning after `give`/`free`, the rule that a borrow
-//! may not be kept, the ban on storing a bare name into a container,
-//! `fill` on an array of objects, and the host gate are all checked
-//! here and nowhere else.  That is deliberate — a `.lc` is an
-//! executable and is trusted like one (docs/PIPELINE.md) — but it
-//! means a change here is a change to what the language guarantees,
-//! and `specs/ownership_spec.zig` is where that is pinned down.
+//! immutability, reference stores, worker sendability, `fill` on an
+//! array of objects, and the host gate are all checked here and nowhere
+//! else.  That is deliberate — a `.lc` is an executable and is trusted
+//! like one (docs/PIPELINE.md) — but it means a change here is a change
+//! to what the language guarantees. Behavioral proofs live in the
+//! differential specs and refusals in `specs/errors_spec.zig`.
 //!
 //! **Bounds.**  Reporting is capped at `max_diagnostics`, and the
 //! expression walk is bounded at `helpers.max_expression_depth`.

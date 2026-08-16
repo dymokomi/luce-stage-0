@@ -319,11 +319,9 @@ never a guard for the call after it: read the file and handle what the
 read says.
 
 **There is no `close` and no `with`** (docs/FILESYSTEM.md). A `file` is a
-reference resource; the completed ARC contract closes it at its last release
-(`docs/MEMORY.md`). Current resource-close tests are disabled around missing
-function-exit cleanup, so that guarantee is not yet release-ready. `close()`
-remains refused: Phase 0 completes the one ARC lifetime path rather than adding
-a second "closed but still referenced" state.
+reference resource; ARC closes it at its last release (`docs/MEMORY.md`).
+`close()` remains refused because it would add a second "closed but still
+referenced" state beside the one shared-reference lifetime.
 
 ```text
 import std.files
@@ -439,9 +437,8 @@ files.append_bytes(path, bytes)  # !
 ```
 
 `open`, `create` and `append_to` answer a **`file`** reference. Assigning or
-passing it shares the same handle. The completed ARC contract closes it at the
-last release; `docs/MEMORY.md` records why current builds do not yet prove that
-on every path. There is deliberately no second `close` lifetime API.
+passing it shares the same handle. ARC closes it at the last release. There is
+deliberately no second `close` lifetime API.
 
 The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
 and `f.flush()`, all fallible.  The buffer is an `array(byte, _)` the

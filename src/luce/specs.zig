@@ -76,7 +76,7 @@ pub const zip = @import("specs/zip_spec.zig");
 pub const json = @import("specs/json_spec.zig");
 
 /// The binary half of the host boundary: packed byte lists, file
-/// handles as scope-owned resources, and text as a validation
+/// handles as ARC resources, and text as a validation
 /// (docs/BYTES.md).
 pub const bytes = @import("specs/bytes_spec.zig");
 /// The host boundary: every effect, offered and withheld.

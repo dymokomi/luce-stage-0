@@ -6,7 +6,7 @@
 //! stated behavior holds — and stays holding, which is the point:
 //! this is the regression net under every future compiler change.
 //! Organized by feature area, not by anecdote.  Compile errors live
-//! in errors_spec.zig; ownership lives in ownership_spec.zig.
+//! in errors_spec.zig; ARC behavior lives with the feature it protects.
 //!
 //! Every program here runs **twice**: interpreted and compiled, with
 //! the printed bytes, the trap code and message, the call trace and
@@ -26,8 +26,8 @@ const testing = std.testing;
 const budget: agree.Provided = .{ .call_depth = 4096 };
 
 /// The program runs on both engines, they agree, every `assert`
-/// inside holds, and nothing is left alive — scope ownership frees
-/// everything, so a nonzero census is a bug in whichever engine
+/// inside holds, and nothing is left alive — ARC releases every
+/// reference, so a nonzero census is a bug in whichever engine
 /// reported it.
 fn agreeOk(source: []const u8) !void {
     return agree.okGiven(source, budget);
@@ -5060,7 +5060,7 @@ test "collection misuse traps with stable codes" {
     for (cases) |case| try agreeTrap(case.source, case.code);
 }
 
-test "S33: nothing leaks — scope ownership frees what free() used to" {
+test "S33: ARC leaves no live objects after a clean run" {
     try agreeOk(
         \\func main():
         \\    let kept = [1, 2, 3]

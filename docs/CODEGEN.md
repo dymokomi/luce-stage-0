@@ -1185,10 +1185,9 @@ rather than called through**: `luce_rt_files_install` hands the five
 pointers to the runtime once at the start of a run, and the runtime is
 what calls them.
 
-That last one is the shape of the decision rather than a detail of it. The
-completed contract closes a handle in the runtime's last-release walk, where
-no generated code is standing to hand a table in. Current emission still has
-resource lifecycle gaps (`docs/MEMORY.md`). Installing the channel also puts both
+That last one is the shape of the decision rather than a detail of it. ARC
+closes a handle in the runtime's last-release walk, where no generated code is
+standing to hand a table in. Installing the channel also puts both
 engines on *literally the same five function pointers*, so what an
 open answers, what a short read means and when a close happens are one
 implementation rather than two that could disagree; the four handle

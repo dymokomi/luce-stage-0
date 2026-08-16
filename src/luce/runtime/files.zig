@@ -161,7 +161,7 @@ fn closeFailedOpen(runtime: *Runtime, service: CloseFn, handle: i64) void {
 }
 
 // ---------------------------------------------------------------------------
-// The handle, as a scope-owned object
+// The handle, as a reference-counted resource
 // ---------------------------------------------------------------------------
 
 /// What a whole-file text read will carry into memory before it gives
@@ -175,13 +175,13 @@ pub const max_text_file: usize = 64 * 1024 * 1024;
 /// the buffer is not itself the memory problem.
 const read_chunk: usize = 64 * 1024;
 
-/// `files.open(path, mode)` — a fresh handle the caller's scope owns.
+/// `files.open(path, mode)` — a fresh handle carrying one strong reference.
 ///
 /// Answers `null` when the world said no; the caller raises `io_failed`
 /// naming the path, exactly as the whole-file services always did.
 pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     const service = runtime.files.open orelse return runtime.fail(.host_unavailable);
-    // Opening a scope-owned resource without a way to close it would
+    // Opening a resource without a last-release close service would
     // violate the resource contract even on the successful path.  Like
     // the worker channel's spawn/join pair, this pair fails closed
     // before the host acquires anything.

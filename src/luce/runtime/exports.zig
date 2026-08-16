@@ -121,8 +121,8 @@ const Owned = struct {
 };
 
 /// Where a compiled artifact's heap objects live.  Unlike the values
-/// arena this one has to give memory back — scope ownership frees
-/// objects while the program runs (`heap.Memory`) — so it is a real
+/// arena this one has to give memory back — ARC frees objects while the
+/// program runs (`heap.Memory`) — so it is a real
 /// general-purpose allocator rather than a bump.
 ///
 /// libc's is the one to use when there is a libc, and there is: the

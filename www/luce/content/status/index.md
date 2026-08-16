@@ -16,10 +16,9 @@ can use now and the language being designed. The [Tour](/tour/),
   bound methods, and capture-free one-expression lambdas.
 - Lists, maps, fixed-shape arrays, builders, optionals, recoverable errors,
   and multiple returns.
-- The ARC transition for lists, maps, arrays, builders, files, and tasks.
-  Assignment shares reference objects and common retain/release paths work on
-  both engines, but last-release reclamation and resource cleanup are not yet
-  complete.
+- ARC for lists, maps, arrays, builders, files, and tasks. Assignment shares
+  reference objects; the last strong release reclaims containers, closes
+  files, and joins unfinished tasks on both engines.
 - Explicit nominal interfaces with multiple methods, multi-value answers,
   directional failure matching, returns, optionals, and heterogeneous
   containers. Interface dispatch is read-only today.
@@ -30,15 +29,11 @@ can use now and the language being designed. The [Tour](/tour/),
   tests.
 
 The old source-level ownership operations do not exist. There is no `give`,
-`copy`, or `free` syntax and no borrow annotation. The runtime and both engines
-have retain/release operations, but feature-gated lifecycle tests remain. This
-development release must not be described as full ARC until those gates are
-removed.
-
-Current blockers are concrete: four byte/zip file-lifecycle tests are skipped;
-two language specs relax their zero-object census; and damaged compiled-module
-inputs can reach two verifier/runtime panic paths. [Memory Management](/guide/reference/memory/#current-completion-blockers)
-lists the exact boundary.
+`copy`, or `free` syntax and no borrow annotation. Every successful
+differential specification requires zero live objects, resource lifecycle
+tests are active, and the serialized-module mutation corpus must reject or run
+cleanly without a host-language panic. [Memory Management](/guide/reference/memory/#implementation-evidence)
+lists the evidence.
 
 ### Toolchain and libraries
 
@@ -136,37 +131,52 @@ generics, not primitive keywords. `map` is the one associative container;
 `dict` and `hash` are not aliases. A compiler `vec[T, N]` is justified only by
 real SIMD and ABI semantics.
 
+### Type aliases
+
+Transparent aliases will use one declaration form:
+
+```text
+alias UserId = i64
+alias Names = list[str]
+```
+
+An alias gives an existing type another source name; it does not create a new
+nominal type, runtime representation, conversion, or dispatch rule. Alias
+chains are allowed, cycles are rejected, and normal module visibility applies.
+
 ## Ordered work
 
 The implementation order is chosen to avoid rewriting the same compiler and
 documentation seams twice:
 
-1. **Finish ARC.** Remove every feature-related skip, restore zero-object
-   census checks, close resources exactly once, make bound receivers safe,
-   repair worker argument transfer, replace inherited single-owner collection
-   rules, and fix the damaged-module verifier panic.
-2. **Freeze the type and closure contracts.** Decide literal, conversion,
+1. **ARC foundation — complete.** Every feature-related skip and relaxed
+   census gate is gone; resources close or join exactly once, bound receivers
+   retain their graphs, worker snapshots preserve aliases, derived collections
+   retain elements, and malformed modules fail closed.
+2. **Add transparent type aliases.** Implement `alias Name = Type` with module
+   visibility, chains, cycle rejection, diagnostics, and both-engine specs.
+3. **Freeze the type and closure contracts.** Decide literal, conversion,
    Unicode, container-type, block-closure, capture-list, and diagnostic rules
    before changing code.
-3. **Migrate type names atomically.** Update compiler, runtime, module format,
+4. **Migrate type names atomically.** Update compiler, runtime, module format,
    standard library, examples, editor grammar, packages, and documentation in
    one pre-release cut; old spellings become direct diagnostics rather than
    long-lived aliases.
-4. **Build weak references.** Safe zeroing for built-in ARC objects, lifecycle
+5. **Build weak references.** Safe zeroing for built-in ARC objects, lifecycle
    integration, cycle diagnostics, and both-engine agreement.
-5. **Complete classes.** Heap lowering, sharing, mutation, identity,
+6. **Complete classes.** Heap lowering, sharing, mutation, identity,
    construction, teardown, weak fields, errors, optionals, containers, and
    workers.
-6. **Replace interface storage.** Owned existentials for structs and classes,
+7. **Replace interface storage.** Owned existentials for structs and classes,
    then weak storage, mutable dispatch, and the full negative conformance
    matrix.
-7. **Add capturing closures.** ARC environments, shared mutable captures,
+8. **Add capturing closures.** ARC environments, shared mutable captures,
    strong/weak/snapshot capture, block bodies, and cycle diagnostics.
-8. **Prove the model in userland.** Build a retained UI layer over `std.ui`,
+9. **Prove the model in userland.** Build a retained UI layer over `std.ui`,
    `std.gpu`, and termui; migrate the editor as the end-to-end proof.
-9. **Add generics later.** Monomorphized generic functions and types with
+10. **Add generics later.** Monomorphized generic functions and types with
    interface bounds, followed by a small library of justified data structures.
-10. **Lock the release.** Full deterministic tests, hardening, site build,
+11. **Lock the release.** Full deterministic tests, hardening, site build,
     installer smoke test, benchmark comparison, and a final documentation and
     diagnostics audit.
 

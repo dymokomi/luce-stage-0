@@ -282,10 +282,8 @@ the process working directory, and absolute paths are allowed. The
 | `clear()` | removes every element and releases their references |
 
 Plus `len`, `xs[i]`, `xs[i] = v`, and `xs[a:b]` — which allocates a
-new list and recursively copies copyable reference elements. When the element type carries
-`file` or `task`, both effective bounds must be equal compile-time `long`
-constants, proving an empty slice with no element copies; every other
-such slice is refused.
+new outer list, copies value elements, and retains reference elements. The new
+list and the source therefore share any referenced objects.
 `sort_by` accepts a named function or capture-free lambda. Sorting rearranges
 the existing elements without changing their ARC lifetimes.
 
@@ -297,7 +295,7 @@ the existing elements without changing their ARC lifetimes.
 | `get(key) -> V?` | absence when missing — never traps; `m.get(k) else d` is the fallback form |
 | `remove(key)` | a no-op when absent |
 | `keys() -> list(K)` | a fresh list |
-| `values() -> list(V)` | a fresh list; refused when `V` carries `file` or `task` |
+| `values() -> list(V)` | a fresh outer list; reference values remain shared |
 | `clear()` | |
 
 Plus `len`, `m[k]` — which traps `key_missing` when the key is
@@ -355,8 +353,7 @@ explicit value families listed in the conversions table.
 | `flush() -> !` | everything written so far is on the device |
 
 All three are fallible: the world decides. There is deliberately no `close`.
-The completed ARC contract closes a [`file`](/guide/reference/types/#file) at
-its last release; current builds still have disabled file-lifecycle tests.
+ARC closes a [`file`](/guide/reference/types/#file) at its last release.
 
 The buffer is the caller's, which is the C shape and is what makes the
 same three methods serve a socket later. [`std.files`](/library/files/) is
@@ -373,9 +370,8 @@ function value is copied into the joining runtime; a function answering
 `file`, `task`, a function value, or a graph carrying one is refused at
 `spawn`. An error crosses
 as an error, and a trap surfaces with the worker's frames before the
-joiner's. The completed ARC path joins a task whose last reference is released
-without a wait and discards its answer; current lifecycle tests must still
-prove that automatic path. See the [`task`
+joiner's. ARC joins a task whose last reference is released without a wait and
+discards its answer. See the [`task`
 type](/guide/reference/types/#task).
 
 ## string

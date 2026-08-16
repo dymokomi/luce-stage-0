@@ -13,8 +13,7 @@
 //! **And a `Json` is a union**, so the rest of this suite is the thing
 //! `docs/UNION.md` said would prove the design: a recursive owned tree
 //! built, walked, copied, mutated and freed, with the two-engine leak
-//! census as the witness that scope ownership needed no new rule for
-//! it.
+//! census as the witness that ARC needed no JSON-specific rule.
 //!
 //! The fixtures at the foot are Nicolas Seriot's **JSONTestSuite**
 //! (`Parsing JSON is a Minefield`, 2016), whose `y_` cases every

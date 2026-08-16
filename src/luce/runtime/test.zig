@@ -5134,8 +5134,8 @@ test "failed materialization discards its partial object and every published roo
 test "freeing an object gives its storage back, during the run" {
     // The census says an object was freed; this says the memory it
     // held came back *while the program was still running*, which is
-    // the whole difference between scope ownership and a leak with
-    // good manners.  A counting allocator sits under object storage,
+    // the whole difference between last-release ARC and an exit-time
+    // sweep. A counting allocator sits under object storage,
     // so the claim is bytes rather than a promise.
     var counted: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -5147,7 +5147,7 @@ test "freeing an object gives its storage back, during the run" {
     defer runtime.deinit();
 
     const settled = counted.allocated_bytes - counted.freed_bytes;
-    // One round of exactly what a scope does: make objects, fill them,
+    // One round of exactly what an ARC lifetime does: make objects, fill them,
     // let the scope end.  Repeated, because a single round could hide
     // behind an allocator's slack.
     for (0..8) |_| {

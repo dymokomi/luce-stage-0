@@ -10,10 +10,9 @@ import std.files
 ```
 
 Programs compiled without host access cannot use this module. A file is a
-shared reference resource, and there is no source `close` call. The completed
-ARC contract closes its host handle at the last release; current development
-builds still have disabled file-lifecycle tests and may close only at runtime
-teardown. See [Memory Management](/guide/reference/memory/#current-completion-blockers).
+shared reference resource, and there is no source `close` call. ARC closes its
+host handle at the last strong release. See [Memory
+Management](/guide/reference/memory/#m7).
 
 ## Text files and directories
 

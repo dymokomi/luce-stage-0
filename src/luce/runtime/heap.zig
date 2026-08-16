@@ -832,7 +832,7 @@ pub const layout = struct {
     /// this one byte and traps `immutable_object` when it is set, the way
     /// a runtime-routed write meets `requireMutable`.  This is the seam
     /// the compiled path enforces constant immutability through now that
-    /// scope ownership's program-root guard is gone.
+    /// the retired owner-root guard is gone.
     pub const constant = @offsetOf(Object, "constant");
     /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
     /// alone: a List has no shape but its length.  The rank is a

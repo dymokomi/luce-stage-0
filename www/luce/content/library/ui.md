@@ -6,9 +6,9 @@ not contain widgets, layout, event loops, or application state; those belong
 in a package built above these two narrow modules.
 
 The host keeps the native window handle behind the runtime. `Window` and its
-drawing surface are shared resource references. Their completed ARC contract
-releases each native resource at its last strong reference; the exact
-last-release path is part of the current [ARC completion work](/guide/memory/).
+drawing surface are shared resource references. ARC releases each native
+resource at its last strong reference; [Memory and ARC](/guide/memory/)
+explains the common lifetime rule.
 
 ## Opening a window
 

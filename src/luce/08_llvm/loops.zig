@@ -664,14 +664,11 @@ test "an inner loop lifts even when the loop around it cannot" {
     try testing.expect(built.made.hoists[0].preheader > 0);
 }
 
-test "the reassignment guard has no way to fire from source, and is kept anyway" {
-    // `a = give b` and `free(a)` inside a loop over a name declared
-    // outside it are both refused by scope ownership (S21, S30), so a
-    // MIR `local_set` of a live Array local cannot appear inside a loop
-    // that also reads it.  `collect` checks for one all the same:
-    // nothing in this file should depend on a rule enforced four stages
-    // away, and a `.lcm` reaches stage 10 through `decode` without ever
-    // passing the analyzer.
+test "the local assignment guard remains independent of the effect gate" {
+    // A source reassignment releases the old reference and therefore
+    // already makes the loop unstable. `collect` still checks `local_set`
+    // independently: this optimization must defend its own invariant, and a
+    // `.lcm` reaches stage 10 through `decode` without the source checker.
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():

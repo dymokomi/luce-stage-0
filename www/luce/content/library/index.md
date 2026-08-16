@@ -8,8 +8,7 @@ maintained `termui` package is documented here because it is a useful example
 of that second kind.
 
 Each module follows the same language rules as application code. Containers
-are shared references under the current ARC transition, arithmetic is checked,
-and a host-facing module is
+are shared ARC references, arithmetic is checked, and a host-facing module is
 available only when the program has a host. `std.paths`, `std.math`,
 `std.strings`, `std.lists`, `std.json`, and the byte-only parts of `std.zip`
 are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`, and the

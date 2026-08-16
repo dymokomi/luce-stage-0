@@ -7,7 +7,7 @@
 //! allocates nothing that outlives one evaluation.
 //!
 //! What is *not* here is the point of the file.  Every semantic below
-//! the instruction level — the object heap, scope ownership, the
+//! the instruction level — the object heap, reference counting, the
 //! containers, string storage, the conversions, checked arithmetic —
 //! lives in `libluce_rt` (`../runtime.zig`), and this file only decodes
 //! instructions and calls it.  There is one implementation of each
@@ -54,8 +54,8 @@ pub fn run(
         .host = host,
     };
     // The host's file channel goes into the runtime, which is what
-    // calls it: a handle's close happens at the end of the scope that
-    // owns it, inside the ownership walk (docs/BYTES.md R2).  The
+    // calls it: a handle closes on its last strong release inside the
+    // ARC walk (docs/BYTES.md R2).  The
     // compiled path installs the same five pointers through
     // `luce_rt_files_install`, so both engines reach one channel.
     if (host) |given| machine.runtime.files = given.files;
@@ -72,8 +72,8 @@ pub fn run(
         machine.runtime.depth_budget = @intCast(budget.call_depth);
     }
     // Object storage is a real allocator now, so the run has to hand
-    // it back: scope ownership frees what the program finished with,
-    // and this frees what a trap unwound past or a leak left behind
+    // it back: ARC frees what a clean program finished with, and this
+    // frees what a trap unwound past or a strong cycle left behind
     // (S34).  The result is built first — it carries the census and a
     // trap's words, which live in the arena, not here.
     defer machine.runtime.deinit();

@@ -3,9 +3,9 @@
 `std.gpu` is the low-level drawing surface shared by `std.ui` and future UI
 packages. It does not expose Metal, Vulkan, or a window-system handle. The
 host chooses a backend and keeps the native implementation behind a shared
-`Surface` resource reference. The completed ARC contract releases the native
-surface at its last strong reference; the current lifecycle boundary is
-tracked in [Memory and ARC](/guide/memory/).
+`Surface` resource reference. ARC releases the native surface at its last
+strong reference; [Memory and ARC](/guide/memory/) explains the common
+lifetime rule.
 
 The macOS `loom` host selects Metal when the device and shader pipeline are
 available. If Metal is unavailable, it uses a CPU-backed window while keeping

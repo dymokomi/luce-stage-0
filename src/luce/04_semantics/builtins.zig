@@ -233,15 +233,14 @@ pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find
 pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
 pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 /// The byte channel's three (docs/BYTES.md R4).  There is no
-/// `close`: a handle is scope-owned and the end of the owning scope
-/// closes it.
+/// `close`: aliases share the handle and its last strong release closes it.
 pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
 /// A task's one method (docs/THREADS.md D4).  There is no `cancel`
 /// and no `done`: a worker owns its own runtime and nothing outside
 /// it may reach in, and a question whose answer is stale before it is
-/// read is not a question worth answering.  The end of the owning
-/// scope joins it, exactly as for `file`.
+/// read is not a question worth answering.  Its last strong release
+/// joins it, exactly as for `file`.
 pub const task_methods = [_][]const u8{"wait"};
 
 // ---------------------------------------------------------------------------

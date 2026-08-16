@@ -10,8 +10,7 @@ graphs do cross. They are rebuilt in the receiving runtime, so their identity
 does not cross and no object is reachable from both threads.
 
 The worker boundary, explicit `wait()`, and last-release join behavior are
-implemented on both execution paths. The remaining ARC lifecycle gaps are
-listed in `docs/MEMORY.md`.
+implemented on both execution paths.
 
 ## Spawning
 

@@ -16,7 +16,7 @@ working reference type, a planned type name is not a current spelling, and a
 completed implementation plan is not the language reference.
 
 Start with [V2.md](V2.md) for the product north star and
-[ROADMAP.md](ROADMAP.md) for the ordered path from today's partial ARC pivot to
+[ROADMAP.md](ROADMAP.md) for the ordered path from today's ARC foundation to
 the intended language. Use [LANGUAGE.md](LANGUAGE.md) and the current pages
 below when working on the compiler. Confirmed incorrect behavior belongs in
 [MISSING.md](MISSING.md), and only there.
@@ -33,7 +33,7 @@ selected surface roster is checked during the site build.
 | File | Purpose |
 |---|---|
 | [LANGUAGE.md](LANGUAGE.md) | The complete current language specification. |
-| [MEMORY.md](MEMORY.md) | The current ARC transition, its disabled lifecycle gates, and the completed value/reference contract. |
+| [MEMORY.md](MEMORY.md) | The current value/reference contract, ARC lifetime rules, worker snapshots, and cycle boundary. |
 | [STD.md](STD.md) | Every embedded standard module and the cost of adding one. |
 | [CODEGEN.md](CODEGEN.md) | LLVM lowering, the published host ABI, artifacts, and measured backend behavior. |
 | [MISSING.md](MISSING.md) | Confirmed bugs only; plans and feature requests do not belong here. |

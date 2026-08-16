@@ -22,8 +22,7 @@ A copied value may contain references; copying it retains those fields.
 
 A **reference type** is a shared object. Assigning it or passing it shares the
 *same* object — a mutation through one name is seen through every other. The
-completed ARC contract frees it after the last reference; the current tree has
-the lifecycle gaps catalogued in `docs/MEMORY.md`.
+ARC runtime frees it after the last strong reference.
 The reference types implemented today are the containers `list(T)`,
 `map(K, V)`, `array(T, ...)`, and `builder`, together with the resources
 `file` and `task(...)`.

@@ -307,20 +307,16 @@ its C-shaped read/write primitive, and the whole-file byte conveniences
 (`files.read_bytes`, `files.write_bytes`, `files.append_bytes`) is
 `docs/BYTES.md`.
 
-### No `with` or `close`; ARC completion is still required
+### No `with` or `close`
 
-A `file` is a reference resource (`docs/MEMORY.md`). The completed ARC
-contract closes it at its last release, without a separate source keyword.
-That implementation is not complete today: byte and ZIP lifecycle tests are
-disabled because a function-local handle may remain open until runtime
-teardown. There is still no `close()` method; Phase 0 must make the one
-lifetime rule work rather than adding a second one:
+A `file` is a reference resource (`docs/MEMORY.md`). ARC closes it at its last
+release, without a separate source keyword. There is no `close()` method
+because aliases share one handle and one last-release lifetime:
 
 ```text
 f.close()
 # luce.sema.method: file has no method close: the file closes when its
-#   last reference is released — the end of the scope that holds it —
-#   which is why there is no 'with' either
+#   last reference is released, which is why there is no 'with' either
 ```
 
 ## Where this is not Python
@@ -328,7 +324,7 @@ f.close()
 | Python | Luce | why |
 |---|---|---|
 | `open(p, "w")` | opening modes are named doors (`files.create`, `files.append_to`) | a mode string is a magic value with no type and no completion |
-| `with open(p) as f:` | `var f = try files.open(p)` | completed ARC closes at the last release; current lifecycle gap is tracked |
+| `with open(p) as f:` | `var f = try files.open(p)` | ARC closes at the last strong release |
 | `f.close()` | let the last reference go | a `close()` would be a second lifetime story |
 | `for line in f:` | `files.read_lines(p)`, or a loop over the byte handle | Luce has no generators |
 | `os.path.join(a, b, c)` | `paths.joined([a, b, c])` | no variadics, no `/` operator |

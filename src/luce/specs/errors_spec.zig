@@ -8,9 +8,8 @@
 //! the contract editors read, so a rejection silently changing code —
 //! or a check being refactored away — fails a test here.
 //!
-//! Organized by diagnostic code.  Behavioral correctness lives in
-//! behavior_spec.zig; ownership rejections (luce.sema.own) live in
-//! ownership_spec.zig, which already covers them per situation.
+//! Organized by diagnostic code. Behavioral correctness lives in
+//! behavior_spec.zig; this file owns every current source refusal.
 //!
 //! This is the one spec that runs nothing: a program the compiler
 //! refuses never reaches an engine, so there is no second arm and

@@ -494,29 +494,26 @@ pub const Type = union(enum) {
 };
 
 /// The shape of one heap-backed type: a container's element/key/rank,
-/// or the state a scope-owned file/task resource carries.  Resources
-/// use the heap table for an owner and death point; they are not
-/// containers.
+/// or the state a reference-counted file/task resource carries.
+/// Resources use the object table for identity, a strong count, and a
+/// last-release death point; they are not containers.
 pub const HeapType = union(enum) {
     list: Type,
     map: struct { key: Type, value: Type },
     array: struct { element: Type, rank: u8 },
     builder,
     /// An open file (docs/BYTES.md R5).  A heap type and not a scalar
-    /// because a file is a **resource**, and scope ownership is what
-    /// gives a resource a death point: the binding that received the
-    /// handle owns it, the owning scope's end closes it, and a use
-    /// after close traps like a use after free because it is the same
-    /// mistake.  It carries no element type — a file is not a
+    /// because a file is a **resource**. References share its handle,
+    /// and the last strong release closes it; a stale handle traps
+    /// rather than becoming undefined access. It carries no element type — a file is not a
     /// container — so the shape is the whole of it, and
     /// `std.network`'s sockets are meant to arrive beside it wearing
     /// the same pattern.
     file,
     /// A running worker (docs/THREADS.md D3).  The `file` precedent
-    /// exactly: a resource, not a container, whose death point is the
-    /// owning scope's end — and for a worker the death point is a
-    /// **join**, which is how structured concurrency falls out of
-    /// scope ownership rather than being a discipline laid on top.
+    /// exactly: a resource, not a container, whose last-release death
+    /// point is a **join**. Structured cleanup follows from the same ARC
+    /// rule instead of being a discipline laid on top.
     ///
     /// `result` is what `f` answers, `.none` when it answers nothing.
     /// `fallible` is `f`'s own attribute travelling with the call it

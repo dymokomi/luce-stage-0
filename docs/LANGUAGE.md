@@ -11,12 +11,11 @@ along a ladder every rung reaches every rung above it — `byte` to
 the two ladders the answer is always `double` (docs/TYPES.md §2).
 **Nothing narrows**, in any direction or context.
 
-> **ARC transition status.** The source ownership verbs are gone and common
-> reference-sharing paths work, but the current tree has disabled reclamation,
-> resource-close, and hardening tests. Statements below about exact
-> last-release destruction are the committed language contract, not yet a
-> complete implementation claim. `docs/MEMORY.md` lists the current gaps and
-> `docs/ROADMAP.md` Phase 0 owns their completion.
+> **Memory model.** Values copy. References share identity and are reclaimed
+> by ARC after their last strong reference. Files close and unfinished tasks
+> join on that same last-release path. ARC does not collect strong cycles;
+> `weak` is planned but is not current syntax. `docs/MEMORY.md` is the full
+> contract.
 
 ## Values and references
 
@@ -42,7 +41,7 @@ Every type is one of two kinds, and the line between them is deliberate
   `array(T, ...)` and `builder`, and the resources `file`
   and `task(...)`.  A reference is a shared, reference-counted object:
   created with `new ...` or a literal, named by a variable that holds a
-  *reference*. The completed ARC contract frees it when its last reference
+  *reference*. ARC frees it when its last reference
   goes away. Assigning or passing one shares the same object — both
   names see it, and a mutation through either is seen through both.  A
   flat list, map, or rank-1 array declared with file-scope `const` is
@@ -52,9 +51,8 @@ Every type is one of two kinds, and the line between them is deliberate
 `file` and `task(...)` are references too, but not containers: there is
 no `new file` or `new task`.  The raw `file_open` host builtin is the
 primitive file door, which `std.files` wraps as `open`, `create`, and
-`append_to`; `spawn` is the task door. The completed contract closes a file
-and joins an unfinished task at the last release. Current development builds
-do not yet prove that timing on every path.
+`append_to`; `spawn` is the task door. ARC closes a file and joins an
+unfinished task at the last release.
 
 A `struct` is always a value: it copies field by field. When a field
 holds a reference — a `list`, a `file`, a `task` — the copy shares
@@ -66,16 +64,14 @@ whose target semantics are in `docs/ROADMAP.md`.
 
 ## Memory
 
-Memory syntax is automatic, and the model is one paragraph (the full current
-status and completed contract are in `docs/MEMORY.md`; both engines implement
-the same partial transition):
+Memory syntax is automatic, and the model is one paragraph (the full contract
+is in `docs/MEMORY.md`; both engines implement the same semantics):
 
 - **A value copies; a reference is shared and counted.**  Assigning or
   passing a value — a number, `bool`, `string`, `enum`, plain `struct`,
   or function value — makes an independent copy.  Assigning or passing a
   reference — a container, a `file`, or a `task` — shares the
-  one object. Reference objects carry a count the compiler maintains. Full
-  last-release reclamation remains the first roadmap gate.
+  one object. Reference objects carry a count the compiler maintains.
   Casual code never writes a memory word:
 
   ```luce
@@ -83,7 +79,7 @@ the same partial transition):
       var xs = [1, 2, 3]        # a fresh list; xs references it
       xs.append(4)
       xs = [5, 6]               # the old reference is released
-      # completed ARC destroys each object after its last release
+      # ARC destroys each object after its last release
   ```
 
 - **`let y = x` shares a reference or copies a value.** For a
@@ -108,10 +104,9 @@ the same partial transition):
   that safely breaks them is therefore part of their completion milestone
   (`docs/ROADMAP.md`).
 
-- **Deterministic release is the resource contract.** The final implementation
+- **Deterministic release is the resource contract.** ARC
   closes a `file` and joins an unfinished `task` at the last release, so no
-  separate `close` or `with` language is required. Current file lifecycle tests
-  remain disabled until that path is complete.
+  separate `close` or `with` language is required.
 
 - **`var name: Type`** (no value) declares now, fills later: the slot
   holds the type's zero value — a null handle for a reference type —
@@ -120,10 +115,9 @@ the same partial transition):
   "there may be nothing here" out loud instead (next section), so a
   `list(T)?` obeys every rule above exactly as a `list(T)` does.
 
-The differential harness normally requires programs to leave no live objects.
-Two current specs relax that assertion and several lifecycle tests are
-disabled; removing every such exception is the ARC phase gate. A surviving
-strong cycle is a leak, not something ARC silently claims to collect.
+Every successful differential specification must leave no live objects. A
+surviving strong cycle is a leak, not something ARC silently claims to
+collect.
 
 ## Absence: `T?` and `none`
 
@@ -1348,9 +1342,8 @@ gets a name (`files.kind`, `files.exists`, `files.is_file`,
 numbers.  It answers a `file`, a reference.  A file has three fallible
 methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
 and `f.flush() -> !`, where the buffer is an `array(byte, _)`. There is no
-source `close`: the completed ARC contract closes a `file` at its last release,
-which is also why there is no `with`. The current resource-close test gap is
-recorded in `docs/MEMORY.md` and `docs/FILESYSTEM.md`.
+source `close`: ARC closes a `file` at its last release, which is also why
+there is no `with`.
 `parse_string(bytes) -> string?` is the pure
 boundary in the other direction — bytes that are not UTF-8 are absent,
 not an I/O error.

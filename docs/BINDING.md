@@ -50,9 +50,8 @@ it always said about `p.x`.
 
 The receiver a bind carries is its own value copy, so writing the original
 afterwards does not reach its value fields. References inside that copied
-receiver name the same objects but are currently borrowed from the original
-owner. Returning or storing the bound value past that owner's lifetime is
-unsafe in the current implementation and is a Phase 0 fix.
+receiver name the same objects and are retained by the function value.
+Returning or storing the bound value therefore keeps its receiver graph alive.
 
 ## No equality, no ordering
 

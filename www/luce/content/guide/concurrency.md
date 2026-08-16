@@ -27,10 +27,9 @@ func main():
 144
 ```
 
-`wait()` observes a task once. The completed ARC contract also joins an
-unfinished worker when its task's last reference is released. Current
-development builds have lifecycle tests disabled around that automatic path,
-so use an explicit wait rather than depending on last-release timing today.
+`wait()` observes a task once. ARC also joins an unfinished worker when its
+task's last reference is released. Call `wait()` when you need the answer;
+otherwise last-release cleanup joins and discards it.
 
 ## Send independent data
 

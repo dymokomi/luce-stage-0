@@ -248,10 +248,10 @@ test "worker arguments preserve aliases across parameter roots" {
 }
 
 // ---------------------------------------------------------------------------
-// A task is a scope-owned resource (D3, D5)
+// A task is an ARC resource (D3, D5)
 // ---------------------------------------------------------------------------
 
-test "an unwaited task joins at the end of its scope and the result is discarded" {
+test "an unwaited task joins at its last release and discards the result" {
     // The worker really runs — it writes the world's file — so this is
     // a join and not a cancellation.  What it *answers* is discarded,
     // which is D4's fire-and-forget, and the census is zero because a

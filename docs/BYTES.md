@@ -7,9 +7,9 @@ therefore travels a path of its own — a packed byte buffer, a file
 reached through an open handle, and text recovered from bytes by an
 explicit validation. This document is the reference for that path.
 
-The byte representation and operations run on both engines. File-handle
-last-release cleanup is not complete: four byte/ZIP lifecycle tests remain
-disabled, as recorded in `docs/MEMORY.md`.
+The byte representation, file operations, and last-release cleanup run on both
+engines. The host and ZIP specifications exercise round trips through real
+resource handles and require a zero-object census.
 
 ## The byte buffer
 
@@ -46,8 +46,7 @@ func main():
 ```
 
 Because it is a reference type (`docs/MEMORY.md`), a buffer is shared, not
-copied, when assigned or passed. Last-release reclamation is the ARC contract
-and still has gated edge cases in the current tree:
+copied, when assigned or passed. ARC reclaims it at the last strong release:
 
 ```luce
 func main():
@@ -139,20 +138,16 @@ func main():
     print("ok")
 ```
 
-### No close; last-release cleanup is still being completed
+### No close; ARC owns the lifetime
 
-There is no `close()` method and no `with` statement. The completed ARC
-contract closes the file at its last release through the same path that
-destroys a container. Current development builds may leave a function-local
-handle open until runtime teardown; the disabled `resource_close_pending`
-tests make that gap explicit. An explicit close is not the fix—the one ARC
-lifetime path must be completed:
+There is no `close()` method and no `with` statement. ARC closes the file at
+its last release through the same path that destroys a container. An explicit
+close would add a second lifetime model and make aliases unsafe:
 
 ```text
 f.close()
 # luce.sema.method: file has no method close: the file closes when its
-#   last reference is released — the end of the scope that holds it —
-#   which is why there is no 'with' either
+#   last reference is released, which is why there is no 'with' either
 ```
 
 Naming `file` in a `new` is likewise refused, because a file with no

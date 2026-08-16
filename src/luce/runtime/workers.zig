@@ -2,7 +2,7 @@
 //!
 //! The load-bearing fact this file rests on is one the tree already
 //! had: **the runtime is a parameter, not a global**.  Every run owns
-//! its `Runtime` — its object table, its scope ownership, its string
+//! its `Runtime` — its object table, its reference counts, its string
 //! storage, its trap channel — so several isolated runtimes in one
 //! process is the existing shape and a worker's heap costs no new
 //! mechanism.  Share-nothing is therefore structural rather than

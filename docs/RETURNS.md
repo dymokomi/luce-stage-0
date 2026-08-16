@@ -174,9 +174,8 @@ reseed_from("seed.txt") catch:
 its type does: a value type — a scalar, `string`, a `struct`, an `enum` —
 is copied into the caller; a reference type — a `list`, `map`, `array`,
 `builder`, `file`, or `task` — is handed back as a shared
-reference. A destructuring bind gives each name its value. Completed ARC frees
-each object at its last reference; `docs/MEMORY.md` lists current lifecycle
-gaps. Returning the same reference in two
+reference. A destructuring bind gives each name its value. ARC frees each
+object at its last reference. Returning the same reference in two
 positions is fine: the caller gets two names for one shared object, and
 ARC counts both. See `docs/MEMORY.md`.
 

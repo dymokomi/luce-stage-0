@@ -11,9 +11,9 @@ your data, not from which API looks familiar.
 
 All three are mutable reference types managed by ARC. Assignment and argument
 passing share the same collection. A list slice creates a new list and
-recursively copies copyable reference elements. Read [Memory and
-ARC](/guide/memory/) before choosing between sharing a collection and creating
-an independent one.
+copies value elements while retaining shared reference elements. Read [Memory
+and ARC](/guide/memory/) before choosing between sharing a collection and
+creating an independent outer collection.
 
 ## Lists
 

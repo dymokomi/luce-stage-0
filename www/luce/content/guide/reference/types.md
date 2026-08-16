@@ -22,8 +22,7 @@ fields.
 `array(T, ...)`, `builder`, `file`, and `task(...)`. They are created by
 a literal, `new`, a host/library operation, or `spawn`. Assignment,
 arguments, results, fields, optionals, and container slots share the same
-object. Last-release destruction is the ARC contract, but current development
-builds still have the [listed lifecycle gaps](../memory/#current-completion-blockers).
+object. ARC destroys it after its last strong reference.
 
 There are no source ownership operators and no universal deep copy. A
 program constructs an independent value explicitly when that is what its
@@ -582,8 +581,7 @@ wraps it as `open`, `create`, and `append_to`. A handle with no file
 behind it is the one thing this type must never hold.
 
 It is a reference **resource**. Assignment and return share the same handle.
-The completed ARC contract closes it at the last release; current builds have
-the [listed file-lifecycle gap](../memory/#current-completion-blockers). A null
+ARC closes it at the last release. A null
 or stale runtime handle traps rather than becoming undefined memory access.
 
 ```luce run
@@ -654,9 +652,8 @@ func main():
 ```
 
 A task reference may be shared, but there is still one worker behind it. Its
-one method is `t.wait()`, which observes the answer once. Automatic
-last-reference joining is the ARC completion contract, not yet a fully proved
-current guarantee.
+one method is `t.wait()`, which observes the answer once. Releasing the final
+task reference joins an unfinished worker and discards its unobserved answer.
 
 ## Return shapes {#return-shapes}
 

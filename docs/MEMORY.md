@@ -1,42 +1,44 @@
-# Memory — current ARC transition and final contract
+# Memory — current ARC contract
 
-This document separates what the compiler proves today from the memory model
-Luce is committed to finishing. That distinction is load-bearing: source-level
-manual ownership has been removed, but last-release reclamation is not yet
-complete on every path. The ordered completion work is Phase 0 of
-[ROADMAP.md](ROADMAP.md).
+Luce has value semantics for values and automatic reference counting for
+references. The compiler derives every retain and release from types and
+control flow; programs do not spell ownership operations. This page states
+the behavior implemented by both execution paths and the limits that remain
+for future types.
 
 ## The language contract
 
 Every runtime value is either copied as a value or shared as a reference:
 
-| Kind | Current and planned examples | Assignment and passing | Completed lifetime rule |
+| Kind | Current and planned examples | Assignment and passing | Lifetime rule |
 |---|---|---|---|
 | Value | numbers, `bool`, `string`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
 | Reference | `list`, `map`, `array`, `builder`; future `class` and closure environments | retain and share one identity | last strong release destroys the object |
 | Resource reference | `file`, `task`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
 
 There are no source-level retain, release, move, clone, borrow, or free
-operations. A completed compiler derives every retain and release from the
-static type and control-flow edge.
+operations. The compiler derives every retain and release from the static type
+and control-flow edge.
 
-The sentence users should eventually need is:
+The rule users need is:
 
 > Values copy. References share identity. ARC keeps references alive. Weak
 > breaks cycles. Resources close at the last strong release. Workers never
 > share object identity.
 
-## What is implemented now
+## What is implemented
 
-The current tree has the structural pieces of ARC:
+The current tree implements ARC for every built-in reference and resource:
 
 - runtime reference counts and `retain`/`release` operations;
 - MIR instructions verified and executed by both the interpreter and LLVM
   path;
-- shared reference behavior for ordinary assignment and calls;
-- retain/release emission across many locals, replacements, returns,
-  aggregates, optionals, errors, loops, and container stores; and
-- a zero-live-object gate for ordinary differential specs.
+- shared reference behavior for assignment, arguments, and returns;
+- retain/release emission across locals, replacement, aggregates, optionals,
+  unions, failures, loops, interfaces, bound methods, and container stores;
+- last-release close for files and join for unfinished tasks;
+- graph-preserving worker snapshots with rollback; and
+- a zero-live-object gate for every successful differential spec.
 
 For example, both names below observe one list:
 
@@ -50,27 +52,19 @@ func main():
 
 A struct remains a value when it contains a reference. Copying the struct
 copies value fields and makes its reference fields name the same objects.
-Current common-path specs exercise that behavior on both engines.
+The differential specifications exercise that behavior on both engines.
+Malformed serialized modules are separately required to be rejected or run
+to a clean outcome without a host-language panic.
 
-## What is not implemented completely
+## What remains outside the current model
 
-The repository itself records these open gaps:
+ARC does not collect a strong cycle. Luce does not yet have `weak`, so a
+program must avoid strong back-edges in recursive container graphs. Classes
+and capturing closures are future reference types; they do not weaken the
+current built-in ARC contract. The current interface representation is safe
+for read-only dispatch but will be replaced before mutable class dispatch.
 
-- Four byte/zip file tests are skipped behind `resource_close_pending`
-  because function-exit cleanup does not reliably close the handle yet.
-- The synthesized Luce test entry and the adventure specification relax their
-  zero-census assertion around remaining container reclamation gaps.
-- The module damage hardening test is skipped around two decoder/verifier
-  panic paths; [MISSING.md](MISSING.md) tracks the bug.
-
-Until Phase 0 closes these gaps, code must not rely on a file closing at the
-exact last-release point. Runtime teardown is a backstop, not proof that
-mid-run ARC is complete. Public documentation must not describe the
-implementation as release-ready ARC.
-
-## Completed ARC behavior
-
-When Phase 0 exits, the following rules hold without qualification.
+## ARC behavior
 
 ### Calls, returns, and replacement
 
@@ -109,9 +103,10 @@ one-shot state.
 
 A bound method copies its value receiver and retains reference fields in that
 copy. The function value can therefore be returned or stored independently of
-the original binding. A completed interface existential owns one payload and
-uses metadata plus a witness table; it follows the payload's value/reference
-semantics without duplicating the receiver once per method.
+the original binding. A current interface value stores one such bound witness
+per method; every witness owns its receiver snapshot safely. The planned
+existential representation stores one payload plus metadata and a witness
+table, avoiding repeated receiver storage and enabling mutable dispatch.
 
 Capturing closure environments are ARC objects. Immutable value captures are
 snapshots, mutable local captures use a shared cell, and reference captures
@@ -140,7 +135,7 @@ make back-edges common, so `weak` must ship before those features are called
 complete. Debug leak reporting must make an accidental surviving cycle
 diagnosable rather than silently treating it as collection.
 
-## Proof required to call ARC complete
+## Release-gate evidence
 
 - No feature-related test skip or relaxed leak assertion remains.
 - Every normal differential spec ends with zero live objects.

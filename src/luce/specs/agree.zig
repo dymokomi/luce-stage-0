@@ -473,7 +473,7 @@ fn sameWorld(reference: *const World, capture: *const World) !void {
 // program works here.
 
 /// The program runs, every `assert` in it holds, and nothing is left
-/// alive — scope ownership frees everything (S33).
+/// alive — ARC releases every strong reference (S33).
 pub fn ok(source: []const u8) !void {
     return okGiven(source, .{});
 }
@@ -534,8 +534,8 @@ pub fn trapGiven(source: []const u8, provided: Provided, code: mir.TrapCode) !vo
 
 /// The same, over a program the caller compiled — and, for the checks
 /// stage 4 now makes statically, over one the caller went on to
-/// damage.  A trap no source program can still reach is reached from
-/// here or nowhere (`src/luce/specs/ownership_spec.zig`'s S23).
+/// damage. A trap no source program can still reach is reached from
+/// here or nowhere.
 pub fn trapProgram(compiled: *const mir.Program, provided: Provided, code: mir.TrapCode) !void {
     var session = try compareProgram(compiled, provided);
     defer session.deinit();

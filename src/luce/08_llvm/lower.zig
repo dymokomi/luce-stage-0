@@ -4543,8 +4543,8 @@ const Body = struct {
     /// materialized program constant.  A runtime-routed write meets
     /// `Runtime.requireMutable`; an inline write reaches the row itself,
     /// so it reads `Object.constant` and traps the same way.  This is
-    /// guarded on every inline write — scope ownership's `roots` analysis,
-    /// which proved where the guard was needless, retired with the model,
+    /// guarded on every inline write — the retired owner-root analysis,
+    /// which proved where the guard was needless, left with that model,
     /// and a redundant guard is the optimizer's to drop, never
     /// correctness's to skip.
     fn checkNotConstant(self: *Body, row: Builder.Value) Error!void {

@@ -1,4 +1,4 @@
-# Roadmap — finish ARC, then build the intended language
+# Roadmap — build the intended language on ARC
 
 This is a plan, not the current language reference. The current compiler is
 described by [LANGUAGE.md](LANGUAGE.md), [MEMORY.md](MEMORY.md), and the other
@@ -17,27 +17,23 @@ language, the design is not finished.
 
 ## Where the repository is now
 
-The ARC pivot is partially implemented on both execution paths:
+ARC is implemented for every current built-in reference and resource on both
+execution paths:
 
 - the old source-level `give`, `copy`, and `free` language is gone;
 - runtime objects carry a reference count, MIR has `retain` and `release`, and
   the interpreter and LLVM path implement those instructions;
-- common local, assignment, parameter, return, aggregate, optional, error, and
-  container paths now share reference identity and pass simple zero-census
-  differential specs; and
+- locals, assignment, parameters, returns, aggregates, optionals, errors,
+  loops, interfaces, bound methods, containers, resources, and worker teardown
+  all follow the same retain/release model;
+- every successful differential specification requires zero live objects;
+- files close and unfinished tasks join at their last release; worker
+  snapshots preserve aliases without sharing identity; and
+- the serialized-module mutation corpus is total; and
 - the compiler and oracle still use one runtime implementation.
 
-It is not yet honest to call that full ARC:
-
-- `bytes_spec.zig` and `zip_spec.zig` skip four file lifecycle tests because a
-  file opened in a function is not reliably closed at the function's last
-  release;
-- the synthesized test entry and adventure spec relax their zero-census
-  assertions around remaining container reclamation gaps;
-- the damaged-module byte-mutation hardening test is skipped around two
-  decoder/verifier panic paths.
-
-Those are the first milestone, not cleanup to postpone. After them:
+The remaining work extends the type system rather than weakening that current
+ARC contract:
 
 - `class` is a front-end scaffold. It parses and carries a reference-kind bit,
   but still lowers with value-struct behavior.
@@ -49,8 +45,8 @@ Those are the first milestone, not cleanup to postpone. After them:
 - `weak` references do not exist.
 - The public scalar spellings are still `byte`, `short`, `int`, `long`,
   `half`, `float`, `double`, and `string`.
-- [MISSING.md](MISSING.md) contains a damaged-module validation bug that must
-  be fixed before the serialized format changes again.
+- Transparent `alias Name = Type` declarations do not exist yet.
+- [MISSING.md](MISSING.md) contains no confirmed current bug.
 
 That inventory is the baseline. A plan item is not allowed to migrate into a
 current reference until its acceptance program and negative matrix pass on
@@ -303,12 +299,15 @@ considered complete, not after every prose or local implementation edit.
 
 ### Phase 0 — finish ARC and restore the release gate
 
-1. Fix every confirmed current bug in [MISSING.md](MISSING.md); the remaining
-   one is the damaged-module verifier panic.
-2. Remove every feature-related skip and relaxed census assertion. Keep only
-   genuine platform capability skips, and make the test summary distinguish
-   them from product gaps.
-3. Complete retain/release emission for every current reference shape:
+The semantic and hardening gates in this phase are complete. The remaining
+release housekeeping is the repository-wide terminology audit, measured
+baselines, and the final site/release build.
+
+1. Keep [MISSING.md](MISSING.md) free of resolved work; it currently contains
+   no confirmed bug.
+2. Keep every feature-related skip and relaxed census assertion out. Genuine
+   platform capability skips must be reported separately from product gaps.
+3. Keep retain/release emission green for every current reference shape:
    local, assignment, argument, return, aggregate field, optional, failure,
    loop binding, interface, bound method, container element, synthesized test
    entry, file, task, and worker teardown.
@@ -322,7 +321,7 @@ considered complete, not after every prose or local implementation edit.
 6. Keep the completed worker-boundary proofs green: nested argument snapshots,
    caller liveness, aliases within and between roots, both-runtime zero census,
    rollback, and transitive resource/function refusals.
-7. Prove last-release destruction and rollback under success, recoverable
+7. Keep last-release destruction and rollback green under success, recoverable
    error, trap, allocation failure, host failure, and runtime teardown on both
    engines. Include file close and unfinished-task join counts.
 8. Remove retired ownership terminology from source comments, test names,
@@ -337,7 +336,25 @@ hardening bug; zero live objects after every clean differential spec; exact
 file-close/task-join counts; no user-visible legacy ownership language; and
 reproducible baseline numbers.
 
-### Phase 1 — freeze the new type contract
+### Phase 1 — add transparent type aliases
+
+1. Parse `alias Name = Type` as a file-scope declaration with ordinary
+   public-by-default visibility and `private alias` support.
+2. Resolve aliases transparently in annotations, function signatures,
+   containers, optionals, interfaces, imports, and later declarations.
+3. Permit alias chains while rejecting direct and indirect cycles, unknown
+   targets, private imported aliases, and collisions with every declaration
+   namespace peer.
+4. Keep aliases out of runtime layouts, MIR type tags, conversions, overload
+   rules, and identity: an alias is another source name for exactly one type.
+5. Add parser, semantic, differential, multi-file, diagnostic, syntax-data,
+   Guide, and reference coverage.
+
+Exit: aliases work everywhere a type may be written, add no runtime behavior,
+and every malformed alias fails at its own declaration or use with a precise
+source span.
+
+### Phase 2 — freeze the new type contract
 
 1. Write the numeric, `char`, `str`, `bytes`, container-application, and
    conversion rules as a target specification.
@@ -351,7 +368,7 @@ reproducible baseline numbers.
 
 Exit: there is no semantic question left hidden inside the mechanical rename.
 
-### Phase 2 — migrate the type vocabulary atomically
+### Phase 3 — migrate the type vocabulary atomically
 
 1. Add the complete internal type table and real arithmetic behavior for all
    widths.
@@ -368,7 +385,7 @@ Exit: there is no semantic question left hidden inside the mechanical rename.
 Exit: the old vocabulary is absent outside migration tests and history; the
 full width/conversion matrix agrees on both engines.
 
-### Phase 3 — build the weak-reference foundation
+### Phase 4 — build the weak-reference foundation
 
 1. Design the runtime weak table/control block so zeroing precedes storage
    reuse and cannot race with ordinary release inside one runtime.
@@ -382,7 +399,7 @@ full width/conversion matrix agrees on both engines.
 Exit: a recursive value-struct/container graph can use a weak back-edge and
 reach zero live objects without dangling access.
 
-### Phase 4 — complete class reference semantics
+### Phase 5 — complete class reference semantics
 
 1. Lower reference-kind layouts through one heap-object path shared with the
    existing ARC machinery.
@@ -398,7 +415,7 @@ Exit: aliasing a class observes shared mutation, `deinit` runs once on every
 normal release path, and parent/child graphs use the already-proved weak
 storage rather than shipping a cycle-prone partial class model.
 
-### Phase 5 — replace interface values with owned existentials
+### Phase 6 — replace interface values with owned existentials
 
 1. Introduce one payload/metadata/witness representation.
 2. Support struct and class conformers, returns, optionals, fields, arrays,
@@ -414,7 +431,7 @@ Exit: one heterogeneous collection can hold stateful values of different
 concrete types and dispatch every method without lifetime dependence on the
 creating frame.
 
-### Phase 6 — add capturing closures
+### Phase 7 — add capturing closures
 
 1. Lower capture analysis to an explicit environment layout.
 2. Implement value snapshots, shared mutable cells, strong reference capture,
@@ -428,14 +445,14 @@ creating frame.
 Exit: a returned closure safely retains and mutates captured state, and a weak
 capture breaks its intentional cycle.
 
-### Phase 7 — add only the optional ergonomics the model proves necessary
+### Phase 8 — add only the optional ergonomics the model proves necessary
 
 Candidates are optional chaining and an optional-binding form for a single
 checked unwrap. They land only with examples showing that existing narrowing
 is materially worse. Forced unwraps, unsafe unowned references, and a second
 error mechanism remain out.
 
-### Phase 8 — prove the model in userland
+### Phase 9 — prove the model in userland
 
 1. Build the retained higher-level UI layer above `std.ui`, `std.gpu`, and the
    existing low-level termui renderer.
@@ -450,13 +467,13 @@ error mechanism remain out.
 Exit: a button callback mutates shared model state, redraws the view, and
 leaves no reference cycle; the editor is the end-to-end proving program.
 
-### Phase 9 — generics, then library collections
+### Phase 10 — generics, then library collections
 
 Implement the separately reviewed generics plan, then use it to build and
 benchmark the small set of library structures that real programs require.
 Generics are not part of the ARC/classes/closures completion milestone.
 
-### Phase 10 — release lock
+### Phase 11 — release lock
 
 1. Rebuild every internal and public reference from the accepted semantics.
 2. Run the full deterministic gate, hardening corpus, site generator, package
