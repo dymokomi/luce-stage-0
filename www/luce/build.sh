@@ -123,4 +123,39 @@ tar -czf "$release_output/$archive_name" \
 tar -tzf "$release_output/$archive_name" >/dev/null
 echo "release: $release_output/$archive_name"
 
+echo "==> installer smoke"
+smoke="$release_work/smoke"
+smoke_install="$smoke/luce"
+smoke_extensions="$smoke/extensions"
+smoke_profile="$smoke/profile"
+smoke_program="$smoke/hello.luc"
+mkdir -p "$smoke"
+
+run_installer_smoke() {
+    LUCE_INSTALL_BASE_URL="file://$release_output" \
+    LUCE_INSTALL_DIR="$smoke_install" \
+    LUCE_INSTALL_EDITOR_EXTENSIONS_DIR="$smoke_extensions" \
+    LUCE_INSTALL_PROFILE="$smoke_profile" \
+    LUCE_INSTALL_NO_PATH=0 \
+        "$release_output/install.sh"
+}
+
+# Run twice: a release installer promises replacement with a fresh copy and
+# must not duplicate PATH entries or leave a stale editor extension behind.
+run_installer_smoke
+run_installer_smoke
+
+test "$("$smoke_install/bin/luce" --version)" = "luce $release_version"
+test "$("$smoke_install/bin/loom" --version)" = "loom $release_version"
+test -x "$smoke_install/bin/editor"
+test -f "$smoke_extensions/$extension_id-$extension_version/package.json"
+test "$(grep -Fc "$smoke_install/bin" "$smoke_profile")" -eq 1
+
+printf '%s\n' 'func main():' '    print("installer works")' >"$smoke_program"
+(cd "$smoke" && "$smoke_install/bin/luce" build hello.luc)
+test "$("$smoke/hello")" = "installer works"
+(cd "$smoke" && "$smoke_install/bin/luce" build hello.luc --emit=library -o hello.lc)
+test "$("$smoke_install/bin/loom" run "$smoke/hello.lc")" = "installer works"
+echo "installer: fresh replacement, PATH, editor support, executable, and library run passed"
+
 echo "==> done: $here/out"

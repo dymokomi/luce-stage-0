@@ -61,7 +61,10 @@ working stops the script.
 The release step also cross-builds the macOS ARM64 toolchain and packages
 the dependency-free `tools/vscode-luce` extension beside it. The published
 installer copies that extension into the user's VS Code, VS Code Insiders, or
-Cursor extension shelf.
+Cursor extension shelf. The build then runs that installer twice against the
+fresh local archive in an isolated home: versions, replacement, a single PATH
+entry, editor support, default executable output, and a library run through
+loom must all work before the site is considered built.
 
 The generator's tests also run under the repository's `zig build test`
 (wired in `build.zig`), so a change to the language that the site has

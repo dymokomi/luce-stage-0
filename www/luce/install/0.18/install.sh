@@ -13,6 +13,8 @@ version=0.18
 archive_name="luce-${version}-macos-aarch64.tar.gz"
 base_url="${LUCE_INSTALL_BASE_URL:-https://luce.luciaos.com/install/${version}}"
 install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
+editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
+profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
 extension_version=0.4.0
 
@@ -56,6 +58,38 @@ case "$install_root" in
         exit 1
         ;;
 esac
+# These two overrides make release testing hermetic and are also useful for
+# managed editor/profile layouts. Defaults remain the ordinary local shelves.
+if [ -n "$editor_extensions_dir" ]; then
+    case "$editor_extensions_dir" in
+        /*) ;;
+        *)
+            echo "luce: LUCE_INSTALL_EDITOR_EXTENSIONS_DIR must be an absolute path: $editor_extensions_dir" >&2
+            exit 1
+            ;;
+    esac
+    case "$editor_extensions_dir" in
+        /|/usr|/usr/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
+            echo "luce: refusing unsafe editor extensions directory: $editor_extensions_dir" >&2
+            exit 1
+            ;;
+    esac
+fi
+if [ -n "$profile_override" ]; then
+    case "$profile_override" in
+        /*) ;;
+        *)
+            echo "luce: LUCE_INSTALL_PROFILE must be an absolute path: $profile_override" >&2
+            exit 1
+            ;;
+    esac
+    case "$profile_override" in
+        /|/usr|/usr/*|/System|/System/*|/Library|/Library/*|/bin|/bin/*|/sbin|/sbin/*)
+            echo "luce: refusing unsafe shell profile: $profile_override" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 parent=$(dirname "$install_root")
 mkdir -p "$parent"
@@ -164,6 +198,13 @@ install_editor_extension() {
 }
 
 install_editor_support() {
+    if [ -n "$editor_extensions_dir" ]; then
+        mkdir -p "$editor_extensions_dir"
+        install_editor_extension "$editor_extensions_dir"
+        echo "    Restart the editor (or reload its window) to use .luc highlighting."
+        return 0
+    fi
+
     installed=0
     for editor in vscode vscode-insiders cursor; do
         case "$editor" in
@@ -197,26 +238,30 @@ install_editor_support() {
 install_editor_support
 
 add_path() {
-    shell_path=${SHELL:-/bin/sh}
-    shell_name=${shell_path##*/}
-    case "$shell_name" in
-        zsh)
-            profile_dir=${ZDOTDIR:-$HOME}
-            profile="$profile_dir/.zprofile"
-            ;;
-        bash)
-            if [ -f "$HOME/.bash_profile" ]; then
-                profile="$HOME/.bash_profile"
-            elif [ -f "$HOME/.bash_login" ]; then
-                profile="$HOME/.bash_login"
-            else
+    if [ -n "$profile_override" ]; then
+        profile=$profile_override
+    else
+        shell_path=${SHELL:-/bin/sh}
+        shell_name=${shell_path##*/}
+        case "$shell_name" in
+            zsh)
+                profile_dir=${ZDOTDIR:-$HOME}
+                profile="$profile_dir/.zprofile"
+                ;;
+            bash)
+                if [ -f "$HOME/.bash_profile" ]; then
+                    profile="$HOME/.bash_profile"
+                elif [ -f "$HOME/.bash_login" ]; then
+                    profile="$HOME/.bash_login"
+                else
+                    profile="$HOME/.profile"
+                fi
+                ;;
+            *)
                 profile="$HOME/.profile"
-            fi
-            ;;
-        *)
-            profile="$HOME/.profile"
-            ;;
-    esac
+                ;;
+        esac
+    fi
 
     mkdir -p "$(dirname "$profile")"
     # The default path is written with $HOME so it remains valid if the home
