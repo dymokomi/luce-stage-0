@@ -73,6 +73,11 @@ const CopyTask = struct {
     destination: *Value,
 };
 
+/// Source handle bits to the one destination shell made for them.  Installing
+/// a shell here before its children are queued preserves aliases and turns a
+/// cycle's back edge into an ordinary retained reference.
+const CopyAliases = std.AutoHashMapUnmanaged(u64, Value);
+
 /// Where a run's memory comes from.  Luce has two kinds of data with
 /// two different lifetimes, so it takes two allocators, and mixing them
 /// up is what made freed objects unreclaimable for as long as there was
@@ -1445,32 +1450,6 @@ pub const Runtime = struct {
         return self.attach(.{ .data = .{ .task = worker } });
     }
 
-    /// Move `held` out of this runtime and into `target` — what a
-    /// spawn's arguments and a wait's result both do (docs/THREADS.md
-    /// D2, D4).
-    ///
-    /// **An object moves; a value copies.**  Nothing about that is new:
-    /// it is S32 applied at one more site.  The object half is a deep
-    /// re-own into the target followed by a free here, which is the
-    /// correct floor and not a placeholder — a handle is an index into
-    /// this table and a string's bytes came from this allocator, so
-    /// there is no representation the two runtimes could share.  The
-    /// value half frees nothing, because the caller's own storage is
-    /// still the caller's: `spawn f(name)` leaves `name` exactly as a
-    /// call would.
-    pub fn moveInto(self: *Runtime, target: *Runtime, held: Value) Error!Value {
-        const carried = target.copyFrom(self, held) catch |mistake| switch (mistake) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Trap => {
-                const trapped = target.pending.?;
-                target.pending = null;
-                return self.failMessage(trapped.code, trapped.message);
-            },
-        };
-        self.freeObjectsIn(held);
-        return carried;
-    }
-
     /// Tell the host a handle is finished with.  Called from the two
     /// places a file's life can end — the owning scope, and the run's
     /// own sweep of what a program leaked — neither of which has
@@ -1885,15 +1864,11 @@ pub const Runtime = struct {
 
     // -- releasing an object --------------------------------------------
     //
-    // Nothing frees objects while a program runs; a row lives until the
-    // final sweep (`Runtime.deinit`).  What remains here is the release
-    // machinery the two exceptions still need — a failed constant
-    // prologue (`abortConstants`, `discardLoose`) and a rolled-back deep
-    // copy (`copyFrom`), both of which must give back objects they built
-    // before the run continues.  A release walks a value's top objects
-    // — the object a handle names, or a struct's object fields
-    // recursively — and never descends into an object's elements, which
-    // already belong to it.
+    // ARC frees a row when its last reference dies.  The same machinery also
+    // serves unconditional rollback (`freeObject`) and failed constant
+    // materialization.  A value release walks only the references the value
+    // itself carries; destroying an object's final reference then releases
+    // the elements that object owned.
 
     /// Raise an object's reference count by one: a new name now holds it.
     /// A stale handle and a program constant are both no-ops — the first
@@ -2129,19 +2104,58 @@ pub const Runtime = struct {
     /// difference; writing the walk twice would have been two places
     /// for one semantic.
     pub fn copyFrom(self: *Runtime, source: *Runtime, held: Value) Error!Value {
-        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
+        var sources = [_]Value{held};
+        var results = [_]Value{Value.none};
+        try self.copyRootsFrom(source, &sources, &results);
+        return results[0];
+    }
+
+    /// Copy several roots as one graph.  Worker arguments use this rather
+    /// than invoking `copyFrom` once per parameter: two arguments that name
+    /// one source object must name one destination object too.
+    pub fn copyValuesFrom(self: *Runtime, source: *Runtime, held: []const Value) Error![]Value {
+        const copied = try self.objects.alloc(Value, held.len);
+        errdefer self.objects.free(copied);
+        @memset(copied, Value.none);
+        try self.copyRootsFrom(source, held, copied);
+        return copied;
+    }
+
+    /// The shared graph-copy engine.  It publishes each destination shell
+    /// before queuing its children, retains repeated edges, and makes every
+    /// root either complete or empty.  Rollback force-destroys created
+    /// shells because ordinary ARC cannot collect a partial cycle.
+    fn copyRootsFrom(
+        self: *Runtime,
+        source: *Runtime,
+        roots: []const Value,
+        results: []Value,
+    ) Error!void {
+        std.debug.assert(roots.len == results.len);
         const initial_table_len = self.table.items.len;
         const initial_table_capacity = self.table.capacity;
         var tasks: std.ArrayList(CopyTask) = .empty;
         defer tasks.deinit(self.objects);
+        var aliases: CopyAliases = .empty;
+        defer aliases.deinit(self.objects);
+        var created: std.ArrayList(Handle) = .empty;
+        defer created.deinit(self.objects);
 
-        var result = Value.none;
         errdefer {
-            // Every shell is installed in a destination before its
-            // children are queued, so the root reaches partial copies
-            // even when the next task allocation fails.
-            self.freeObjectsIn(result);
-            self.dropStorage(result);
+            // Break copied cycles first.  Reverse attachment order also
+            // restores consumed free rows to their original order.
+            var remaining = created.items.len;
+            while (remaining != 0) {
+                remaining -= 1;
+                self.freeObject(created.items[remaining]);
+            }
+            // Roots may also be pure values, or function values retaining a
+            // pre-existing in-runtime receiver rather than a copied shell.
+            for (results) |*result| {
+                self.freeObjectsIn(result.*);
+                self.dropStorage(result.*);
+                result.* = Value.none;
+            }
             // `rollbackCopyTable` restores the logical rows and free list.
             // A failing allocator may refuse its optional capacity shrink;
             // that spare buffer remains owned by this runtime and is still
@@ -2149,15 +2163,15 @@ pub const Runtime = struct {
             self.rollbackCopyTable(initial_table_len, initial_table_capacity);
         }
 
-        try tasks.append(self.objects, .{
-            .source = held,
-            .destination = &result,
+        try tasks.ensureUnusedCapacity(self.objects, roots.len);
+        for (roots, results) |root, *result| tasks.appendAssumeCapacity(.{
+            .source = root,
+            .destination = result,
         });
         while (tasks.items.len != 0) {
             const task = tasks.pop().?;
-            try self.copyTask(source, task, &tasks);
+            try self.copyTask(source, task, &tasks, &aliases, &created);
         }
-        return result;
     }
 
     /// Restore the logical table state that preceded a failed copy.  The
@@ -2214,12 +2228,19 @@ pub const Runtime = struct {
         source: *Runtime,
         task: CopyTask,
         tasks: *std.ArrayList(CopyTask),
+        aliases: *CopyAliases,
+        created: *std.ArrayList(Handle),
     ) Error!void {
         if (!task.source.hasValidRepresentation()) return self.fail(.not_owned);
         switch (task.source.view()) {
             .object => |handle| {
                 if (handle.index == value.null_index) {
                     task.destination.* = task.source;
+                    return;
+                }
+                if (aliases.get(task.source.bits)) |duplicate| {
+                    self.retain(duplicate.asObject());
+                    task.destination.* = duplicate;
                     return;
                 }
                 const source_object = source.liveObject(handle) orelse
@@ -2289,10 +2310,16 @@ pub const Runtime = struct {
                     .file, .task => return self.fail(.not_owned),
                 };
 
-                const duplicate = self.attach(storage) catch |mistake| {
-                    self.discardCopiedObject(&storage);
-                    return mistake;
-                };
+                var storage_owned = true;
+                errdefer if (storage_owned) self.discardCopiedObject(&storage);
+                // Reserve bookkeeping before publishing the shell so no
+                // allocation can fail between attachment and registration.
+                try aliases.ensureUnusedCapacity(self.objects, 1);
+                try created.ensureUnusedCapacity(self.objects, 1);
+                const duplicate = try self.attach(storage);
+                storage_owned = false;
+                aliases.putAssumeCapacity(task.source.bits, duplicate);
+                created.appendAssumeCapacity(duplicate.asObject());
                 task.destination.* = duplicate;
 
                 const destination = &self.table.items[duplicate.asObject().index];

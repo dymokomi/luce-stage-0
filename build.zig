@@ -218,14 +218,14 @@ pub fn build(b: *std.Build) void {
         "fuzz: owner graphs",
         "checked owner invariants",
         "failed nested list",
-        "failed function-value copies",
+        "failed function-value storage copies",
         "failed worker graph",
         "a worker result copies",
         "waiting a task is one-shot",
         "waiting a task fails closed",
         "malformed worker outcomes fail closed",
         "nested tasks wait and release",
-        "cross-runtime moves",
+        "cross-runtime copies",
         "fixed worker and resource lifecycle",
         "fuzz: worker and resource lifecycles",
         "list growth keeps every raw capacity",
@@ -236,8 +236,8 @@ pub fn build(b: *std.Build) void {
         "failed retaining stores",
         "failed struct replacement consumes",
         "struct replacement rejects",
-        "function values stay receiver-borrowed",
-        "array fill rolls borrowed function runs",
+        "function values retain their receiver",
+        "array fill rolls owned function values",
         "whole-file reads stay within",
         "rank-zero arrays are rejected",
         "worker inputs fail closed",
@@ -582,12 +582,22 @@ pub fn build(b: *std.Build) void {
         "Run worker nested-graph ownership regressions",
     );
     test_worker_ownership_step.dependOn(&b.addRunArtifact(worker_ownership_tests).step);
+    const worker_snapshot_specs = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "a container argument is an independent worker snapshot",
+            "worker arguments preserve aliases across parameter roots",
+        },
+    });
+    test_worker_ownership_step.dependOn(&b.addRunArtifact(worker_snapshot_specs).step);
 
     const runtime_ownership_tests = b.addTest(.{
         .root_module = luce,
         .filters = &.{
-            "cross-runtime moves roll back every nested allocation",
-            "cross-runtime moves reject function receiver handles",
+            "cross-runtime copies roll back every nested allocation",
+            "cross-runtime copies reject function values transitively",
+            "cross-runtime copy preserves aliases across roots and nested edges",
+            "cross-runtime copy rolls a partially copied cycle back on refusal",
             "failed union and optional-shaped copies preserve every source field",
             "inout replacement failures preserve the bound union and optional receiver",
             "a failed struct store consumes only its replacement",

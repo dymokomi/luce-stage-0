@@ -118,6 +118,8 @@ pub const CloseFn = *const fn (context: ?*anyopaque, worker: *Runtime) callconv(
 /// `survived`, `raised_trap` or `raised_error`; a trap's words and
 /// frames, an error's words and origin, and a chosen exit status are
 /// all left in the worker's own `Runtime`, where the join reads them.
+/// On `survived`, `out` is an owning return value under the ordinary call
+/// convention; the worker keeps it until a join copies or discards it.
 /// If the worker exhausts its arena, it answers `raised_trap` with
 /// `Runtime.exhausted` set; the join turns that marker back into
 /// `error.OutOfMemory` rather than inventing a Luce trap.
@@ -304,46 +306,13 @@ fn body(argument: ?*anyopaque) callconv(.c) void {
         worker.outcome = raised_trap;
         _ = child.fail(.host_unavailable) catch {};
     }
-    if (worker.outcome != survived) return;
-    // **The join is the caller, and this is the caller's first step.**
-    //
-    // A returned value's storage is the caller's to keep, and a caller
-    // takes it by copying — the `own_storage` stage 4 puts in front of
-    // the store — and then releases what it was handed, because a
-    // `ret` moves the storage out of the frame rather than lending it
-    // (docs/STRINGS.md).  A worker has no caller standing at its `ret`,
-    // so the two steps are taken here, on the worker's own thread and
-    // in the worker's own runtime.
-    //
-    // Doing it here rather than at the join is what makes the join
-    // simple: after this the answer is unambiguously this runtime's,
-    // so `wait` can move it across and `finish` can release it without
-    // either of them having to know where the bytes came from.
-    const answered = worker.result;
-    worker.result = child.ownValue(answered) catch |mistake| taken: {
-        // No memory to take the copy with: this is ordinary run
-        // exhaustion, not a located Luce allocation trap.  The copy may
-        // have been a struct whose fields include object rows, so release
-        // the complete answer rather than only its value-storage bytes.
-        switch (mistake) {
-            error.OutOfMemory => child.exhausted = true,
-            error.Trap => {},
-        }
-        worker.outcome = raised_trap;
-        break :taken .none;
-    };
-    if (worker.result.isNone()) {
-        child.freeValue(answered);
-    } else {
-        child.dropStorage(answered);
-    }
 }
 
 // ---------------------------------------------------------------------------
 // spawn
 // ---------------------------------------------------------------------------
 
-/// `spawn f(args)` — open a runtime for the worker, move the arguments
+/// `spawn f(args)` — open a runtime for the worker, copy the argument graph
 /// into it, start the thread, and answer the task that owns it (D2, D3).
 ///
 /// **Everything that can fail happens on this thread, before the
@@ -363,7 +332,7 @@ pub fn spawn(
     // These values cross the public C door as signed integers.  A negative
     // function would reach an engine-specific cast, and an invalid depth
     // would do the same in the interpreter; reject both before allocating a
-    // worker or moving an argument.
+    // worker or copying an argument graph.
     if (function < 0 or std.math.cast(u32, parent.depth_budget) == null) {
         return parent.fail(.host_unavailable);
     }
@@ -388,19 +357,18 @@ pub fn spawn(
     child.effects = effects;
     child.depth_budget = parent.depth_budget;
 
-    const moved = try child.objects.alloc(Value, arguments.len);
-    var carried: usize = 0;
-    errdefer {
-        // The worker frame borrows these values from this array.  On a
-        // failed spawn there is no frame left to return that storage to,
-        // while any object rows are reclaimed by the child Runtime's
-        // closing sweep just below.
-        for (moved[0..carried]) |argument| child.dropStorage(argument);
-        child.objects.free(moved);
-    }
-    while (carried < arguments.len) : (carried += 1) {
-        moved[carried] = try parent.moveInto(child, arguments[carried]);
-    }
+    const copied = child.copyValuesFrom(parent, arguments) catch |mistake| switch (mistake) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Trap => {
+            const trapped = child.pending orelse return parent.fail(.host_unavailable);
+            child.pending = null;
+            return parent.failMessage(trapped.code, trapped.message);
+        },
+    };
+    // The argument block is one owning value graph.  The callee's parameter
+    // slots borrow it for the call; every failed-spawn path and `finish`
+    // destroy it as a whole.
+    errdefer child.freeValue(Value.ofStruct(copied));
 
     worker.* = .{
         .runtime = child,
@@ -408,7 +376,7 @@ pub fn spawn(
         .channel = channel,
         .function = function,
         .depth = parent.depth_budget,
-        .arguments = moved,
+        .arguments = copied,
     };
 
     const spawn_answer = channel.spawn.?(channel.context, body, worker, &worker.thread);
@@ -548,32 +516,16 @@ fn joinThread(worker: *Worker) bool {
 /// already joined the thread and taken whatever it wanted out.
 fn finish(owner: *Runtime, worker: *Worker) void {
     const child = worker.runtime.?;
-    // A parameter *borrows* its caller's storage (`mir.Local`), and
-    // here the caller is this array: the callee's frame never owned the
-    // bytes a `string` argument arrived in, so they go back with the
-    // frame that did.  An object argument's handle is stale by now and
-    // `dropStorage` leaves objects alone, which is exactly right — the
-    // `give` parameter that received it freed it at its own scope's end.
-    for (worker.arguments) |argument| child.dropStorage(argument);
-    child.objects.free(worker.arguments);
+    // Parameter slots borrow this block for the duration of the call.  The
+    // block itself owns every copied root and is their one death point.
+    child.freeValue(Value.ofStruct(worker.arguments));
+    worker.arguments = &.{};
     // And the worker's own answer, which the join has already copied
     // across or deliberately discarded.
     //
-    // **What is released here is what a `ret` owns, and no more.**  A
-    // returned value's storage is the caller's, and the caller here is
-    // the join — but "the caller's" is not the same as "an allocation":
-    // a returned `string` may be a borrow of a program constant, which
-    // owns nothing and must not be freed, and only the IR knows which
-    // (docs/STRINGS.md).  What is *always* an allocation is a struct's
-    // field run, which `struct_make` built and consumed its fields
-    // into, and the objects the answer holds, which are rows of this
-    // table.  So those two go back and the bytes do not: releasing a
-    // constant would be a free of the artifact's own data, and holding
-    // a run would be a leak the census could not see.
-    // `body` has already made the answer this runtime's own (see
-    // there), so it is released here without qualification: the join
-    // has taken its copy, or has deliberately discarded the answer, and
-    // either way this is its death point.
+    // The ordinary return convention made this value the worker caller's.
+    // The join has copied it across or deliberately discarded it; either
+    // way this is its one death point.
     child.freeValue(worker.result);
     worker.result = .none;
     // The census last, once nothing of this worker's is still standing

@@ -18,10 +18,10 @@
 //!
 //! What is proved, in the order the design states it:
 //!
-//!   * **D1/D2** — a worker owns its world: arguments cross by `give`
-//!     or `copy` or as values, a bare object name is refused, a
-//!     borrow parameter cannot be spawned at all, and `give` poisons
-//!     the sender exactly as S23 says.
+//!   * **D1/D2** — a worker owns its world: every permitted argument
+//!     graph crosses as an independent snapshot, aliases within and
+//!     between roots stay aliases, the caller remains live, and
+//!     resources or functions anywhere in the graph are refused.
 //!   * **D3/D4** — `spawn` answers a `task`, `wait` moves the result
 //!     out once, at every width and every shape, and a `T!` crosses
 //!     whole.
@@ -212,6 +212,39 @@ test "values copy across a spawn and the caller keeps its own" {
         \\    print(string(len(name)))
         \\
     , "a label longer than a value can hold inline:3\n43\n");
+}
+
+test "a container argument is an independent worker snapshot" {
+    try agree.prints(
+        \\func extend(values: list(long)) -> long:
+        \\    values.append(99)
+        \\    return len(values)
+        \\
+        \\func main():
+        \\    var original: list(long) = [1, 2]
+        \\    let task = spawn extend(original)
+        \\    original.append(3)
+        \\    print(string(len(original)))
+        \\    print(string(task.wait()))
+        \\    print(string(original[2]))
+        \\
+    , "3\n3\n3\n");
+}
+
+test "worker arguments preserve aliases across parameter roots" {
+    try agree.prints(
+        \\func extend(first: list(long), second: list(long)) -> long:
+        \\    first.append(9)
+        \\    return len(second)
+        \\
+        \\func main():
+        \\    var shared: list(long) = [1]
+        \\    let task = spawn extend(shared, shared)
+        \\    shared.append(2)
+        \\    print(string(task.wait()))
+        \\    print(string(len(shared)))
+        \\
+    , "2\n2\n");
 }
 
 // ---------------------------------------------------------------------------

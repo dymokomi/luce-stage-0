@@ -605,7 +605,7 @@ pub export fn luce_rt_workers_install(
 }
 
 /// `spawn f(args)` — the arguments arrive as a run of boxes and are
-/// moved into the worker's runtime here, on this thread, before the
+/// copied into the worker's runtime here, on this thread, before the
 /// thread starts (docs/THREADS.md D2).
 pub export fn luce_rt_spawn(
     runtime: *Runtime,
