@@ -1,61 +1,79 @@
 # Bitwise operators and integer literals
 
-Luce has the six C-family bit operators — binary `&`, `|`, `^`, `<<`,
-`>>` and unary `~` — their compound-assignment forms, and the integer
-literals `0xFF`, `0b1010`, and `1_000` with digit separators. They spell
-the bit-level work that CRC tables, Huffman coders, and little-endian
-fields are made of.
+Luce has six bit operators—binary `&`, `|`, `^`, `<<`, `>>` and unary
+`~`—plus their compound-assignment forms. They work on every concrete integer
+type and never change its width or signedness.
 
-## The operators
+## Operators and types
 
-| operator | meaning |
+| Operator | Meaning |
 |---|---|
 | `a & b` | bitwise and |
 | `a \| b` | bitwise or |
 | `a ^ b` | bitwise xor |
-| `~a` | bitwise not (`~a` is `-a - 1`) |
-| `a << n` | left shift by `n` bits |
-| `a >> n` | right shift by `n` bits (arithmetic) |
+| `~a` | bitwise complement |
+| `a << n` | checked left shift |
+| `a >> n` | signed arithmetic or unsigned logical right shift |
+
+`&`, `|`, `^`, and `~` preserve the operand's exact integer type. The two
+operands of a binary operation have the same concrete type; a literal takes
+that type from the other operand, while two already typed values need an
+explicit conversion.
 
 ```luce
 func main():
-    let flags = 0b1010
-    let mask = 0b0110
-    print(str(flags & mask))   # 2
-    print(str(flags | mask))   # 14
-    print(str(flags ^ mask))   # 12
-    print(str(~flags))         # -11
-    print(str(flags << 2))     # 40
-    print(str(flags >> 1))     # 5
+    let flags: u8 = 0b1010
+    let mask: u8 = 0b0110
+    assert(flags & mask == 2)
+    assert(flags | mask == 14)
+    assert(flags ^ mask == 12)
+    assert(~flags == 245)
+
+    let signed: i8 = -8
+    assert(signed >> 1 == -4)
+    assert(u8(240) >> 4 == 15)
 ```
 
-**Integers only.** `int` and `long` operate directly; `byte` and `short`
-widen to `int` first, exactly as they do under arithmetic
-(`docs/TYPES.md`), so no expression ever has an 8- or 16-bit type. A
-float has no bits a program may see, and a bitwise operator on one is
-refused:
+Floats have no bitwise operators. A mixed concrete-width expression is also
+refused; Luce never inserts a numeric promotion for bit work.
+
+## Shift checks
+
+A shift preserves the left operand's type. Its count has the same concrete
+integer type after contextual literal fitting or explicit conversion.
+
+Two checks are distinct:
+
+- a negative count, or a count at least the operand width, traps
+  `shift_out_of_range`;
+- a left shift whose result does not fit the operand type traps
+  `integer_overflow`.
+
+```luce
+func main():
+    let byte: u8 = 1
+    assert(byte << 7 == 128)
+    let wide: i64 = 1
+    assert(wide << 62 == 4611686018427387904)
+```
+
+Thus `u8(128) << 1` traps overflow, `u8(1) << 8` traps a bad count, and
+`i64(1) << 63` traps overflow. A signed right shift sign-extends; an unsigned
+right shift zero-fills.
+
+In a constant expression the same failures are compile-time refusals rather
+than runtime traps:
 
 ```text
-let y = 1.5 & 1   # refused:
-# & works on int and long; float has no bits a program may see
+const bad_count: i64 = 1 << 99
+const overflow: u8 = 128 << 1
 ```
 
-**Two's complement, signed.** `&`, `|`, and `^` operate on the two's
-complement representation; `>>` is an **arithmetic** shift that
-sign-extends, because the operands are signed — a logical shift on a
-negative value would silently manufacture a positive number. Code that
-wants logical-shift behavior masks first.
+## Precedence
 
-**Result type.** A binary bit operator's result is the unified operand
-type — `int` with `int` is `int`, anything with a `long` is `long` — the
-same unification arithmetic uses. A shift's **count** may be any integer
-type and does not widen the shifted operand; the result type is the type
-of the value being shifted.
-
-Precedence follows Go rather than C: `&`, `<<`, and `>>` bind at the
-multiplication level, and `|` and `^` at the addition level. This fixes
-C's classic trap — `flags & mask != 0` means `(flags & mask) != 0`, as
-it reads.
+Precedence follows Go rather than C: `&`, `<<`, and `>>` bind with
+multiplication; `|` and `^` bind with addition. Consequently
+`flags & mask != 0` means `(flags & mask) != 0`, as it reads.
 
 ```luce
 func main():
@@ -65,88 +83,39 @@ func main():
         print("set")
 ```
 
-Comparison stays non-associative, and mixing comparisons (`a < b < c`)
-remains refused; the change here is only that `a & b == c` groups as
+Comparisons remain non-associative, so `a < b < c` is refused. The bitwise
+precedence only makes expressions such as `a & b == c` group as
 `(a & b) == c`.
-
-## Shifts are checked bit transport
-
-A shift moves bits; it does not multiply, so high bits shifted out of an
-`int` or `long` are discarded without trapping. The shift **count**,
-however, is checked: a count that is negative or at least the operand's
-bit width traps `shift_out_of_range` (`shift count out of range`, with
-the count and the width), on both engines.
-
-```luce
-func main():
-    let width = 40
-    let n = width - 8
-    print(str(1 << n))   # ok: 32 < 64 for a i64 shift
-```
-
-A `1 << 64` on a `long`, or a negative count, traps at run time. In a
-constant context — a file-scope `const` or a folded default — a bad
-shift count is caught at compile time instead:
-
-```text
-const bad: long = 1 << 99   # refused:
-# constant shift count out of range
-```
 
 ## Compound assignment
 
-Each binary operator has a compound-assignment form — `&=`, `|=`, `^=`,
-`<<=`, `>>=` — with the same typing and the same count check on the
-shifts:
+`&=`, `|=`, `^=`, `<<=`, and `>>=` compute at the destination's concrete
+width and use the same shift-count and overflow checks:
 
 ```luce
 func main():
-    var x = 0b1010
-    x &= 0b0110
-    x |= 0b0001
-    x ^= 0b0011
-    x <<= 2
-    x >>= 1
-    print(str(x))
+    var bits: u8 = 0b1111
+    bits &= 0b1010
+    bits |= 0b0101
+    bits ^= 0b0110
+    bits <<= 2
+    bits >>= 4
+    assert(bits == 2)
 ```
 
-## Constant folding
+## Integer literal spellings
 
-Bitwise expressions over constants fold in stage 4 with identical
-semantics, the shift-count check included. A folded bitwise constant is
-a value that inlines wherever it is used:
+- Decimal, hexadecimal `0xFF`, and binary `0b1010` literals are integers.
+  Digits in hexadecimal literals are case-insensitive; the canonical prefixes
+  are lowercase, while `0X` and `0B` are accepted.
+- A literal takes its integer type from context and must fit. With no context
+  it is `i64`.
+- `_` may separate digits—`1_000`, `0xFF_FF`, `0b1010_1010`—but cannot be
+  leading, trailing, doubled, or adjacent to the base prefix.
+- There are no hexadecimal floats or octal literals. `0o17` is refused, and a
+  malformed leading-zero number does not silently become C-style octal.
 
-```luce
-const read_mask: i64 = 0xFF
-const write_flag = 1 << 4
-
-func main():
-    print(str(read_mask & write_flag))
-```
-
-## Literals
-
-- **Hexadecimal** `0xFF` and **binary** `0b1010`. Hex and binary
-  literals are integers — `int` until they land on a wider type, like
-  any integer literal — and there are no hex floats. Digits are
-  case-insensitive; the canonical prefix is lowercase (`0x`, `0b`), and
-  `0X`/`0B` are also accepted.
-- **Digit separators.** A `_` may sit between digits — `1_000`,
-  `0xFF_FF`, `0b1010_1010` — but never leading, trailing, doubled, or
-  beside the base prefix. A misplaced separator is `luce.lex.number`.
-- **No octal.** There is no octal literal: `0o17` is refused by name,
-  and a bare leading zero is a malformed number rather than a C-style
-  octal.
-
-```luce
-func main():
-    let a = 0xFF_FF
-    let b = 0b1010_1010
-    let c = 1_000_000
-    print(str(a + b + c))
-```
-
-`shift_out_of_range` is the one trap code these operators add, shared by
-both engines. Everything else reuses the arithmetic machinery: the LLVM
-backend lowers to `and`/`or`/`xor`/`shl`/`ashr` with the count check in
-front, and the interpreter calls the same runtime helpers.
+Constant folding and runtime evaluation use the same concrete-width rules on
+both execution engines. The runtime helpers and LLVM lowering both preserve
+signedness, distinguish arithmetic from logical right shift, and report the
+same `integer_overflow` or `shift_out_of_range` trap.

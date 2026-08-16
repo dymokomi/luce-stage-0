@@ -64,9 +64,9 @@ test "integers: the four operations and precedence" {
 // The bit set (docs/BITWISE.md)
 // ---------------------------------------------------------------------------
 //
-// Go's precedence, two's complement on the integers, shifts that move
-// bits with the count as the one thing that traps, and the literals
-// R3 brought in.  Every row runs on both engines.
+// Go's precedence, concrete-width two's-complement bit operations,
+// checked left shifts, range-checked counts, and the literal spellings.
+// Every row runs on both engines.
 
 test "references: sharing, aliasing, and reassignment leave nothing alive" {
     // Every path the ARC emission counts (docs/MEMORY.md): a fresh
@@ -168,6 +168,21 @@ test "the bit set: shifts transport bits at the operand's explicit width" {
     );
 }
 
+test "the bit set: left-shift overflow traps at the operand's explicit width" {
+    try agree.trap(
+        \\func main():
+        \\    var value: u8 = 128
+        \\    let shifted = value << 1
+        \\
+    , .integer_overflow);
+    try agree.trap(
+        \\func main():
+        \\    var value: i64 = 1
+        \\    let shifted = value << 63
+        \\
+    , .integer_overflow);
+}
+
 test "the bit set: Go's precedence means flags read as written" {
     try agreeOk(
         \\func main():
@@ -250,13 +265,11 @@ test "the bit set: a shift count out of range traps, at either width and either 
     , .shift_out_of_range);
 }
 
-// `string(x)` completes the family of conversion constructors, each
-// named for the type it produces, and `str` is gone (docs/NUMERICS.md
-// §7).  `builder` is why they are not the same function: `str(b)`
-// took a heap object, and a scalar constructor should not — a builder
-// hands over its text with `b.build()`.
+// `str(x)` is the text conversion for scalar values (docs/NUMERICS.md).
+// A builder is a mutable reference object rather than a scalar, so it
+// takes an explicit snapshot with `b.build()`.
 
-test "string(x) prints every scalar, and builder.build() hands over its own" {
+test "str(x) prints every scalar, and builder.build() takes a snapshot" {
     try agreeOk(
         \\func main():
         \\    assert(str(42) == "42")
@@ -280,7 +293,7 @@ test "string(x) prints every scalar, and builder.build() hands over its own" {
 
 // `{x:.2f}` — format specs inside f-strings, and nowhere else,
 // because that is where formatting happens (docs/NUMERICS.md §8).
-// One form: `.Nf` on a double.  It lowers to `strings.format_float`,
+// One form: `.Nf` on a numeric value. It lowers to `strings.format_float`,
 // which already existed and already rounds half away from zero, so
 // this is one production in the f-string scanner and no runtime.
 
@@ -293,9 +306,9 @@ test "f-strings: a :.Nf spec writes a double to N decimal places" {
         \\    print(f"mean = {mean:.2f}")
         \\    let rate = 1.0 / 3.0
         \\    print(f"{3} rolls, {rate:.3f}/s")
-        \\    # Rounding is the language's, f16 away from zero.
+        \\    # Display rounding is halfway away from zero.
         \\    print(f"{2.5:.0f} {-2.5:.0f}")
-        \\    # Promotion reaches the spec too: a i64 widens into it.
+        \\    # Integer holes use the same explicit formatting request.
         \\    print(f"{7:.2f}")
         \\    # And a hole with no spec is unchanged.
         \\    print(f"{mean}")

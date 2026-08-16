@@ -101,9 +101,9 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
             return boxInteger(T, computed);
         },
         // The bit set (docs/BITWISE.md): two's complement on the
-        // representation, `>>` arithmetic because the operands are
-        // signed, and `<<` transporting bits rather than multiplying —
-        // the count is the one thing checked (R2).
+        // representation, signed `>>` arithmetic, unsigned `>>`
+        // logical, and `<<` checked at the operand's concrete width.
+        // Counts have their distinct range trap.
         .bit_and => return boxInteger(T, left & right),
         .bit_or => return boxInteger(T, left | right),
         .bit_xor => return boxInteger(T, left ^ right),

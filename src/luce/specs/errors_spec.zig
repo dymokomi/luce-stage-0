@@ -3294,11 +3294,12 @@ test "luce.sema.type: the bit set works on integers, said with the fact that ref
     );
 }
 
-test "luce.sema.const: a constant shift with a bad count is the trap's compile-time face" {
-    // docs/BITWISE.md D6: the folder answers what a run answers, and
-    // a count out of range cannot quietly fold to anything.
+test "luce.sema.const: invalid constant shifts are the traps' compile-time face" {
+    // The folder answers what a run answers: neither a bad count nor
+    // a value that overflows its concrete width can quietly fold.
     try expectRejected("const bad = 1 << 64\n\nfunc main():\n    return\n", "luce.sema.const");
     try expectRejected("const bad = 1 << -1\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad: u8 = 128 << 1\n\nfunc main():\n    return\n", "luce.sema.const");
     try expectCompiles("const fine: i64 = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
 }
 

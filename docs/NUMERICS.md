@@ -72,7 +72,9 @@ Every integer type computes at its own width.
 - Signed minimum divided by `-1` traps `integer_overflow`.
 - `&`, `|`, `^`, and `~` work on every integer type and preserve it.
 - `<<` and `>>` preserve the left type. A negative shift count or a count at
-  least the left width traps `shift_out_of_range`.
+  least the left width traps `shift_out_of_range`; a left-shift result that
+  does not fit traps `integer_overflow`. Signed right shift sign-extends and
+  unsigned right shift zero-fills.
 
 ```luce
 func main():
