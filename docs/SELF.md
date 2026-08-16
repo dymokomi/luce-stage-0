@@ -15,7 +15,7 @@ caller's feet; a method call on a receiver can, and the syntax shows it.
 
 ## `self` is implied
 
-A struct's, class's, or enum's member function declares no `self`
+A struct's or enum's member function declares no `self`
 parameter. Its body names `self` and `self.field` directly, and the
 written signature lists only the arguments a caller passes:
 

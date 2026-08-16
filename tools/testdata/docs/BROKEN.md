@@ -1,6 +1,6 @@
-# A living document with one lie in it
+# A current document with one lie in it
 
-`tools/doccheck.zig` compiles every Luce sample in every living
+`tools/doccheck.zig` compiles every Luce sample in every current
 document.  A guard that only ever runs against a clean tree proves
 nothing — empty its document list and every test still passes — so
 this file is the tree it is pointed at to prove it fails.

@@ -9,9 +9,11 @@ is fallible: the world may refuse a valid request, so handle it with `try` or
 import std.files
 ```
 
-Programs compiled without host access cannot use this module. A file handle
-is an owned resource: its scope closes it, `free` closes it early, and a
-returned or given handle moves to its new owner. There is no `close` call.
+Programs compiled without host access cannot use this module. A file is a
+shared reference resource, and there is no source `close` call. The completed
+ARC contract closes its host handle at the last release; current development
+builds still have disabled file-lifecycle tests and may close only at runtime
+teardown. See [Memory Management](/guide/reference/memory/#current-completion-blockers).
 
 ## Text files and directories
 

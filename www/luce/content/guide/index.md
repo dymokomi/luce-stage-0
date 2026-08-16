@@ -8,7 +8,7 @@ top-level destinations.
 
 **Language Guide** chapters teach the language in reading order. They start
 with a complete program, establish values and operators, then build toward
-data modeling, failure, concurrency, ownership, access control, and modules.
+data modeling, failure, concurrency, ARC, access control, and modules.
 Each chapter assumes only the ideas that appeared before it.
 
 **Tools and Projects** covers the work around source code: building,
@@ -16,7 +16,7 @@ editing, packages, tests, complete programs, and performance. Read these
 chapters when the corresponding task first becomes real.
 
 **Language Reference** closes the book with exhaustive lookup material.
-Those chapters define grammar, types, expressions, declarations, ownership,
+Those chapters define grammar, types, expressions, declarations, memory,
 diagnostics, modules, and built-ins. They favor precision over narrative.
 
 ## How to read it

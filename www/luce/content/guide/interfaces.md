@@ -65,9 +65,9 @@ not visible through `Drawable`.
 ## Let the compiler check the contract
 
 Every declared method is required. The implementation must match its name,
-parameter count, parameter types, `give` modes, result count, and result
-types. The receiver is implied by the method declaration and interface
-methods are read-only, so a method that writes `self` cannot be a witness.
+parameter count, parameter types, result count, and result types. The receiver
+is implied by the method declaration. Interface methods are currently
+read-only, so a method that writes `self` cannot be a witness.
 
 Failure effects are directional. A non-fallible implementation may satisfy
 a fallible requirement, so a caller may still write `try`. A fallible
@@ -112,24 +112,24 @@ The answer is still one call, but it is not one scalar expression. Passing
 its components first. A fallible multi-value method follows the ordinary
 `try`/`catch` rules.
 
-## Ownership is part of the design
+## Values remain alive
 
-An interface value owns its dispatch storage. If the concrete receiver is a
-value-only struct, that receiver is independent. If the receiver contains a
-list, map, array, builder, file, or task, the interface's receiver copy still
-refers to the concrete owner's object graph; the interface does not create a
-second owner.
+Converting a struct to an interface value captures a copy of the concrete
+receiver. A value-only receiver is self-contained and may be returned or
+stored. Current dispatch values do not retain reference fields in that copy;
+when a conformer carries a list, map, array, builder, file, or task, another
+live concrete value must keep that graph alive. This is an incomplete-ARC
+lifetime gap, not the target interface contract.
 
-Keep the concrete owner alive for as long as the interface value can be
-called. A fresh object-carrying receiver cannot be retained as an interface,
-and a function cannot return a carrying receiver as an interface because its
-local owner would die at the return. Return the concrete owner instead, or
-make a resource-free copy, store that copy in a named owner, and then create
-the interface view.
+The current representation stores one bound dispatch value per required
+method. It is correct but intentionally not the final representation. The
+[status page](/status/#interfaces) describes the planned move to
+one owned payload and a witness table before mutable interface dispatch is
+added.
 
-The [memory guide](/guide/memory/) explains the ownership words. The
-[interface reference](/guide/reference/types/#interface) gives the exact
-matching, storage, and diagnostic rules.
+The [memory guide](/guide/memory/) explains the lifetime rule. The [interface
+reference](/guide/reference/types/#interface) gives the exact matching,
+storage, and diagnostic rules.
 
 ## A useful boundary
 

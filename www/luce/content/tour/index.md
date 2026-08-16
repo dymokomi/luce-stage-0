@@ -82,20 +82,24 @@ point 6,2; total 6
 ```
 
 Structs are values and copy when assigned. Lists, maps, arrays, and builders
-are owned objects; their lifetime follows the scope that owns them.
+are shared reference objects. Luce keeps them alive with automatic reference
+counting.
 
-## Ownership is the memory model
+## Memory is automatic
 
-Luce has no garbage collector and no reference counting. A binding that
-receives a fresh object owns it, and its scope releases it. Most calls borrow
-an object temporarily. Say `give` when ownership should move, `copy` when you
-need a second object, and `free` when you want to release one early.
+Assigning a list or passing it to a function shares the same object. A
+mutation through either reference is visible through both. The compiler
+inserts retain and release operations. There are no memory-management keywords
+to write. The development compiler is still finishing last-release
+reclamation on every control-flow and resource path; [Status](/status/) names
+the remaining gates.
 
-That rule applies to files and workers as well. It is why a value can be sent
-to another worker without a shared heap and why a resource cannot be copied.
-The [ownership guide](/guide/memory/) and
-[exact ownership rules](/guide/reference/ownership/)
-show every form.
+The completed ARC contract closes a file and joins an unfinished task at its
+last reference. Current development builds still have lifecycle gaps. Workers have
+separate runtimes; permitted container graphs are copied between them, and no
+object identity is shared. Container arguments currently have a caller-lifetime
+bug, so use value arguments for now. The [memory guide](/guide/memory/) and
+[exact memory rules](/guide/reference/memory/) show every form.
 
 ## Absence and failure are different
 
@@ -142,8 +146,10 @@ shows how a direct source folder becomes a versioned package.
 ## Workers
 
 `spawn` starts a named function on a worker with its own runtime. `wait()`
-joins it and consumes the scope-owned task. Plain values copy; owned objects
-cross only with an explicit `give` or `copy`.
+joins it and observes the task's result once. Value arguments and permitted
+results are copied between runtimes; live resources and function values do not
+cross. The recursive argument copier exists, but its current container ARC bug
+is tracked on [Status](/status/#ordered-work).
 
 ```luce run
 func square(n: long) -> long:

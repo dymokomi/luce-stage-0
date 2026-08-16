@@ -148,9 +148,9 @@ of a call, for instance — lives to the end of the statement, and the
 Nothing about the memory model (`docs/MEMORY.md`) is special for unions. A
 union is a value type: it copies when assigned or passed, a payload field
 that is a **value type** copies with it, and a payload field that is a
-**reference type** — a container such as `list` or `map`, or a `class` — is
-shared like any reference, retained while the union is held and released
-when the last reference goes. There are no ownership verbs, because a value
+**reference type** — a container such as `list` or `map` — is
+shared like any reference. Common paths retain it while the union is held;
+full last-release coverage remains the gate in `docs/MEMORY.md`. There are no ownership verbs, because a value
 type never had any.
 
 A payload binding names the payload. For a **value** payload the binding is
@@ -187,7 +187,7 @@ the object it names stays alive for as long as any copy does.
 A union may name itself indirectly through a reference-typed container,
 which is how a recursive shape like a JSON tree is written. The recursion
 travels through the container's single reference, so the type is finite by
-construction and the tree is freed at its last reference — no boxing
+construction and completed ARC frees the tree at its last reference — no boxing
 keyword, no arena, no tracing collector:
 
 ```luce
@@ -380,8 +380,8 @@ same compare-and-branch tree an enum's does.
 The runtime (`libluce_rt`) learns nothing about unions: the same call that
 builds a struct run builds a union's, the same walk that copies a struct
 copies a union — value payloads by their bytes, reference payloads by
-retaining them — and the same walk that frees a struct frees a union,
-releasing whatever references its live member holds. Both engines — the
+retaining them — and the completed release walk frees a union while releasing
+whatever references its live member holds. Both engines — the
 compiled path and the interpreter oracle — run the same MIR and are
 compared on prints, traps, traces, and the leak census, so a missed release
 or a double free of a payload shows up as a number in the spec suite rather

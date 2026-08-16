@@ -9,11 +9,11 @@ your data, not from which API looks familiar.
 | Values are addressed by a runtime key | `map(K, V)` | indexes, counters, configuration |
 | Numeric or tabular data has a fixed shape | `array(T, ...)` | vectors, images, matrices, grids |
 
-All three are mutable, owned objects. A fresh collection belongs to the
-binding that receives it. Assigning a named collection creates an alias;
-`copy` makes an explicit deep copy when its contents can be copied. Read
-[Memory and Ownership](/guide/memory/) before storing collections inside
-other owned values.
+All three are mutable reference types managed by ARC. Assignment and argument
+passing share the same collection. A list slice creates a new list and
+recursively copies copyable reference elements. Read [Memory and
+ARC](/guide/memory/) before choosing between sharing a collection and creating
+an independent one.
 
 ## Lists
 
@@ -108,9 +108,9 @@ func main():
 head 3, tail 2, source 5
 ```
 
-A collection owns owned elements placed inside it. Fresh elements need no
-annotation; a named owned value needs `give` to transfer it or `copy` to
-duplicate it.
+A collection retains reference elements placed inside it. That makes nested
+collections easy to share intentionally. Use a slice when one nested list must
+be independently resizable.
 
 ```luce run
 func main():
@@ -118,17 +118,16 @@ func main():
     rows.append([1, 2])
 
     var loose: list(long) = [3, 4]
-    rows.append(give loose)
+    rows.append(loose)
+    let independent = loose[0:len(loose)]
+    rows.append(independent)
 
-    var template: list(long) = [0]
-    rows.append(copy template)
-    template.append(1)
-
-    print(f"{len(rows)} rows; template has {len(template)} values")
+    loose.append(5)
+    print(f"shared {len(rows[1])}, independent {len(rows[2])}")
 ```
 
 ```output
-3 rows; template has 2 values
+shared 3, independent 2
 ```
 
 ## Maps
@@ -200,7 +199,7 @@ func main():
 the: 3
 ```
 
-`keys()` and `values()` return fresh lists owned by the caller.
+`keys()` and `values()` return fresh lists.
 
 ## Arrays
 
@@ -249,17 +248,17 @@ func main():
 
 A rank-one array supports `sort`, `reverse`, `find`, `contains`, and
 `fill`. Numeric operations such as `sum`, `mean`, `dot`, and `axpy`
-are in [`std.math`](/library/math/). Filling an array of owned objects from
-one value is refused because one value cannot own several slots; assign each
-slot separately.
+are in [`std.math`](/library/math/). `fill` is available for value elements;
+assign reference elements to individual slots.
 
 ## Iterating safely
 
 `for value in collection` visits values. `for key, value in collection`
-visits a list or array index, or a map key, with its value. The loop borrows
-the collection while it runs, so do not resize or free that same collection
-during iteration.
+visits a list or array index, or a map key, with its value. The collection stays
+alive while the loop runs. Do not change its size during that iteration;
+element replacement is allowed where the element and loop-binding rules permit
+it.
 
-For exact construction, indexing, and ownership rules, see
+For exact construction, indexing, and ARC rules, see
 [Types](/guide/reference/types/). For module-specific operations, see
 [`std.lists`](/library/lists/) and [`std.math`](/library/math/).

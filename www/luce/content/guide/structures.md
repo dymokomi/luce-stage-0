@@ -22,11 +22,10 @@ struct Point:
     y: double
 ```
 
-The important property is value semantics: copying a struct copies its
-value fields. If a field contains a list, map, array, builder, file, or task,
-the struct carries that object and follows the ordinary [ownership
-rules](/guide/memory/); copying the struct does not silently deep-copy the
-object.
+The important property is value semantics: copying a struct copies its value
+fields. If a field contains a list, map, array, builder, file, or task, ARC
+retains that reference. Both struct values then reach the same object; copying
+the struct does not silently clone it.
 
 ## Put behavior beside the fields
 
@@ -69,7 +68,7 @@ the receiver's value at the point it is read.
 
 When several structs should answer the same small question, use an interface
 as the boundary between the caller and the implementation. The contract,
-multi-value returns, heterogeneous collections, and ownership rules are
+multi-value returns, heterogeneous collections, and lifetime rules are
 explained in [Interfaces](/guide/interfaces/). Keep this
 page focused on the data shape; use that chapter when the design question is
 which behavior belongs behind a shared type.
@@ -118,25 +117,24 @@ func main():
 answer: 42
 ```
 
-## Structures that carry objects
+## Structures that carry references
 
-A struct containing a `list`, `map`, `array`, `builder`, `file`, or `task` is
-an object-carrying value. The struct itself is still a value, but its object
-fields have an owner and a lifetime. Passing the struct by value preserves
-the alias to those fields; it does not create an accidental second owner.
+A struct containing a `list`, `map`, `array`, `builder`, `file`, or `task` is a
+reference-carrying value. The struct still copies as a value, while ARC keeps
+each referenced object alive. Passing or returning the struct preserves those
+shared identities.
 
-When a struct is the new owner of a named object, say so at the boundary:
+Construction needs no transfer syntax:
 
 ```text
 var labels = ["new", "ready"]
-let job = Job(labels = give labels)
+let job = Job(labels = labels)
 ```
 
-Use `copy labels` when the new struct needs an independent object. Use a
-borrow when a function only needs to inspect or mutate an object during the
-call. [Memory and Ownership](/guide/memory/) explains the four ownership
-words, and the [ownership reference](/guide/reference/ownership/) gives the exact rule
-for each place a struct can occur.
+`job.labels` and `labels` now refer to the same list. Use
+`labels[0:len(labels)]` when the field needs an independent list. [Memory and
+ARC](/guide/memory/) explains sharing, replacement, and the deterministic
+resource-cleanup contract that the current ARC completion phase must finish.
 
 ## A practical review
 
@@ -145,7 +143,7 @@ Before adding a struct, ask:
 - Are these fields always meaningful together?
 - Which operations must preserve an invariant?
 - Should callers construct the value directly, or use a factory?
-- Does a field carry an object, and where is that object transferred?
+- Does a field carry a reference, and should that object be shared?
 - Would a union or enum describe the alternatives more honestly?
 
 If the answers are unclear, keep the data local until the shape becomes

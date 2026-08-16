@@ -1,103 +1,194 @@
 # Where Luce stands
 
-This page separates three things that are easy to confuse:
-
-1. what you can use today;
-2. what Luce intentionally does not include; and
-3. what is being considered or built next.
-
-The rest of the site documents the first category. The [Guide](/guide/)
-teaches the language and closes with its exhaustive Language Reference; the
-[Tour](/tour/) is the short introduction.
+Updated for release 0.18. This page is the boundary between the language you
+can use now and the language being designed. The [Tour](/tour/),
+[Guide](/guide/), and [Library](/library/) describe the current toolchain only.
 
 ## Available today
 
 ### Language
 
-- Static types with inference, checked arithmetic and explicit numeric
-  promotion.
-- Values, structs, enums, unions, functions, interfaces and capture-free
-  lambdas.
-- Lists, maps, arrays and builders.
-- `T?` for absence, with narrowing and `else`.
-- `T!` for recoverable failure, with `try`, `catch` and `error(...)`.
-- Scope ownership for heap objects and resources, with `give`, `copy`,
-  `free` and `new`.
-- Modules, visibility, file-scope constants and named/default arguments.
-- Methods with implied `self`, `static` functions and multiple returns.
-- Explicit nominal interfaces with read-only method dispatch; interface
-  values can be mixed in lists, maps, arrays and struct fields.
-- Workers with scope-owned `task` values and joins.
+- Static types with inference, checked integer arithmetic, and explicit
+  narrowing conversions.
+- The current scalar names `byte`, `short`, `int`, `long`, `half`, `float`,
+  `double`, `bool`, and `string`.
+- Value structs, enums, tagged unions, nominal interfaces, named functions,
+  bound methods, and capture-free one-expression lambdas.
+- Lists, maps, fixed-shape arrays, builders, optionals, recoverable errors,
+  and multiple returns.
+- The ARC transition for lists, maps, arrays, builders, files, and tasks.
+  Assignment shares reference objects and common retain/release paths work on
+  both engines, but last-release reclamation and resource cleanup are not yet
+  complete.
+- Explicit nominal interfaces with multiple methods, multi-value answers,
+  directional failure matching, returns, optionals, and heterogeneous
+  containers. Interface dispatch is read-only today.
+- Isolated workers. Permitted container graphs are copied between runtimes and
+  object identity is never shared, but the current container-argument ARC path
+  can invalidate the caller's source reference.
+- Modules, visibility, constants, exact-version package consumption, and Luce
+  tests.
 
-These are not separate implementations on separate execution paths. The
-compiler, shared runtime and differential specification suite test the
-same observable behavior together.
+The old source-level ownership operations do not exist. There is no `give`,
+`copy`, or `free` syntax and no borrow annotation. The runtime and both engines
+have retain/release operations, but feature-gated lifecycle tests remain. This
+development release must not be described as full ARC until those gates are
+removed.
 
-### Toolchain
+Current blockers are concrete: four runtime reclamation tests and four
+byte/zip file-lifecycle tests are skipped; two language specs relax their
+zero-object census; bound methods do not retain references inside carrying
+receivers; several collection operations retain old deep-copy/refusal rules;
+and passing a container graph to `spawn` can invalidate the caller's reference
+and leak an object. [Memory Management](/guide/reference/memory/#current-completion-blockers)
+lists the exact boundary.
 
-The repository builds two programs:
+### Toolchain and libraries
 
-- `luce` builds a standalone executable by default, or explicitly emits a
-  loadable `.lc` artifact or relocatable object, prints IR, and runs Luce test
-  functions.
-- `loom` runs an existing `.lc`, or compiles a `.luc` file and runs it. It
-  provides the terminal and file services used by a program.
+`luce build FILE.luc` creates a native executable named after the source by
+default. `luce check`, `luce ir`, and `luce test` provide focused development
+workflows. `loom` runs a native `.lc` library when that artifact form is useful.
+The release also includes the terminal editor and local VS Code/Cursor syntax
+extension.
 
-A `.lc` file is native machine code. Running one does not invoke the
-compiler or LLVM. A source file does need the compiler and the C linker
-during its build. [Command-Line Tools](/guide/command-line/) gives the exact
-commands and failure modes.
+The shipped standard library includes `std.math`, `std.files`, `std.strings`,
+`std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`, `std.json`,
+`std.gpu`, and `std.ui`. The maintained `termui` package is a low-level,
+deterministic terminal renderer and layout library.
 
-### Standard library and complete programs
+## The language we are building
 
-The compiler ships these standard modules: `std.math`, `std.files`,
-`std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,
-`std.json`, `std.gpu` and `std.ui`. They are written in Luce and embedded
-in the toolchain.
+The north star is one memory sentence:
 
-The repository also contains complete programs, including a parser,
-archive tool, file utilities, games and a terminal editor. The
-[Guide](/guide/) includes them as runnable programs because they use the same
-language and libraries available to you; they are not special cases in the
-compiler.
+> Values copy. References share identity. ARC keeps references alive. Weak
+> references break cycles. Resources close at the last strong release.
+> Workers never share object identity.
 
-## Deliberately outside the language
+### Classes
 
-These are design decisions, not missing documentation:
+`class` will be a final ARC reference type with shared identity and ordinary
+mutation. Assignment will share the same object; methods will be callable
+through a `let` reference; `deinit` will run once at the last strong release.
+There is no planned class inheritance.
 
-- garbage collection, reference counting, shared ownership and weak
-  references;
-- implicit narrowing, shadowing, truthiness and a ternary operator;
-- tuples as a type, user-defined generics, interface inheritance and operator
-  overloading;
-- exceptions, `errdefer`, asynchronous functions and reflection;
-- capturing closures. Use a struct with a method when state must travel
-  with behavior.
+`class` already parses as a front-end scaffold, but it still lowers with value
+behavior. That is not a usable class implementation and the Guide does not
+present it as one.
 
-[Memory and Ownership](/guide/memory/), [Error Handling](/guide/errors/),
-and the [exact language rules](/guide/reference/) explain the alternatives
-Luce chose and the rules that follow from them.
+### Interfaces
 
-## Not shipped yet
+Interface values will become one owned existential payload plus concrete
+metadata and a witness table. A struct payload will be boxed as a value; a
+class payload will retain the shared object. That representation enables
+mutable dispatch and keeps heterogeneous lists and maps independent of the
+frame that created each value.
 
-The following work is intentionally separate from the language core:
+The first complete model does not include interface inheritance, default
+method bodies, associated types, or runtime casting.
 
-- typed channels between workers;
-- package fetching and publishing (the consuming package layout exists,
-  but the tool does not fetch a registry);
-- cross-compilation and sharing one runtime library between artifacts;
-- a formatter, language server and debugger;
-- additional library conveniences such as direct code-point iteration and
-  character-class helpers.
+### Weak references and capturing closures
 
-An item here is not a promise about a release date. It is a boundary around
-what the current toolchain supports. When a boundary changes, the complete
-programs, reference coverage checks and this page should change together.
+`weak` will apply to ordinary ARC objects, including classes and built-in
+container references, and read as an optional that becomes `none` when the
+object is destroyed. That scope matters because a recursive struct/container
+graph can already form a cycle. Resources and function values remain
+strong-only in the first model. A weak reference never dangles, and there is
+no unsafe `unowned` form.
 
-## Keeping the page honest
+Capturing closures will share the ordinary function type. Immutable values
+capture a snapshot; mutable locals share an environment cell; references are
+strongly captured by default. Explicit capture lists request a weak reference
+or a named value snapshot when needed. Strong capture remains the normal safe
+case—the compiler will not demand weak capture merely because a closure
+escapes.
 
-Every runnable Luce block on this site is compiled and run during the site
-build. Expected traps, errors and refused programs use their corresponding
-toolchain path. The build also checks links and selected compiler-to-
-reference name lists. This catches stale code and API tables; it does not
-replace a human reading the surrounding explanation.
+### Explicit type names
+
+The intended core type vocabulary is:
+
+```text
+bool
+
+u8  u16  u32  u64
+i8  i16  i32  i64
+f16 f32  f64
+
+char
+str
+bytes
+
+list[T]
+map[K, V]
+array[T, N, ...]
+func(T, ...) -> R
+T?
+```
+
+The current-to-target migration is `byte` → `u8`, `short` → `i16`,
+`int` → `i32`, `long` → `i64`, `half` → `f16`, `float` → `f32`,
+`double` → `f64`, and `string` → `str`. The new family also adds `i8`,
+`u16`, `u32`, and `u64`.
+
+`none` remains an absence value, not a type. `char` is one Unicode scalar,
+not a borrowed view or a grapheme cluster. `str` is immutable UTF-8 and
+`bytes` is immutable binary data. There is no generic `f8`; any future 8-bit
+float names its format explicitly.
+
+`tree`, `stack`, matrices, and specialized vectors are library types after
+generics, not primitive keywords. `map` is the one associative container;
+`dict` and `hash` are not aliases. A compiler `vec[T, N]` is justified only by
+real SIMD and ABI semantics.
+
+## Ordered work
+
+The implementation order is chosen to avoid rewriting the same compiler and
+documentation seams twice:
+
+1. **Finish ARC.** Remove every feature-related skip, restore zero-object
+   census checks, close resources exactly once, make bound receivers safe,
+   repair worker argument transfer, replace inherited single-owner collection
+   rules, and fix the damaged-module verifier panic.
+2. **Freeze the type and closure contracts.** Decide literal, conversion,
+   Unicode, container-type, block-closure, capture-list, and diagnostic rules
+   before changing code.
+3. **Migrate type names atomically.** Update compiler, runtime, module format,
+   standard library, examples, editor grammar, packages, and documentation in
+   one pre-release cut; old spellings become direct diagnostics rather than
+   long-lived aliases.
+4. **Build weak references.** Safe zeroing for built-in ARC objects, lifecycle
+   integration, cycle diagnostics, and both-engine agreement.
+5. **Complete classes.** Heap lowering, sharing, mutation, identity,
+   construction, teardown, weak fields, errors, optionals, containers, and
+   workers.
+6. **Replace interface storage.** Owned existentials for structs and classes,
+   then weak storage, mutable dispatch, and the full negative conformance
+   matrix.
+7. **Add capturing closures.** ARC environments, shared mutable captures,
+   strong/weak/snapshot capture, block bodies, and cycle diagnostics.
+8. **Prove the model in userland.** Build a retained UI layer over `std.ui`,
+   `std.gpu`, and termui; migrate the editor as the end-to-end proof.
+9. **Add generics later.** Monomorphized generic functions and types with
+   interface bounds, followed by a small library of justified data structures.
+10. **Lock the release.** Full deterministic tests, hardening, site build,
+    installer smoke test, benchmark comparison, and a final documentation and
+    diagnostics audit.
+
+During a phase, focused language, library, host, backend, editor, or tools
+tests are the inner loop. The complete release gate runs at the phase boundary,
+with visible progress and heartbeat output. A feature is complete only when
+positive programs, common user mistakes, runtime lifetime checks, both
+engines, public examples, and performance evidence agree.
+
+## Not part of this roadmap
+
+- class inheritance;
+- interface default methods or inheritance;
+- garbage collection or user-visible manual retain/release;
+- unsafe pointers or unsafe non-owning references;
+- shared mutable state between workers;
+- operator overloading, reflection, macros, or metaclasses; and
+- higher-kinded or variadic generics.
+
+There is no release date implied by this order. The purpose of the list is to
+make dependencies and completion criteria visible before implementation
+starts.

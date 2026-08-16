@@ -2,8 +2,8 @@
 
 `termui` is Luce's terminal-UI package. It turns application state into a
 deterministic cell surface and keeps terminal protocol details at the
-`std.term` boundary. The application owns its state and event policy;
-termui owns the mechanics every terminal program otherwise repeats:
+`std.term` boundary. The application keeps its state and event policy;
+termui handles the mechanics every terminal program otherwise repeats:
 frame preparation, clipping, constraint layout, styled text, junction-aware
 frames, rendering composition, and presenting only the cells that changed.
 
@@ -23,7 +23,7 @@ packages/termui-0.2.0/
 ├── view.luc       # View, Text, Fill              — the read-only view interface
 ├── rows.luc       # Rows, RowsView                — selection list
 ├── viewport.luc   # Viewport, ViewportView        — scrollable window
-└── renderer.luc   # Renderer                      — the lifecycle owner
+└── renderer.luc   # Renderer                      — the lifecycle coordinator
 ```
 
 Each module is tested per boundary in memory, and the editor drives the

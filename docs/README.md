@@ -1,69 +1,81 @@
 # The documents
 
-One line each.  Every file here describes the language as it is now, in
-the present tense: there is no frozen tier, no exemption, and no history
-kept in a reference — the reasoning behind a decision lives in the commit
-that made it.  A reference is wrong the moment it drifts, so a guard
-keeps them honest: [`tools/documents.zig`](../tools/documents.zig) is the
-catalogue both guards read, its every Luce sample must compile as
-written, its prose may not spell a retired type name, and the table below
-is pinned to that list by a test — a document in one and not the other
-fails `zig build test`.
+The documents have three jobs, and the distinction is enforced by
+[`tools/documents.zig`](../tools/documents.zig):
 
-Start with [V2.md](V2.md) for what the project is for, then
-[LANGUAGE.md](LANGUAGE.md) for the language and
-[PIPELINE.md](PIPELINE.md) for the compiler.  If you are about to
-write code, [CODING_GUIDE.md](CODING_GUIDE.md) is not optional.  For
-confirmed incorrect behavior, see [MISSING.md](MISSING.md).
+- **Current reference** describes the repository and language that exist now.
+  Every Luce fence compiles, refused examples must remain refused, and retired
+  type spellings are rejected from prose as well as code.
+- **Plans** describe the language we intend to build. Syntax the compiler does
+  not yet accept is written as `text`, never as a pasteable Luce example.
+- **Decision records** preserve a completed design in its historical context.
+  Only these may use `luce historical` fences.
 
-The prose that faces users lives on the documentation site instead —
-**[luce.luciaos.com](https://luce.luciaos.com)**, built from
-[`www/luce/`](../www/luce/) in this repository, where every Luce sample is
-checked by the freshly built toolchain.  Runnable samples execute and
-their claimed output is compared byte for byte; expected traps, raises
-and refusals are checked as such.  Broken samples and mismatched claimed
-results fail the build, as do dead links and anchors and selected
-compiler-to-reference vocabulary gaps.  The surrounding prose remains
-human-reviewed.  These files are the reasoning behind it.
+This separation is an honesty boundary. A class that merely parses is not a
+working reference type, a planned type name is not a current spelling, and a
+completed implementation plan is not the language reference.
 
-## The documents
+Start with [V2.md](V2.md) for the product north star and
+[ROADMAP.md](ROADMAP.md) for the ordered path from today's partial ARC pivot to
+the intended language. Use [LANGUAGE.md](LANGUAGE.md) and the current pages
+below when working on the compiler. Confirmed incorrect behavior belongs in
+[MISSING.md](MISSING.md), and only there.
 
-| File | What it is |
+User-facing documentation lives at
+[luce.luciaos.com](https://luce.luciaos.com), built from
+[`www/luce/`](../www/luce/). Its Guide and Library describe the released
+toolchain; its Status page is the public boundary between current and planned
+work. Every Luce sample, claimed output, expected refusal, link, anchor, and
+selected surface roster is checked during the site build.
+
+## Current reference
+
+| File | Purpose |
 |---|---|
-| [LANGUAGE.md](LANGUAGE.md) | The language specification: types, values, statements, expressions, the entry point. |
-| [MEMORY.md](MEMORY.md) | The memory model: value `struct`s and reference `class`es, ARC, and `weak` for cycles. Memory you never think about. |
-| [ROADMAP.md](ROADMAP.md) | The sequenced plan for the value/reference + ARC pivot: the phases, the big-bang cut, and what "done" looks like. |
-| [PIPELINE.md](PIPELINE.md) | The status table: one row per compiler stage, what it does, and how finished it is. |
-| [CODEGEN.md](CODEGEN.md) | The LLVM backend, the published host ABI, and the benchmark snapshot. The one place a benchmark ratio is written down. |
-| [MODES.md](MODES.md) | Debug and release, which differ in exactly one thing: what a trap can tell you. |
-| [ENGINE.md](ENGINE.md) | Why there is one engine, and what the interpreter is now: the differential oracle every spec's second arm runs on. |
-| [STD.md](STD.md) | The standard library, module by module, and what it takes to add one. |
-| [CODING_GUIDE.md](CODING_GUIDE.md) | How Zig is written here. Authoritative and intentionally opinionated. |
-| [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
-| [INTERFACES.md](INTERFACES.md) | The nominal interface contract: explicit conformance, effect matching, heterogeneous collections, and dispatch to mutating methods. |
-| [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
-| [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | How design and coding agents design, implement, and review user experiences: an operational synthesis of Apple's Human Interface Guidelines into software obligations. |
-| [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The plan of record for the clean termui rewrite and the modular editor that adds undo/redo, in-file search, and crash-safe drafts. |
-| [V2.md](V2.md) | The north star: what v2 is for, what it is made of, and the order the work goes in. |
-| [TYPES.md](TYPES.md) | The seven-rung numeric ladder, `bool`, `string`, and value structs beside reference classes. |
-| [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, and the `int(x)`-style conversions. |
-| [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. |
-| [ARGS.md](ARGS.md) | Named and default arguments: names optional everywhere, defaults as trailing folded constants, struct fields on the same clause, nothing below stage 4 moving. |
-| [VECTOR.md](VECTOR.md) | Vectorizing checked reductions without weakening a single trap: prove, or speculate-and-replay. |
-| [STRINGS.md](STRINGS.md) | How `string` stores its bytes, phase by phase, with the timing after each step. |
-| [VISIBILITY.md](VISIBILITY.md) | Public until it says `private`: the file as the trust unit, `private:`/`public:` regions in structs, visibility dying in stage 4. |
-| [FAILURE.md](FAILURE.md) | The rule that decides trap versus error versus `T?`, and the `T!`/`try`/`catch` design it produced. |
-| [BITWISE.md](BITWISE.md) | `& \| ^ ~ << >>` at Go's precedence, shifts as checked bit transport, hex/binary/underscore literals. |
-| [ENUMS.md](ENUMS.md) | A name for every number that is secretly a set: C-shaped member values, a chosen backing width, `Method(n) -> Method?`, and the `match` that refuses to compile with a member unaccounted for. |
-| [BYTES.md](BYTES.md) | The binary half of the host boundary: why a `string` cannot carry a JPEG, the C-shaped byte primitive, and a file handle as a reference-counted resource. |
-| [UNION.md](UNION.md) | One of these, and the language always knows which: members carrying named payload fields, `match` with alias bindings as the only door, and a value that is a struct-shaped run the runtime never learns exists. |
-| [THREADS.md](THREADS.md) | Workers own their world: `spawn f(x)` onto a second runtime, `task(T)` as a reference-counted resource whose last release joins, races unrepresentable because a reference never crosses a worker boundary. |
-| [FUNCTIONS.md](FUNCTIONS.md) | Functions as values: named functions and one-expression lambdas whose types come from where they land., with stable `std.lists.sort_by`. |
-| [PACKAGES.md](PACKAGES.md) | The consuming half of packages: `luce.yaml` roots (a strict YAML subset) and exact-version wants, dotted imports with `as`, probe-every-tier resolution that refuses ambiguity instead of ordering it, the `.luce/` store and compile cache, and the four seam changes package isolation costs the loader. Authoring, publishing and fetch are not yet built. |
-| [BINDING.md](BINDING.md) | Bound methods — the method travels with its struct: `receiver.method` as a function value whose environment is the receiver, a reference ARC keeps alive, `(func(..) -> R)?` as the storable form, and union constructors as function values. |
-| [FILESYSTEM.md](FILESYSTEM.md) | **Partly built.** The filesystem surface: `paths` is the name and `files` is the world, because asking is touching; no `Path` value type; and `files.kind(p) -> Kind?!` as the one question, answering absence and refusal separately, subsuming `exists`, with listings that carry kinds. The file-surface methods (`open()`, `FileMode`) are not yet built. |
-| [TESTING.md](TESTING.md) | **Built.** `luce test`: `func test_*()` in `tests/`, discovered by name and refused-not-skipped when malformed, run one `luce_main` call per test through a synthesized entry in a blessed shape — the CLI drives, so a trap fails the test and never the run. |
-| [TERMUI.md](TERMUI.md) | **Built.** The terminal-UI package: one renderer owns the screen and event stream, views measure and draw through a small interface, layout is total rectangle arithmetic, and the editor is its end-to-end customer. |
-| [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. |
-| [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. |
-| [GENERICS.md](GENERICS.md) | **Proposed, not built.** Parametric generics: monomorphization, interface bounds, `[T]` syntax — and the honest note that a declarative UI framework needs generics only to hide the last loop. |
+| [LANGUAGE.md](LANGUAGE.md) | The complete current language specification. |
+| [MEMORY.md](MEMORY.md) | The current ARC transition, its disabled lifecycle gates, and the completed value/reference contract. |
+| [STD.md](STD.md) | Every embedded standard module and the cost of adding one. |
+| [CODEGEN.md](CODEGEN.md) | LLVM lowering, the published host ABI, artifacts, and measured backend behavior. |
+| [MISSING.md](MISSING.md) | Confirmed bugs only; plans and feature requests do not belong here. |
+| [ENGINE.md](ENGINE.md) | The single shipping engine and the differential interpreter oracle. |
+| [MODES.md](MODES.md) | Debug and release behavior. |
+| [PIPELINE.md](PIPELINE.md) | The compiler stages and their current completion state. |
+| [CODING_GUIDE.md](CODING_GUIDE.md) | The repository's authoritative Zig style and testing rules. |
+| [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | Deep modules, information hiding, naming, and complexity control. |
+| [INTERFACES.md](INTERFACES.md) | Current nominal interfaces, conformance, heterogeneous storage, and the read-only dispatch boundary. |
+| [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | Operational product and interface-design guidance. |
+| [RETURNS.md](RETURNS.md) | Multiple returns without tuple values. |
+| [NUMERICS.md](NUMERICS.md) | Current promotion, division, conversion, and overflow semantics. |
+| [STRINGS.md](STRINGS.md) | Current UTF-8 string representation and lifetime behavior. |
+| [FAILURE.md](FAILURE.md) | Absence, recoverable errors, traps, `try`, and `catch`. |
+| [TYPES.md](TYPES.md) | Current builtin types and type grammar. |
+| [ARGS.md](ARGS.md) | Named and default arguments. |
+| [VISIBILITY.md](VISIBILITY.md) | Public-by-default declarations and file-scoped privacy. |
+| [BITWISE.md](BITWISE.md) | Integer bit operations and literals. |
+| [ENUMS.md](ENUMS.md) | Enumerations, backing widths, conversions, and exhaustive matching. |
+| [BYTES.md](BYTES.md) | Current byte storage and binary file APIs. |
+| [UNION.md](UNION.md) | Tagged unions and payload matching. |
+| [THREADS.md](THREADS.md) | Isolated workers and reference-counted task resources. |
+| [FUNCTIONS.md](FUNCTIONS.md) | Named function values and today's capture-free lambdas. |
+| [PACKAGES.md](PACKAGES.md) | The package consumer and manifest surface that exists today. |
+| [TESTING.md](TESTING.md) | Luce tests, engineering lanes, progress output, and the release gate. |
+| [BINDING.md](BINDING.md) | Current bound-method representation and lifetime rules. |
+| [FILESYSTEM.md](FILESYSTEM.md) | The partly built filesystem surface, with the boundary stated explicitly. |
+| [TERMUI.md](TERMUI.md) | The current low-level terminal UI package. |
+| [SELF.md](SELF.md) | Implied receivers, static members, and value-writer calls. |
+| [CONSTANTS.md](CONSTANTS.md) | File-scope constants and immutable program-root containers. |
+
+## Plans
+
+| File | What it decides |
+|---|---|
+| [V2.md](V2.md) | The product north star and the deliberately small language we are aiming for. |
+| [ROADMAP.md](ROADMAP.md) | The sequenced implementation and verification plan for ARC, the explicit type system, weak references, classes, interfaces, and closures. |
+| [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
+| [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
+
+## Decision records
+
+| File | What it records |
+|---|---|
+| [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The completed termui/editor rewrite plan and the reasoning behind its boundaries. |

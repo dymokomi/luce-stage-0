@@ -227,7 +227,7 @@ test "the install line and the install are different requests" {
 test "pages count and assets do not" {
     try testing.expectEqual(Resource.page, resource("/"));
     try testing.expectEqual(Resource.page, resource("/guide/command-line/"));
-    try testing.expectEqual(Resource.page, resource("/guide/reference/ownership/"));
+    try testing.expectEqual(Resource.page, resource("/guide/reference/memory/"));
     try testing.expectEqual(Resource.page, resource("/index.html"));
     try testing.expectEqual(Resource.asset, resource("/assets/style.css"));
     try testing.expectEqual(Resource.asset, resource("/assets/mark.svg"));

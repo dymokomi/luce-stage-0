@@ -173,7 +173,7 @@ running the tests has them.
 
 ## adventure — a game in five files
 
-`adventure` is a multi-file program. `adventure.luc` owns the turn — read a
+`adventure` is a multi-file program. `adventure.luc` coordinates the turn — read a
 line, act on it, say what happened — and it imports four modules that
 each know one thing:
 
@@ -194,8 +194,8 @@ adventure.luc   the loop, and the only file that talks to the world
 It demonstrates several features together: private
 fields with public [factories](/guide/reference/modules/), `T?` narrowed in
 the command loop, an [error](/guide/reference/failure/) chain three files deep
-caught once at the top, `give` and `copy` where a list crosses a
-module boundary, and `exit(0)` when the player types `quit`.
+caught once at the top, reference values shared across module calls, and
+`exit(0)` when the player types `quit`.
 
 It is interactive, so the page cannot play it for you. Run it from a
 terminal and provide commands on standard input.
@@ -215,7 +215,7 @@ page:
 `examples/editor/editor.luc` is a full-screen editor with
 movement, editing, scrolling, line numbers, a status bar, a file pane,
 an output pane and Luce syntax highlighting. It draws through the
-`termui` package, which owns the terminal cell grid and input events.
+`termui` package, which manages the terminal cell grid and input events.
 The build installs it as an ordinary program.
 
 ```sh

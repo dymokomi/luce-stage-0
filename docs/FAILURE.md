@@ -220,7 +220,7 @@ releases, emitted statically: a `return` hands its value back and
 releases the frame's other locals; a `try` on the failing edge releases
 everything, including the slot the value would have gone to. There is no
 dynamic unwinder to teach about errors and no `errdefer`: the one bit
-`errdefer` encodes elsewhere — keep the value on success, free it on
+`errdefer` encodes elsewhere — keep the value on success, release it on
 failure — is already a parameter of the release sequence Luce emits.
 
 The one thing an unwinding function cannot undo is a mutation it already

@@ -121,7 +121,7 @@ func main() -> !:
             file:
                 print(f"{entry.name} at {entry.path}")
             other:
-                continue
+                print(f"{entry.name}: another kind")
 ```
 
 ```output
@@ -160,9 +160,11 @@ func main() -> !:
 (not text as a string either)
 ```
 
-`files.open` returns a scope-owned `file`. Scope exit closes it; `free` can
-close it early. A file read fills a byte array and returns the number of
-bytes read:
+`files.open` returns a shared `file` reference. The completed ARC contract
+closes its host handle after the last reference goes away; the current
+development compiler still has disabled file-lifecycle tests, so do not rely
+on exact mid-run close timing yet. A file read fills a byte array and returns
+the number of bytes read:
 
 ```luce run
 import std.files

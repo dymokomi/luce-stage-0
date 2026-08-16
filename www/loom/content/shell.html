@@ -136,8 +136,8 @@ for.</p>
 
 <h2 id="programs">While a program is running</h2>
 
-<p>Nothing bounds how long a program runs. An interactive one blocks on
-<code>key_read</code> for as long as it likes, and loom is not a supervisor: it
+<p>Nothing bounds how long a program runs. An interactive one may wait on
+terminal events for as long as it likes, and loom is not a supervisor: it
 made the call and it is waiting for it to return. What it does guarantee is the
 other side of that — <strong>the screen is restored before any trap is
 reported</strong>, so a full-screen program that crashed hands the terminal back

@@ -55,7 +55,9 @@ leave the channel absent and report `host_unavailable`.
 `std.gpu` is the backend-neutral surface API. `gpu.backend()` reports the
 host's selected backend (`Backend.metal`, `Backend.vulkan`, or
 `Backend.headless`). A `gpu.Surface` is obtained from `ui.Window.surface()`;
-the surface holds its native resource and is released at its last reference.
+the surface holds its native resource. Releasing that resource at the last
+strong reference is part of the unfinished ARC release gate described in
+[`MEMORY.md`](MEMORY.md).
 
 ```text
 import std.gpu
@@ -316,17 +318,12 @@ There is no exception, `exists` included — see below.  Asking is still
 never a guard for the call after it: read the file and handle what the
 read says.
 
-**There is no `close` and no `with`** (docs/FILESYSTEM.md).  A
-`file` is a reference-counted resource, so it closes automatically
-when its last reference goes away (docs/MEMORY.md).  Python's `with`
-is a per-call-site opt-in to a guarantee this language gives
-unconditionally — to every reference-counted thing, rather than to
-the ones a library remembered to write an `__exit__` for — so a Luce
-program cannot leak a file by forgetting a keyword, because there is
-no keyword to forget.  `close()` is *refused* rather than merely
-absent, and the diagnostic says why: a working one would need a
-"closed but still referenced" state, which is the one state a resource
-must never hold.
+**There is no `close` and no `with`** (docs/FILESYSTEM.md). A `file` is a
+reference resource; the completed ARC contract closes it at its last release
+(`docs/MEMORY.md`). Current resource-close tests are disabled around missing
+function-exit cleanup, so that guarantee is not yet release-ready. `close()`
+remains refused: Phase 0 completes the one ARC lifetime path rather than adding
+a second "closed but still referenced" state.
 
 ```text
 import std.files
@@ -441,12 +438,10 @@ files.write_bytes(path, bytes)   # !
 files.append_bytes(path, bytes)  # !
 ```
 
-`open`, `create` and `append_to` answer a **`file`**, which is a
-reference-counted resource: assigning or passing it shares the same
-handle, and it closes automatically when its last reference goes away
-(docs/MEMORY.md).  There is deliberately no `close` — a file you have
-to remember to close is a file somebody will not, and ARC already
-knows where the last reference ends.
+`open`, `create` and `append_to` answer a **`file`** reference. Assigning or
+passing it shares the same handle. The completed ARC contract closes it at the
+last release; `docs/MEMORY.md` records why current builds do not yet prove that
+on every path. There is deliberately no second `close` lifetime API.
 
 The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
 and `f.flush()`, all fallible.  The buffer is an `array(byte, _)` the
@@ -815,12 +810,10 @@ fields["tags"] = json.Json.array(items = [json.Json.integer(value = 1)])
 let doc = json.Json.object(fields = fields)
 ```
 
-A `Json` holds reference objects — its `list` and `map` payloads —
-which ARC keeps alive as long as anything refers to them and frees at
-the last release (docs/MEMORY.md), recursively, through the
-containers: no arena, no collector, and no `deinit` to remember.  The
-two-engine leak census over a tree built, walked, copied, mutated and
-dropped is what proves it.
+A `Json` holds list and map references. Current common paths share those
+objects; completed ARC keeps them alive until their last release
+(`docs/MEMORY.md`). The zero-census differential tree specification is part of
+the proof, but it does not replace the remaining global lifecycle gates.
 
 **Eager, where the old design was lazy.**  A parse turns `"1e3"` into
 1000.0 and `"é"` into é once, on the way in; the document's bytes

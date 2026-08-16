@@ -1,99 +1,97 @@
-<!-- Facts on this page are read from examples/editor/editor.luc and
-     build.zig in the LuciaOS repository. -->
+<!-- Current feature and key roster read from examples/editor/editor.luc,
+     keymap.luc, state.luc, session.luc, paint.luc, and their Luce tests. -->
+
+<p>The Luce release includes a full-screen terminal editor written in Luce.
+Start the installed command directly:</p>
 
 <figure class="sample">
 <figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run examples/editor/editor.lc notes.txt</kbd></samp></pre></div>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>editor main.luc</kbd>
+<span class="prompt">$</span> <kbd>editor main.luc helpers.luc</kbd></samp></pre></div>
 </figure>
 
-<p>A full-screen editor opens: line numbers down the left, the file in the
-middle, a status bar at the bottom saying the path, whether it is modified, and
-where the cursor is. Ctrl-S saves. Ctrl-Q quits, and twice if there are unsaved
-changes.</p>
+<p>It is not a privileged part of loom. The installer ships a standalone
+executable, and the repository also builds a normal <code>editor.lc</code>
+artifact that loom can run like any other program.</p>
 
-<p>None of that is unusual. What is unusual is where it comes from.</p>
+<h2 id="current">What it does now</h2>
 
-<h2 id="in-luce">It is written in Luce</h2>
+<ul>
+<li>opens one or more buffers and switches among them;</li>
+<li>edits UTF-8 text with checked character-boundary movement;</li>
+<li>saves files and recovers periodic unsaved drafts;</li>
+<li>provides bounded undo and redo per buffer, with typed runs coalesced into
+one undo step;</li>
+<li>finds every in-file match and steps through the results;</li>
+<li>shows a navigable file pane and a build-output pane;</li>
+<li>builds and runs the active Luce file, keeping the captured result visible;</li>
+<li>supports keyboard, resize, and mouse events, including pane focus and
+draggable pane dividers;</li>
+<li>draws line numbers, status, pane frames, and Luce syntax highlighting; and</li>
+<li>updates only changed terminal cells through the <code>termui</code> package.</li>
+</ul>
 
-<p>The editor is not part of loom. It is <code>examples/editor/editor.luc</code>, an
-ordinary Luce program using the ordinary terminal builtins, with no privilege and
-no back door. It does its own text handling, its own vertical scrolling, its own
-character-boundary arithmetic and its own syntax
-highlighting — <strong>the host owns raw mode and every escape byte, and this
-program owns every editing decision.</strong></p>
+<p>A recovered draft is not silently accepted as the file. It opens as modified,
+and the original on-disk content is the first undo state: Ctrl-Z discards the
+recovery, while Ctrl-S keeps it.</p>
 
-<p>It is the proof that the language is enough. An editor is a program that
-exercises almost everything at once: strings that are edited a character at a
-time, a cursor that has to land on character boundaries in UTF-8, a whole screen
-redrawn on every keystroke, a file read and written, a key loop that must not miss a
-keystroke, and a memory story that must not leak across thousands of edits. When
-the editor works, the language works.</p>
-
-<h2 id="installed">It is an installed program, not a feature of loom</h2>
-
-<p>The build installs it twice: as <code>examples/editor/editor.lc</code>, which
-<a href="@/running/">loom runs</a> like any other artifact, and as a standalone
-<code>editor</code> executable that needs no loom at all. Loom carries no editor
-of its own and has no <code>edit</code> command — an editor is a program, and
-programs are what loom runs.</p>
-
-<p>Which also means yours can replace it: an editor you write is a
-<code>.luc</code> file you compile and run, with exactly the same standing as
-this one. A test in the repository builds this one on every build so it can
-never rot silently.</p>
-
-<h2 id="termui">It draws through a package</h2>
-
-<p>The editor is the first Luce program to carry a <strong>dependency</strong>.
-It imports <code>termui</code>, which owns the cell grid, the frame diff, the
-rectangles its panes are laid out on and the union its keys and mouse reports
-arrive as. The package is ordinary Luce source, resolved by the compiler from
-the want list in the editor's own <code>luce.yaml</code> — nothing about it is
-loom's business, and loom never sees it.</p>
-
-<p>What that bought is visible from outside: the editor used to repaint every
-cell of the screen on every keystroke, and now it writes only the cells that
-changed.</p>
-
-<h2 id="keys">Keys</h2>
+<h2 id="keys">Keyboard</h2>
 
 <div class="table">
 <table>
-<tr><th>Key</th><th>Does</th></tr>
-<tr><td>Arrows</td><td>Move by one character or one line — left and right step
-character boundaries, not bytes</td></tr>
-<tr><td>Home / End</td><td>Start and end of the line</td></tr>
-<tr><td>Page Up / Page Down</td><td>Move by one screen of visible lines</td></tr>
-<tr><td>Backspace / Delete</td><td>Erase before and at the cursor</td></tr>
-<tr><td>Enter</td><td>Split the line</td></tr>
-<tr><td>Tab</td><td>Four spaces</td></tr>
-<tr><td>Ctrl-S</td><td>Save; the status bar says so, or says why not</td></tr>
-<tr><td>Ctrl-Q</td><td>Quit — twice, when there are unsaved changes</td></tr>
+<tr><th>Key</th><th>Action</th></tr>
+<tr><td>Arrows, Home, End, Page Up, Page Down</td><td>Move through the active
+buffer or pane.</td></tr>
+<tr><td>Backspace, Delete, Enter, Tab</td><td>Edit text; Tab inserts four
+spaces.</td></tr>
+<tr><td><code>Ctrl-S</code></td><td>Save the active buffer.</td></tr>
+<tr><td><code>Ctrl-B</code></td><td>Build and run the active Luce file; open the
+output pane.</td></tr>
+<tr><td><code>Ctrl-F</code></td><td>Open in-file search. Enter/arrow movement
+steps matches; Escape returns to the editor.</td></tr>
+<tr><td><code>Ctrl-Z</code> / <code>Ctrl-Y</code></td><td>Undo / redo.</td></tr>
+<tr><td><code>Ctrl-E</code></td><td>Toggle the file pane.</td></tr>
+<tr><td><code>Ctrl-O</code></td><td>Toggle the output pane.</td></tr>
+<tr><td><code>Ctrl-W</code></td><td>Move focus to the next visible pane.</td></tr>
+<tr><td><code>Ctrl-Q</code></td><td>Quit; press again to confirm when a buffer
+has unsaved changes.</td></tr>
 </table>
 </div>
 
-<p>Those names are the host's stable key names, the same ones any Luce program
-sees from <code>key_read()</code>. The editor is reading exactly what
-<a href="@/host/#keys">your program can read</a>.</p>
+<p>The terminal host reports named key, text, mouse, resize, and closed events;
+the editor's own <code>keymap.luc</code> decides what they mean. See the
+<a href="@/host/#keys">host boundary</a> for that division.</p>
 
-<h2 id="highlighting">Syntax highlighting</h2>
+<h2 id="build">Build/run uses the installed toolchain</h2>
 
-<p>Per line, as it draws: keywords, capitalized type names, builtins, string
-literals, numbers, and comments. It is Luce highlighting written in Luce — a
-small scanner over the line being drawn, deciding a style per run of characters
-and writing the run into the frame it is building.</p>
+<p>Ctrl-B asks the host shell service to run <code>luce build</code> for the
+active path, then runs the resulting executable and captures combined output.
+The installed host resolves its sibling <code>luce</code> binary even when a GUI
+launch gives the editor only <code>/usr/bin:/bin</code> on <code>PATH</code>.
+That installed-pair behavior has a product test because it is easy for an
+editor to work in a terminal and fail when launched elsewhere.</p>
 
-<p>The status bar carries the path, a <code>+</code> when the buffer is modified,
-the line and column, any message the last action produced, and the two key hints
-on the right.</p>
+<h2 id="termui">The terminal UI is a package</h2>
 
-<h2 id="limits">What it does not do</h2>
+<p>The editor imports the maintained <code>termui</code> package. termui handles the
+repeated mechanics: a front/back cell surface, frame diff, clipping, styled
+text, constraint layout, junction-aware borders, input snapshots, rows, and
+viewports. The application keeps its model, command policy, file behavior, and
+event loop.</p>
 
-<p>Honestly and currently: no search, no replace, no undo, no selection, no copy
-and paste, no configuration file, and no line-wrapping — a long line scrolls off
-the right edge. Saving writes the whole file.</p>
+<p>This is an important proof boundary. The renderer and layout can be tested in
+memory without a real terminal; editor state, search, history, session recovery,
+mouse layout, and rendering have their own Luce tests; the compiled editor is
+also exercised end to end.</p>
 
-<p>Some of that is waiting on the terminal growing (mouse and bracketed paste are
-named as future work on the host side); the rest is waiting on somebody wanting
-it enough to write it. It is a Luce program in a repository: changing it is
-editing one file and running it.</p>
+<h2 id="limits">Current limits</h2>
+
+<p>The editor is intentionally still small. It has no replace workflow,
+selection/clipboard editing, multiple cursors, plugin system, configuration
+language, or soft line wrapping. It is a proving application for the public
+language and libraries, not a hidden editor framework.</p>
+
+<p>The language roadmap will eventually add classes, owned mutable interface
+values, weak references, and capturing closures. A higher-level UI package and
+this editor will be the end-to-end proof of those features; until then the
+current explicit state-and-view design remains the honest implementation.</p>

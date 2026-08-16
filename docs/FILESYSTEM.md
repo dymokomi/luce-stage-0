@@ -307,17 +307,14 @@ its C-shaped read/write primitive, and the whole-file byte conveniences
 (`files.read_bytes`, `files.write_bytes`, `files.append_bytes`) is
 `docs/BYTES.md`.
 
-### No `with`, no `close`, and nothing leaks
+### No `with` or `close`; ARC completion is still required
 
-A `file` is a reference-counted resource (`docs/MEMORY.md`), closed
-deterministically the instant its last reference is released — for a
-plain local, the end of the scope that holds it — by the same machinery
-that frees a `list`. A Luce program cannot leak a file by forgetting a
-keyword, because there is no keyword to remember; Python's `with` is a
-per-call-site opt-in to a guarantee Luce gives unconditionally. There is
-no `close()` method, because releasing the last reference already closes
-the file, and an explicit `close()` would only add a "closed but not
-closed-yet" state beside the reference count:
+A `file` is a reference resource (`docs/MEMORY.md`). The completed ARC
+contract closes it at its last release, without a separate source keyword.
+That implementation is not complete today: byte and ZIP lifecycle tests are
+disabled because a function-local handle may remain open until runtime
+teardown. There is still no `close()` method; Phase 0 must make the one
+lifetime rule work rather than adding a second one:
 
 ```text
 f.close()
@@ -331,8 +328,8 @@ f.close()
 | Python | Luce | why |
 |---|---|---|
 | `open(p, "w")` | opening modes are named doors (`files.create`, `files.append_to`) | a mode string is a magic value with no type and no completion |
-| `with open(p) as f:` | `var f = try files.open(p)` | the reference count already closes the file |
-| `f.close()` | let the last reference go | a `close()` is a second lifetime story |
+| `with open(p) as f:` | `var f = try files.open(p)` | completed ARC closes at the last release; current lifecycle gap is tracked |
+| `f.close()` | let the last reference go | a `close()` would be a second lifetime story |
 | `for line in f:` | `files.read_lines(p)`, or a loop over the byte handle | Luce has no generators |
 | `os.path.join(a, b, c)` | `paths.joined([a, b, c])` | no variadics, no `/` operator |
 | `os.path.exists(p)` returning `False` on refusal | `files.exists(p) -> bool!`, `catch false` for Python's behaviour | a refusal has somewhere to go |

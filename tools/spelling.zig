@@ -19,15 +19,15 @@
 //!   * multiline string literals in `src/luce/specs/**.zig` — the
 //!     executable specification's programs.
 //!
-//! **And in the prose of the living documents**, every line of them.
+//! **And in the prose of the current documents**, every line of them.
 //! A document that describes the language as it is may not spell a
 //! type a way the language would refuse, in a sentence any more than
 //! in a sample: a reader cannot tell a stale sentence from a current
 //! one, and `func main(args: List(String))` in a reference page is a
-//! lie told with more authority than a comment.  The decision records
-//! are deliberately *not* here — `docs/NUMERICS.md` and its siblings
-//! describe what was decided and when, and quoting the spelling of
-//! the day is what they are for.
+//! lie told with more authority than a comment. Plans and decision
+//! records are deliberately *not* here: a plan may compare today's
+//! spelling with tomorrow's, and a record may quote the spelling of its
+//! day.
 //!
 //! It deliberately does *not* read Zig prose or the compiler's own
 //! sources, and a name reached through a dot is somebody else's:
@@ -61,7 +61,7 @@ const Scope = enum {
     /// Every line.
     whole_file,
     /// Every line of a Markdown document — prose as well as code,
-    /// because a living document's sentences are as normative as its
+    /// because a current document's sentences are as normative as its
     /// samples.
     markdown_prose,
     /// Only the lines inside a fenced ```luce block.
@@ -80,7 +80,7 @@ const trees = [_]Tree{
     .{ .path = "src/luce/specs", .suffix = ".zig", .scope = .zig_multiline },
 };
 
-/// The living documents, by name — `tools/documents.zig`, which
+/// The current documents, by name — `tools/documents.zig`, which
 /// `tools/doccheck.zig` reads for the samples while this reads it for
 /// the sentences.  The two used to keep a list each, said of them that
 /// they were "meant to be read together", and disagreed by one entry.
@@ -286,10 +286,10 @@ test "the guard finds a stale name in every scope it scans" {
     // The count of trees and the count of sightings are stated here,
     // so removing a scope fails before anything is walked.
     try testing.expectEqual(@as(usize, 5), trees.len);
-    try testing.expectEqual(@as(usize, 40), living.len);
+    try testing.expectEqual(@as(usize, 35), living.len);
     // One `Int` in each of the three `.luc` fixtures; `list(Int)` in
     // the page's luce fence is a sighting for each name; one `Float`
-    // in the spec's program; and `List(String)` in a living
+    // in the spec's program; and `List(String)` in a current
     // document's *prose*, which is a sighting for each name.
     try testing.expectEqual(@as(usize, 8), found.items.len);
 
@@ -306,7 +306,7 @@ test "the guard finds a stale name in every scope it scans" {
         std.debug.print("the guard read nothing under {s}\n", .{tree.path});
         return error.TestUnexpectedResult;
     }
-    // And the living documents, whose scope is a list rather than a
+    // And the current documents, whose scope is a list rather than a
     // tree and would otherwise go unexercised — emptying `living`
     // would pass every assertion above it.
     var read_a_document = false;
@@ -314,7 +314,7 @@ test "the guard finds a stale name in every scope it scans" {
         if (std.mem.endsWith(u8, item.file, "docs/LANGUAGE.md")) read_a_document = true;
     }
     if (!read_a_document) {
-        std.debug.print("the guard read none of the living documents\n", .{});
+        std.debug.print("the guard read none of the current documents\n", .{});
         return error.TestUnexpectedResult;
     }
     // And the same run through the assertion the real test makes, so

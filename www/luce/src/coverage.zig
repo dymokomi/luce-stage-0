@@ -954,16 +954,16 @@ test "the public site keeps constant containers and map literals visible" {
     defer gpa.free(statements);
     for ([_][]const u8{
         "program root",
-        "Arrays have indexing, iteration and `copy`",
+        "Arrays have indexing and iteration",
         "container may not expose a private element type",
-        "`give` parameter cannot have an object default",
+        "A parameter default may share a constant container",
     }) |claim| {
         try std.testing.expect(std.mem.indexOf(u8, statements, claim) != null);
     }
 
-    const ownership = try repository.read("www/luce/content/guide/reference/ownership.md");
-    defer gpa.free(ownership);
-    try std.testing.expect(std.mem.indexOf(u8, ownership, "### S46 — a constant container belongs to the program root") != null);
+    const memory = try repository.read("www/luce/content/guide/reference/memory.md");
+    defer gpa.free(memory);
+    try std.testing.expect(std.mem.indexOf(u8, memory, "### M11 — constants live in the program root") != null);
 
     const failure = try repository.read("www/luce/content/guide/reference/failure.md");
     defer gpa.free(failure);

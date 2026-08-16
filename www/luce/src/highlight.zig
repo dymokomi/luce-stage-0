@@ -1,7 +1,7 @@
 //! Luce syntax highlighting, as a scanner over source bytes.
 //!
 //! Deliberately not the compiler's lexer: the site must render a
-//! *deliberately broken* sample (the ownership errors, the precedence
+//! *deliberately broken* sample (type errors, precedence
 //! refusals) exactly as well as a correct one, and it must never fail.
 //! So this is a forgiving scanner that classifies bytes and never
 //! rejects any.
@@ -25,7 +25,7 @@
 //! Classes, and the CSS they reach:
 //!
 //!   c  comment          k  keyword         t  type name
-//!   s  string literal   v  ownership verb  b  builtin
+//!   s  string literal   v  construction/concurrency word  b  builtin
 //!   n  number literal   d  declared name
 
 const std = @import("std");
@@ -62,10 +62,10 @@ pub const type_names = [_][]const u8{
     "Map",  "Array", "Builder",
 };
 
-/// Everything callable by name on its own: the free builtins, the
+/// Everything callable by name on its own: standalone builtins, the
 /// host-gated ones, and `range`.  The compiler's list is the
 /// file-scope `builtins` table in `04_semantics/builtins.zig`, less
-/// `free`, which is a verb above, and less the conversion
+/// the conversion
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
@@ -301,13 +301,13 @@ fn highlighted(gpa: std.mem.Allocator, source: []const u8) ![]u8 {
 
 test "keywords, verbs, types, builtins and declared names each get their class" {
     const gpa = std.testing.allocator;
-    const html = try highlighted(gpa, "static func total() -> Int:\n    let xs = new List(Int)\n    return len(xs)");
+    const html = try highlighted(gpa, "static func total() -> int:\n    let xs = new list(int)\n    return len(xs)");
     defer gpa.free(html);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">static</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">func</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"d\">total</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">new</span>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"t\">List</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"t\">list</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"b\">len</span>") != null);
 }
 
@@ -348,11 +348,11 @@ test "every byte of the input survives highlighting" {
     const gpa = std.testing.allocator;
     const source =
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(int)
         \\
         \\func main():
         \\    var bag = Bag(items = [1, 2])   # <&>
-        \\    print(String(len(bag.items)))
+        \\    print(string(len(bag.items)))
     ;
     const html = try highlighted(gpa, source);
     defer gpa.free(html);

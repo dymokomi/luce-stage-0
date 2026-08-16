@@ -2,8 +2,8 @@
 
 `termui` is a small terminal-UI package. It turns application state into a
 deterministic grid of styled cells and keeps terminal protocol details at the
-`std.term` boundary. Your program owns its state and event policy; `termui`
-owns frame preparation, clipping, constraint layout, styled text, box drawing,
+`std.term` boundary. Your program keeps its state and event policy; `termui`
+handles frame preparation, clipping, constraint layout, styled text, box drawing,
 rendering composition and presenting changed cells.
 
 This is a package, not a second standard-library namespace. In a checkout its
@@ -102,7 +102,7 @@ strings and comments each their own `Span` — and a label or status bar is one
 var spans = new list(text.Span)
 spans.append(text.Span(text = "let ", style = keyword))
 spans.append(text.Span(text = "x", style = plain))
-let line = text.Line(spans = give spans)
+let line = text.Line(spans = spans)
 line.draw(surface, area, row)
 ```
 
@@ -192,11 +192,11 @@ interfaces are nominal and heterogeneous.
 application, which moves it in response to events, and a read-only **view**
 (`RowsView`, `ViewportView`) is built from the current state each frame to
 paint. `Rows` tracks a selection and a window; `Viewport` tracks a scroll
-position. Neither owns the application's data — a provider function answers
+position. Neither stores the application's data — a provider function answers
 what each row says — so the application keeps its list and the widget reads it.
 
 See the [interface guide](/guide/interfaces/) and the exact [interface
-rules](/guide/reference/types/#interface) for conformance and ownership.
+rules](/guide/reference/types/#interface) for conformance and lifetime rules.
 
 ## Input
 
@@ -216,14 +216,15 @@ keeps its raw name for applications that need to support a newer host event.
 The package does not impose a keymap. Mapping keys to commands belongs to the
 application.
 
-## Ownership and boundaries
+## Lifetime boundaries
 
-- The application owns its model, providers, and event loop.
-- `Renderer` owns its `Surface` and `Events` fields.
-- Views borrow the surface for one draw call and do not retain it.
-- A provider such as a `RowsView.render` function borrows the application's
-  data. Keep that data alive while the provider is stored, or make an explicit
-  `copy`.
+- The application keeps its model, providers, and event loop alive.
+- A `Renderer` keeps its `Surface` and `Events` fields.
+- A view receives the surface only for its `draw` call and must not store it.
+- A provider such as a `RowsView.render` bound function currently aliases the
+  application's reference fields without retaining them. Keep the concrete
+  provider value alive while the bound function is stored. This restriction
+  disappears when the ARC bound-receiver gap is closed.
 - Do not hide a mutable application model behind `View` just to obtain dynamic
   dispatch; project the current state into value-only views.
 
@@ -236,7 +237,7 @@ decisions that belong to the application.
 
 The current package does not provide a mutable retained widget tree, focus
 traversal, scrollbars, mouse hit-testing policy, grapheme-aware width, or a
-global theme. Each would need its own ownership and testing decision. The
+global theme. Each would need its own lifetime and testing decision. The
 package tests cover layout totality, the constraint solver, styled-text
 clipping, frame junctions, cell diffing, input snapshots, selection and scroll
 windowing, and renderer lifecycle; the editor is the end-to-end consumer.

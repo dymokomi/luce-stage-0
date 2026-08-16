@@ -1,8 +1,8 @@
 # www/luce — luce.luciaos.com
 
-The Luce language's documentation: a one-page Tour, a practical Guide with
-complete programs, an exhaustive Reference, the Library, and the Status page
-that says out loud what the language cannot yet do.
+The Luce language's documentation: a one-page Tour, one Guide that progresses
+from teaching chapters to an exhaustive language reference, the Library, and
+the Status page that says out loud what the language cannot yet do.
 
 It lives in this repository so that it changes with the language, and
 it is generated rather than hand-published so that broken samples,

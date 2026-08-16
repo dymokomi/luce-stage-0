@@ -8,9 +8,9 @@ it survives into the compiled program.
 
 ## The rule in one paragraph
 
-A file-scope `func`, `const`, `struct`, `class`, `enum`, or `union` is
+A file-scope `func`, `const`, `struct`, `interface`, `enum`, or `union` is
 public by default; write `private` before it to withhold it from
-importers. A struct or class field is public by default; write `private`
+importers. A struct field is public by default; write `private`
 before the field, or place it in a `private:` region, to withhold it. An
 `import` binds the module's namespace either way; what it *reaches* is the
 module's surface minus everything marked private, and touching a marked
@@ -60,7 +60,7 @@ visibility word may appear per declaration; a second (`public public`,
 `public private`) is a parse error, `one visibility word per
 declaration`.
 
-On a struct or class field, the marker goes on the field's own line:
+On a struct field, the marker goes on the field's own line:
 
 ```text
 struct Session:
@@ -69,9 +69,9 @@ struct Session:
     private token: long = 0
 ```
 
-### Regions inside struct and class bodies
+### Regions inside struct bodies
 
-Inside a `struct` or `class` body — and only there — `private:` and
+Inside a `struct` body — and only there — `private:` and
 `public:` open an **indented block** of members, fields and methods
 alike, the way every colon in the language opens an indented block. Every
 member in the block takes the label's visibility:
@@ -146,7 +146,7 @@ implementation type entirely.
 
 ## Construction with private fields
 
-When a struct or class has private fields, construction from another file
+When a struct has private fields, construction from another file
 follows three rules:
 
 1. **An outside construction site may name unmarked fields only.** Naming

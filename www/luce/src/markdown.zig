@@ -537,15 +537,15 @@ test "headings carry stable, unique anchors" {
     var document = try render(gpa,
         \\# Title
         \\
-        \\## Give and copy
+        \\## Values and references
         \\
-        \\## Give and copy
+        \\## Values and references
         \\
     , null);
     defer document.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 2), document.headings.len);
-    try std.testing.expectEqualStrings("give-and-copy", document.headings[0].id);
-    try std.testing.expectEqualStrings("give-and-copy-2", document.headings[1].id);
+    try std.testing.expectEqualStrings("values-and-references", document.headings[0].id);
+    try std.testing.expectEqualStrings("values-and-references-2", document.headings[1].id);
 }
 
 test "lists, tables and quotes render" {
@@ -581,12 +581,12 @@ test "a heading may fix its own anchor" {
     var document = try render(gpa,
         \\# Title
         \\
-        \\## S21 — containers own their elements {#s21}
+        \\## M11 — constants live in the program root {#m11}
         \\
     , null);
     defer document.deinit(gpa);
-    try std.testing.expectEqualStrings("s21", document.headings[0].id);
-    try std.testing.expectEqualStrings("S21 — containers own their elements", document.headings[0].title);
+    try std.testing.expectEqualStrings("m11", document.headings[0].id);
+    try std.testing.expectEqualStrings("M11 — constants live in the program root", document.headings[0].title);
 }
 
 test "a document without a leading heading is refused" {

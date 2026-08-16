@@ -1,303 +1,115 @@
-<!-- Every transcript on this page was produced by running the command
-     shown against a freshly built toolchain (./build.sh) and pasting
-     what it printed, including the exit statuses.  The Luce programs
-     were checked with `build/luce check`. -->
+<!-- Current behavior summarized from src/apps/loom/runner.zig,
+     src/apps/loom/artifacts.zig, src/apps/loom/product.zig, and
+     src/apps/native.zig. Product tests exercise the installed pair. -->
 
-<p>There are two ways to start a Luce program under loom, and they differ in
-exactly one thing: whether a compiler has to be involved.</p>
+<p>loom has two run paths. A compiled <code>.lc</code> needs only the runner.
+A <code>.luc</code> source may need the separate <code>luce</code> compiler to
+produce or refresh a cached library first.</p>
 
 <div class="table">
 <table>
-<tr><th>Form</th><th>What happens</th></tr>
-<tr><td><code>loom run FILE.lc [ARGS]</code></td><td>One <code>dlopen</code>, one
-symbol lookup, one call</td></tr>
-<tr><td><code>loom luce FILE.luc [ARGS]</code></td><td>Compile if there is not
-already a current artifact, then the above</td></tr>
+<tr><th>Form</th><th>Work performed</th></tr>
+<tr><td><code>loom run FILE.lc [ARGS]</code></td><td>Validate the artifact, load
+it, and call it.</td></tr>
 <tr><td><code>loom FILE.lc [ARGS]</code></td><td>Shorthand for
-<code>run</code></td></tr>
-<tr><td><code>loom FILE.luc [ARGS]</code></td><td>Shorthand for
-<code>luce</code></td></tr>
+<code>run</code>.</td></tr>
+<tr><td><code>loom luce FILE.luc [ARGS]</code></td><td>Resolve the full source
+project, reuse or build its library artifact, then run it.</td></tr>
+<tr><td><code>loom FILE.luc [ARGS]</code></td><td>Shorthand for the source
+form.</td></tr>
 </table>
 </div>
 
-<p>Arguments after the path are the <em>program's</em>, never loom's. They arrive
-as <code>main</code>'s <code>args: list(string)</code> parameter — handed to the
-program rather than asked for by it, which is why the host gate does not cover
-them and why the list is owned by <code>main</code>'s scope and freed when it
-returns.</p>
+<p>Arguments after the program path belong to the program. They arrive in
+<code>main(args: list(string))</code>; a program that needs none may declare
+<code>func main():</code>.</p>
 
-<h2 id="artifact">A <code>.lc</code> is machine code</h2>
+<h2 id="artifact">A <code>.lc</code> is a native library artifact</h2>
 
-<p><code>luce build</code> writes a tagged shared library and calls it
-<code>.lc</code>. It is not bytecode, not serialized IR, and not a script.
-Nothing about running it is a translation step:</p>
+<p>The compiler creates this form explicitly:</p>
 
 <figure class="sample">
 <figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>time loom run hello.lc</kbd>
-hello, loom
-loom run hello.lc  0.00s user 0.00s system  0.002 total</samp></pre></div>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>luce build app.luc --emit=library</kbd>
+<span class="prompt">$</span> <kbd>loom run app.lc one two</kbd></samp></pre></div>
 </figure>
 
-<p>Two milliseconds, on the machine this was measured on, almost all of it the
-operating system's process setup. loom deliberately links no LLVM: libLLVM is
-164 MB, the dynamic loader binds all of it before <code>main</code>, and that
-cost every single invocation — including the ones that compile nothing at all.
-So the compiler links it and the environment does not.</p>
+<p><code>--emit=library</code> matters: the default <code>luce build</code>
+output is a standalone executable named after the source. The library form is
+for loom or another compatible host.</p>
 
-<h3 id="tag">Every artifact carries a tag</h3>
+<p>Running a current <code>.lc</code> performs no compilation and needs neither
+LLVM nor the <code>luce</code> binary. The artifact contains native code linked
+to Luce's runtime and exports the one entry loom calls.</p>
 
-<p>An artifact records four things besides the program: the <strong>machine</strong>
-it was built for, the <strong>host ABI version</strong> it was built against, the
-identity of the <strong>code generator</strong> that produced it, and a content
-hash of the <strong>program</strong> itself. The tag sits in a section of its
-own, and loom reads it <strong>out of the file's own bytes, before the file is
-loaded at all</strong> &mdash; so a damaged file is answered rather than handed
-to a platform loader that would map it and crash. A file that does not match is
-refused by name:</p>
+<h3 id="tag">The tag is checked before loading</h3>
 
-<div class="table">
-<table>
-<tr><th>loom says</th><th>Meaning</th></tr>
-<tr><td>it is not a compiled Luce artifact</td><td>The file is something
-else</td></tr>
-<tr><td>it is truncated, or its object file is damaged</td><td>A full disk, an
-interrupted copy, a half-finished download</td></tr>
-<tr><td>its tag is layout version <var>N</var>, and this loader reads version
-<var>M</var></td><td>The tag format itself moved</td></tr>
-<tr><td>it was built against host ABI <var>N</var>, and this loader speaks
-<var>M</var></td><td>The published <code>LuceHost</code> table changed under
-it</td></tr>
-<tr><td>it was built for <var>machine</var>, and this machine is
-<var>machine</var></td><td>Another architecture or another operating
-system</td></tr>
-<tr><td>it was built by a different code generator</td><td>A rebuilt or
-different compiler produced it</td></tr>
-<tr><td>the program it was built from has changed</td><td>The source moved; the
-cache entry is stale</td></tr>
-</table>
-</div>
+<p>Every artifact records its tag layout, target machine, host ABI version,
+code-generator identity, and source/program hash. loom reads and validates that
+metadata before asking the platform loader to map the file.</p>
 
-<p><strong>Three of them name both sides.</strong> A loader refusing an artifact
-knows two things the person reading does not have in front of them &mdash; what
-the file says, and what this build is &mdash; so it says both.</p>
+<p>A missing file, a non-Luce library, truncated metadata, a different target,
+an old host ABI, a different code generator, and a stale source hash are
+different failures and are reported as such. There is no interpreter fallback:
+an artifact that cannot be trusted is not run.</p>
 
-<p><strong>There is no fallback and nothing to fall back to.</strong> Refusing by
-name is the whole of the answer: a <code>.luc</code> needs a compiler exactly as
-a <code>.c</code> does, and an artifact that cannot be trusted is not run
-slower, it is not run.</p>
+<h2 id="cache">Source runs use a content-checked cache</h2>
 
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run bad.lc</kbd></samp></pre></div>
-</figure>
-<figure class="sample">
-<figcaption class="cap bad">Standard error, exit 1</figcaption>
-<div class="code result bad"><pre><samp>loom: cannot run bad.lc: it is not a compiled Luce artifact</samp></pre></div>
-</figure>
+<p><code>loom luce FILE.luc</code> resolves imports and packages, creates the
+verified serialized hand-off, and checks for a matching native library. The
+cache key covers every loaded source and the project/package resolution inputs,
+not only the entry file's timestamp.</p>
 
-<p>A platform loader says only "no", never why &mdash; and about a damaged file
-it may say nothing at all and crash instead. So loom does not ask it first: a
-file that is not there and a file that is not a program are different mistakes,
-and both are answered from the file rather than relayed from the loader.</p>
+<p>Where the artifact lives depends on the source:</p>
 
-<figure class="sample">
-<figcaption class="cap bad">Standard error, exit 1</figcaption>
-<div class="code result bad"><pre><samp>loom: cannot read nope.lc: no such file</samp></pre></div>
-</figure>
+<ul>
+<li>A standalone source with no governing <code>luce.yaml</code> uses
+<code>FILE.lc</code> beside the source.</li>
+<li>A governed project mirrors the entry's path under
+<code>PROJECT/.luce/cache/</code>. Deleting that cache is safe; the next run
+rebuilds it.</li>
+<li>A source that has no writable named location uses a private directory under
+the user's temporary directory, addressed by its content hash.</li>
+</ul>
 
-<h2 id="cache">Compiling a <code>.luc</code>, and where the artifact goes</h2>
+<p>A warm run invokes no external compiler. A cold run locates
+<code>luce</code>, asks it to turn the verified <code>.lcm</code> hand-off into a
+library, validates the result, and atomically places it in the cache. Temporary
+hand-off and partial output files are removed on success and failure. Concurrent
+writers use distinct temporary names, so a cache entry is never a half-written
+library.</p>
 
-<p><code>loom luce FILE.luc</code> compiles the file — and the sibling modules it
-imports, resolved beside it — and runs the result. The artifact is written
-<strong>beside the source</strong>, as <code>FILE.lc</code>: the same name
-<code>luce build FILE.luc</code> would write, so a build can ship one and loom
-simply finds it.</p>
+<h2 id="compiler">How loom finds the compiler</h2>
 
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>time loom luce hello.luc</kbd>
-hello, loom
-loom luce hello.luc  0.05s user 0.03s system  0.140 total
-<span class="prompt">$</span> <kbd>time loom luce hello.luc</kbd>
-hello, loom
-loom luce hello.luc  0.00s user 0.00s system  0.003 total</samp></pre></div>
-</figure>
+<p>loom first looks beside its own executable, then on the <code>PATH</code> it
+was given. This makes the checked installer self-contained even when an editor
+or GUI process starts with a minimal system path. The compiler in turn reads
+<code>LUCE_LIB</code> and <code>LUCE_CC</code> for runtime-library and linker
+policy.</p>
 
-<p>The first run compiled and linked; the second found the artifact and called
-it. <strong>A warm run invokes nothing external. A cold one runs
-<code>luce</code> once, which runs the linker once.</strong></p>
+<p>If no current cache entry exists and no compiler can be found, loom names
+both places it looked. A direct <code>.lc</code> run does not perform this search
+because it has nothing to compile.</p>
 
-<h3 id="keyed">The cache is keyed on content, not on time</h3>
+<h2 id="status">What the invoking shell receives</h2>
 
-<p>The artifact carries a hash of the program it was built from, so a source file
-whose bytes changed gets a rebuild whatever the clock says about either file —
-and a source file that was touched but not changed does not. There is no
-timestamp comparison anywhere in this, and so no way for a restored backup, a
-copied tree or a clock skew to hand you the wrong program.</p>
-
-<p>What loom hands the compiler is not the source file. It is the
-<strong>serialized module</strong> loom's own front end just produced from that
-source — the compiler's internal hand-over form — so the artifact is keyed to the
-exact program that is about to run rather than to whatever a second reading of
-the same text would have produced. That file is written beside the artifact and
-removed again, on the failing path as much as the succeeding one: it is a
-hand-over, never a deliverable, and one left behind in your directory after a
-failed build is litter you did not make.</p>
-
-<h3 id="spare">When there is nowhere to write beside the program</h3>
-
-<p>A read-only directory, or a program with no path at all, has nothing to sit
-beside. The artifact then goes to a directory named
-<code>luce-artifacts</code> inside <code>TMPDIR</code>, keyed on the hash
-because there is no name to key on.</p>
-
-<p>That directory is created <code>rwx------</code> and is used <em>only</em> if
-what is really there is a directory with no group or other permissions at all; a
-symbolic link where it should be is refused rather than followed. The reason is
-not tidiness. A cached artifact is a file loom <code>dlopen</code>s, and its name
-is the program's content hash — a name anyone holding the same program can
-compute. On a shared <code>/tmp</code>, that file can be planted before loom ever
-looks, and the sticky bit does not help: it stops one user <em>replacing</em>
-another's file and stops nobody from creating it first. A loom that recompiles
-every run is slow; a loom that runs somebody else's code is not loom.</p>
-
-<p><strong>Nothing is ever swept from that directory</strong>, deliberately. The
-entries are content-keyed, so a stale one is never loaded — it is refused by its
-tag and rebuilt over the same name — and a sweep would need an age policy, a
-lock, and a way to know that no other loom is about to open the file it is
-deleting. Reaping a temp directory is the operating system's job. <code>rm -rf</code>
-on it is always safe and costs one recompile.</p>
-
-<h2 id="failure">When a program stops</h2>
-
-<p>A run ends in one of five ways — it finishes, it traps, it ends on an uncaught
-error, it calls <code>exit</code>, or the machine runs out of memory under it — and
-loom says which in words and in the number a shell reads afterwards. The fifth is
-not the program's doing at all, which is why it gets a number well clear of
-anything a program means: <code>70</code>. <strong>The screen is restored before anything is
-reported</strong>, so a full-screen program that trapped leaves its message on
-the ordinary terminal rather than inside a frame that is being torn down.</p>
-
-<h3 id="trap">A trap is a bug</h3>
-
-<p>A debug artifact — the default — carries source locations, so a trap reports
-<code>file:line:column</code> and a call trace, innermost first.</p>
-
-<figure class="sample">
-<figcaption class="cap luc"><cite>boom.luc</cite></figcaption>
-<div class="code"><pre><code><span class="k">func</span> <span class="d">main</span>():
-    <span class="k">let</span> numbers = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
-    <span class="b">print</span>(<span class="b">string</span>(numbers[<span class="n">7</span>]))</code></pre></div>
-<figcaption class="cap bad">Standard error, exit 1</figcaption>
-<div class="code result bad"><pre><samp>loom: trap: index out of bounds [index_bounds]
-    at main (boom.luc:3:5)</samp></pre></div>
-</figure>
-
-<p>The code in brackets is stable and is the thing to match on. A trace prints at
-most twelve innermost frames and counts the rest, so a runaway recursion shows
-its shape rather than its length. <code>--release</code> strips the position
-tables; the function names still print, and the program behaves identically —
-safety is the language, never a build mode.</p>
-
-<h3 id="error">An uncaught error is news</h3>
-
-<p>A trap and a recoverable error that nobody handled are different sentences
-about a program, and they get different words <em>and</em> different numbers, so
-a script can tell them apart without parsing standard error. An error prints
-where it was raised and no stack: the stack is a trap's diagnosis, and an error's
-news is what the world said.</p>
-
-<figure class="sample">
-<figcaption class="cap luc"><cite>news.luc</cite></figcaption>
-<div class="code"><pre><code><span class="k">import</span> std.files
-
-<span class="k">func</span> <span class="d">main</span>() -> !:
-    <span class="k">let</span> text = <span class="k">try</span> files.read(<span class="s">"missing.txt"</span>)
-    <span class="b">print</span>(text)</code></pre></div>
-<figcaption class="cap bad">Standard error, exit 3</figcaption>
-<div class="code result bad"><pre><samp>loom: error: cannot read missing.txt [io_failed]
-    raised in files.read (std/files.luc:26:5)</samp></pre></div>
-</figure>
-
-<h3 id="exit">A program may choose its own number</h3>
-
-<p><code>exit(status)</code> is the fourth of those five, beside finishing,
-trapping and raising and ahead of the machine running out: nothing is wrong and nothing failed, the program chose to
-stop and chose the number. loom carries it out — on POSIX, as the low eight bits
-of its own exit code.</p>
-
-<figure class="sample">
-<figcaption class="cap luc"><cite>stop.luc</cite></figcaption>
-<div class="code"><pre><code><span class="k">func</span> <span class="d">main</span>():
-    <span class="b">print</span>(<span class="s">"checked and closing"</span>)
-    <span class="b">exit</span>(<span class="n">7</span>)</code></pre></div>
-<figcaption class="cap out">Standard output, exit 7</figcaption>
-<div class="code result"><pre><samp>checked and closing</samp></pre></div>
-</figure>
-
-<h3 id="statuses">The exit table</h3>
-
-<p>One table, because a program's behaviour must not depend on who started it —
-and that includes the number a shell reads afterwards. <code>loom run</code> and a
-standalone <code>--emit=exe</code> binary answer from the same source.</p>
+<p>The program's status passes through. The defined result classes are:</p>
 
 <div class="table">
 <table>
 <tr><th>Status</th><th>Meaning</th></tr>
-<tr><td><code>0</code></td><td>The program finished</td></tr>
-<tr><td><code>1</code></td><td>It trapped — and also loom's own refusals: no such
-file, not a program this machine can run, a compile that failed</td></tr>
-<tr><td><code>3</code></td><td>It ended on an uncaught error</td></tr>
-<tr><td><code>70</code></td><td>Out of memory: the machine ran out, not the
-program</td></tr>
-<tr><td><code>71</code></td><td>The run could not be carried out, or its output
-could not be delivered</td></tr>
-<tr><td>anything else</td><td>The program called <code>exit</code> with
-it</td></tr>
+<tr><td><code>0</code></td><td>The program returned normally.</td></tr>
+<tr><td><code>1</code></td><td>The program trapped, or loom itself could not
+load/compile the requested program.</td></tr>
+<tr><td><code>3</code></td><td>A recoverable Luce error reached the entry
+uncaught.</td></tr>
+<tr><td><code>70</code></td><td>The runtime ran out of memory.</td></tr>
+<tr><td><code>71</code></td><td>The host could not run the program or deliver
+its output.</td></tr>
+<tr><td>another value</td><td>The program called <code>exit(status)</code>.</td></tr>
 </table>
 </div>
 
-<p>The last two are not about the program at all, which is why they take
-<em>sysexits</em> numbers well clear of anything a program means. <code>71</code>
-covers a case that is easy to lose: output that could not be written did not
-happen. A closed or full pipe loses the tail of a program's transcript, and a
-runner that returned <code>0</code> would be claiming it arrived — so the failure
-is said once and counted in the status.</p>
-
-<h2 id="compiler">When loom cannot compile</h2>
-
-<p>loom carries no code generator, so a cold <code>loom luce</code> needs the
-<code>luce</code> binary. It is looked for beside loom's own executable first and
-on <code>PATH</code> after — and only on a cold run, because looking for it is
-work a warm run must not do. A loom that cannot find one says so, rather than
-doing something slower and calling it success:</p>
-
-<figure class="sample">
-<figcaption class="cap bad">Standard error, exit 1</figcaption>
-<div class="code result bad"><pre><samp>loom: cannot compile sums.luc: the `luce` compiler is not beside /opt/luce and not on PATH</samp></pre></div>
-</figure>
-
-<p>A compile that failed prints the compiler's own diagnostics, and a program the
-back end has no lowering for is refused rather than retried somewhere else — the
-next directory would say the same thing.</p>
-
-<h2 id="environment">What loom reads from the environment</h2>
-
-<div class="table">
-<table>
-<tr><th>Variable</th><th>Effect</th></tr>
-<tr><td><code>PATH</code></td><td>Where <code>luce</code> is looked for, after the
-directory loom's own binary sits in</td></tr>
-<tr><td><code>TMPDIR</code></td><td>Where an artifact goes when it cannot go
-beside its program; <code>/tmp</code> when unset</td></tr>
-<tr><td><code>NO_COLOR</code></td><td>Set to any value and the shell prints no
-escape sequences</td></tr>
-</table>
-</div>
-
-<p>Those are read once, at start, because they are process policy rather than
-anything a program or a command can change. Everything else the compiler needs
-(<code>LUCE_CC</code> to name a C compiler driver, <code>LUCE_LIB</code> the
-directory holding <code>libluce_rt.a</code>) it reads from the environment it
-inherits, so loom neither parses nor forwards it.</p>
+<p>Debug artifacts carry source locations and function names for traps. Release
+artifacts keep function names but omit source locations; safety and status
+semantics do not change.</p>

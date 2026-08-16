@@ -81,14 +81,15 @@ text s
 | `value.as_double() -> double?` | either numeric member, widening an integer |
 | `value.as_text() -> string?` | text payload, or `none` |
 | `value.count() -> long` | array elements or object members; `0` for a leaf |
-| `value.member(name: string) -> Json?` | object member as a copy, or `none` when absent/not an object |
+| `value.member(name: string) -> Json?` | object member as a value, or `none` when absent/not an object |
 | `value.element(index: long) -> Json` | array element or object member by insertion position; out of range traps |
 | `value.write() -> string` | compact JSON text |
 | `value.pretty(spaces: long) -> string` | indented JSON; `spaces == 0` is the compact form |
 
 For a read-only walk, match the value and iterate its `fields` or `items`.
-`member` and `element` copy their result so it can outlive the container
-that held it. `element` is deliberately checked like ordinary indexing;
+`member` and `element` return a `Json` value. Leaf payloads copy; any list or
+map inside the returned subtree remains a shared reference. `element` is
+deliberately checked like ordinary indexing;
 call `count()` before using an index supplied by input.
 
 ```luce run
@@ -113,8 +114,8 @@ false
 
 ## Build a value
 
-Constructors use the union member names. A map or list that becomes part of
-a `Json` value is moved with `give` at the outer boundary:
+Constructors use the union member names. A map or list stored in a `Json`
+value remains the same shared reference:
 
 ```luce run
 import std.json
@@ -124,7 +125,7 @@ func main():
     fields["name"] = json.Json.text(value = "Luce")
     fields["version"] = json.Json.integer(value = 1)
     fields["tags"] = json.Json.array(items = [json.Json.text(value = "language")])
-    let doc = json.Json.object(fields = give fields)
+    let doc = json.Json.object(fields = fields)
     print(doc.write())
     print(doc.pretty(2))
 ```
@@ -140,9 +141,9 @@ func main():
 }
 ```
 
-`Json` follows normal scope ownership. A document carrying an array or map
-is released with its binding; there is no JSON-specific arena or cleanup
-call.
+`Json` follows the language's value/reference rules. The union value copies,
+while array and object payloads share their list or map through ARC. There is
+no JSON-specific arena or cleanup call.
 
 ## Numbers and round trips
 
@@ -196,5 +197,5 @@ let value = try json.parse(text)
 ```
 
 `std.json` receives a Luce `string`, so UTF-8 validation has already happened
-before parsing begins. `std.files` owns the host interaction and
-`std.strings.from_bytes` owns the byte-to-text conversion.
+before parsing begins. `std.files` handles the host interaction and
+`std.strings.from_bytes` handles the byte-to-text conversion.

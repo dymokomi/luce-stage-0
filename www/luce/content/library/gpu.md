@@ -2,8 +2,10 @@
 
 `std.gpu` is the low-level drawing surface shared by `std.ui` and future UI
 packages. It does not expose Metal, Vulkan, or a window-system handle. The
-host chooses a backend and owns the native implementation; Luce owns the
-`Surface` value and releases it with its scope.
+host chooses a backend and keeps the native implementation behind a shared
+`Surface` resource reference. The completed ARC contract releases the native
+surface at its last strong reference; the current lifecycle boundary is
+tracked in [Memory and ARC](/guide/memory/).
 
 The macOS `loom` host selects Metal when the device and shader pipeline are
 available. If Metal is unavailable, it uses a CPU-backed window while keeping
@@ -18,7 +20,7 @@ there traps with `host_unavailable` rather than pretending to draw.
 ## Surface
 
 `Surface` is created by `Window.surface()`; `Surface.from_handle` is the
-internal ownership handoff used by `std.ui`.
+internal host-handle bridge used by `std.ui`.
 
 | Function | Meaning |
 |---|---|

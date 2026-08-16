@@ -83,7 +83,7 @@ word plum
 2 is plum
 ```
 
-Do not change the size of, or free, the collection being iterated. See
+Do not change the size of the collection being iterated. See
 [Collection Types](/guide/collections/) for
 the collection operations.
 
@@ -106,7 +106,7 @@ func main():
 first value over ten: 20
 ```
 
-Leaving a scope also releases the objects owned by that scope. A function
+Leaving a scope also releases the references held by that scope. A function
 can return from inside a loop; there is no `defer` construct.
 
 ## Recursion

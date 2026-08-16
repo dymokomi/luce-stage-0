@@ -1,183 +1,92 @@
-<!-- The front page.  Every transcript below was produced by running
-     the command shown against a freshly built toolchain (./build.sh)
-     and pasting what it printed; the one Luce program was checked
-     with `build/luce check`. -->
+<!-- Current overview based on src/apps/loom/, the release installer, and the
+     public Luce command-line documentation. It intentionally avoids copied
+     transcripts; executable command behavior is proved in product tests. -->
 
 <div class="hero">
-<p class="lead">loom is the environment that runs compiled Luce. It opens a program,
-hands it the world, and gets out of the way. There is no engine inside it, no
-code generator, and no state of its own — ordinary files, the real terminal,
-and one honest boundary.</p>
+<p class="lead">loom is the small host and runner for Luce library artifacts.
+It validates a compiled program, hands it the machine through one explicit
+boundary, calls it, and gets out of the way.</p>
 </div>
 
-<p><a href="https://luce.luciaos.com">Luce</a> is the language. <code>luce</code> is
-its compiler. <strong>loom is where a Luce program is a program</strong> — the
-thing you type at, the thing that starts it, and the thing it asks when it wants
-to print a line or read a key.</p>
+<p><a href="https://luce.luciaos.com">Luce</a> is the language and
+<code>luce</code> is its compiler. A normal first program does not need loom:
+<code>luce build hello.luc</code> produces a standalone <code>hello</code>
+executable by default. loom is useful when you deliberately build a
+<code>.lc</code> library artifact or want a compile-cache-run loop for source.</p>
 
-<h2 id="thirty-seconds">Thirty seconds</h2>
+<h2 id="install">Install the complete toolchain</h2>
 
-<p>Write a program, run it, look at what appeared beside it.</p>
+<p>The one-command macOS ARM64 installer on
+<a href="https://luce.luciaos.com">luce.luciaos.com</a> installs
+<code>luce</code>, <code>loom</code>, the terminal <code>editor</code>, runtime
+libraries, and local VS Code/Cursor highlighting. It also adds the install's
+<code>bin</code> directory to the shell profile. The repository is private; the
+public installation path is the checked release, not a source build.</p>
 
-<figure class="sample">
-<figcaption class="cap luc"><cite>hello.luc</cite></figcaption>
-<div class="code"><pre><code><span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)):
-    <span class="b">print</span>(<span class="s">"hello, loom"</span>)
-    <span class="k">for</span> name <span class="k">in</span> args:
-        <span class="b">print</span>(name)</code></pre></div>
-</figure>
-
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom luce hello.luc world</kbd>
-hello, loom
-world
-<span class="prompt">$</span> <kbd>ls</kbd>
-hello.lc	hello.luc
-<span class="prompt">$</span> <kbd>loom run hello.lc one two</kbd>
-hello, loom
-one
-two</samp></pre></div>
-</figure>
-
-<p><code>loom luce</code> compiled the source and ran it. What it left behind —
-<code>hello.lc</code> — is <strong>machine code</strong>: a tagged shared library.
-<code>loom run hello.lc</code> is one <code>dlopen</code>, one symbol lookup, one
-call. No compiler is consulted, nothing is decoded, and the second run does not
-need the source file at all. It takes milliseconds, and almost all of them are
-the operating system's.</p>
-
-<p>Run <code>loom</code> with no arguments and you get the same commands at a
-prompt instead.</p>
-
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom</kbd>
-loom — the luce environment. help lists commands.
-loom ▸ <kbd>help</kbd>
-  run PROGRAM.lc [ARGS]   run a compiled Luce program
-  luce PROGRAM.luc [ARGS] compile and run a Luce source file
-  clear                  clear the screen
-  exit                   leave loom
-  a bare PROGRAM.lc or .luc path runs it directly
-loom ▸ <kbd>exit</kbd></samp></pre></div>
-</figure>
-
-<h2 id="four-parts">The parts</h2>
-
-<p>loom is one small binary made of three things, and this site has a page for
-each of them — and a page for the editor, which is a program loom runs rather
-than a part of loom.</p>
-
-<div class="cards">
-<a class="card" href="@/running/"><strong>The runner</strong><span>Opens a
-<code>.lc</code> and calls it. Compiles a <code>.luc</code> first and caches the
-result beside the source. Refuses an artifact built for another machine, another
-host ABI or another code generator — by name, before a single instruction of it
-runs.</span></a>
-<a class="card" href="@/shell/"><strong>The shell</strong><span>Five commands and a
-bare program path. Colour when a terminal is reading, none when a log file is.
-An interactive shell always leaves cleanly; a piped script exits with the worst
-status any line produced.</span></a>
-<a class="card" href="@/editor/"><strong>The editor</strong><span>A full-screen
-editor with per-line Luce syntax highlighting, written entirely in Luce and
-drawing through a package — an installed program loom runs, not a command loom
-has.</span></a>
-<a class="card" href="@/host/"><strong>The host</strong><span>Every effect a
-program can have — printing, files, the terminal, the clock, the command line —
-is a service loom hands it. A service the host does not offer refuses; it never
-guesses.</span></a>
-</div>
-
-<h2 id="not">What loom is not</h2>
-
-<p>Most of what makes loom fast is what is missing from it.</p>
-
-<ul>
-<li><strong>No engine.</strong> There is no interpreter and no bytecode inside
-loom. A <code>.lc</code> is machine code and loom calls it. (The interpreter
-exists, but it ships in nothing: it is the differential oracle the test suite
-compares the compiled path against.)</li>
-<li><strong>No code generator.</strong> loom links no LLVM at all. Building is
-<code>luce</code>'s job, and loom runs that binary when it needs a program
-compiled. A machine that only <em>runs</em> Luce programs needs no LLVM
-installed and, once the artifacts are built, no <code>luce</code> either.</li>
-<li><strong>No disk image, no database, no registry.</strong> Programs read and
-write ordinary OS files. There is nothing to initialise, nothing to migrate, and
-nothing loom keeps between runs except the artifact cache — which is content-keyed
-and safe to delete at any time.</li>
-<li><strong>No state of its own.</strong> The shell has no variables, no history
-file, no configuration and no <code>cd</code>. Everything durable belongs to the
-programs and to the filesystem.</li>
-</ul>
-
-<p>What loom does keep is a promise: <strong>a program's behaviour must not
-depend on who started it.</strong> A program run under <code>loom run</code>, a
-standalone binary built with <code>luce build --emit=exe</code>, and the same
-program under the test oracle all report a failure in the same words and exit
-with the same number.</p>
-
-<h2 id="userland">Programs to run</h2>
-
-<p>The repository ships userland written in Luce, compiled and linked by the
-freshly built compiler on every build, so none of it can quietly rot:</p>
+<h2 id="use">Run an artifact or run source</h2>
 
 <div class="table">
 <table>
-<tr><th>Program</th><th>What it is</th></tr>
-<tr><td><code>editor.lc</code></td><td>The full-screen editor <a href="@/editor/">this
-site has a page about</a></td></tr>
-<tr><td><code>adventure.lc</code></td><td>A text adventure in five files — the
-first Luce program written as a project, with a save file</td></tr>
-<tr><td><code>life.lc</code></td><td>Conway's Game of Life on a
-multi-dimensional array, drawn on the terminal</td></tr>
-<tr><td><code>calc.lc</code></td><td>A recursive-descent expression calculator,
-and the worked example for recoverable errors</td></tr>
-<tr><td><code>zipper.lc</code></td><td>List, extract and build real ZIP
-archives — <code>zipper zip out.zip a.txt b.txt</code>, and what
-<code>unzip</code> makes of it</td></tr>
-<tr><td><code>bf.lc</code>, <code>dice.lc</code>, <code>sort.lc</code>,
-<code>stats.lc</code>, <code>wordcount.lc</code>, <code>hello.lc</code></td>
-<td>Smaller programs, each one proving something the language can
-do</td></tr>
+<tr><th>Command</th><th>Meaning</th></tr>
+<tr><td><code>loom run app.lc [ARGS]</code></td><td>Validate, load, and call an
+already compiled library artifact. No compiler is needed.</td></tr>
+<tr><td><code>loom app.lc [ARGS]</code></td><td>Shorthand for the same run.</td></tr>
+<tr><td><code>loom luce app.luc [ARGS]</code></td><td>Compile when the cached
+artifact is absent or stale, then run it.</td></tr>
+<tr><td><code>loom app.luc [ARGS]</code></td><td>Shorthand for the source form.</td></tr>
+<tr><td><code>loom</code></td><td>Open the small interactive command shell.</td></tr>
 </table>
 </div>
 
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run build/examples/life/life.lc</kbd></samp></pre></div>
-</figure>
+<p>A <code>.lc</code> is native machine code in a tagged shared library. The
+direct run is one validation, one <code>dlopen</code>, one symbol lookup, and one
+call. The interpreter remains a test-only differential oracle and ships in
+nothing.</p>
 
-<h2 id="building">Building it</h2>
+<h2 id="parts">What belongs here</h2>
 
-<p>loom is built from the LuciaOS repository along with the compiler, in one
-command:</p>
+<div class="cards">
+<a class="card" href="@/running/"><strong>Running programs</strong><span>Artifact
+tags, source compilation, project caches, compiler discovery, and exit
+statuses.</span></a>
+<a class="card" href="@/shell/"><strong>The shell</strong><span>A deliberately
+small interactive or piped command loop, with failures scripts can
+observe.</span></a>
+<a class="card" href="@/host/"><strong>The host</strong><span>The single
+versioned boundary for files, terminals, workers, clocks, windows, GPU
+surfaces, and other effects.</span></a>
+<a class="card" href="@/editor/"><strong>The editor</strong><span>An ordinary
+Luce program using termui, installed as its own command rather than built into
+loom.</span></a>
+</div>
 
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>./build.sh</kbd>
-<span class="prompt">$</span> <kbd>ls build</kbd>
-lib	loom	luce	programs</samp></pre></div>
-</figure>
+<h2 id="not">What loom deliberately does not contain</h2>
 
-<p>Everything is Zig 0.16. <strong>LLVM is a build prerequisite of
-<code>luce</code> and of nothing else</strong> — the code generator calls
-libLLVM in process — and a C compiler driver (<code>cc</code>) is a prerequisite
-of building at all, because producing a compiled program is a link. loom itself
-links neither.</p>
+<ul>
+<li><strong>No language engine.</strong> It does not interpret bytecode or
+implement Luce semantics.</li>
+<li><strong>No code generator.</strong> It links no LLVM. A cold source run calls
+the separate <code>luce</code> binary; a warm run and a direct artifact run do
+not.</li>
+<li><strong>No application framework.</strong> The editor, terminal UI package,
+and future GUI packages are userland Luce.</li>
+<li><strong>No private persistent world.</strong> The current system uses normal
+OS files. Larger persistence ideas remain deferred until the language release
+gate is complete.</li>
+<li><strong>No ambient capability.</strong> A platform service exists only when
+the supplied host table contains it.</li>
+</ul>
 
-<p>The build installs <code>build/loom</code>, <code>build/luce</code>,
-<code>build/lib/libluce_rt.a</code> (Luce's semantics as a linkable library,
-which every compiled artifact carries) and <code>build/examples/&lt;name&gt;/&lt;name&gt;.lc</code>.
-Those paths are the repository's development snapshot; development tests and
-benchmarks use them explicitly. For daily use on macOS or Linux, run
-<code>./install.sh</code>. It copies both tools and both static libraries to a
-user-owned <code>~/.local</code> prefix, adds <code>~/.local/bin</code> to the
-user shell profile, and needs no <code>sudo</code>.</p>
+<h2 id="one-result">One program, one behavior</h2>
 
-<hr>
+<p>A library artifact under loom and a standalone executable use the same
+runtime and host semantics. Debug artifacts report source locations and call
+traces; release artifacts omit locations but keep the same safety rules. A
+trap, uncaught error, explicit exit, or host refusal reaches the invoking shell
+with a defined status.</p>
 
-<p>The language itself — types, ownership, failure, the standard library — is
-documented at <a href="https://luce.luciaos.com">luce.luciaos.com</a>. This site
-is about the tool that runs it, and about <a href="@/direction/">where that tool is
-going</a>.</p>
+<p>The language itself—types, ARC status, errors, packages, tests, and the
+standard library—is documented at
+<a href="https://luce.luciaos.com">luce.luciaos.com</a>. The
+<a href="@/direction/">Direction</a> page explains what the ordered language
+roadmap means for this deliberately small tool.</p>

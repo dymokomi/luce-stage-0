@@ -24,8 +24,8 @@ func main():
 Storing a `string` into anything that outlives the current statement — a
 binding, a container element, a `struct` field, a `map` key — copies the
 bytes into that place, so no place ever holds a view of bytes it did not
-allocate. Every string a program keeps has exactly one owner, and its
-storage is reclaimed when that place goes away: the scope that holds a
+allocate. Every stored string has independent storage, and that storage is
+reclaimed when the value goes away: the scope that holds a
 binding, the entry that holds a map key, the container that holds an
 element. A program never frees a string; the runtime reclaims it.
 
@@ -33,21 +33,21 @@ element. A program never frees a string; the runtime reclaims it.
 
 A runtime `Value` is 24 bytes. A string that fits carries its bytes
 **inside** that value with no allocation at all; a longer string points
-**outside** to a separate allocation it owns.
+**outside** to a separate allocation used only by that value.
 
 - **Small-string optimization.** A string of **22 bytes or fewer** lives
   in the value's own bytes. A one-byte form field records the inline
   length, and the remaining bytes hold the text. No heap allocation, no
   pointer to chase — the value *is* the string. This is the same
   in-situ threshold libc++ reaches in the same 24 bytes.
-- **Outside storage.** A string longer than 22 bytes owns a heap
+- **Outside storage.** A string longer than 22 bytes uses a private heap
   allocation holding its bytes; the value carries a pointer and a length.
   The allocation is freed when the place holding the value dies.
 
 The threshold covers what programs actually store — split pieces,
 `string(n)` results, short map keys — so the common case allocates
-nothing. Because a store copies, an owned local always owns its bytes,
-and reclaiming it is an unconditional free with no shared bit, no
+nothing. Because a store copies, a stored value has independent bytes,
+and reclaiming them is unconditional, with no shared bit, no
 counter, and no side table: a string is a value, not a
 reference-counted object.
 
@@ -56,10 +56,10 @@ reference-counted object.
 The one store that does not duplicate bytes is the one that hands over a
 value the current statement just made and keeps nothing else. In
 `xs.append(a + b)` or `field = strings.upper(text)`, the concatenation
-or the built result is a fresh allocation with no other owner, so the
+or the built result is a fresh allocation with no other reference, so the
 store takes that allocation instead of copying it. This is an internal
 optimization with no surface: a program cannot tell a move from a copy,
-because both leave exactly one owner.
+because both leave the same independent values.
 
 ## Slices are views
 

@@ -30,7 +30,7 @@ func main():
     print(f"{WIDTH // 2} {ada_age} {deflated}")
     print(f"{NUMBERS == ALIAS} {NUMBERS == EQUAL} {first()}")
     print(f"{ORDER.dim(0)} {ENTRIES[1].fallback else 0}")
-    var editable = copy NUMBERS
+    var editable = NUMBERS[0:len(NUMBERS)]
     editable.sort()
     editable.append(4)
     print(f"{editable[0]} {len(editable)} {NUMBERS[0]}")
@@ -44,8 +44,9 @@ true false 3
 ```
 
 `ALIAS` refers to the same root object as `NUMBERS`; the separately written
-`EQUAL` is a different object. `copy` explicitly creates a mutable owned
-copy. A default parameter can borrow a constant root in the same way.
+`EQUAL` is a different object. A list slice creates the independent mutable
+list used by `editable`. A default parameter shares the same constant root on
+every omitted call.
 
 ## The foldable boundary
 
@@ -55,8 +56,8 @@ structs that contain no objects. An optional field in such a struct may be
 containers or top-level optionals. Empty list and array literals need an
 annotation, such as `list(long)` or `array(long, _)`.
 
-Builders, object-carrying structs, multidimensional arrays, function values,
-ordinary function calls, and ownership verbs do not fold. Constants may
+Builders, reference-carrying structs, multidimensional arrays, function values,
+and ordinary function calls do not fold. Constants may
 refer to one another in any order, but a cycle is an error.
 
 ## Map literals
@@ -87,12 +88,12 @@ constant must describe one stable table.
 
 The program root lives for the lifetime of the runtime. Reads, indexing,
 iteration, and operations that return fresh values are allowed. Mutating a
-root directly, transferring its ownership, or freeing it is a compile-time
-error. The diagnostic recommends `copy` when a mutable object is intended.
+root directly is a compile-time error. Take a list slice when you need an
+independent mutable list.
 
 The compiler enforces the boundary, and the runtime checks it again for
-paths that reach inline generated stores. Each worker has its own runtime
-and its own copy of the roots.
+paths that reach generated stores. Each worker has its own runtime and its own
+copy of the roots.
 
 See the [statement reference](/guide/reference/statements/#file-scope-constants)
-and [ownership rule S46](/guide/reference/ownership/#s46).
+and [memory rule M11](/guide/reference/memory/#m11).

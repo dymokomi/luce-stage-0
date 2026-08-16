@@ -1,6 +1,6 @@
 # Built-in Functions and Methods
 
-Builtins are compiler-provided functions. A free builtin is called by
+Builtins are compiler-provided functions. A top-level builtin is called by
 name. A method is selected from the receiver's static type; method
 syntax does not perform dynamic dispatch. Host builtins require a host
 enabled compilation and may report `host_unavailable` at run time.
@@ -15,7 +15,6 @@ enabled compilation and may report `host_unavailable` at run time.
 | `assert(condition: bool)` | traps `assertion_failed` |
 | `trap(message: string)` | never returns; traps `explicit_trap` |
 | `error(message: string)` | never returns; raises `user_error` |
-| `free(object)` | early release of a direct owned container or resource handle; the parameter's established broad name includes both; poisons the name |
 | `abs(value)` | any number; answers its operand's type |
 | `min(a, b)`, `max(a, b)` | any two numbers of the same type |
 | `clamp(value, low, high)` | any three numbers of the same type |
@@ -88,8 +87,8 @@ At end of input, `read_line` returns `none`; use `read_line("> ") else
 |---|---|
 | `env(name: string) -> string?` | one environment variable; `none` when it is unset. There is no setter and no way to read the whole environment |
 
-The command line is `main`'s optional `list(string)` parameter, not a
-builtin ([S44](../ownership/#s44)).
+The command line is `main`'s optional `list(string)` parameter, not a builtin
+([entry forms](../statements/#entry)).
 
 ### Shell
 
@@ -178,8 +177,8 @@ changing these signatures.
 | Signature | Notes |
 |---|---|
 | `gpu_backend() -> long` | backend code: 0 Metal, 1 Vulkan, 2 headless; an unknown code traps |
-| `ui_window_open(title: string, width: long, height: long) -> file!` | opens a scope-owned window handle |
-| `ui_window_surface(window: file) -> file!` | creates the window's scope-owned GPU surface |
+| `ui_window_open(title: string, width: long, height: long) -> file!` | opens an ARC-managed window handle |
+| `ui_window_surface(window: file) -> file!` | creates an ARC-managed GPU surface for the window |
 | `gpu_surface_size(surface: file, axis: long) -> long!` | axis 0 is width, 1 is height |
 | `gpu_surface_clear(surface: file, red: long, green: long, blue: long, alpha: long) -> !` | clears the surface with an RGBA colour |
 | `gpu_surface_fill_rect(surface: file, x: long, y: long, width: long, height: long, red: long, green: long, blue: long, alpha: long) -> !` | fills a rectangle |
@@ -199,9 +198,9 @@ higher-level package.
 | `file_delete(path: string) -> !` | an absent path is `io_failed`, not a quiet success |
 | `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
 | `path_kind(path: string) -> long!` | what is at the path: 0 nothing, 1 a file, 2 a directory, 3 something else. Links are followed. `!` is the world **refusing to say** — a parent nobody may search — which is a different fact from "nothing is there". You write [`files.kind`](/library/files/), which gives the four codes their names |
-| `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. A fresh list the caller owns |
+| `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. Returns a fresh list |
 | `dir_create(path: string) -> !` | makes a directory **and every directory leading to it**. A directory already there is success; a *file* holding the name is `io_failed` |
-| `file_open(path: string, mode: long) -> file!` | a handle your scope owns. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/library/files/), [`files.create`](/library/files/) or [`files.append_to`](/library/files/) rather than a number |
+| `file_open(path: string, mode: long) -> file!` | an ARC-managed handle. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/library/files/), [`files.create`](/library/files/) or [`files.append_to`](/library/files/) rather than a number |
 
 All file operations are fallible. `path_kind` returns 0 for absence, 1
 for a file, 2 for a directory, and 3 for another entry kind; inability
@@ -273,24 +272,22 @@ the process working directory, and absolute paths are allowed. The
 |---|---|
 | `append(value)` | |
 | `insert(index, value)` | |
-| `remove(index)` | frees an owned element |
-| `pop() -> T` | ownership moves out; traps `empty_collection` when empty |
+| `remove(index)` | removes the element and releases any reference it held |
+| `pop() -> T` | removes and returns the final element; traps `empty_collection` when empty |
 | `sort()` | in place, **stable**, O(n log n); `long`, `double` or `string` elements |
 | `sort_by(before: func(T, T) -> bool)` | in place, **stable**, O(n log n); every element type; requires `import std.lists` |
 | `reverse()` | in place |
 | `find(value) -> long?` | absence when not found; `xs.find(v) else -1` is the sentinel form |
 | `contains(value) -> bool` | |
-| `clear()` | frees all owned elements |
+| `clear()` | removes every element and releases their references |
 
 Plus `len`, `xs[i]`, `xs[i] = v`, and `xs[a:b]` — which allocates a
-new list the receiver owns, deeply when the elements are resource-free
-container objects or carrying structs. When the element type carries
+new list and recursively copies copyable reference elements. When the element type carries
 `file` or `task`, both effective bounds must be equal compile-time `long`
 constants, proving an empty slice with no element copies; every other
 such slice is refused.
-`sort_by` borrows a named function or capture-free lambda; when the
-elements are containers, resources, or carrying structs the merge moves
-them rather than copying.
+`sort_by` accepts a named function or capture-free lambda. Sorting rearranges
+the existing elements without changing their ARC lifetimes.
 
 ## map(K, V)
 
@@ -299,8 +296,8 @@ them rather than copying.
 | `has(key) -> bool` | |
 | `get(key) -> V?` | absence when missing — never traps; `m.get(k) else d` is the fallback form |
 | `remove(key)` | a no-op when absent |
-| `keys() -> list(K)` | a fresh list the receiver owns |
-| `values() -> list(V)` | a fresh list the receiver owns; refused when `V` carries `file` or `task` |
+| `keys() -> list(K)` | a fresh list |
+| `values() -> list(V)` | a fresh list; refused when `V` carries `file` or `task` |
 | `clear()` | |
 
 Plus `len`, `m[k]` — which traps `key_missing` when the key is
@@ -357,9 +354,9 @@ explicit value families listed in the conversions table.
 | `write(from: array(byte, _), count: long) -> long!` | write the first `count` bytes and answer how many landed, which may be fewer than you offered |
 | `flush() -> !` | everything written so far is on the device |
 
-All three are fallible: the world decides. There is deliberately no
-`close` — a [`file`](/guide/reference/types/#file) is scope-owned, so the end of
-the owning scope closes it and `free(f)` closes it early.
+All three are fallible: the world decides. There is deliberately no `close`.
+The completed ARC contract closes a [`file`](/guide/reference/types/#file) at
+its last release; current builds still have disabled file-lifecycle tests.
 
 The buffer is the caller's, which is the C shape and is what makes the
 same three methods serve a socket later. [`std.files`](/library/files/) is
@@ -371,12 +368,14 @@ where the loops over them live.
 |---|---|
 | `wait()` | consume the task and answer its worker's return shape; a fallible worker makes this a fallible call |
 
-`wait` is a join and may be used once. A resource-free worker answer
-moves into the joining runtime; a function answering `file`, `task`, or
-a graph carrying either is refused at `spawn` instead. An error crosses
+`wait` is a join and may be used once. A graph carrying no resource or
+function value is copied into the joining runtime; a function answering
+`file`, `task`, a function value, or a graph carrying one is refused at
+`spawn`. An error crosses
 as an error, and a trap surfaces with the worker's frames before the
-joiner's. A task not explicitly waited on is still joined when its
-owning scope ends, but its answer is discarded. See the [`task`
+joiner's. The completed ARC path joins a task whose last reference is released
+without a wait and discards its answer; current lifecycle tests must still
+prove that automatic path. See the [`task`
 type](/guide/reference/types/#task).
 
 ## string

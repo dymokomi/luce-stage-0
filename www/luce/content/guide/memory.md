@@ -1,138 +1,172 @@
-# Memory and Ownership
+# Memory and ARC
 
-Luce releases owned values at scope boundaries. There is no garbage
-collector and no reference counting. A program does not normally call a
-destructor or a memory-management API; it gives a name to the value it
-owns, and the scope that owns it releases it.
+Luce's source language manages memory automatically: you do not write retain,
+release, move, clone, or free. The current development compiler implements the
+common ARC paths, but the conversion is not finished. In particular, several
+reclamation and file-close tests remain disabled. See [the current completion
+blockers](/guide/reference/memory/#current-completion-blockers) before relying
+on exact destruction timing.
 
-The rule is simple:
+The useful rule is short:
 
-> The binding that receives a fresh container or resource owns it. Its
-> owning scope releases it when that scope ends, returns, breaks, continues,
-> propagates an error, or replaces the binding.
+> Values copy. References share one object. Automatic reference counting
+> frees that object after its last reference goes away.
 
-## Which values are owned
+That sentence is the release gate, not yet an unconditional claim about every
+path in the current development build.
 
-These are heap objects: `list`, `map`, `array`, and `builder`. A struct that
-contains one of them is owned too. `file` and `task` are resources with the
-same lifetime rule. `long`, `double`, `bool`, `string`, and structs made only
-of values are ordinary values: assignment and return copy their value.
+## Values copy
 
-An unnamed object temporary lives until the statement that created it is
-finished. A file-scope constant container belongs to the program root and
-lives until that runtime ends. The
-[ownership reference](/guide/reference/ownership/)
-lists the rule for every form of statement.
+Numbers, booleans, strings, structs, enums, unions, and plain function values
+are values. Assignment and function calls give the destination a value copy.
 
 ```luce run
+struct Point:
+    x: long
+    y: long
+
 func main():
-    var numbers: list(long) = [1, 2]
-    numbers.append(3)
-    numbers = [10]       # the first list is released here
-    print(string(numbers[0]))
+    var first = Point(x = 2, y = 3)
+    var second = first
+    second.x = 10
+    print(f"{first.x} {second.x}")
 ```
 
 ```output
-10
+2 10
 ```
 
-## Aliases do not copy
+The two points are independent. A struct may still contain a reference; in
+that case the struct itself copies while both copies may share the referenced
+object.
 
-`let alias = owner` creates a second name for the same object. The alias can
-read and mutate it, but it does not become another owner:
+## References share
+
+Lists, maps, arrays, and builders are reference objects. Files and tasks are
+reference resources. Assignment and parameter passing retain the same object
+instead of duplicating its contents.
 
 ```luce run
+func add_one(values: list(long)):
+    values.append(3)
+
 func main():
-    var numbers: list(long) = [1, 2]
-    let alias = numbers
-    alias.append(3)
-    print(string(len(numbers)))
+    let first: list(long) = [1, 2]
+    let second = first
+    add_one(second)
+    print(f"{len(first)} {first[2]}")
 ```
 
 ```output
-3
+3 3
 ```
 
-The owner must remain alive while an alias is used. `free owner` releases an
-object early; using an alias afterwards traps with `use_after_free`. The
-runtime checks object generations, so a stale alias cannot accidentally read
-a newer object that reused the same storage.
+`first`, `second`, and the parameter temporarily name one list. Mutating the
+list does not reassign any binding, so a `let` reference may still mutate its
+object.
 
-## Moving and copying
-
-Most ownership decisions use four words:
-
-- `give value` moves an owned object into a container, field, or `give`
-  parameter. The old name cannot be used afterwards.
-- `copy value` makes an independent copy of a copyable object graph.
-- `free value` releases a directly owned object before its scope ends.
-- `return value` moves the returned object to the caller automatically.
-
-A fresh expression does not need `give`: nobody has a name that could still
-own it. A graph containing a `file` or `task` is not copyable; move it or
-restructure the data instead.
+Use an ordinary value transformation when you need independent data. A list
+slice creates a new list, for example:
 
 ```luce run
-func store(values: list(list(long)), item: give list(long)):
-    values.append(give item)
-
 func main():
-    var all: list(list(long)) = []
-    var first: list(long) = [1, 2]
-    store(all, give first)
-
-    var template: list(long) = [7]
-    all.append(copy template)
-    template.append(8)
-    all.append([9])
-
-    print(f"{len(all)} {len(template)}")
+    let source: list(long) = [1, 2, 3]
+    let separate = source[0:len(source)]
+    separate.append(4)
+    print(f"{len(source)} {len(separate)}")
 ```
 
 ```output
-3 2
+3 4
 ```
 
-After `give first`, `first` is moved and cannot be read again. This is a
-compile-time error, not a convention to remember. Likewise, storing a named
-object without either `give` or `copy` is refused because a container must
-always own the object it stores.
+There is no universal deep-copy operator. A current list slice recursively
+copies copyable reference elements as well as the outer list; Phase 0 replaces
+that inherited single-owner behavior with ordinary ARC element sharing.
 
-## Calls borrow by default
+## Structs may carry shared references
 
-A normal object parameter is a borrow. The callee may inspect or mutate the
-object while the caller remains its owner, but it may not store, return,
-give, or free that borrowed object.
+Copying a struct copies its scalar fields and retains its reference fields:
 
 ```luce run
-func add_squares(values: list(long), count: long):
-    for i in range(0, count):
-        values.append(i * i)
+struct Model:
+    title: string
+    values: list(long)
 
 func main():
-    var values: list(long) = []
-    add_squares(values, 3)
-    print(string(values[2]))
+    var first = Model(title = "first", values = [1])
+    var second = first
+    second.title = "second"
+    second.values.append(2)
+    print(f"{first.title} {second.title}")
+    print(f"{len(first.values)} {len(second.values)}")
 ```
 
 ```output
-4
+first second
+2 2
 ```
 
-Use a `give` parameter when a function is meant to keep the object. The
-caller writes `give` at the call site too, so the handoff is visible on both
-sides. Return values are always owned by their receiver, which is why a
-function cannot return a borrowed object.
+The titles are independent string values. The `values` fields refer to one
+list. This value/reference distinction is part of each field's type; it is not
+changed by how the enclosing struct is passed.
 
-## Resources follow the same rule
+## The completed release rule
 
-`std.files.open`, `create`, and `append_to` return an owned `file`. The file
-closes when its owner leaves scope, or when `free` releases it early. There
-is no `close` keyword to forget, and a closed handle used later traps like
-any other use-after-free. `task` has the same lifetime shape and joins when
-its owning scope ends.
+Each reference-holding place contributes a strong reference. Reassignment
+releases the old value before the slot takes its new one. Leaving a function,
+returning, breaking, continuing, or propagating an error releases the locals
+that control-flow edge leaves behind. A temporary releases at the end of its
+statement unless another place retained it.
 
-This model makes cleanup predictable without making every value shared. If
-multiple parts of a program need the same data, keep one owner and pass
-borrows, or make an explicit `copy` of a copyable graph. Shared ownership,
-weak references, and user-visible arenas are not part of Luce.
+The optimizer may remove a retain/release pair only when that cannot change
+resource cleanup, traps, or any other observable result. Current common paths
+follow this rule, but the disabled lifecycle tests mean the rule is not yet
+proved for every edge.
+
+## Files and tasks must close deterministically
+
+A completed `file` implementation closes at its last release. A completed task
+implementation joins its worker at its last release, even when no code calls
+`wait()`. Sharing either reference shares one underlying resource.
+
+That deterministic cleanup is why Luce chose ARC. It is also a current
+implementation blocker: file lifecycle tests are still skipped, so runtime
+teardown may be the operation that finally closes a handle.
+
+## Interfaces and bound methods
+
+A current interface value carries bound dispatch values for one concrete
+struct. Value-only receivers are self-contained. For a receiver with reference
+fields, another concrete value must currently keep those objects alive.
+Interface dispatch is read-only today.
+
+A bound method also carries a receiver. A struct receiver is copied into the
+function value; reference fields remain shared but are not yet retained by the
+bound value. The original owner must outlive it.
+
+## Workers remain isolated
+
+Every worker has its own runtime and heap. Values copy directly, and permitted
+container graphs are rebuilt recursively in the receiving runtime. No object
+identity is shared. Graphs carrying a `file`, `task`, or function value are
+refused as arguments or results.
+
+Current container-argument transfer still has an ARC bug that can invalidate
+the caller's source reference and leak an object. Until the Phase 0 fix, do not
+reuse a reference argument after `spawn`; [the reference
+blockers](/guide/reference/memory/#current-completion-blockers) track the gate.
+
+That rule makes data races over Luce objects unrepresentable without adding a
+second ownership language.
+
+## What has not shipped yet
+
+Full last-release ARC is the first unfinished milestone. `class` is only a
+compiler scaffold; weak references, mutable owned interface values, and
+capturing closures have not shipped either. [Status](/status/) gives their
+order.
+
+The [Memory Management reference](/guide/reference/memory/) gives the exact
+current rules. [Concurrency](/guide/concurrency/) applies them at the worker
+boundary.

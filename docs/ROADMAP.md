@@ -1,400 +1,553 @@
-# ROADMAP — the reference feature set and how it is built
+# Roadmap — finish ARC, then build the intended language
 
-The memory model is **value types and reference types with automatic
-reference counting** (`docs/MEMORY.md`). This document is the plan for
-finishing it: the feature set we are building, how each feature works,
-and the order the work goes in. It is a plan, not a reference — the
-built features are described in their own docs; the ones below marked
-"not built" are the design we are aiming at.
+This is a plan, not the current language reference. The current compiler is
+described by [LANGUAGE.md](LANGUAGE.md), [MEMORY.md](MEMORY.md), and the other
+documents under **Current reference** in [README.md](README.md). Syntax shown
+here is fenced as `text` until the compiler accepts it.
 
-## Where we are
+The destination is deliberately small:
 
-The **ARC engine is built and green.** The built-in reference types —
-`list`, `map`, `array`, `builder`, `file`, `task` — are reference-counted
-with compiler-inserted retain/release, freed at the last release, closing
-resources deterministically, on both engines, with zero leaks across the
-whole spec suite. The legacy ownership subsystem is gone, and the
-documentation describes ARC.
+> Luce values copy. Luce references share identity. ARC keeps references
+> alive. Weak references break cycles. Resources close at the last strong
+> release. Workers never share object identity.
 
-What is **not** built yet is the language surface a user reaches for a
-`class`. A `class` parses and type-checks as a reference kind but still
-*lowers* as a value: assigning one copies rather than shares. `weak`,
-capturing closures, and mutating interface dispatch are still refused.
-Wiring those up is the whole of the remaining work, and it is the reason
-the rewrite started: **a callback that captures and mutates shared state
-is only expressible once references are shared and closures can capture
-them.**
+That rule must be enough to explain a list alias, a class model, a callback,
+an interface value, a file, and a task. If a feature needs a second lifetime
+language, the design is not finished.
 
-## Guiding cuts
+## Where the repository is now
 
-- **Smaller is the goal.** Every feature below is chosen to be the
-  smallest version that is still whole. Where Swift has three forms of a
-  thing, we take the one that cannot be expressed by the others.
-- **The two-engine guarantee is non-negotiable.** ARC is enforced
-  identically in `libluce_rt` and the interpreter oracle, and every spec
-  compares them. A feature is not done until both engines agree.
-- **Reversible by construction.** The deferred features (inheritance,
-  `unowned`, generics) are all *additive* — the v1 choices leave the door
-  open for them without committing now.
+The ARC pivot is partially implemented on both execution paths:
 
----
+- the old source-level `give`, `copy`, and `free` language is gone;
+- runtime objects carry a reference count, MIR has `retain` and `release`, and
+  the interpreter and LLVM path implement those instructions;
+- common local, assignment, parameter, return, aggregate, optional, error, and
+  container paths now share reference identity and pass simple zero-census
+  differential specs; and
+- the compiler and oracle still use one runtime implementation.
 
-# The feature set
+It is not yet honest to call that full ARC:
 
-## The model, recapped
+- `src/luce/runtime/test.zig` keeps four reclamation tests behind
+  `sub_cut_b_pending` and says objects may survive until runtime teardown;
+- `bytes_spec.zig` and `zip_spec.zig` skip four file lifecycle tests because a
+  file opened in a function is not reliably closed at the function's last
+  release;
+- the synthesized test entry and adventure spec relax their zero-census
+  assertions around remaining container reclamation gaps;
+- a bound method still borrows reference fields in its receiver instead of
+  retaining them, so a carrying receiver must outlive the function value;
+- current interface dispatch is made from those bound values and inherits the
+  same lifetime restriction for a reference-carrying conformer;
+- list slices and `map.values()` still recursively clone copyable object
+  elements, while reference-valued `array.fill` remains refused—residue from
+  the retired single-owner model rather than normal ARC collection behavior;
+- passing a container graph to `spawn` can invalidate the caller's still-live
+  reference and leaves a leaked object even when that reference is not reused;
+  and
+- the damaged-module byte-mutation hardening test is skipped around two
+  decoder/verifier panic paths.
 
-A **value type** — the scalars, `string`, a plain `struct`, an `enum`, a
-`union`, a function value — copies when assigned or passed, and costs
-nothing at runtime. A **reference type** — a `class`, the containers
-`list`/`map`/`array`/`builder`, the resources `file`/`task` — is a shared,
-reference-counted object: assigning or passing it shares the same object,
-and it is freed at the last reference. You choose with one keyword,
-`struct` or `class`. That is the whole model; everything below is how the
-reference side behaves (`docs/MEMORY.md`).
+Those are the first milestone, not cleanup to postpone. After them:
 
-## Classes
+- `class` is a front-end scaffold. It parses and carries a reference-kind bit,
+  but still lowers with value-struct behavior.
+- Interfaces work for explicit struct conformance, multiple methods,
+  multi-value answers, directional failure effects, return values, optionals,
+  and heterogeneous containers. Dispatch is intentionally read-only today,
+  and the representation is not yet the final owned existential model.
+- Lambdas are one expression and cannot capture a local.
+- `weak` references do not exist.
+- The public scalar spellings are still `byte`, `short`, `int`, `long`,
+  `half`, `float`, `double`, and `string`.
+- [MISSING.md](MISSING.md) contains a current lowering bug that must be fixed
+  before feature work changes the same seams.
 
-A `class` is a reference type with identity.
+That inventory is the baseline. A plan item is not allowed to migrate into a
+current reference until its acceptance program and negative matrix pass on
+both engines. A skipped feature or hardening test counts as unfinished work,
+not as a green result.
+
+## The target language
+
+### Values, references, and resources
+
+The type kind is observable and simple:
+
+| Kind | Examples | Assignment and passing | Lifetime |
+|---|---|---|---|
+| Value | numbers, `bool`, `char`, `str`, `bytes`, `struct`, `enum`, `union` | copy the value | inline or owned by the containing value |
+| Reference | `class`, `list`, `map`, `array`, closure environments, interface existentials | share one identity | ARC; free at the last strong reference |
+| Resource reference | files, tasks, windows, GPU surfaces | share one identity | ARC plus deterministic close/join/release at zero |
+
+A value may contain references; copying it copies its value fields and retains
+its reference fields. A reference may contain values and other references.
+Recursive container graphs can already form strong cycles; classes and
+capturing closures make them common, so `weak` lands before either feature is
+considered complete.
+
+Workers keep the existing isolation rule: permitted value/container graphs
+are rebuilt in the receiving runtime, while object identity never crosses.
+Resources, classes, weak references, and capturing closure environments are
+not sendable in this milestone. There are no locks, atomics, shared heaps, or
+thread identities.
+
+### Classes
+
+A `class` is a final ARC reference type with identity and ordinary mutation:
 
 ```text
 class Counter:
-    count: long
+    count: i64
+
+    func increment():
+        self.count += 1
 
 func main():
-    let a = Counter(count = 0)
-    let b = a          # b and a name the same object
-    b.count = 5
-    print(string(a.count))   # 5 — the mutation is seen through a
+    let first = Counter(count = 0)
+    let second = first
+    second.increment()
+    print(str(first.count))       # 1
 ```
 
-- **Reference semantics.** `let b = a` makes `b` refer to the same
-  object; a mutation through one name is seen through every other.
-  Assigning or passing a class never copies it.
-- **Identity.** `a === b` asks whether two references name the *same*
-  object, distinct from `a == b` (equal contents). `===` is the reference
-  question and exists the moment references do.
-- **Mutation is ordinary.** A method mutates its receiver with no marker,
-  and it may be called through a `let` — a `let` binds the reference, and
-  mutating the object it names does not reassign the binding. (This is the
-  opposite of a value `struct`, below.)
-- **Stored and computed properties.** A stored property holds a value in
-  the object (`var`/`let`). A computed property has no storage and gives a
-  value from a body — the `@property` a "compiled Python" needs.
-- **Construction — `init`, optional.** A class (or struct) with no
-  constructor gets the memberwise form `Counter(count = 0)`. It may
-  instead declare one or more `init` constructors that take their own
-  arguments and run setup; an `init` must assign every stored property
-  before the object is used, and it is called by the same
-  `TypeName(args)` syntax with its own parameter names. Writing an `init`
-  is optional — the memberwise form is what you get for free.
+The first complete class release includes:
 
-  ```text
-  class Temperature:
-      celsius: double
+- heap allocation and reference lowering from the declaration's kind;
+- sharing on assignment, parameters, returns, fields, optionals, collections,
+  interfaces, and function environments;
+- mutation through a `let` binding, because the binding is stable while the
+  object is mutable;
+- memberwise construction, including defaults and visibility already shared
+  with structs;
+- reference identity with Python-familiar `is`; `==` remains value equality
+  and is not synthesized recursively for classes;
+- an optional `deinit` that runs exactly once at the last strong release,
+  while fields are still alive, after which fields release;
+- a ban on resurrection from `deinit`; and
+- deterministic behavior on success, recoverable error, and normal worker
+  cleanup.
 
-      init(fahrenheit: double):
-          self.celsius = (fahrenheit - 32.0) / 1.8
+Explicit `init` bodies can follow after memberwise construction is solid. They
+must use the same call syntax, establish every field before `self` escapes,
+and not introduce Swift's two-phase initializer hierarchy.
 
-  func main():
-      let t = Temperature(fahrenheit = 98.6)
-      print(string(t.celsius))
-  ```
-- **`deinit`, optional.** A class may declare a `deinit` that runs at the
-  last release — deterministic, driven by the count. It is where a class
-  cleans up what ARC's automatic free does not cover; a `file` field, for
-  instance, closes on its own, but a `deinit` is the user-level "on
-  teardown" hook. A class without one needs nothing — ARC frees the
-  object and its reference fields on its own.
+Classes have no inheritance, subclassing, `override`, or `super`. Reuse comes
+from composition and interfaces. Interface default methods are also outside
+this milestone: they are not needed to make polymorphism whole, and they would
+mix implementation inheritance into the first existential design.
 
-  ```text
-  class Session:
-      log: file
+### Interfaces as owned existentials
 
-      deinit():
-          print("session closed")
-  ```
-- **`static`.** `static func` and `static const` are type-level members
-  with no receiver — the factories and namespace helpers.
-- **Visibility — the same as a struct.** Everything is public by default;
-  `private` written in full marks a field or method; `private:` and
-  `public:` regions open indented blocks inside the class body. The unit
-  of privacy is the file, and a class with a private field is constructed
-  through its own public functions (the factory pattern). This is already
-  in place (`docs/VISIBILITY.md`), the same rules structs use.
-- **Final.** A class is final: it has no subclasses. Polymorphism comes
-  from interfaces, not from a hierarchy (see below).
-
-## No inheritance (a decision)
-
-**Luce has no class inheritance.** A class cannot subclass another class;
-there is no `override`, no `super`, no designated-vs-convenience
-initializer chain, no vtable.
-
-The reasoning, grounded in Swift's own experience:
-
-- Inheritance is the highest-complexity, lowest-necessity feature in a
-  class model. Its two irreplaceable powers are **shared stored state**
-  across a hierarchy and **`super`-style override**. Everything else it
-  offers, interfaces offer more cheaply.
-- Swift — which has inheritance — promotes *protocol-oriented*
-  programming over it: reuse through protocol default implementations and
-  composition, not base classes. A great deal of modern Swift defines zero
-  non-`final` classes.
-- The machinery inheritance drags in (two-phase initialization, the
-  designated/convenience/required initializer rules, initializer
-  inheritance, dynamic dispatch) is Swift's single most complex feature.
-  It contradicts "smaller than before."
-- The programs that motivated this rewrite — a SwiftUI-shaped UI, an
-  editor, an AST — are interface-, composition-, and union-shaped, not
-  hierarchy-shaped. An AST is a `union`; a widget is an `interface`; a
-  view holds its children, it does not inherit them.
-
-What replaces it: **interface default methods** recover shared
-implementation, **composition** (a class holds another as a field and
-forwards) recovers shared state, and **unions** recover closed variant
-hierarchies. If a genuine need for shared mutable base state appears
-later, single inheritance is a strictly additive feature — classes being
-final by default means adding an `open` opt-in then costs nothing now.
-
-## Interfaces
-
-An interface is a named call contract; a `struct` or a `class` conforms to
-it by listing it and implementing its methods (`docs/INTERFACES.md`). With
-inheritance omitted, interfaces are the whole of polymorphism, so they
-grow two things they lack today:
-
-- **Default methods.** An interface may give a method a body; a conformer
-  that does not implement the method inherits the default. This is the
-  reuse mechanism that makes "no base classes" livable — the one thing
-  inheritance really bought, without the hierarchy. Defaults are
-  overridable and dispatched by the concrete type.
-- **A class-only marker.** An interface may be restricted to classes, so
-  a reference to it can be held `weak` (a value type has nothing to weaken).
-
-Already true and staying: nominal explicit conformance, method and
-multi-value-return requirements, directional failure matching (a
-non-fallible method satisfies a fallible requirement), and heterogeneous
-`list(Interface)`. Under ARC an interface value is a reference, so a method
-reached through it **may mutate its receiver** — the read-only-dispatch
-rule that existed only to make a borrowed value safe is removed.
-
-Deferred (see below): interface inheritance/composition, property
-requirements beyond methods, associated types, and the generic-vs-boxed
-(`some`/`any`) distinction — that frontier waits for generics.
-
-## Methods and mutation
-
-The mutation rule is the observable core of value-vs-reference, and it is
-already how structs behave:
-
-- A **value type** (`struct`) method that writes `self` or a `self` field
-  is a **writer**, and a writer may be called only on a bare `var`
-  binding — never a `let`, because a `let` value is immutable. Luce infers
-  which methods are writers from their bodies (no `mutating` keyword); the
-  call site tells the truth either way, since `x.advance()` may write and
-  `f(x)` never does (`docs/SELF.md`).
-- A **reference type** (`class`) method needs no marker and may be called
-  through a `let`: it mutates the shared object, not the binding.
-
-So the only work here is the class half — today a class is checked as a
-value, which wrongly refuses `let b = a; b.count = 5`. Phase 5 makes a
-class method an ordinary reference mutation.
-
-## Capturing closures
-
-**This is the feature the rewrite exists for.** A lambda may capture the
-variables of the scope around it; a captured reference is kept alive by
-ARC for as long as the closure lives.
+The target representation is one existential value, not one copied receiver
+per method:
 
 ```text
-class Model:
-    total: long
-
-func make_adder(m: Model) -> func():
-    return () -> m.total += 1     # captures m; ARC keeps it alive
+{ payload, concrete metadata, witness table }
 ```
 
-- **Capture by reference.** A closure captures the variable, not a
-  snapshot: it reads and writes the live variable, and mutations are seen
-  outside. A captured reference object is retained.
-- **One function type.** `func(T) -> R` covers a plain function and a
-  capturing closure alike; there is no `@escaping`-style colouring on the
-  type.
-- **Capture lists break cycles.** A closure a class stores, that captures
-  that same class, is a cycle ARC cannot reclaim. A capture list states a
-  weaker capture at the point the cycle would form: `[weak m]` captures
-  `m` as a `Model?` (weak, may be gone), and `[name = expr]` captures a
-  chosen value at creation time.
-- **Escape is inferred, not annotated.** The compiler knows whether a
-  closure escapes — is stored, returned, or spawned — or is only called in
-  place. A closure that cannot escape cannot form a lasting cycle, so it
-  needs no capture ceremony at all; the weak/value decision is asked for
-  *only* where a closure escapes and captures a reference. This is the
-  idea that keeps "memory you never think about" true for closures: the
-  ceremony appears exactly where, and only where, a leak is possible.
+- A struct conformer is copied into existential storage.
+- A class conformer is retained as the existential payload.
+- The witness table is static and has one slot per required method.
+- Each element in a heterogeneous `list[Interface]` or `map[K, Interface]`
+  carries its own payload and witness identity.
+- Dispatch may call a mutating concrete method. A value payload mutates the
+  existential's boxed copy; a class payload mutates the shared object.
+- Existing multiple-method, multi-value-return, named-argument, and fallible
+  contract rules remain.
+- A non-fallible witness may satisfy a fallible requirement; the reverse is
+  rejected.
 
-Not in v1: `@autoclosure`, and `unowned` captures (a capture list offers
-`weak` and value capture only — see `weak`, below).
+Interfaces remain nominal and explicit. The first complete model has no
+interface inheritance, default implementations, associated types, or runtime
+casts. Generic constraints arrive later and reuse the same conformance table.
 
-## `weak` references
+### Weak references
 
-ARC's one genuine cost is that a reference **cycle** leaks. A `weak`
-reference is the answer, and the only new concept the model asks a
-programmer to learn.
+`weak` applies to ordinary ARC object references: classes, lists, maps,
+arrays, builders, and reference-backed interface values. Limiting it to
+classes would leave the recursive struct/container cycles that Luce can
+already express with no way to break a back-edge.
 
 ```text
 class Node:
     weak parent: Node?
-    children: list(Node)
+    children: list[Node]
 ```
 
-- A `weak` reference does **not** retain its object; it reads as `T?`, and
-  becomes `none` the instant the object is freed. A read is therefore
-  always safe — there is no dangling reference, only a `none`.
-- It applies to reference types only (a `class`, or a class-only
-  interface); a value type has no identity to weaken.
-- Cycles are rare — a parent↔child back-edge, a delegate — so `weak` is a
-  footnote, not a daily tax.
+A weak reference does not increment the strong count, always reads as `T?`,
+and becomes `none` before the target's storage can be reused. It never dangles.
+The runtime representation and zeroing behavior must agree on the compiled and
+oracle paths. Resource references and function values are not weak in the
+first model: resource disappearance should not become an implicit API, and a
+closure cycle is broken by weakly capturing the object on its back-edge.
+There is no unsafe `unowned` form.
 
-**`weak` only; no `unowned`.** Swift also has `unowned` (a non-optional
-non-owning reference that traps or is undefined behaviour if read after
-the object is gone). It is purely an ergonomic/perf affordance — it avoids
-the optional — bought with a use-after-free hole. For a language whose
-thesis is "memory you never think about," a reference that segfaults on a
-lifetime mistake is the wrong trade. `weak` expresses every cycle-break
-`unowned` can, with an unwrap. If profiling ever shows the weak side-table
-matters, `unowned` can be added later as a *safe, trapping* form only
-(never the unsafe one) — consistent with Luce's existing trap machinery.
+The debug leak census must report surviving strong cycles with enough type and
+allocation context to diagnose them. ARC does not pretend to collect cycles.
 
-## The small ergonomics that references demand
+### Capturing closures
 
-References and optionals make a few small features stop being optional:
+Plain functions and closures share one function type. Whether a closure
+escapes is inferred; it does not color the function type.
 
-- **`===` identity** — "the same object?", added with classes.
-- **Synthesized `==` and hashing** — user `struct`s already compare with a
-  synthesized `==`; a type used as a `map` key needs a synthesized hash
-  the same way, so user types drop into `map` and `==` with no ceremony.
-- **Optional chaining `a?.b?.c`** — short-circuiting member access on an
-  optional, the whole expression becoming `T?`. `weak` produces optionals
-  everywhere in a reference graph; without chaining, walking one is
-  verbose. High value, and it composes with the `else` fallback Luce
-  already has (`a?.b else default`).
-- **Optional binding** — Luce narrows an optional with `if x != none:`
-  today; a binding form (`if let y = x:` / an early-exit `guard`) makes
-  the `[weak self]` idiom — capture weak, then check once — read cleanly.
+- Immutable value bindings capture a value snapshot.
+- Mutable local bindings are promoted into one shared environment cell, so
+  the closure and surrounding scope observe the same variable.
+- Reference values are strongly captured by default. Strong capture is the
+  ordinary safe case, even when a closure escapes.
+- A capture list requests weak or snapshot behavior where it matters:
 
-## Deferred, on purpose
+  ```text
+  [weak model] () -> model?.refresh()
+  [name = current_name] () -> print(name)
+  ```
 
-Not in the reference feature set, each recoverable later without breaking
-what ships:
+- The compiler diagnoses an obvious stored self-cycle and points at the weak
+  capture that breaks it; it does not require weak capture for every escaping
+  reference.
+- Closure environments are ARC objects and release every captured reference
+  exactly once.
+- A closure environment cannot cross a worker boundary in this milestone.
 
-- **Class inheritance** — composition + interface defaults + unions cover
-  it; single inheritance is additive if a real need appears.
-- **`unowned`** — `weak` is the safe primitive; add a trapping `unowned`
-  only if measured.
-- **Generics** (`<T: P>`, and the boxed-`any` vs monomorphized-`some`
-  distinction), **associated types**, **`where` clauses** — the type-system
-  frontier. Interfaces and heterogeneous collections carry v1; generics
-  are their own track (`docs/GENERICS.md`).
-- **`lazy` properties, property observers (`willSet`/`didSet`),
-  convenience/required/failable initializers** — each a clean later
-  addition; none blocks the UI story.
-- **`@autoclosure`, `Self` return types, `as!` forced casts** — advanced;
-  omitted.
+The current single-expression lambda is not enough for UI callbacks. Capturing
+closures therefore land with a block form, using the same statements and
+return checking as a function body. A trailing-closure call form is optional
+ergonomics after the core representation is proven, not a prerequisite for
+closure correctness.
 
----
+### The explicit type vocabulary
 
-# Build order
+The target core vocabulary is:
 
-## Phases 0–4 and 7 — done
+```text
+bool
 
-- **0. Docs & direction** — `docs/MEMORY.md`, this roadmap, `CLAUDE.md`.
-- **1. Type kinds in the front end** — `class` parses beside `struct`; a
-  per-layout value/reference kind on `Type`.
-- **2. ARC in `libluce_rt` and the oracle** — a refcount on every
-  reference object; `luce_rt_retain`/`_release`; deterministic free and
-  resource close; both engines mirror it. `abi.version` is 19.
-- **3. Share/copy semantics; legacy subsystem removed** — the ownership
-  walk and its diagnostics are gone; a value copies, a built-in reference
-  shares, `new`/literals allocate with count 1.
-- **4. MIR & backend: retain/release** — the ownership instructions are
-  now `retain`/`release`; the verifier checks the discipline; codegen
-  emits and elides them; `format_version` is 47.
-- **7. Docs sweep** — every doc rewritten to the ARC model.
+u8  u16  u32  u64
+i8  i16  i32  i64
+f16 f32  f64
 
-## Phase 5 — the reference feature set  ← next
+char
+str
+bytes
 
-Each step is additive and can land green on its own.
+list[T]
+map[K, V]
+array[T, N, ...]
+func(T, ...) -> R
+T?
+```
 
-- **5a — a `class` lowers as a reference.** The central change: a `strukt`
-  layout whose kind is `reference` allocates a heap object and lowers
-  through the container path — assigning shares and retains, scope end
-  releases, a method mutates the shared object (legal through a `let`).
-  Add `===`, optional `init` constructors, and an optional `deinit`
-  release-time hook. After 5a, the `Counter` example above prints `5`.
-- **5b — interfaces carry implementation.** Default methods; the
-  class-only marker; conformance for classes as well as structs; remove
-  the read-only-dispatch rule so an interface method may mutate.
-- **5c — capturing closures.** Capture enclosing variables by reference;
-  capture lists (`[weak x]`, `[name = expr]`); escape inference so the
-  weak/value decision is asked only where a closure escapes.
-- **5d — `weak`.** The non-retaining `T?` reference that auto-nils at
-  free; parsing, checking, and the runtime side-table on both engines.
-- **5e — the small ergonomics.** Optional chaining `a?.b`, an optional
-  binding form, and synthesized hashing for user map keys.
+User-declared `struct`, `class`, `enum`, `union`, and `interface` types remain
+TitleCase. Files, tasks, windows, and GPU surfaces are opaque library/runtime
+types rather than a reason to add more scalar keywords.
 
-## Phase 6 — rewrite the users of the model
+The migration is intentionally atomic:
 
-- **`std/*`** — containers are shared; drop any remaining defensive copies.
-- **`examples/editor`** — the state coordinator shrinks: shared mutable
-  buffers, no remember/restore dance.
-- **`packages/termui`** — the retained-tree, SwiftUI-shaped framework,
-  now expressible: a `class` view tree, mutated in place, with `on_press`
-  closures that capture and mutate app state directly. This is the proof
-  the model is right.
-- **`bench/*`** — value types keep their speed; re-baseline the
-  graph-heavy rows that sharing should improve.
+| Current | Target |
+|---|---|
+| `byte` | `u8` |
+| `short` | `i16` |
+| `int` | `i32` |
+| `long` | `i64` |
+| `half` | `f16` |
+| `float` | `f32` |
+| `double` | `f64` |
+| `string` | `str` |
 
-## What "done" looks like
+The new integer family adds `u16`, `u32`, `u64`, and `i8`. There is no plain
+`f8`: if an 8-bit floating representation is ever justified, its format is in
+the name, such as `f8e4m3` or `f8e5m2`. `bf16` is likewise a distinct future
+format, not an alias for `f16`.
 
-`app.run(App())` hides the loop; a `class` widget tree is retained and
-mutated in place; a button's `on_press` closure captures and mutates app
-state directly; `weak` closes the one back-edge that would leak; `struct`
-numerics keep their benchmark speed; both engines agree on every spec; and
-the language surface is *smaller* than it was before ARC.
+The semantic rules must be frozen before spelling changes:
 
----
+- literals are contextual; an unconstrained integer defaults to `i64` and an
+  unconstrained floating literal to `f64`;
+- every integer type is a real checked arithmetic type at its own width;
+- operations on two concrete numeric values require the same type;
+- changing width, signedness, or integer/float domain is explicit;
+- a literal may land directly on a target type only when it fits;
+- narrowing, overflow, invalid shifts, and out-of-range conversions remain
+  defined traps, never wrapping or undefined behavior; and
+- FFI/platform-sized integers are added only when a real boundary requires
+  them, not as aliases that make program behavior machine-dependent.
 
-# Concurrency, kept
+`none` is the absence value of `T?`, not a type. `char` is one Unicode scalar
+value, copied by value; it is not a borrowed view into a string and not an
+extended grapheme cluster. `str` is immutable UTF-8. Iterating a `str` yields
+`char`; byte-oriented work is explicit through `bytes`. `bytes` is immutable
+binary data; mutable buffers use `list[u8]` or `array[u8, N]` until a measured
+need justifies a dedicated buffer.
 
-`spawn` is unchanged: **value types cross a worker by copy, reference
-types do not cross at all** — so there is no shared mutable state
-*between* workers even though there is sharing *within* one
-(`docs/MEMORY.md`, `docs/THREADS.md`). Locks, atomics, and actors stay out
-until a workload asks.
+There is one general associative container, `map`; `dict` and `hash` are not
+synonyms. `tree`, `stack`, and matrix types belong in libraries after
+generics. `vec2`, `vec3`, and `vec4` are aliases or library types, not core
+keywords. A compiler type `vec[T, N]` earns a place only with real SIMD
+operations and ABI semantics; otherwise `array[T, N]` is the honest name.
 
-# Runtime ARC design (grounded in the tree, for Phase 5a)
+`builder` may remain an internal/runtime specialization while the migration
+is underway, but the target user surface is a library `strings.Builder`, not
+another primitive scalar name.
 
-What the code looks like, so the surgery is precise:
+### Generics and library data structures
 
-- `runtime/heap.zig` `Object` carries `references: u32` (set to 1 by every
-  `new*`), `generation` (stale-handle detection), and `next_free` (the
-  free list). `luce_rt_retain` increments; `luce_rt_release` decrements
-  and, at zero, runs the existing `freeObject` path. This is built.
-- **Value vs reference at the boundary:** a value `struct` and the scalars
-  stay inline in `Value`; a reference — `class`, container, resource — is a
-  `Value` holding a `Handle`, and it is the thing retain/release act on.
-  The per-layout `reference` flag is the compile-time switch that decides
-  which lowering a `strukt` type gets. **5a is wiring that flag through the
-  `strukt` lowering** so a `class` follows the reference path the
-  containers already do, rather than the value-copy path it follows today.
-- **MIR/codegen** already emit `retain`/`release` for the built-in
-  references and elide redundant pairs; a `class` joins that path once 5a
-  flips its lowering. The interpreter counts identically.
-- Resources still close deterministically — a `file`/`task` releases at
-  count zero, the same instant scope end gave, so `docs/FILESYSTEM.md` and
-  `docs/THREADS.md` keep their guarantee.
+Generics are a later, separate milestone. They are not a workaround for the
+class, interface, weak, or closure representation, and none of those phases
+waits for them.
 
-The counting is one screenful in `libluce_rt` and is done; the remaining
-work is the front-end lowering (5a), the surface features (5b–5e), and the
-rewrite of the model's users (6).
+The first generic system is monomorphized and supports generic functions,
+structs, classes, and interface bounds. It does not include higher-kinded
+types, specialization syntax, variadics, associated types, or generic
+interface existentials. [GENERICS.md](GENERICS.md) owns the detailed proposal
+and must be reconciled with the final bracket type syntax before work begins.
+
+Once generics exist, standard packages—not the core language—may provide
+`Stack[T]`, `Deque[T]`, tree variants named for their guarantees, `Matrix[T]`,
+and fixed-size vector aliases. Each type must justify its own invariant and
+complexity; a bag of collection synonyms is not a standard library.
+
+## Build order
+
+Each phase below must land green and remain usable on its own. Focused tests
+run during development. `zig build test` runs once before the phase commit is
+considered complete, not after every prose or local implementation edit.
+
+### Phase 0 — finish ARC and restore the release gate
+
+1. Fix every confirmed current bug in [MISSING.md](MISSING.md), beginning with
+   `try` inside a `match` arm inside `for` and the damaged-module verifier
+   panic.
+2. Remove every feature-related skip and relaxed census assertion. Keep only
+   genuine platform capability skips, and make the test summary distinguish
+   them from product gaps.
+3. Complete retain/release emission for every current reference shape:
+   local, assignment, argument, return, aggregate field, optional, failure,
+   loop binding, interface, bound method, container element, synthesized test
+   entry, file, task, and worker teardown.
+4. Make bound function values retain and release reference fields in their
+   receiver. Either make current interfaces inherit that safety immediately or
+   temporarily reject reference-carrying interface storage/return until the
+   owned existential lands; dangling callable state is not an acceptable
+   intermediate contract.
+5. Replace the last single-owner collection rules with ARC rules: list slices
+   and `map.values()` copy the outer value and retain reference elements;
+   reference-valued array fill retains once per cell. Keep recursive copying
+   only at the isolated-worker runtime boundary, where identity must not cross.
+6. Add direct worker-boundary specs for nested container arguments, snapshot
+   independence, caller liveness after `spawn`, alias preservation within the
+   copied graph, zero census across both runtimes, and transitive
+   resource/function refusals; fix the current argument-transfer failure.
+7. Prove last-release destruction and rollback under success, recoverable
+   error, trap, allocation failure, host failure, and runtime teardown on both
+   engines. Include file close and unfinished-task join counts.
+8. Remove retired ownership terminology from source comments, test names,
+   diagnostics, coverage assertions, and generated grammar categories.
+9. Record compile-time, artifact-size, runtime, and peak-memory baselines for
+   representative value-heavy and reference-heavy programs.
+10. Make the current public Guide and Library build clean against this exact
+   compiler. Future syntax appears only in Status.
+
+Exit: no feature-gated skip or relaxed leak assertion; no confirmed ARC or
+hardening bug; zero live objects after every clean differential spec; exact
+file-close/task-join counts; no user-visible legacy ownership language; and
+reproducible baseline numbers.
+
+### Phase 1 — freeze the new type contract
+
+1. Write the numeric, `char`, `str`, `bytes`, container-application, and
+   conversion rules as a target specification.
+2. Decide the exact block-closure and capture-list grammar in the same small
+   grammar note.
+3. Extend the diagnostic taxonomy for conversion, class lifecycle, weak
+   access, closure capture, and worker-boundary refusals.
+4. Create the migration manifest: compiler tables, runtime tags, MIR encoding,
+   ABI surfaces, standard library, examples, packages, editor grammar, public
+   docs, and installer samples.
+
+Exit: there is no semantic question left hidden inside the mechanical rename.
+
+### Phase 2 — migrate the type vocabulary atomically
+
+1. Add the complete internal type table and real arithmetic behavior for all
+   widths.
+2. Update parser, semantic types, constant folding, HIR, MIR, serializer,
+   verifier, oracle, LLVM lowering, runtime values, host ABI conversions, and
+   diagnostics.
+3. Rewrite all Luce source, specs, packages, examples, benchmarks, generated
+   syntax data, and public documentation in the same cut.
+4. Refuse every retired spelling with direct replacement advice. Do not keep a
+   long-lived alias period in a pre-release language.
+5. Bump the module format for type-tag or instruction changes and the host ABI
+   only if its published representation changes.
+
+Exit: the old vocabulary is absent outside migration tests and history; the
+full width/conversion matrix agrees on both engines.
+
+### Phase 3 — build the weak-reference foundation
+
+1. Design the runtime weak table/control block so zeroing precedes storage
+   reuse and cannot race with ordinary release inside one runtime.
+2. Implement weak fields, locals, optionals, and copies for built-in heap
+   references on both engines.
+3. Integrate zeroing with ordinary object teardown and add debug
+   leak-cycle reports.
+4. Reject weak value types, resources, function values, non-optional weak
+   reads, and worker crossing.
+
+Exit: a recursive value-struct/container graph can use a weak back-edge and
+reach zero live objects without dangling access.
+
+### Phase 4 — complete class reference semantics
+
+1. Lower reference-kind layouts through one heap-object path shared with the
+   existing ARC machinery.
+2. Implement sharing, aggregate/container storage, optionals, returns, and
+   reference mutation.
+3. Add `is`, memberwise construction, visibility behavior, and deterministic
+   `deinit`.
+4. Prove unwinding and partial construction do not double-release or leak.
+5. Keep inheritance, computed properties, synthesized class equality/hashing,
+   and advanced initializer forms out.
+
+Exit: aliasing a class observes shared mutation, `deinit` runs once on every
+normal release path, and parent/child graphs use the already-proved weak
+storage rather than shipping a cycle-prone partial class model.
+
+### Phase 5 — replace interface values with owned existentials
+
+1. Introduce one payload/metadata/witness representation.
+2. Support struct and class conformers, returns, optionals, fields, arrays,
+   heterogeneous lists/maps, and multiple conformances.
+3. Enable mutable dispatch and weak existential storage with precise value-box
+   versus shared-class behavior.
+4. Preserve multiple methods, multi-value returns, defaults at call sites,
+   and directional fallibility.
+5. Reject incomplete, duplicate, static, mutability-incompatible, and
+   signature-incompatible witnesses with focused diagnostics.
+
+Exit: one heterogeneous collection can hold stateful values of different
+concrete types and dispatch every method without lifetime dependence on the
+creating frame.
+
+### Phase 6 — add capturing closures
+
+1. Lower capture analysis to an explicit environment layout.
+2. Implement value snapshots, shared mutable cells, strong reference capture,
+   weak capture, and named snapshot capture.
+3. Make environments ARC objects and integrate them with function values,
+   collections, interfaces, optionals, errors, and bound methods.
+4. Add block closure bodies; consider trailing syntax only after the core is
+   complete.
+5. Diagnose obvious stored self-cycles and refuse worker crossing.
+
+Exit: a returned closure safely retains and mutates captured state, and a weak
+capture breaks its intentional cycle.
+
+### Phase 7 — add only the optional ergonomics the model proves necessary
+
+Candidates are optional chaining and an optional-binding form for a single
+checked unwrap. They land only with examples showing that existing narrowing
+is materially worse. Forced unwraps, unsafe unowned references, and a second
+error mechanism remain out.
+
+### Phase 8 — prove the model in userland
+
+1. Build the retained higher-level UI layer above `std.ui`, `std.gpu`, and the
+   existing low-level termui renderer.
+2. Use class state, owned interface values, capturing callbacks, and weak
+   back-edges in ordinary Luce—not compiler-known framework syntax.
+3. Move the editor onto that layer and compare code size, allocation count,
+   responsiveness, and clarity with the current implementation.
+4. Treat every friction point as evidence: fix a general language/library
+   seam or keep the explicit userland code; do not add a framework-only
+   special case.
+
+Exit: a button callback mutates shared model state, redraws the view, and
+leaves no reference cycle; the editor is the end-to-end proving program.
+
+### Phase 9 — generics, then library collections
+
+Implement the separately reviewed generics plan, then use it to build and
+benchmark the small set of library structures that real programs require.
+Generics are not part of the ARC/classes/closures completion milestone.
+
+### Phase 10 — release lock
+
+1. Rebuild every internal and public reference from the accepted semantics.
+2. Run the full deterministic gate, hardening corpus, site generator, package
+   tests, editor product tests, installer smoke test, and benchmark comparison.
+3. Audit diagnostics by simulating common mistakes, not only valid programs.
+4. Verify a clean macOS ARM64 install can compile, run, edit, and test without
+   repository access.
+5. Publish only when the docs, binaries, extension, libraries, and Status page
+   carry the same version and feature boundary.
+
+## Verification contract for every language phase
+
+Every phase carries the smallest relevant subset of this matrix while it is
+being developed and the whole relevant matrix at its exit:
+
+| Layer | Required evidence |
+|---|---|
+| Lexer/parser | accepted grammar, recovery, depth limits, precise refusals |
+| Semantics | positive programs plus wrong type, effect, mutability, lifetime, visibility, and worker-boundary cases |
+| HIR/MIR | structural tests, verifier rejection, print/decode round trip, format bump when required |
+| Runtime | direct count/lifecycle tests, zero/double release defense, resource teardown, leak census |
+| Differential spec | identical output, traps, errors, frames, host world, and live-object census on both engines |
+| LLVM | structural IR tests where ARC placement or ABI shape matters |
+| Optimizer | retain/release elimination never changes observables or teardown order |
+| Documentation | internal fences compile; public samples run or refuse as claimed; links and surface coverage pass |
+| Hardening | deterministic fuzz corpus plus a reduced regression for every discovered failure |
+| Performance | compile time, runtime, allocations, peak memory, and artifact size compared with the Phase 0 baseline |
+
+Tests belong with the layer whose claim they observe. Any Luce program whose
+observable behavior is being asserted belongs in `src/luce/specs/` and runs on
+both engines. Focused commands (`test-language`, `test-stdlib`, `test-host`,
+`test-backend`, `test-editor`, `test-tools`) are the inner loop; the full gate
+is the phase boundary.
+
+## Acceptance programs for the north star
+
+The roadmap is complete only when all of these are ordinary, heavily tested
+programs:
+
+1. Two class references observe the same `Counter` mutation.
+2. A class `deinit` runs exactly once through return, optional, interface, and
+   container paths.
+3. A parent owns children strongly; each child holds a weak parent; dropping
+   the root leaves no live objects and weak reads become `none`.
+4. A recursive value-struct/container graph uses a weak container back-edge
+   and reaches zero live objects when its root is dropped.
+5. A returned closure captures a local counter and mutates it on successive
+   calls.
+6. A stored callback captures its owner weakly and does not form a cycle.
+7. A heterogeneous list and map hold different stateful `UIElement`
+   conformers and dispatch several mutating and multi-value methods.
+8. Every numeric pair, literal boundary, conversion, overflow, and shift has a
+   positive or rejection/trap case.
+9. Unicode scalar iteration and `char`/`str`/`bytes` round trips distinguish
+   text from binary data.
+10. A worker copies a nested container graph without sharing identity and
+   rejects resources, classes, weak references, and capturing closure
+   environments.
+11. A retained termui button callback updates model state and the editor uses
+    the same public library surface.
+
+## Explicit non-goals for this roadmap
+
+- class inheritance;
+- interface default methods or inheritance;
+- garbage collection;
+- unsafe pointers or user-visible manual retain/release;
+- unsafe `unowned` references;
+- shared mutable state between workers;
+- operator overloading;
+- reflection, macros, or metaclasses;
+- higher-kinded or variadic generics; and
+- collection synonyms promoted into primitive types.
+
+The point is not to reproduce Swift or Zig. They are sources of proven
+implementation ideas. Luce's advantage is the smaller surface: Python-shaped
+syntax, explicit types, native code, and one memory rule a user can carry from
+their first list to their first UI.

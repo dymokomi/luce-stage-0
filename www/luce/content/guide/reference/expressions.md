@@ -14,7 +14,7 @@ Loosest to tightest:
 | 4 | `else`, `catch` | **right** |
 | 5 | `+` `-` `\|` `^` | left |
 | 6 | `*` `/` `//` `%` `&` `<<` `>>` | left |
-| 7 | prefix `not` `-` `~` `give` `copy` `try` | right |
+| 7 | prefix `not` `-` `~` `try` | right |
 | 8 | postfix `.field` `[index]` `(call)` | left |
 
 So `x else 0 > 5` compares the fallback, `x else n + 1` falls back to
@@ -153,10 +153,10 @@ bound to the slots they *name*; the two differ only when a call
 reorders. A parameter may declare a trailing **default**, checked at
 the declaration and supplied wherever a call omits the argument. A
 folded value default inlines there; a flat container default instead
-borrows the same per-runtime program root on every omission. There are
+shares the same immutable per-runtime program root on every omission. There are
 no variadics. These names and defaults belong to a direct call of a
 declared function. A call through a function value is positional: its
-type carries parameter types and `give`, but no names or defaults.
+type carries parameter types, but no names or defaults.
 
 ```luce run
 func grown(base: long, step: long = 5, twice: bool = false) -> long:
@@ -212,16 +212,17 @@ A top-level or static namespace function name is a value where a
 `receiver.method` for a **reading** method: the value carries the
 receiver, and the written type drops the receiver's parameter, so a
 method taking one `long` at its call site binds as a
-`func(long) -> long`. The receiver is copied into the value at the
-bind, which is what makes a bound value an ordinary value with no
-ownership verb of its own. A value is called with ordinary
-parentheses, and its arguments are checked against the signature
-exactly as a direct call's are, including any required `give`.
+`func(long) -> long`. The receiver is copied into the value at the bind.
+Value fields form a snapshot; reference fields still name the same objects.
+The current bound value does not retain those references, so the original
+receiver must remain alive for as long as the function value. This is a
+documented [ARC completion gap](../memory/#m13), not the final contract. A
+value is called with ordinary parentheses, and its arguments are checked
+against the signature exactly as a direct call's are.
 
-Three binds are refused, each by name: a **writing** method (call it on
-the binding that owns its receiver), a **fallible** method (a function
-type carries no `!`), and a receiver that **carries objects** — a
-container, a resource, or a struct holding one.
+Two binds are refused, each by name: a **writing** method (call it on the
+mutable receiver directly) and a **fallible** method (a function type carries
+no `!`).
 
 A lambda is parenthesized parameter names, `->`, and one expression:
 
@@ -405,7 +406,7 @@ main.luc:3:17: list has no method has (has append insert remove pop sort reverse
 | `xs[i]` | list or rank-1 array element; bounds-checked |
 | `grid[r, c]` | multi-dimensional array element |
 | `m[k]` | map get; a missing key traps |
-| `xs[a:b]` | a **new list**, owned by the receiver; deep when elements are resource-free objects; resource-carrying elements require equal compile-time `long` bounds, proving an empty slice |
+| `xs[a:b]` | a **new list**; copyable reference elements are copied recursively; resource-carrying elements require equal compile-time `long` bounds, proving an empty slice |
 | `s[a:b]` | a `string` slice; still a value; checks UTF-8 boundaries |
 
 Open slice ends default to `0` and to the length.
@@ -430,17 +431,16 @@ Empty `{}` is refused because it supplies neither `K` nor `V`; write
 `new map(K, V)`. At file scope the same nonempty literal may initialize
 an immutable [constant container](../statements/#file-scope-constants).
 
-## Ownership operators
+## Reference construction and sharing
 
-`give x` transfers ownership and poisons `x` to the end of its scope.
-`copy x` deep-copies. `give` applies to container objects, resources
-and ownership-carrying structs. `copy` applies only to container
-objects and carrying structs whose complete type graph contains no
-`file` or `task`; values copy by themselves.
+`new list(T)`, `new map(K, V)`, `new array(T, ...)`, and `new builder()`
+create reference objects. List and map literals also create fresh reference
+objects. Assignment, calls, returns, fields, optionals, and container stores
+share them through ARC; no ownership operator appears in the expression.
 
-A verb in a pure borrow position — a builtin argument, a
-non-adopting method argument, an operator operand — is refused: a
-`give` must always have an owner to receive it.
+Values copy according to their type. There is no general deep-copy expression.
+A list slice and particular library transformations create independent values
+when their documented result says so.
 
 ## Narrowing
 
@@ -478,13 +478,13 @@ there is no force-unwrap sigil.
 
 ## `try` and `catch`
 
-`try CALL` propagates a failure to the caller, releasing what this
-frame owns. It requires the enclosing function to declare `!`.
+`try CALL` propagates a failure to the caller, releasing the frame's local
+references through ARC. It requires the enclosing function to declare `!`.
 
 `catch` has three spellings:
 
 ```
-EXPR catch FALLBACK        an expression; both sides must agree on ownership
+EXPR catch FALLBACK        an expression; both sides must have one result type
 CALL catch:                a handler block, guarding exactly one call
     ...
 CALL catch NAME:           the same block, with the error's message bound

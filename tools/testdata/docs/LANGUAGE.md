@@ -1,6 +1,6 @@
-# A living document with a stale sentence in it
+# A current document with a stale sentence in it
 
-`tools/spelling.zig` reads the prose of a living document as well as
+`tools/spelling.zig` reads the prose of a current document as well as
 its code, because a reference page that says `func main(args:
 List(String))` in a sentence is a lie told with more authority than a
 comment.

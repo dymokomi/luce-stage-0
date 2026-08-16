@@ -23,16 +23,14 @@ both bars, but neither build can break the other.
 ## The contract
 
 **Every page except `direction` describes the binary as it is built
-from this repository.**  Where a page shows a shell transcript, that
-transcript was produced by running the command against a freshly built
-toolchain and pasting what it printed; where it shows Luce source,
-that source was checked with `build/luce check`.  Each content file
-says so in an HTML comment at the top, naming what was verified and
-how.
+from this repository.** Each content file says which implementation and
+product tests its claims were checked against. Exact public language APIs stay
+on luce.luciaos.com, whose generator verifies them; this site explains loom's
+tool and host boundaries without keeping a second API roster.
 
-`direction` is the one page that talks about things that are not
-built, it says so in its first paragraph, and every unbuilt thing on
-it carries an `ahead` label.
+`direction` is the one page that talks about things that are not built. It says
+so in its first paragraph, marks every planned phase with an `ahead` label, and
+derives the order from `docs/ROADMAP.md`.
 
 **Nothing on this site is verified by the build.**  That is the
 honest difference from `www/luce/`, and the line to watch: the moment

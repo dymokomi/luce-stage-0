@@ -36,19 +36,19 @@ handler.
 | `index_bounds` | index out of bounds | A list or array index is outside the collection. |
 | `key_missing` | key not found in map | Map indexing (`m[k]`) names an absent key. `m.get(k)` returns `none` instead. |
 | `empty_collection` | pop from an empty list | `pop()` runs on an empty list. |
-| `use_after_free` | object used after free | An alias or resource handle is used after its owner released it. |
+| `use_after_free` | object used after free | A consumed resource is used again, or damaged IR presents a stale handle. Ordinary ARC container aliases remain live together. |
 | `null_object` | null object reference | An unfilled container or resource slot is used. |
 | `bad_codepoint` | invalid character code | `chr` receives an invalid Unicode scalar, or `append_ascii` receives a value outside 0..127. |
-| `not_owned` | object is owned by a container | A forged/damaged module attempts an ownership operation without an owner. The compiler cannot emit this path. |
+| `not_owned` | object is owned by a container | A forged or damaged module reaches an operation with the wrong runtime value shape. Correctly compiled source does not emit that path. |
 | `shift_out_of_range` | shift count out of range | A shift count is negative or at least the operand width. |
 | `allocation_failed` | not enough memory for this container | The allocator cannot create container or resource storage. |
 | `immutable_object` | constant container is immutable | A write reaches a file-scope constant container through hidden provenance. |
-| `ownership_cycle` | attempted store would create an ownership cycle | A retaining store would put an owner inside itself or one of its descendants. |
+| `ownership_cycle` | attempted store would create an ownership cycle | Reserved stable code from the retired manual-ownership model; current source does not raise it. |
 
-`use_after_free`, `null_object`, `not_owned`, and `allocation_failed`
-use the runtime's broad *object* wording; the handles may also be a
-`file` or `task`. `not_owned` is retained as a loader/IR defense and is
-not reachable from a correctly compiled source program.
+`use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
+runtime's broad *object* wording; a handle may also be a `file` or `task`.
+`not_owned` and `ownership_cycle` remain in the stable module vocabulary even
+though correctly compiled current source does not produce them.
 
 ```luce trap
 func main():
@@ -81,9 +81,9 @@ The host deliberately does not split `io_failed` into invented
 `-> T!` marks a function that returns `T` or raises an error. `-> !`
 marks a function that returns no value or raises. `T!` is not a type.
 
-`error(message)` raises `user_error` and never returns. `try CALL`
-propagates the error to the caller, which must itself be fallible; the
-current frame's owned values are released as it unwinds ([S4](../ownership/#s4)).
+`error(message)` raises `user_error` and never returns. `try CALL` propagates
+the error to the caller, which must itself be fallible; local references are
+released through ARC as the current frame unwinds ([M9](../memory/#m9)).
 
 `catch` has these forms:
 
@@ -131,8 +131,8 @@ loom: error: negative: -5 [user_error]
     raised in check (main.luc:3:9)
 ```
 
-There is no `errdefer`. Scope ownership already releases values on
-`return` and `try`; an error path needs no second cleanup mechanism.
+There is no `errdefer`. ARC already releases local references on `return` and
+`try`; an error path needs no second cleanup mechanism.
 
 ## Absence
 

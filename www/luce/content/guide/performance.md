@@ -77,7 +77,7 @@ error checking is not a useful comparison.
 
 The table is not a language-wide ranking and it is not a guarantee about
 I/O, allocation patterns, or a different CPU. Luce keeps checked arithmetic,
-bounds checks, UTF-8 boundaries, and ownership checks in every build mode.
+bounds checks, UTF-8 boundaries, and memory-safety checks in every build mode.
 Those are semantics, not optimisations a release build may remove. When a
 hot loop is slower, first make its data shape and allocation behavior clear,
 then profile and measure the smallest change that addresses it.

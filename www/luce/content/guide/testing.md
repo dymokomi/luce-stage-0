@@ -46,9 +46,8 @@ func test_writes_a_file() -> !:
     try files.write("result.txt", "ok")
 ```
 
-The runner gives each test call a fresh runtime. A heap, ownership scopes,
-call-depth budget, trap report, and leak census from one test do not carry
-into the next test.
+The runner gives each test call a fresh runtime. Its heap, reference census,
+call-depth budget, and trap report do not carry into the next test.
 
 ## Discovery errors are not skips
 

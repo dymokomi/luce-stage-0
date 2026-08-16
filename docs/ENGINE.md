@@ -157,8 +157,7 @@ reference counting, `list`/`map`/`array`/`builder`, string storage and
 the string primitives, checked arithmetic, and the trap channel. Both
 arms call it; its own tests call it directly, through neither engine.
 
-The **memory model** is orthogonal to any of this: Luce uses
-value/reference types with ARC (docs/MEMORY.md) — reference objects are
-freed at the last release, structs and scalars copy. That is what the
-two-engine leak census proves, and it is settled independently of the
-engine question.
+The **memory model** is orthogonal to any of this: values copy and references
+share under the in-progress ARC transition (`docs/MEMORY.md`). Both engines
+run the same retain/release semantics and compare their census, but skipped
+lifecycle tests mean last-release reclamation is not yet settled.

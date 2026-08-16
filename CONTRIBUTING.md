@@ -110,7 +110,7 @@ Run it before every commit.
 ## Documentation
 
 [docs/README.md](docs/README.md) indexes the documents and
-says which are current and which are frozen decision records.
+separates current reference, future plans, and frozen decision records.
 
 User-facing prose lives on the site, **[luce.luciaos.com](https://luce.luciaos.com)**,
 built from [`www/luce/`](www/luce/) — see [www/luce/README.md](www/luce/README.md).
@@ -146,12 +146,13 @@ it — is a ```` ```text ```` fence and no business of the checker's.
 
 `historical` is the only exemption there is, and it belongs to
 decision records alone: `grep -rn 'luce historical' docs/` lists every
-use of it in one line each, and the living documents carry none.
+use of it in one line each, and current references and plans carry none.
 `tools/documents.zig` is the one catalogue both `doccheck.zig` and
-`tools/spelling.zig` read, and a test pins it to `docs/README.md`'s two
-tables. The spelling guard refuses a retired TitleCase type name in a
-living document's *prose* as well as its code, because a sentence in a
-reference page is as normative as a sample in one.
+`tools/spelling.zig` read, and a test pins its current, plan, and decision-record
+groups to the three tables in `docs/README.md`. The spelling guard refuses a
+retired TitleCase type name in a current document's *prose* as well as its
+code, because a sentence in a reference page is as normative as a sample in
+one. Future syntax in a plan uses a `text` fence until it is implemented.
 
 ## Committing
 

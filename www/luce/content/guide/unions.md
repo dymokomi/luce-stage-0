@@ -52,26 +52,22 @@ Do not match only the fields you happen to need. If an arm should ignore a
 payload, write `circle:` or `rect:`. The field names in a binding list are
 part of the type, not local aliases chosen for convenience.
 
-## Keep ownership at the boundary
+## References inside a payload
 
-Value payloads copy. A payload that contains a list, map, array, builder,
-file, or task carries that object and follows the same ownership rules as a
-struct field. Matching gives you access to the existing payload; it does not
-create a second owner.
-
-When a named object becomes a union payload, make the transfer explicit:
+Value payloads copy. A payload containing a list, map, array, builder, file, or
+task retains that reference through ARC, just like a struct field. Matching
+gives access to the payload and keeps its references alive.
 
 ```text
 var items = new list(Json)
 items.append(Json.text(value = "ready"))
-let document = Json.array(items = give items)
+let document = Json.array(items = items)
 ```
 
-Use `copy` if both the old name and the union must continue to own data. A
-borrowed object cannot be retained in a union. See [Memory without a
-collector](/guide/memory/) for the ownership decision and
-[Ownership](/guide/reference/ownership/)
-for the rule numbers cited by diagnostics.
+`document` and `items` reach the same list. Take a list slice before
+construction when the payload must be an independent list. See [Memory and
+ARC](/guide/memory/) for the value/reference boundary and deterministic
+resource cleanup.
 
 ## Recursive data needs an indirection
 
@@ -86,8 +82,9 @@ union Json:
 ```
 
 This is why JSON arrays can contain JSON values and why a linked structure
-usually has `next: Node?` or a `list(Node)` payload. The object owns the
-recursive container; the union still has a finite size.
+usually has `next: Node?` or a `list(Node)` payload. The indirection gives the
+union a finite size. If the recursive links are references, remember that
+strong cycles need a weak link under the completed ARC design.
 
 ## Separate shape from policy
 

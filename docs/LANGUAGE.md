@@ -11,6 +11,13 @@ along a ladder every rung reaches every rung above it — `byte` to
 the two ladders the answer is always `double` (docs/TYPES.md §2).
 **Nothing narrows**, in any direction or context.
 
+> **ARC transition status.** The source ownership verbs are gone and common
+> reference-sharing paths work, but the current tree has disabled reclamation,
+> resource-close, and hardening tests. Statements below about exact
+> last-release destruction are the committed language contract, not yet a
+> complete implementation claim. `docs/MEMORY.md` lists the current gaps and
+> `docs/ROADMAP.md` Phase 0 owns their completion.
+
 ## Values and references
 
 Every type is one of two kinds, and the line between them is deliberate
@@ -31,12 +38,12 @@ Every type is one of two kinds, and the line between them is deliberate
   ever has one and there is no arithmetic at 8 or 16 bits to define.
   What they are for is `array(byte, _)` at one byte an element, with
   the extent supplied at construction (docs/TYPES.md).
-- **References** — a `class`, the container objects `list(T)`,
-  `map(K, V)`, `array(T, ...)` and `builder`, and the resources `file`
+- **References** — the container objects `list(T)`, `map(K, V)`,
+  `array(T, ...)` and `builder`, and the resources `file`
   and `task(...)`.  A reference is a shared, reference-counted object:
   created with `new ...` or a literal, named by a variable that holds a
-  *reference*, and freed automatically the instant its last reference
-  goes away.  Assigning or passing one shares the same object — both
+  *reference*. The completed ARC contract frees it when its last reference
+  goes away. Assigning or passing one shares the same object — both
   names see it, and a mutation through either is seen through both.  A
   flat list, map, or rank-1 array declared with file-scope `const` is
   instead materialized once into the program root and stays there until
@@ -45,44 +52,42 @@ Every type is one of two kinds, and the line between them is deliberate
 `file` and `task(...)` are references too, but not containers: there is
 no `new file` or `new task`.  The raw `file_open` host builtin is the
 primitive file door, which `std.files` wraps as `open`, `create`, and
-`append_to`; `spawn` is the task door.  Because release is
-deterministic, the last reference to a `file` closes it and the last
-reference to a `task` joins it — the moment it drops, not at some later
-collection.
+`append_to`; `spawn` is the task door. The completed contract closes a file
+and joins an unfinished task at the last release. Current development builds
+do not yet prove that timing on every path.
 
-A `struct` is always a value: it copies field by field.  When a field
-holds a reference — a `list`, a `class`, a `file` — the copy shares
+A `struct` is always a value: it copies field by field. When a field
+holds a reference — a `list`, a `file`, a `task` — the copy shares
 that reference, exactly as a bare reference does, so both struct values
 see one object through that field while their scalar fields stay
-independent.  A `weak` reference is the one reference that does not
-retain; it reads as `T?`, so a read after the object is gone is `none`
-rather than a dangling pointer, and it is how a reference cycle is
-broken (`docs/MEMORY.md`).
+independent. User-defined class references and `weak` do not exist as
+complete language features yet; `class` is only a front-end scaffold
+whose target semantics are in `docs/ROADMAP.md`.
 
 ## Memory
 
-Memory is automatic, and the model is one paragraph (the full ratified
-specification is `docs/MEMORY.md`; the compiler enforces it identically
-on both engines):
+Memory syntax is automatic, and the model is one paragraph (the full current
+status and completed contract are in `docs/MEMORY.md`; both engines implement
+the same partial transition):
 
 - **A value copies; a reference is shared and counted.**  Assigning or
   passing a value — a number, `bool`, `string`, `enum`, plain `struct`,
   or function value — makes an independent copy.  Assigning or passing a
-  reference — a `class`, a container, a `file`, a `task` — shares the
-  one object.  Reference objects carry a count the compiler maintains,
-  and the object is freed the instant its last reference goes away.
+  reference — a container, a `file`, or a `task` — shares the
+  one object. Reference objects carry a count the compiler maintains. Full
+  last-release reclamation remains the first roadmap gate.
   Casual code never writes a memory word:
 
   ```luce
   func main():
       var xs = [1, 2, 3]        # a fresh list; xs references it
       xs.append(4)
-      xs = [5, 6]               # the old list has no references left; freed
-      # scope ends; the last references drop and their objects are freed
+      xs = [5, 6]               # the old reference is released
+      # completed ARC destroys each object after its last release
   ```
 
-- **`let y = x` shares a reference or copies a value.**  For a
-  container, a `class`, or a resource, `x` and `y` name one object, and
+- **`let y = x` shares a reference or copies a value.** For a
+  container or resource, `x` and `y` name one object, and
   a mutation through either is seen through both.  For a value struct,
   `y` is an independent copy.  There is no ownership verb of any kind:
   keeping a reference in a field, a container, or another scope simply
@@ -97,17 +102,16 @@ on both engines):
   it onward.  A value parameter is a copy, so a function cannot reach
   the caller's value through it.
 
-- **A reference cycle is the one thing to think about.**  Reference
-  counting cannot reclaim a cycle on its own, so a back-edge that would
-  close one is declared `weak`: a `weak` reference does not retain and
-  reads as `T?`, so following it after the object is gone yields `none`
-  rather than a dangling pointer.  Cycles are rare — a parent and its
-  child pointing back — and `weak` is the whole of the answer.
+- **ARC does not collect strong cycles.** A recursive struct can already
+  point back through a container, so avoid strong back-edges today. Classes
+  and closure environments make such graphs routine; the `weak` reference
+  that safely breaks them is therefore part of their completion milestone
+  (`docs/ROADMAP.md`).
 
-- **Deterministic release makes resources ordinary.**  Because the last
-  reference to a `file` closes it and the last reference to a `task`
-  joins it the moment it drops, a resource needs no `close`, no `with`,
-  and no finalizer roulette.
+- **Deterministic release is the resource contract.** The final implementation
+  closes a `file` and joins an unfinished `task` at the last release, so no
+  separate `close` or `with` language is required. Current file lifecycle tests
+  remain disabled until that path is complete.
 
 - **`var name: Type`** (no value) declares now, fills later: the slot
   holds the type's zero value — a null handle for a reference type —
@@ -116,9 +120,10 @@ on both engines):
   "there may be nothing here" out loud instead (next section), so a
   `list(T)?` obeys every rule above exactly as a `list(T)` does.
 
-The ratified model says nothing can leak outside of an uncollected
-cycle, so loom's leak report is a runtime self-check rather than a
-program diagnostic.
+The differential harness normally requires programs to leave no live objects.
+Two current specs relax that assertion and several lifecycle tests are
+disabled; removing every such exception is the ARC phase gate. A surviving
+strong cycle is a leak, not something ARC silently claims to collect.
 
 ## Absence: `T?` and `none`
 
@@ -592,14 +597,15 @@ not reach it.  A receiver that is a **reference** — a list, a map, an
 array, or a struct holding one — is shared: the bound value holds its
 own two-slot run whose receiver slot references the same object, so
 appending to the receiver's list is visible through the bound value,
-and reference counting keeps that object alive for as long as the bound
-value does.
+but the current bound value does not retain that object. The original
+receiver must remain alive for as long as the bound value; Phase 0 of
+`docs/ROADMAP.md` closes this lifetime hole.
 
 Since a function type cannot say which of its values carries a
 receiver, two consequences follow: a function value has **no equality**
 (`string(f)` is how a program asks what it names), and a function value
-that carries a reference receiver does **not cross a worker boundary**,
-in either direction, exactly as a bare reference does not.
+does **not cross a worker boundary** in either direction. Callable
+environments are excluded from the worker graph-copy contract.
 
 Two things also do not bind, each saying so by name: a **writing**
 method (its store-back discipline is its own design) and a **fallible**
@@ -952,7 +958,7 @@ duplicate-arm rules are `match`'s own, unchanged.
 
 **Memory arrives with no new rule.**  A union is a value, like a
 struct: it copies field by field.  When a payload field holds a
-reference — a `list`, a `class` — the copy shares that reference, and an
+reference — a `list`, `file`, or another built-in reference — the copy shares that reference, and an
 arm's payload binding names the same object the scrutinee holds, so
 reference counting keeps it alive for as long as either does.  A union
 whose payloads are all values is a plain value throughout.
@@ -1021,7 +1027,7 @@ let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
 let text = b.build()                  # builder -> string
-# the last references to xs, m, grid, and b drop here — freed automatically
+# completed ARC destroys xs, m, grid, and b after their last releases
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
@@ -1342,10 +1348,11 @@ gets a name (`files.kind`, `files.exists`, `files.is_file`,
 `append_to`; ordinary code uses those named doors rather than the mode
 numbers.  It answers a `file`, a reference.  A file has three fallible
 methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
-and `f.flush() -> !`, where the buffer is an `array(byte, _)`.  There
-is deliberately no `close`: the last reference to a `file` closes it
-the instant it drops, which is also why there is no `with`
-(docs/FILESYSTEM.md).  `parse_string(bytes) -> string?` is the pure
+and `f.flush() -> !`, where the buffer is an `array(byte, _)`. There is no
+source `close`: the completed ARC contract closes a `file` at its last release,
+which is also why there is no `with`. The current resource-close test gap is
+recorded in `docs/MEMORY.md` and `docs/FILESYSTEM.md`.
+`parse_string(bytes) -> string?` is the pure
 boundary in the other direction — bytes that are not UTF-8 are absent,
 not an I/O error.
 
@@ -1813,10 +1820,9 @@ program-root handle.
 `spawn f(args)` runs `f` on a **worker** — a thread with a runtime of
 its own: its own heap, its own scopes, its own fresh call-depth budget
 — and answers a `task` the spawning scope holds (docs/THREADS.md).
-Nothing a worker touches is reachable from anywhere else and nothing
-elsewhere is reachable from a worker, so the value/reference split is
-the concurrency model too: races are not detected, they are
-unrepresentable.
+Nothing a worker touches is reachable from another runtime. Permitted graphs
+are rebuilt at the boundary rather than shared, so races over Luce objects are
+not detected; they are unrepresentable.
 
 ```luce
 func crunch(base: double, count: long) -> double:
@@ -1839,21 +1845,22 @@ func main(args: list(string)):
 Three sentences are the whole of it, and each is a rule the language
 already had.
 
-**Values cross a boundary; references do not.**  A worker has a heap of
-its own, so a **value** — a number, a `string`, an `enum`, a plain
-`struct` — crosses by copy, exactly as it copies everywhere.  A
-**reference** — a `class`, a container, a `file`, a `task`, or a struct
-holding one — does not cross at all: it stays in the runtime that made
-it, so passing one as a spawn argument or returning one as a worker
-result is refused statically.  With nothing shared, there is nothing to
-race on.
+**Data crosses; object identity does not.** A value — a number, a `string`, an
+enum, or a value field — copies directly. A permitted container graph is
+copied recursively into the receiving runtime, so a list argument and the
+caller's list must be independent after `spawn`. The current container-argument
+ARC path violates that rule: it may invalidate the caller's reference and
+leaks an object even when the caller does not reuse it (`docs/MISSING.md`). A
+`file`, `task`, or function
+value is refused transitively because a host resource or callable environment
+cannot be rebuilt as ordinary data. The same boundary copier brings a
+worker's permitted result graph back through `wait()`.
 
-**A task is a reference-counted resource**, the `file` precedent
-exactly: made by `spawn` and by nothing else — there is no `new task` —
-and its release is a **join**.  So structured concurrency is a
-consequence of the memory model rather than a discipline laid over it,
-and an orphan thread is as unrepresentable as a leaked list.  The last
-reference to a task joins it; `return t` hands the wait to the caller.
+**A task is a reference resource**, made by `spawn` and by nothing else—there
+is no `new task`. The completed ARC contract makes its last release a join.
+That is the structured-concurrency destination; current lifecycle tests must
+prove it before the guarantee is claimed without qualification. `return t`
+hands the task reference to the caller.
 
 **`t.wait()` moves the answer here, once.**  The type is written as the
 return shape it names — `task`, `task(!)`, `task(double)`,
@@ -2027,7 +2034,7 @@ or any pipe or process substitution.  Diagnostics then name it
 
 ## Deliberately absent (for now)
 
-Closures, **tuples** (a return shape is not a type — see "Answering
+Capturing closures, **tuples** (a return shape is not a type — see "Answering
 more than one thing"), exceptions (traps are
 final), implicit *narrowing* of a `double` to a `long`, shadowing,
 mutable file-scope `var`

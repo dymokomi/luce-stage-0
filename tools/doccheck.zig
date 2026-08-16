@@ -43,24 +43,25 @@
 //!
 //! `historical` is the one exemption there is, `grep -rn 'luce
 //! historical' docs/` lists every use of it in one line each, and it
-//! is a decision record's alone: **the living documents below carry
+//! is a decision record's alone: **the current documents below carry
 //! none.**  That split is the guard's whole shape — a memo is allowed
 //! its history, and a reference page is not.
 //!
 //! Anything that is not Luce — an API index, a syntax sketch with `…`
 //! in it — is a ```text fence and no business of this tool's.
 //!
-//! ## What counts as living
+//! ## What counts as current
 //!
 //! `tools/documents.zig` says, and it is the only place that does — a
-//! **living** document describes the language as it is, so a reader is
+//! **current** document describes the language as it is, so a reader is
 //! entitled to paste its code into a file and have it compile, and it
-//! gets no exemptions; a **decision record** describes what was decided
-//! and when, and the parts of it that are the language of their day say
-//! so with `historical`.
+//! gets no exemptions. A **plan** describes an intended language surface
+//! and uses `text` for syntax not yet implemented. A **decision record**
+//! describes what was decided and when, and the parts of it that are the
+//! language of their day say so with `historical`.
 //!
 //! `tools/spelling.zig` reads that same list, for the sentences rather
-//! than the samples: a living document may not spell a retired type
+//! than the samples: a current document may not spell a retired type
 //! name in its prose either.  The two used to keep a list each, "meant
 //! to be read together", and they disagreed by one.
 
@@ -70,13 +71,14 @@ const catalogue = @import("documents.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// The documents whose Luce must compile, living ones first.
+/// The documents whose Luce must compile, current ones first.
 pub const documents = catalogue.all;
 
-/// How many of `documents` are living.  The living ones come first so
-/// that "the living documents carry no exemptions" is a slice rather
+/// How many of `documents` are current. The current ones come first so
+/// that "the current documents carry no exemptions" is a slice rather
 /// than a convention, and the test below asserts it as one.
 pub const living_count = catalogue.living.len;
+pub const plan_count = catalogue.plans.len;
 
 /// How a fence's body becomes a file.
 pub const Wrap = enum { file, fragment };
@@ -275,7 +277,7 @@ pub fn check(
             .line = line,
             .reason = try gpa.dupe(
                 u8,
-                "a ```luce fence in a living document says nothing, `fragment`, `refused`, or `historical`",
+                "a ```luce fence says nothing, `fragment`, `refused`, or `historical`",
             ),
         });
     }
@@ -329,7 +331,7 @@ pub fn check(
     }
 }
 
-/// Every living document under `base`.  `base` is the repository root
+/// Every selected document under `base`. `base` is the repository root
 /// in earnest and a fixture directory under test, for the reason
 /// `tools/spelling.zig`'s `survey` takes one: a guard whose document
 /// list nothing exercises can be emptied without a test noticing.
@@ -425,7 +427,7 @@ test "a fragment is indented into an entry, and a whole file keeps its own" {
     try testing.expectEqualStrings("struct Point:\n    x: long\n\nfunc main():\n    return\n", declared);
 }
 
-test "every Luce sample in every living document compiles" {
+test "every Luce sample in every catalogued document compiles" {
     const gpa = testing.allocator;
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -450,16 +452,21 @@ test "every Luce sample in every living document compiles" {
     // exists to prevent.
     try testing.expectEqual(@as(usize, 40), documents.len);
     try testing.expect(census.found >= 40);
-    // And the exemption stays a decision record's: a living document
-    // that reaches for `historical` is a living document that has
-    // stopped being one.
-    var living_census: Census = .{};
-    var living_problems = try survey(gpa, threaded.io(), ".", documents[0..living_count], &living_census);
+    // And the exemption stays a decision record's. Current references
+    // must be executable truth; plans use `text` for future syntax.
+    var current_and_plan_census: Census = .{};
+    var living_problems = try survey(
+        gpa,
+        threaded.io(),
+        ".",
+        documents[0 .. living_count + plan_count],
+        &current_and_plan_census,
+    );
     defer {
         for (living_problems.items) |one| one.deinit(gpa);
         living_problems.deinit(gpa);
     }
-    try testing.expectEqual(@as(usize, 0), living_census.historical);
+    try testing.expectEqual(@as(usize, 0), current_and_plan_census.historical);
 }
 
 test "the guard finds a sample that does not compile" {

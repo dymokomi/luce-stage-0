@@ -154,12 +154,16 @@ loom now starts in 3 ms against a C do-nothing binary's 2.4.  It also
 means **a machine that only runs Luce programs needs neither LLVM nor
 `luce` installed** — a shipped `.lc` needs a loader and nothing else.
 
-A Luce program is a script with a `main` entry.  The language is
-statically typed with inference, has value `struct`s and reference
-`class`es, `list`/`map`/`array`/`builder` containers created with `new`
-or literals, and `file`/`task` resources — the reference types are
-reference-counted and freed automatically at the last reference, with
-`weak` for cycles (docs/MEMORY.md).  The language also has slices and
+A Luce program is a script with a `main` entry. The language is
+statically typed with inference and has value `struct`s,
+`list`/`map`/`array`/`builder` reference containers created with `new`
+or literals, and `file`/`task` reference resources. The ARC transition shares
+references today, but last-release reclamation and deterministic resource
+cleanup are not yet complete, and container arguments to `spawn` have a
+confirmed caller-lifetime bug (docs/MEMORY.md, docs/MISSING.md).
+User-defined class references, `weak`, and capturing closures are the
+next language milestone, not features claimed by this README
+(docs/ROADMAP.md). The language also has slices and
 checked traps — `docs/LANGUAGE.md` is the reference.  Effects — console,
 files and the screen — only exist as host builtins that loom, the
 trusted boundary, implements; arguments are instead handed to `main` as

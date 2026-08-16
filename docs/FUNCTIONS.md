@@ -14,7 +14,7 @@ pointer wearing clean syntax — no environment, nothing hidden. A function
 that reaches a variable from an enclosing scope is a *closure*, and
 closures carry an environment the reader cannot see on the page. Luce's
 lambdas are **capture-free**: the compiler enforces it today, and a body
-that needs state that travels with behavior names a struct (or `class`)
+that needs state that travels with behavior names a struct
 with a method instead — the state explicit, named, and visible. Capturing
 closures are the memory model's direction (`docs/MEMORY.md`); until they
 land, the lambda stays capture-free.
@@ -50,7 +50,7 @@ that binds it (`docs/BINDING.md`).
 
 `func(T, ...) -> R` in type position writes a function's shape:
 parameter types only, no names, and `-> R` optional exactly as it is on a
-declaration. It annotates a parameter, a `let`, a struct or class field, a
+declaration. It annotates a parameter, a `let`, a struct field, a
 container element, a map value, and a union payload field:
 
 ```luce

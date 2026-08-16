@@ -1,266 +1,119 @@
-<!-- The one page on this site that talks about things that are not
-     built.  Sources: docs/v1/LOOM.md and docs/v1/PLAN.md (the v1
-     vision, preserved in the repository), docs/V2.md (the north star,
-     including its roadmap and its deferral list), docs/ENGINE.md and
-     docs/CODEGEN.md.  Anything here that is a plan recorded in the
-     repository says so; anything that is a reading rather than a plan
-     is marked. -->
+<!-- This page summarizes docs/V2.md, docs/ROADMAP.md, docs/MEMORY.md,
+     docs/ENGINE.md, and docs/CODEGEN.md. It separates the current tool from
+     planned language work; planned items are marked ahead. -->
 
 <blockquote>
-<p><strong>Every other page on this site describes the binary as it is built
-today.</strong> This one does not. It is about where loom came from and what it
-is likely to become, and where it talks about something unbuilt it says
-<span class="ahead">ahead</span> and means it. Nothing here is a
-promise, a schedule, or a feature you can use.</p>
+<p><strong>Every other page on this site describes the current tool.</strong>
+This page explains the direction. An <span class="ahead">ahead</span> item is an
+ordered plan, not something the installed release can use.</p>
 </blockquote>
 
-<h2 id="v1">What LuciaOS wanted first</h2>
+<h2 id="today">What loom is today</h2>
 
-<p>Before there was a language, there was an architecture. It is still in the
-repository, in <code>docs/v1/</code>, and it opens like this:</p>
+<p>loom is a deliberately small native runner and host. It opens a compiled
+<code>.lc</code> library, validates its tag, supplies the published host table,
+calls the program once, and reports the result. When asked to run source, it
+uses the separate <code>luce</code> compiler and caches the library. It contains
+no interpreter and no code generator.</p>
+
+<p>That boundary is the part of the older LuciaOS idea that survived every
+rewrite: a program has no ambient machine access. Files, terminals, clocks,
+workers, windows, and drawing surfaces arrive through explicit host services.
+A missing service fails closed instead of guessing.</p>
+
+<h2 id="priority">The language is the priority</h2>
+
+<p>The repository spent enough time building layers above an unfinished
+language to learn the dependency clearly: Luce must become a complete, pleasant
+language before persistence, synchronization, or a larger operating-system
+model can be useful. The current north star is therefore language-first.</p>
+
+<p>The memory rule everything else must fit is:</p>
 
 <blockquote>
-<p>A persistent computer made of connected things.</p>
-<p>Loom does not begin by making the computer intelligent. It begins by making
-the computer coherent.</p>
+<p>Values copy. References share identity. ARC keeps references alive. Weak
+references break cycles. Resources close at the last strong release. Workers
+never share object identity.</p>
 </blockquote>
 
-<p>The argument was that files, folders and applications are useful <em>forms</em>
-but poor <em>ground truth</em>. A file binds information to one container; a
-folder gives it one official location; an application decides where information,
-capability and interface end. Moving work between them means copying, importing,
-exporting, or asking one program to understand another.</p>
+<p>The source language has already removed its manual ownership operations and
+ordinary references now share. The conversion is not finished: several
+last-release, file-lifecycle, bound-receiver, collection, worker-transfer, and
+hardening paths are still gated or failing. That work comes before a new
+feature.</p>
 
-<p>Underneath all of it, v1 put a persistent <strong>Fabric</strong>: identity-bearing
-<strong>Texels</strong> connected by typed <strong>Fibers</strong>, with a small
-enough vocabulary to hold in your head — LuciaOS, Loom, Fabric, Texel, Port,
-Fiber, View. Seven words. Evaluation was demand-driven and cached: <em>push
-invalidates, pull evaluates</em>, and nothing recomputed merely because it
-existed. Effects were data — a Texel computes an intent, the engine checks a
-connected capability, a trusted boundary performs it, and the result comes back
-as an observation. Interfaces were Views: ordinary Texels whose computation
-produces a screen, so the same material could be prose or a table or a map
-without being imported into three applications. Capability arrived through
-explicit connections, never ambiently.</p>
+<h2 id="order">The ordered language work</h2>
 
-<p>The slogan that carried it was <strong>connecting is filing</strong>: to put
-something somewhere is to connect it into a context, and organisation accumulates
-without one context erasing another.</p>
+<ol>
+<li><span class="ahead">ahead</span><strong>Finish ARC.</strong> Remove every
+feature skip, restore exact leak censuses, make files and tasks finish exactly
+once, retain bound receivers, repair worker argument transfer, and close the
+damaged-module panic paths.</li>
+<li><span class="ahead">ahead</span><strong>Adopt explicit type names.</strong>
+Move atomically to <code>u8</code>…<code>u64</code>,
+<code>i8</code>…<code>i64</code>, <code>f16</code>/<code>f32</code>/<code>f64</code>,
+<code>char</code>, <code>str</code>, and <code>bytes</code>, with bracketed
+container applications.</li>
+<li><span class="ahead">ahead</span><strong>Add safe weak references.</strong>
+Built-in ARC objects need them too: recursive struct/container graphs can form
+cycles before classes exist.</li>
+<li><span class="ahead">ahead</span><strong>Complete final classes.</strong>
+Shared identity, ordinary mutation, memberwise construction, identity tests,
+and deterministic teardown—without inheritance.</li>
+<li><span class="ahead">ahead</span><strong>Replace interface storage.</strong>
+One owned payload, metadata, and witness table, supporting struct and class
+values, mutable dispatch, and heterogeneous collections.</li>
+<li><span class="ahead">ahead</span><strong>Add capturing closures.</strong>
+ARC environments, value snapshots, shared mutable cells, strong and weak
+captures, and block bodies.</li>
+<li><span class="ahead">ahead</span><strong>Prove it in userland.</strong> Build a
+higher-level UI layer over the existing low-level UI, GPU, and terminal
+surfaces, then move the editor onto it.</li>
+<li><span class="ahead">ahead</span><strong>Add generics later.</strong> Use them
+for a small set of library data structures rather than turning collection
+synonyms into language primitives.</li>
+</ol>
 
-<p><strong>And in v1, "Loom" was that engine.</strong> Not a terminal — the trusted
-local engine at the center of the system, which stored, connected, evaluated,
-scheduled and protected the Fabric. It was built. It worked. There was a terminal
-in front of it with commands like <code>set</code>, <code>eval</code>,
-<code>pull</code> and <code>watch</code>, and a plan for where that terminal went
-next.</p>
+<h2 id="loom">What this means for loom</h2>
 
-<h2 id="v2">What v2 did about it, and why</h2>
+<p>Most of the work above should not make loom larger. ARC, classes, interfaces,
+closures, and type checking belong in the compiler and shared runtime. loom
+continues to supply effects through the same versioned host boundary. If a new
+platform service is genuinely needed, it is appended to that table and the ABI
+version changes visibly.</p>
 
-<p>v1 taught the project one thing that outranked everything else it taught, and
-the north star document states it plainly:</p>
+<p>The UI proving work may extend the host's low-level window or GPU channel,
+but widgets, application state, callbacks, and layout stay in Luce libraries.
+The <a href="@/editor/">editor</a> remains an ordinary program rather than a
+loom command.</p>
 
-<blockquote>
-<p>It worked, and it taught us the most important lesson of the project: Luce is
-the part that enables everything else. Every other layer — storage images,
-texels, fibers, access rights — made iteration slower while the language was
-still growing.</p>
-</blockquote>
+<h2 id="later">What remains later</h2>
 
-<p>So v2 restarted from the first principle instead of from the architecture. The
-whole persistent substrate was set down — deliberately, with the tree preserved
-on a branch and the documents kept where anyone can read them — and the effort
-went into the language.</p>
+<p>Persistent identity, connected data, synchronization, capabilities as
+values, and multi-user work remain deferred. The repository keeps the old v1
+records as history, not as an implementation schedule. They return for review
+only after the local language, toolchain, editor, installer, and documentation
+have passed their release gate.</p>
 
-<p>What was set down is not vague. It is a list: the Fabric, Texels, Fibers,
-Ports, Views, capabilities-as-values, the Spool, the persistence image, Braids
-and network synchronisation, multi-user anything, and the agent. The v1 fabric
-builtins and their compile-time gate were removed from the compiler entirely
-rather than left switched off.</p>
-
-<p>What was kept is a shorter list, and more interesting:</p>
+<h2 id="walls">The walls stay visible</h2>
 
 <ul>
-<li><strong>The discipline that computation receives no ambient access.</strong> v1
-said capability arrives through explicit connections. v2 says
-<a href="@/host/">every effect is a service the host hands over, and one it does not
-hand over refuses rather than guesses</a>. Different mechanism, same principle,
-and the one that survived contact with a real compiler.</li>
-<li><strong>Effects as a boundary rather than as ambient power.</strong> v1 had
-trusted boundary Texels performing effect intents. v2 has a versioned table of
-function pointers that generated code indexes, where every service is optional
-and fail-closed.</li>
-<li><strong>Familiar computing at the edge.</strong> v1 already said files remain
-useful as portable byte artifacts and that the way to use an existing tool is to
-project a region into the environment that tool expects. v2 took that all the way
-down: ordinary OS files <em>are</em> the storage, and there is no image to
-initialise.</li>
-<li><strong>A small vocabulary held on purpose.</strong> v1's rule was "the
-machinery may grow; the ontology should not." v2's version is a language with no
-classes, no inheritance, no closures, one engine, and one implementation of
-every semantic.</li>
-</ul>
-
-<h2 id="name">The name is the only claim being made</h2>
-
-<p>v1's Loom was an engine. v2's loom is a terminal that opens a shared library
-and calls it. That is a very large demotion, and it was not an accident of
-naming.</p>
-
-<p>Today loom is the smallest thing that honestly deserves the name: it is where a
-program becomes a running thing, and it is the trusted boundary between a program
-and the machine. Those are the two jobs v1's Loom had that did not depend on the
-Fabric existing. Everything else it did — storing, connecting, scheduling,
-evaluating — is not there, and this site does not pretend otherwise.</p>
-
-<p>The north star's roadmap ends with one line about the rest:</p>
-
-<blockquote>
-<p>Then — and only then — persistence and the return of the Fabric.</p>
-</blockquote>
-
-<h2 id="near">What is planned, and written down</h2>
-
-<p>These are recorded in the repository as work to do, not inferred:</p>
-
-<ul>
-<li><span class="ahead">ahead</span><strong>Growing the terminal.</strong> Mouse,
-bracketed paste, and incremental drawing — damage tracking inside the host, with
-the <em>same builtins</em>. A program keeps saying "draw this here"; the host
-stops repainting what did not change.</li>
-<li><span class="ahead">ahead</span><strong>More userland.</strong> A formatter, a
-grep, a file browser. Written in Luce, run by loom, in the repository beside the
-<a href="@/editor/">editor</a> — which is the pattern: <strong>things loom does are
-programs, not commands built into loom.</strong></li>
-<li><span class="ahead">ahead</span><strong>Cross-compilation, and sharing one
-runtime library between artifacts</strong> instead of copying it into each. This
-is the compiler's work rather than loom's, but it changes what loom's install
-tree looks like and how big a <code>.lc</code> is.</li>
-</ul>
-
-<p>None of that changes the shape of the tool. It is loom getting better at what
-it already does.</p>
-
-<h2 id="far">Where the growth actually is</h2>
-
-<p><span class="ahead">ahead</span>Everything in this section is a reading of
-where the project's own decisions point, not a plan anyone has committed to.</p>
-
-<p>The interesting question is not whether the Fabric ideas come back — the north
-star says they do — but <strong>where they come back</strong>. There are two
-doors, and the project has already chosen one of them for everything else.</p>
-
-<h3 id="not-language">Not through the language</h3>
-
-<p>Luce's memory story is scope ownership: no garbage collector, no reference
-counting, no hidden runtime bookkeeping, and a compiler that can tell you at
-compile time who owns what. Persistent identity — a thing that outlives the scope
-that made it, is reachable from several places at once, and is still there
-tomorrow — is exactly the shape of problem that ordinarily drags a runtime
-collector in behind it.</p>
-
-<p>That trade has been refused, and the refusal is written down —
-<code>docs/MEMORY.md</code> is the record of why scope ownership won and what it
-beat. So durable
-identity does not arrive as a new kind of Luce value. Whatever it becomes, it is
-not <code>Texel</code> as a type in the language.</p>
-
-<h3 id="through-tool">Through the tool</h3>
-
-<p>The other door is the one loom already is. <strong>The host boundary is a
-versioned table of services, and it is append-only.</strong> A new capability —
-durable storage, content addressing, a way to demand a value and be told when it
-went stale — is a new row in that table and a new builtin that calls it. The
-language does not change to gain it. The compiler does not learn a new semantic.
-An artifact built against the older table is refused by name rather than handed a
-table it does not understand, so the growth is safe by construction.</p>
-
-<p>That is not a hypothesis about the future; it is how <a href="@/host/#same">every
-effect loom already offers</a> got there. Files, the terminal, the clock, the
-machine facts, and the program's own exit status are all rows in that table,
-added over time, each one bumping a version.</p>
-
-<p>Read that way, the v1 vocabulary has plausible v2 spellings, and each one is a
-service rather than a language feature:</p>
-
-<div class="table">
-<table>
-<tr><th>v1 idea</th><th>The shape it would take here</th></tr>
-<tr><td>Texel — identity independent of location</td><td>A host service that
-stores and retrieves by identity, the way <code>file_read</code> stores and
-retrieves by path. A program holds a name, not a pointer.</td></tr>
-<tr><td>Fiber — a durable typed connection</td><td>Data in that store, written
-and read by programs. A connection is a fact about two identities; it does not
-need to be a value the compiler knows about.</td></tr>
-<tr><td>Demand-driven evaluation with disposable caches</td><td>The runner
-already does a small version of this: an artifact is a cached computation, keyed
-on content, rebuilt when its input changed, and safe to delete
-at any time.</td></tr>
-<tr><td>View — an interface that is a computation</td><td>A Luce program drawing
-on the terminal builtins. The <a href="@/editor/">editor</a> is one, and it needed
-no privilege to be one.</td></tr>
-<tr><td>Capability arriving through explicit connection</td><td>The host table
-itself: what a program can do is what it was handed, decided outside the
-program.</td></tr>
-</table>
-</div>
-
-<p>The point of that table is not that the mapping is obvious or that the work is
-small. It is that <strong>every row of it is loom's work rather than Luce's</strong>
-— which is what "loom will grow a lot" means when the language is deliberately
-staying small.</p>
-
-<h3 id="already">The seed that is already there</h3>
-
-<p>loom already keeps exactly one thing between runs, and its properties are the
-ones a persistent substrate would need: the <a href="@/running/#cache">artifact
-cache</a> is <strong>content-addressed</strong> (its name is a hash of the program,
-so nobody has to invent a naming scheme), <strong>self-validating</strong> (an
-entry that does not match is refused by name rather than used),
-<strong>disposable</strong> (deleting it costs a recompile and never
-correctness), and <strong>unmanaged</strong> (there is no sweep, no lock, no age
-policy, and no daemon). Four properties, and they are the same four v1 demanded of
-its caches.</p>
-
-<p>It is a cache of one kind of thing, not a Fabric. But it is the shape, running
-in production, in a tool that carries no engine.</p>
-
-<h2 id="wont">What will not happen</h2>
-
-<p>Being clear about the direction is worth less than being clear about the
-walls.</p>
-
-<ul>
-<li><strong>loom will not become an engine again in v1's sense.</strong> There is
-no interpreter inside it and no plan to put one there. A <code>.lc</code> is
-machine code; the interpreter that exists is a test-suite oracle and ships in
-nothing.</li>
-<li><strong>Luce will not gain a garbage collector or reference counting.</strong>
-That includes hidden runtime refcounting introduced to make some other feature
-convenient. It is a standing rule, not an open question.</li>
-<li><strong>The shell will not accumulate state.</strong> No variables, no
-history, no configuration, no <code>cd</code>. Things loom does are programs.</li>
-<li><strong>Nothing will be added to the boundary quietly.</strong> Every effect
-is a row in a published table, and every change to it bumps a version that
-artifacts carry. That is the mechanism that makes growth safe, and it only works
-if it is never worked around.</li>
+<li>loom does not acquire an interpreter or LLVM.</li>
+<li>Luce does not acquire class inheritance, interface default methods, unsafe
+unowned references, or shared mutable worker heaps in this roadmap.</li>
+<li>The shell does not grow into a stateful operating environment; programs do
+the work.</li>
+<li>No host capability is added without an explicit ABI change and tests.</li>
 </ul>
 
 <h2 id="reading">Reading further</h2>
 
-<p>All of this is in the repository, which is where to go when this page and the
-code disagree — the code wins, and this page is what needs fixing.</p>
-
 <ul>
-<li><code>docs/v1/LOOM.md</code> — the original architecture, entire and
-unedited.</li>
-<li><code>docs/v1/PLAN.md</code> and <code>docs/v1/EVALUATION.md</code> — where
-the v1 terminal and its evaluation engine were going.</li>
-<li><code>docs/V2.md</code> — the north star: what v2 is for, what it deferred,
-and the roadmap that ends with the Fabric.</li>
-<li><code>docs/ENGINE.md</code> — why there is one engine and what the oracle is
-for.</li>
-<li><code>docs/MEMORY.md</code> and <code>docs/OWNERSHIP.md</code> — the memory
-decision this page leans on, and the rules it produced.</li>
-<li><a href="https://luce.luciaos.com">luce.luciaos.com</a> — the language, and
-its own honest page about what it cannot yet do.</li>
+<li><code>docs/ROADMAP.md</code> — the step-by-step plan and acceptance matrix.</li>
+<li><code>docs/MEMORY.md</code> — current ARC gaps and the completed contract.</li>
+<li><code>docs/V2.md</code> — the product north star.</li>
+<li><code>docs/ENGINE.md</code> and <code>docs/CODEGEN.md</code> — why loom stays
+small and how artifacts meet the host.</li>
+<li><a href="https://luce.luciaos.com/status/">Luce Status</a> — the public
+current-versus-planned boundary.</li>
 </ul>

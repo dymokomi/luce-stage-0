@@ -41,9 +41,7 @@ A parenthesised list of **two or more** types is a
 [return shape](../types/#return-shapes): the function answers that
 many values. It is not a type, and it may be written nowhere but here.
 
-A parameter may be prefixed `give` to take ownership of a container
-object, resource, or carrying struct. Values never take the verb. A
-parameter may also declare a trailing default — `start: long = 0`, a
+A parameter may declare a trailing default — `start: long = 0`, a
 compile-time constant a call site may omit; call sites may name
 arguments too (see [calls](../expressions/#calls)). Every path through
 a function that declares a value return type must return; the compiler
@@ -213,14 +211,14 @@ function type is expected, carrying `p`
 
 The compiler infers whether a method writes its receiver. A store to
 `self` or a value field, or a transitive call to another writer on
-`self`, makes it a writer. Mutating an object through a field remains
-a borrow and does not. A reader accepts a `let` or temporary. A writer
-requires an exact bare mutable binding that owns any objects it carries;
+`self`, makes it a writer. Mutating a referenced object through a field does
+not replace `self` and does not make the method a writer. A reader accepts a
+`let` or temporary. A writer requires an exact bare mutable binding;
 fields, indexes, narrowed values, `let` bindings, and temporaries are
 refused.
 
-The writer aliases that caller slot and owner identity in place, so it
-may replace an object-carrying receiver. Writes completed before an
+The writer aliases that caller slot in place, so it may replace a
+reference-carrying receiver. Writes completed before an
 error remain visible. Its declared return values are ordinary results;
 the receiver is not hidden in the result shape.
 
@@ -437,15 +435,15 @@ for index, name in sequence:      position and element
 for key, value in map:            key and value
 ```
 
-The loop variable is immutable inside the body. Do not grow, shrink or
-free a collection while iterating it: bounds stay checked per step,
+The loop variable is immutable inside the body. Do not grow or shrink a
+collection while iterating it: bounds stay checked per step,
 but which elements are visited is the program's problem.
 
 ## break, continue, return, try
 
-All four leave one or more scopes, and all four free whatever those
-scopes still own. `return` additionally moves the returned binding to
-the caller.
+All four leave one or more scopes and release the local references they leave
+behind. `return` copies a value result or retains a reference result for the
+caller before releasing the frame.
 
 ## Expression statements
 
@@ -453,8 +451,8 @@ A call may stand alone as a statement. A **fallible** call standing
 alone must be `try`ed or `catch`ed; ignoring it is
 `luce.sema.fallible`.
 
-An ignored returned object is a statement temporary and is freed at
-the end of the statement.
+An ignored returned reference is a statement temporary and is released at the
+end of the statement.
 
 ## Guarded statements
 
@@ -511,12 +509,11 @@ other constants (including `module.constant` through an import),
 numeric and bitwise expressions, comparisons and boolean logic, string
 concatenation, the eight conversion constructors and `ord()`, enum
 members and conversions from enums (`int(m)`, `string(m)`), and
-object-free value-struct construction.
+reference-free value-struct construction.
 `none` also folds when a `T?` annotation supplies the absent type; bare
 `const x = none` is refused because it supplies no `T`.
 
-Function values, general calls and ownership verbs are **not**
-constant.
+Function values, general calls, `new`, and `spawn` are **not** constant.
 
 Constants may reference each other in any order but never in a cycle.
 Every value use site inlines the fold. A `const` may also hold one flat
@@ -528,7 +525,7 @@ const WORDS = {"and": true, "break": true}
 const ORDER: array(long, _) = [16, 17, 18, 0]
 ```
 
-- Elements may be scalars, strings, enum values, or object-free value
+- Elements may be scalars, strings, enum values, or reference-free value
   structs. Such a struct may contain an optional field, but an optional
   top-level element or map value is refused.
 - A bracket literal is a `list` unless an `array(T, _)` annotation
@@ -536,22 +533,23 @@ const ORDER: array(long, _) = [16, 17, 18, 0]
   but its element type must still be flat and non-optional; zero
   elements do not waive the constant-container boundary.
 - Constant containers are flat: no nested container, builder,
-  object-carrying struct, or multidimensional array.
+  reference-carrying struct, or multidimensional array.
 - A constant map rejects duplicate folded keys and names both sites.
   Empty `{}` is not a literal; use `new map(K, V)`.
 - One written construction is one identity. Aliases, imports and
-  borrowing parameter defaults share it; separately written equal
+  parameter defaults share it; separately written equal
   constructions do not.
-- A `give` parameter cannot have an object default; only a borrowing
-  parameter may share the program root this way.
+- A parameter default may share a constant container, but every attempted
+  mutation still traps `immutable_object`.
 
 The reachable rows are eagerly materialized into each runtime's
 program root before user code; unreachable rows are pruned. The root
-lives until teardown. Reads and iteration are ordinary, a list slice
-and map `keys()`/`values()` are fresh owned objects, and `copy` makes a
-fresh mutable deep copy. Arrays have indexing, iteration and `copy`,
-but no slice expression. Direct or aliased mutation and ownership
-escape are compile errors. A parameter-hidden mutation traps
+lives until teardown. Reads and iteration are ordinary. A list slice and map
+`keys()`/`values()` create fresh reference objects.
+Arrays have indexing and iteration, but no slice expression or universal
+deep-copy operator. Retaining or returning a constant reference is safe
+because it remains immutable for the
+runtime's life. Direct or aliased mutation traps
 `immutable_object` before writing.
 
 Constants share the module namespace and visibility rules. A public

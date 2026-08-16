@@ -5,13 +5,14 @@ that window into the `std.gpu.Surface` used for drawing. It intentionally does
 not contain widgets, layout, event loops, or application state; those belong
 in a package built above these two narrow modules.
 
-The host keeps the native window handle behind the runtime. The `Window`
-binding owns it, so moving it, freeing it, or leaving its scope releases the
-native resource. A window's surface is another owned resource.
+The host keeps the native window handle behind the runtime. `Window` and its
+drawing surface are shared resource references. Their completed ARC contract
+releases each native resource at its last strong reference; the exact
+last-release path is part of the current [ARC completion work](/guide/memory/).
 
 ## Opening a window
 
-Call `ui.open` when the application is ready to own a native window.
+Call `ui.open` when the application is ready to create a native window.
 
 ```text
 ui.open(title: string, width: long, height: long) -> Window!

@@ -319,7 +319,7 @@ fn build(
 
     const blurb: []const u8 = if (target.entry) |entry|
         entry.blurb
-    else if (target.section) |section| section.blurb else "Luce is a small, statically typed language with no garbage collector and no reference counting.";
+    else if (target.section) |section| section.blurb else "Luce is a small, statically typed language with value semantics and automatic reference counting.";
 
     var out: Buffer = .init(gpa);
     defer out.deinit();

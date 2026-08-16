@@ -2,20 +2,21 @@
 
 A **bound method** is `receiver.method` written where a `func(T, ...) ->
 R` value is expected: a function value whose environment is the receiver.
-Nothing anonymous enters the language — the environment is a struct,
-class, or enum the program declared, with a name, a layout, and visible
+Nothing anonymous enters the language — the environment is a struct or
+enum the program declared, with a name, a layout, and visible
 fields. This is the reference for how a bind is spelled, typed, stored,
 and called. Plain function values and lambdas have their own reference
 (`docs/FUNCTIONS.md`).
 
 One sentence carries the feature: **a bound method is a function value
-that holds a reference to its receiver, and ARC keeps that receiver alive
-for as long as the value lives.** A value-type receiver — a scalar, a
-plain `struct`, an `enum` — is copied into the value, so the value carries
-its own independent state. A reference-type receiver — a `class` or a
-container — is shared with the value, exactly as it is anywhere a
-reference is assigned. A bind takes no annotation; the receiver travels
-by its own kind (`docs/MEMORY.md`).
+that carries its receiver.** A value receiver — a plain `struct` or an
+`enum` — is copied into the value. Current function-value object walks stop at
+the function run, so reference fields inside that receiver are aliases but are
+not retained by the bind. The original owner must outlive a carrying bound
+method. This is a known incomplete-ARC lifetime gap, not the final contract
+(`docs/MEMORY.md`, `docs/ROADMAP.md`). User-defined class
+receivers and capturing closure environments are planned rather than
+current behavior.
 
 ## The bind, spelled and typed
 
@@ -50,10 +51,11 @@ declaration, the target lowers as a value and its type is asked for a
 method of that name. A miss is *not a bind*, and the field path says what
 it always said about `p.x`.
 
-The receiver a value-type bind carries is its own copy, so writing the
-original afterwards does not reach it; the receiver a reference-type bind
-carries is the same object the receiver names, and mutating through either
-is seen through both.
+The receiver a bind carries is its own value copy, so writing the original
+afterwards does not reach its value fields. References inside that copied
+receiver name the same objects but are currently borrowed from the original
+owner. Returning or storing the bound value past that owner's lifetime is
+unsafe in the current implementation and is a Phase 0 fix.
 
 ## No equality, no ordering
 
@@ -77,7 +79,7 @@ an enum beside the values and search that.
 
 ## A function value is storable
 
-A function value lives in a struct or class field, a list element, an
+A function value lives in a struct field, a list element, an
 array cell, a union payload field, and a map value. In the four slots that
 exist before anything fills them it is written as an **optional**,
 `(func(...) -> R)?`, because a function value has no zero and absence is
@@ -113,11 +115,18 @@ parentheses is a parenthesized type, two or more is a return shape.
 `writeTypeName` parenthesizes a function payload and nothing else, so a
 diagnostic's spelling reads back as the same type.
 
+Storage does not repair the current carrying-receiver gap. A plain function,
+lambda without captures, union constructor, or value-only bound receiver is
+self-contained. A bound receiver with a reference field may be stored only
+while another live value keeps that referenced graph alive. Full ARC must make
+the function value retain and release that graph so this qualification can be
+deleted.
+
 ### Where a function value stands, and why the map is different
 
 | slot | written | why |
 |---|---|---|
-| struct or class field | `(func(...) -> R)?` | `var row: Row` creates it zeroed |
+| struct field | `(func(...) -> R)?` | `var row: Row` creates it zeroed |
 | array cell | `(func(...) -> R)?` | `new array(T, n)` creates it filled |
 | list element | `(func(...) -> R)?` | uniform with the two above |
 | union payload field | `(func(...) -> R)?` | a union's zero is its first member, fields at their own zeros |
@@ -203,13 +212,14 @@ head so an imported union resolves from the reference site's own module.
   does not bind and `try EXPR(args)` on a function value is refused by
   name — a function type carries no `!`.
 - **A function value does not cross a worker boundary**, as a spawned
-  function's parameter or as its result, because it may hold a reference
-  and reference types do not cross (`docs/MEMORY.md`, `docs/THREADS.md`).
+  function's parameter or as its result, because it may hold a bound receiver
+  and callable environments are not part of the worker graph-copy contract
+  (`docs/MEMORY.md`, `docs/THREADS.md`).
   A call *through* a value type-checks its arguments exactly as a direct
   call does.
-- **Capture-free lambdas stay; anonymous captures stay refused.** A
-  lambda that needs state names a struct, which keeps every environment in
-  the language inspectable, sized, and named in the open.
+- **Captures are refused today.** A lambda that needs state currently
+  names a struct and binds a method. ARC closure environments are planned
+  in `docs/ROADMAP.md`.
 
 ## Representation and dispatch
 

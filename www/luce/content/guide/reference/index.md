@@ -9,14 +9,15 @@ diagnostic name. For explanation and examples, start in the Language Guide.
 - [Types](types/) — scalar and aggregate types, conversions, optionals,
   function values, and resources.
 - [Expressions](expressions/) — precedence, calls, operators, indexing,
-  ownership operators, and failure handling.
+  narrowing, and failure handling.
 - [Statements and Declarations](statements/) — functions, structs,
   enums, unions, control flow, assignment, and constants.
-- [Ownership](ownership/) — the numbered ownership rules (S1–S46).
+- [Memory Management](memory/) — value copying, ARC, resources, interfaces,
+  and worker isolation.
 - [Errors and Traps](failure/) — stable trap/error codes and handling
   syntax.
 - [Modules](modules/) — imports, visibility, projects, and packages.
-- [Built-in Functions and Methods](builtins/) — free functions, host services, and receiver
+- [Built-in Functions and Methods](builtins/) — standalone functions, host services, and receiver
   methods.
 
 The [Tour](/tour/) gives the short introduction. Earlier chapters in this
@@ -30,6 +31,6 @@ authority; update the reference to match them.
 
 ## Citing a rule
 
-The [ownership](ownership/) page gives each of the 46 ratified
-situations a stable anchor such as `#s21` and `#s13`. Compiler
-diagnostics that include `[OWNERSHIP.md S21]` refer to that anchor.
+The [memory](memory/) page gives each current lifetime rule a stable anchor,
+such as `#m7` for last-release destruction. Compiler diagnostics use stable
+diagnostic codes; they do not expose retired ownership-rule numbers.

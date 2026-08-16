@@ -57,8 +57,9 @@ unsupported method, truncated header, or checksum mismatch is refused.
 
 ## Writing archives
 
-`zip.writer() -> Writer` creates an empty archive builder. The returned
-`Writer` is owned by the receiving binding.
+`zip.writer() -> Writer` creates an empty archive builder. `Writer` is a value
+struct carrying shared lists; copying it refers to the same archive under
+construction.
 
 | Method | Behavior |
 |---|---|

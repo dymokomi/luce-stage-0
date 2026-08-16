@@ -16,24 +16,23 @@ Every type is one of two kinds, and the kind decides what assignment
 and passing do (`docs/MEMORY.md`).
 
 A **value type** copies. Assigning it or passing it to a function makes
-an independent copy, it lives inline, and nothing frees it. The value
-types are the seven numbers, `bool`, `string`, and the aggregates built
-from values: a plain `struct`, an `enum`, a `union`, and a function
-value.
+an independent value. The value types are the seven numbers, `bool`,
+`string`, a `struct`, an `enum`, a `union`, and a plain function value.
+A copied value may contain references; copying it retains those fields.
 
-A **reference type** is a shared object. Assigning it or passing it
-shares the *same* object — a mutation through one name is seen through
-every other — and the object is reference-counted, freed automatically
-when the last reference to it goes away. The reference types are `class`
-and the containers `list(T)`, `map(K, V)`, `array(T, ...)` and
-`builder`, together with the resources `file` and `task(...)`.
+A **reference type** is a shared object. Assigning it or passing it shares the
+*same* object — a mutation through one name is seen through every other. The
+completed ARC contract frees it after the last reference; the current tree has
+the lifecycle gaps catalogued in `docs/MEMORY.md`.
+The reference types implemented today are the containers `list(T)`,
+`map(K, V)`, `array(T, ...)`, and `builder`, together with the resources
+`file` and `task(...)`.
 
-You choose value or reference with one keyword — `struct` for a value,
-`class` for a reference — and the choice is the whole of the difference
-between a type that is fast to copy and one that is shared and retained.
-A reference cycle is the one case the count cannot reclaim on its own; a
-`weak` reference, which does not retain and reads as `T?`, is the model's
-answer to it. `docs/MEMORY.md` is the source of truth for the model.
+User-defined reference types are not complete. `class` is accepted as a
+front-end scaffold but still lowers with value-struct behavior; `weak` is
+not syntax. Do not use either as if the target semantics had shipped.
+[ROADMAP.md](ROADMAP.md) specifies their destination and acceptance tests.
+[MEMORY.md](MEMORY.md) is the source of truth for current behavior.
 
 ## The numeric ladder
 
@@ -176,7 +175,7 @@ print(string(xs[0] + (totals.get("a") else 0)))
 Sharing a struct that holds a container shares the container: the
 reference is what copies, and both struct values see the one object.
 
-## Structs, classes, enums, and unions
+## Structs, enums, unions, and interfaces
 
 A `struct` is a value aggregate of named, typed fields, built by naming
 each field:
@@ -190,10 +189,6 @@ func main():
     let p = Point(x = 1.0, y = 2.0)
     print(string(p.x))
 ```
-
-A `class` has the same field syntax but is a reference type: it is
-shared and reference-counted rather than copied (see *Value types and
-reference types* above, and `docs/MEMORY.md`).
 
 An `enum` is a set of named constants stored at one integer width
 (`docs/ENUMS.md`); members are always namespaced, `int(m)` and
@@ -224,8 +219,9 @@ A **function value** — `func(T, ...) -> R`, or the storable form
 The builtin type names are **lowercase**: `byte`, `short`, `int`,
 `long`, `half`, `float`, `double`, `bool`, `string`, and the containers
 `list`, `map`, `array`, `builder`, plus the resources `file` and `task`.
-A name you declare — a struct, class, enum or union — is TitleCase by
-convention, so the case of a type name says who defined it.
+A name you declare — a struct, enum, union, or interface — is TitleCase
+by convention, so the case of a type name says who defined it. `class`
+will join that set only when its reference lowering is complete.
 
 Parentheses in a type are grouping: `(T)` is `T`, accepted wherever a
 type may stand and required nowhere. `long?` and `(long)?` are the same

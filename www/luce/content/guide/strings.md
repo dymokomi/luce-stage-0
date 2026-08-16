@@ -12,17 +12,16 @@ The important distinction is between **bytes** and **characters**:
   walk UTF-8 sequences as characters. In the current version `width` counts
   code points, not terminal cells.
 
-Slices must end at UTF-8 boundaries. A slice is still a string value; it is
-not a borrowed list or a handle whose lifetime can escape.
+Slices must end at UTF-8 boundaries. A slice is still an independent string
+value, not a view into another string's storage.
 
-## String values and ownership
+## String values
 
 Assigning or returning a string gives the receiver its own value. Storing a
-string in a list, map, array, or struct copies its bytes into that owner.
-There is no `give`, `copy`, or `free` word for a string. The trade-off is
-visible when a large string is copied; the benefit is that a container never
-refers to bytes owned by a shorter-lived scope. See [Memory and Ownership](/guide/memory/)
-for the general ownership rules.
+string in a list, map, array, or struct copies its bytes into that value. The
+cost is visible when a large string is copied; the benefit is that the new
+value does not depend on another string's lifetime. See [Memory and
+ARC](/guide/memory/) for the distinction between values and shared references.
 
 ## Splitting and joining
 

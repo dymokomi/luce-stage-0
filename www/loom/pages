@@ -8,9 +8,9 @@
 # Previous/Next links walk, so adding a page is one row and a file
 # under `content/`.  Nothing else lists the pages.
 
-	Overview	loom	The environment that runs compiled Luce: a shell, a runner, and the host boundary programs reach the world through.
-running	Running	Running programs	How loom starts a program: one dlopen for a .lc, compile-and-cache for a .luc, artifacts refused by name, and the exit status a script reads afterwards.
+	Overview	loom	The small host and runner for compiled Luce library artifacts, with no interpreter or code generator inside.
+running	Running	Running programs	How loom validates and starts a .lc, compiles and caches a .luc, finds the compiler, and reports the result.
 shell	Shell	The shell	loom's interactive line shell — its five commands, bare program paths, colour, and what a piped script gets that a person at a prompt does not.
-editor	Editor	The editor	A full-screen editor with Luce syntax highlighting, written in Luce, drawing through the termui package — an ordinary installed program, not a feature of loom.
-host	Host	The host	Every effect a Luce program can have is a service loom hands it. The whole surface, the gate that governs it, and why a missing service refuses rather than guesses.
-direction	Direction	Where loom is going	What v1 wanted, what v2 kept and dropped, and the honest shape of loom's growth. Direction, not documentation of anything built.
+editor	Editor	The editor	The shipped multi-buffer terminal editor: search, undo, build/run, panes, draft recovery, and termui, all written in Luce.
+host	Host	The host	The one versioned boundary for files, terminals, workers, windows, GPU surfaces, clocks, process services, and fail-closed capability.
+direction	Direction	Where loom is going	Why the language comes first, the ordered ARC/classes/closures roadmap, and what that means for a deliberately small loom.

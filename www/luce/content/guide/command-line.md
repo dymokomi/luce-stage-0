@@ -123,6 +123,6 @@ luce build program.luc --release
 
 Debug is the default. It keeps instruction origins, so a runtime trap can
 show `file:line:column` and a call trace. `--release` strips those origins;
-function names, trap codes, checks, and ownership rules remain. The two
+function names, trap codes, checks, and ARC behavior remain. The two
 modes have the same observable semantics. Release is for artifacts whose
 users do not have the source; debug is usually easier during development.

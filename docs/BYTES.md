@@ -7,8 +7,9 @@ therefore travels a path of its own — a packed byte buffer, a file
 reached through an open handle, and text recovered from bytes by an
 explicit validation. This document is the reference for that path.
 
-The whole binary surface is built and runs identically on both engines
-(the compiled path and the interpreter oracle, `docs/ENGINE.md`).
+The byte representation and operations run on both engines. File-handle
+last-release cleanup is not complete: four byte/ZIP lifecycle tests remain
+disabled, as recorded in `docs/MEMORY.md`.
 
 ## The byte buffer
 
@@ -44,9 +45,9 @@ func main():
         print(string(b))
 ```
 
-Because it is a reference type (`docs/MEMORY.md`), a buffer is shared,
-not copied, when you assign or pass it, and it is freed automatically
-when the last reference to it goes away:
+Because it is a reference type (`docs/MEMORY.md`), a buffer is shared, not
+copied, when assigned or passed. Last-release reclamation is the ARC contract
+and still has gated edge cases in the current tree:
 
 ```luce
 func main():
@@ -138,16 +139,14 @@ func main():
     print("ok")
 ```
 
-### No close, no leak
+### No close; last-release cleanup is still being completed
 
-There is no `close()` method and no `with` statement. The file closes
-deterministically the instant its last reference is released — for a
-plain local, the end of the scope that holds it — which is the same
-reference-counting machinery that frees a `list`. A program cannot leak
-a file by forgetting a keyword, because there is no keyword to remember.
-An explicit `close()` is refused rather than offered, because it would
-add a "closed but not closed-yet" state beside the reference count — a
-second lifetime story the type must never carry:
+There is no `close()` method and no `with` statement. The completed ARC
+contract closes the file at its last release through the same path that
+destroys a container. Current development builds may leave a function-local
+handle open until runtime teardown; the disabled `resource_close_pending`
+tests make that gap explicit. An explicit close is not the fix—the one ARC
+lifetime path must be completed:
 
 ```text
 f.close()

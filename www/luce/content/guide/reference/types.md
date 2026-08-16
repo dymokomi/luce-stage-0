@@ -9,32 +9,26 @@ An annotation is optional wherever the initializer decides the type,
 and required where nothing does — an empty list literal, a `var` with
 no value.
 
-## Values, container objects, and resources
+## Values and references
 
 The lines between them decide everything about memory.
 
-**Values** copy on assignment and on call, and nobody frees them: the
-seven numbers, `bool`, `string`, structs and unions carrying no object
-or resource,
-enums and function values. A value never takes an ownership word.
+**Values** copy on assignment and on call: the seven numbers, `bool`,
+`string`, structs, unions, enums, and plain function values. A value may
+contain references. Copying it copies value fields and retains reference
+fields.
 
-**Container objects** are referenced, created with `new` or a literal,
-and freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
-`builder`. Assigning or passing a struct value that contains a list
-copies the *reference* — both struct values see the same list. The
-explicit `copy` verb instead deep-copies a resource-free owned graph.
+**References** share one runtime object: `list(T)`, `map(K, V)`,
+`array(T, ...)`, `builder`, `file`, and `task(...)`. They are created by
+a literal, `new`, a host/library operation, or `spawn`. Assignment,
+arguments, results, fields, optionals, and container slots share the same
+object. Last-release destruction is the ARC contract, but current development
+builds still have the [listed lifecycle gaps](../memory/#current-completion-blockers).
 
-**Resources** are heap-backed so scope ownership can give them one
-owner and one death point, but they are not containers: `file` and
-`task(...)`. They move with `give` or `return`, release with `free` or
-scope end, and cannot be copied because there is one file or worker
-behind the handle.
-
-A struct that transitively carries a container object or resource is an
-**ownership-carrying struct**. The compiler's older internal and
-diagnostic term is *object-carrying*; that class includes resources. The
-whole struct follows what it carries, and one carrying a resource is
-non-copyable.
+There are no source ownership operators and no universal deep copy. A
+program constructs an independent value explicitly when that is what its
+data model requires. `class` is currently a front-end scaffold, not a
+completed reference type; see [Status](/status/).
 
 ## Scalars
 
@@ -166,7 +160,7 @@ defaults removed:
 ```
 func(long, long) -> bool
 func(string)
-func(give list(long)) -> long
+func(list(long)) -> long
 ```
 
 A function type is worn by four things: a named top-level or `static`
@@ -174,9 +168,10 @@ function, a lambda, a **bound method** (`receiver.method`, whose
 environment is that receiver), and a **union member constructor**
 (`Msg.query_changed`). One place holds any of them and no reader can
 tell which — which is also why a function value has no equality, and
-why one never crosses a worker boundary. A function value owns the run
-that holds it and never owns objects: a value-only receiver is copied
-in, a carrying one is borrowed, and `give receiver.method` is refused.
+why one never crosses a worker boundary. A bound value copies its struct
+receiver into the function value. In the current implementation, references
+inside that receiver copy are borrowed rather than retained; the original
+concrete receiver must outlive the bound value.
 
 That lack of equality follows the value wherever a comparison reaches
 it: a struct holding a `(func(...) -> R)?` field is not compared with
@@ -185,9 +180,8 @@ such structs are refused for the same reason, because a search is `==`
 under another spelling. Keep what you meant to look for beside the
 values — a name, an enum — and compare that.
 
-The result is omitted when the function returns nothing. `give`
-remains because ownership is part of calling the value. Fallibility
-does not: a fallible function cannot be used as a value because a
+The result is omitted when the function returns nothing. Fallibility
+does not appear in a function type: a fallible function cannot be used as a value because a
 function type has no `!` with which to carry the obligation.
 
 A function type may annotate a parameter or local, be a function's
@@ -274,7 +268,7 @@ struct Button: Drawable:
 ```
 
 The contract is checked at the declaration. Method names, parameter count and
-types, `give` modes, return count and types, and receiver mutability must
+types, return count and types, and receiver mutability must
 match. Interface methods are read-only, so an implementation that writes
 `self` is rejected. Extra methods on the struct are harmless. A non-fallible
 implementation may satisfy a fallible requirement; the reverse is rejected.
@@ -293,7 +287,7 @@ The following are part of the contract check:
 | Requirement | Rule |
 | --- | --- |
 | Receiver | The witness is an instance method; `static` functions cannot satisfy it. |
-| Parameters | Count, types, order, and `give` modes match exactly. Interface methods cannot declare default arguments. |
+| Parameters | Count, types, and order match exactly. Interface methods cannot declare default arguments. |
 | Results | Count and types match exactly. Two or more results use the ordinary return shape. |
 | Effects | A non-fallible witness may satisfy a fallible requirement; a fallible witness may not satisfy a non-fallible one. |
 | Mutation | The witness may not write `self`. |
@@ -349,12 +343,12 @@ func main():
 
 `list(I)` and `map(K, I)` are heterogeneous: each element may have a
 different concrete type. The same interface value can be stored in an array
-or a struct field. Interface values own their dispatch storage; object graphs
-inside a carrying receiver remain borrowed from the concrete value that
-supplied them, just as they are for a bound read-only method. Keep that owner
-alive or make an explicit `copy` before retaining the interface elsewhere. A
-function cannot return a carrying concrete receiver as an interface, because
-its local owner would die at the return; return the concrete owner instead.
+or a struct field, returned, or wrapped in an optional. The current hidden
+layout stores bound dispatch values and copies the concrete struct receiver
+state. Reference fields are currently aliases that the dispatch value does not
+retain, so another concrete value must keep them alive. Interface methods are
+read-only until the planned owned-existential representation replaces this
+layout.
 
 Interfaces do not inherit from one another or expose fields. Interface
 methods may use the ordinary multi-value return shape:
@@ -419,11 +413,10 @@ A plain function declared inside a struct is a method with implied
 and is the namespace form reached as `Struct.name(...)`.  Neither form
 adds dynamic dispatch or inheritance.
 
-A struct type is **object-carrying** — the established compiler term —
-if it transitively contains a container object or resource. Such structs
-follow the owned member's rules when they are *kept*; one carrying
-`file` or `task` cannot be copied, while plain-value structs never take
-an ownership verb.
+A struct remains a value when it contains a reference. Copying the struct
+copies its value fields and retains its reference fields, so the two struct
+values are independent while a `list`, `file`, or `task` field may still name
+one shared object.
 
 Struct definitions may not be cyclic through plain fields. Recursion
 goes through an optional field:
@@ -462,8 +455,8 @@ reference however much it holds.
 ## enum {#enum}
 
 A set of named constants at one integer width, declared with
-[`enum`](../statements/#enum). It is a value type: it copies, it takes
-no ownership word, and a container holds it at its backing width.
+[`enum`](../statements/#enum). It is a value type: it copies, and a
+container holds it at its backing width.
 
 - **No implicit conversion in either direction.** `int(m)` and every
   other numeric constructor answer the member's number at that width,
@@ -508,13 +501,10 @@ proved which member the value holds.
   construction, defaults included. A bare member is written without
   parentheses: `Shape.empty`. The union's own name is not a
   constructor.
-- **Ownership is a struct's.** A union carries objects when *any*
-  member's payload field does; the predicate is type-level, so keeping
-  a value of such a union takes `give` or `copy` whichever member it
-  holds. An arm's payload binding **aliases** what the scrutinee owns.
-  `free(u)` is refused, as it is for a struct; scope end releases
-  whatever the live member owns. A union of value-only members takes
-  no verbs.
+- **Memory follows each payload field.** A union is a value. Copying it
+  copies value payloads and retains reference payloads. An arm's reference
+  binding names the same object the scrutinee holds, and ARC balances both
+  references.
 - **The zero is the first declared member**, every payload field at
   its own zero — what `var s: Shape` starts at and what container
   cells hold.
@@ -537,7 +527,7 @@ union Json:
 func main():
     var xs = new list(Json)
     xs.append(Json.number(value = 2.5))
-    let doc = Json.array(items = give xs)
+    let doc = Json.array(items = xs)
     match doc:
         array(items):
             print(f"an {doc} of {len(items)}")
@@ -554,8 +544,9 @@ an array of 1
 A growable sequence. Created with a literal or `new list(T)`. An empty
 literal requires an annotated binding.
 
-`T` may be any value, container object, or resource type. When `T`
-carries an owned thing, the list **owns** its elements.
+`T` may be any value, reference, or resource type. A list copies value
+elements and retains reference elements; removing or replacing an element
+releases what that slot held.
 
 ## map(K, V)
 
@@ -591,11 +582,10 @@ takes no type argument, and there is no `new file`. The raw
 wraps it as `open`, `create`, and `append_to`. A handle with no file
 behind it is the one thing this type must never hold.
 
-It is a **resource**, and scope ownership is what gives a resource a
-death point. The binding that received the handle owns it, the end of
-that scope closes the file, `free(f)` closes it early, `give` and
-`return` move it, and using one after it is closed traps
-`use_after_free` — because that is the same mistake.
+It is a reference **resource**. Assignment and return share the same handle.
+The completed ARC contract closes it at the last release; current builds have
+the [listed file-lifecycle gap](../memory/#current-completion-blockers). A null
+or stale runtime handle traps rather than becoming undefined memory access.
 
 ```luce run
 import std.files
@@ -612,9 +602,8 @@ func main() -> !:
 3
 ```
 
-A file cannot be copied: there is one open file behind a handle, and a
-second Luce handle on it would be two owners of one resource. The
-methods are `f.read(buffer)`, `f.write(buffer, count)` and `f.flush()`,
+A file reference may be shared, but that does not duplicate the open file.
+The methods are `f.read(buffer)`, `f.write(buffer, count)` and `f.flush()`,
 all three fallible; [`std.files`](/library/files/) is where the loops over
 them live.
 
@@ -622,9 +611,9 @@ them live.
 
 A running worker (see the [Workers](/guide/concurrency/) chapter). The
 `file` precedent exactly: a resource rather than a container, with no
-`new task` — `spawn` is the only door in — and a scope-owned death
-point. What "release" *is* differs: for a file it is a close, for a
-task it is a **join**.
+`new task` — `spawn` is the only door in — and an ARC lifetime. The completed
+contract closes a file and **joins** a task at the last release; current
+lifecycle tests must still prove every automatic path.
 
 What stands inside the parentheses is a **return shape**, written the
 way it would be written after a function's `->`:
@@ -665,10 +654,10 @@ func main():
 14
 ```
 
-A task cannot be copied: there is one worker behind it, and a second
-handle would be two joiners of one thread. Its one method is
-`t.wait()`, which consumes it; `free(t)` joins early and the end of
-the owning scope joins automatically.
+A task reference may be shared, but there is still one worker behind it. Its
+one method is `t.wait()`, which observes the answer once. Automatic
+last-reference joining is the ARC completion contract, not yet a fully proved
+current guarantee.
 
 ## Return shapes {#return-shapes}
 
@@ -743,8 +732,8 @@ After `->` in a declaration a `(` may instead open a
 [return shape](#return-shapes); the arity decides, so `-> (long)` is
 `-> long` and `-> (long, long)` is two answers.
 
-Absence owns nothing: a `list(T)?` holding an object owns it exactly
-as a `list(T)` would, and holding `none` owns nothing.
+Absence holds no reference: a `list(T)?` containing a list retains it
+exactly as a `list(T)` place would, while `none` retains nothing.
 
 Narrowing is described in [expressions](../expressions/#narrowing).
 
@@ -793,5 +782,5 @@ genuinely hold nothing is a `T?` and says so.
 ## Identity
 
 `==` and `!=` on container objects and resources compare handle
-identity — whether two names denote the same owned thing — never
+identity — whether two names denote the same reference object — never
 contents.

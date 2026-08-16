@@ -1,7 +1,6 @@
-//! Which documents the guards hold to the language, and in which of
-//! the two senses.
+//! Which documents the guards hold to the language, and in which sense.
 //!
-//! A list rather than a directory, because `docs/` holds both kinds
+//! A list rather than a directory, because `docs/` holds several kinds
 //! and only one of them is bound by the strict reading.
 //!
 //! It lives in a file of its own because two tools read it and neither
@@ -15,11 +14,9 @@
 //! runs its tests from — the same assumption `tools/grammar.zig`
 //! makes.
 
-/// Every document, in one present-tense catalogue.  Each describes the
-/// language as it is now: a reader may paste any Luce in them into a
-/// file and have it work today, and their prose may not spell a retired
-/// type name.  There is no frozen tier and no exemption — the history
-/// and the rationale live in the commit log, not in a reference.
+/// Current references and working agreements. A reader may paste any
+/// Luce in these documents into a file and have it work today, and their
+/// prose may not spell a retired type name.
 pub const living = [_][]const u8{
     "docs/LANGUAGE.md",
     "docs/MEMORY.md",
@@ -33,15 +30,11 @@ pub const living = [_][]const u8{
     "docs/SOFTWARE_DESIGN.md",
     "docs/INTERFACES.md",
     "docs/UX_UI_DESIGN.md",
-    "docs/TERMUI_EDITOR_REWRITE.md",
-    "docs/ROADMAP.md",
     "docs/RETURNS.md",
     "docs/NUMERICS.md",
     "docs/STRINGS.md",
     "docs/FAILURE.md",
-    "docs/V2.md",
     "docs/TYPES.md",
-    "docs/VECTOR.md",
     "docs/ARGS.md",
     "docs/VISIBILITY.md",
     "docs/BITWISE.md",
@@ -57,24 +50,35 @@ pub const living = [_][]const u8{
     "docs/TERMUI.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
-    "docs/GENERICS.md",
     "docs/README.md",
     "README.md",
     "CLAUDE.md",
 };
 
-/// No second tier: kept as an empty list so the `all` seam and the
-/// guards that slice it read unchanged.
-pub const records = [_][]const u8{};
+/// Target designs and sequenced work. Future syntax belongs in `text`
+/// fences so nobody can mistake it for a feature the compiler accepts.
+/// Any `luce` fences these documents do contain are still checked.
+pub const plans = [_][]const u8{
+    "docs/V2.md",
+    "docs/ROADMAP.md",
+    "docs/GENERICS.md",
+    "docs/VECTOR.md",
+};
+
+/// Completed design records. These may use `luce historical` to quote
+/// syntax from the point in time they record.
+pub const records = [_][]const u8{
+    "docs/TERMUI_EDITOR_REWRITE.md",
+};
 
 /// Every catalogued document.
-pub const all = living ++ records;
+pub const all = living ++ plans ++ records;
 
 // ---------------------------------------------------------------------------
 // The pin: this list and `docs/README.md` are one catalogue
 // ---------------------------------------------------------------------------
 //
-// `docs/README.md` is the human face of the two arrays above — one
+// `docs/README.md` is the human face of the arrays above — one
 // table per sense, one row per file.  Nothing made them agree, and they
 // drifted: three files sat under the wrong heading and five were in
 // neither catalogue at all, which is how a reader learned that
@@ -86,14 +90,15 @@ pub const all = living ++ records;
 const std = @import("std");
 const testing = std.testing;
 
-/// The two senses a document is written in, and the two headings
+/// The senses a document is written in, and the headings
 /// `docs/README.md` sorts them under.
-const Sense = enum { living, record };
+const Sense = enum { living, plan, record };
 
 /// Which sense a document is catalogued in, or `null` for one that is
 /// in neither array.
 fn senseOf(path: []const u8) ?Sense {
     for (living) |one| if (std.mem.eql(u8, one, path)) return .living;
+    for (plans) |one| if (std.mem.eql(u8, one, path)) return .plan;
     for (records) |one| if (std.mem.eql(u8, one, path)) return .record;
     return null;
 }
@@ -106,7 +111,8 @@ const index_page = "docs/README.md";
 /// Reads `docs/README.md` and answers, for each row, which heading it
 /// was written under.  A row is a table line whose first cell is a
 /// markdown link — `| [NAME.md](NAME.md) | … |` — and the heading it
-/// belongs to is whichever `## Current` / `## Decision records` last
+/// belongs to is whichever `## Current` / `## Plans` /
+/// `## Decision records` last
 /// went by.  Caller owns the map and its keys.
 fn readIndexRows(
     gpa: std.mem.Allocator,
@@ -126,7 +132,14 @@ fn readIndexRows(
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "## ")) {
-            heading = if (std.mem.startsWith(u8, line, "## The documents")) .living else null;
+            heading = if (std.mem.startsWith(u8, line, "## Current"))
+                .living
+            else if (std.mem.startsWith(u8, line, "## Plans"))
+                .plan
+            else if (std.mem.startsWith(u8, line, "## Decision records"))
+                .record
+            else
+                null;
         }
 
         const sense = heading orelse continue;

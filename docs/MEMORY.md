@@ -1,121 +1,170 @@
-# The memory model
+# Memory — current ARC transition and final contract
 
-How Luce manages memory, and the source of truth for it.
+This document separates what the compiler proves today from the memory model
+Luce is committed to finishing. That distinction is load-bearing: source-level
+manual ownership has been removed, but last-release reclamation is not yet
+complete on every path. The ordered completion work is Phase 0 of
+[ROADMAP.md](ROADMAP.md).
 
-## What Luce is
+## The language contract
 
-**A compiled, statically typed Python.** Familiar indentation-based
-syntax, native AOT speed through the LLVM backend, and **memory you
-never think about.** The moat is that combination — the joy of Python,
-the speed of a compiled language, and a surface small enough to hold in
-your head.
+Every runtime value is either copied as a value or shared as a reference:
 
-## The model, in one paragraph
+| Kind | Current and planned examples | Assignment and passing | Completed lifetime rule |
+|---|---|---|---|
+| Value | numbers, `bool`, `string`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
+| Reference | `list`, `map`, `array`, `builder`; future `class` and closure environments | retain and share one identity | last strong release destroys the object |
+| Resource reference | `file`, `task`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
 
-Every type is one of two kinds. A **value type** — the scalars, `string`,
-and a plain `struct` — copies when assigned or passed, lives inline, and
-costs nothing at runtime. A **reference type** — a `class`, and the
-containers `list`/`map`/`array`/`builder` — is a shared,
-reference-counted object: assigning or passing it shares the same object,
-and it is freed automatically when the last reference goes away. You
-choose value or reference with one keyword (`struct` vs `class`), exactly
-as Swift and C# do, and you get value performance where you want it and
-reference ergonomics where you need it. There is no ownership verb of any
-kind.
+There are no source-level retain, release, move, clone, borrow, or free
+operations. A completed compiler derives every retain and release from the
+static type and control-flow edge.
 
-## The decisions
+The sentence users should eventually need is:
 
-- **D1 — Two type kinds: value and reference.** `struct` is a value type
-  (copy semantics, inline, no runtime cost). `class` is a reference type
-  (shared identity, heap, automatically freed). The built-in containers
-  (`list`, `map`, `array`, `builder`) and resources (`file`, `task`) are
-  reference types. This is the Swift/C# split, and it is the whole answer
-  to "easiest *and* fast": values stay fast, references stay easy.
+> Values copy. References share identity. ARC keeps references alive. Weak
+> breaks cycles. Resources close at the last strong release. Workers never
+> share object identity.
 
-- **D2 — Automatic Reference Counting.** Reference objects carry a count;
-  the compiler inserts retain/release; the object is freed at the last
-  release. **Deterministic**, so a `file`/`task` closes the instant its
-  last reference dies — no finalizer roulette, no GC pause. ARC over a
-  tracing GC specifically because Luce has resources whose cleanup must be
-  prompt, and because deterministic destruction is simpler to reason
-  about than collection timing.
+## What is implemented now
 
-- **D3 — `weak` for cycles.** ARC's one genuine cost: a reference cycle
-  leaks. A `weak` reference does not retain, and reads as `T?` (it may
-  have gone). This is the only new concept the model asks a programmer to
-  learn. Cycles are rare enough (parent↔child back-edges) that `weak` is
-  a footnote, not a daily tax.
+The current tree has the structural pieces of ARC:
 
-- **D4 — Mutation is ordinary; interfaces dispatch to writing methods.**
-  A method may mutate its receiver with no ceremony. An `interface`
-  method may mutate its receiver, because an interface value is a
-  reference. A reference passed to a function is the same object the
-  caller holds; mutating it is visible to the caller, as everyone
-  expects.
+- runtime reference counts and `retain`/`release` operations;
+- MIR instructions verified and executed by both the interpreter and LLVM
+  path;
+- shared reference behavior for ordinary assignment and calls;
+- retain/release emission across many locals, replacements, returns,
+  aggregates, optionals, errors, loops, and container stores; and
+- a zero-live-object gate for ordinary differential specs.
 
-- **D5 — What references make ordinary.** Because a reference is shared
-  and a `class` can be mutated through any reference to it, the
-  graph-shaped, shared, retained things that are Luce's whole point are
-  ordinary: **capturing closures** (a closure holds references, which ARC
-  keeps alive), **retained mutable trees** (a window owns a tree of
-  `class` nodes), **shared mutable state** (a `class` model referenced by
-  many views), **delegates and callbacks**, and the **SwiftUI-shaped
-  UI**. The UI framework is easy *and* beautiful, which is the proof the
-  model is right.
+For example, both names below observe one list:
 
-- **D6 — Concurrency keeps its safety cheaply.** `spawn` runs a function
-  on a worker with its own runtime; **value types cross a worker boundary
-  by copy, and reference types do not cross at all** — a `class` or
-  container stays in the runtime that made it. So there is no shared
-  mutable state *between* workers by construction, even though there is
-  shared mutable state *within* one. No data races across threads, no
-  cost to single-threaded UI code. Locks, atomics, and thread identity
-  remain deliberately absent; intra-worker sharing across threads, if ever
-  wanted, is an actor-style addition priced separately.
+```luce
+func main():
+    let first = [1, 2]
+    let second = first
+    second.append(3)
+    print(string(len(first)))
+```
 
-- **D7 — `new` and literals make reference objects; assignment shares.**
-  `let a = SomeClass(...)` makes one object; `let b = a` makes `b` refer
-  to the *same* object; mutating through `b` is seen through `a`. A value
-  `struct` still copies on `let b = a`. This is the one mental model every
-  mainstream language shares, and it is what "familiar" means.
+A struct remains a value when it contains a reference. Copying the struct
+copies value fields and makes its reference fields name the same objects.
+Current common-path specs exercise that behavior on both engines.
 
-## Value or reference, at a glance
+## What is not implemented completely
 
-| Kind | Types | `let b = a` | Freed |
-| --- | --- | --- | --- |
-| **Value** | scalars, `string`, `struct`, `enum` | copies; `a` and `b` are independent | with the scope that holds it |
-| **Reference** | `class`, `list`, `map`, `array`, `builder`, `file`, `task` | shares; `a` and `b` name one object | at the last reference |
+The repository itself records these open gaps:
 
-A `weak` reference is the one exception on the reference side: it names an
-object without retaining it, and reads as `T?` so a read after the object
-is gone is `none`, never a dangling pointer.
+- Four runtime reclamation tests are skipped behind `sub_cut_b_pending`.
+- Four byte/zip file tests are skipped behind `resource_close_pending`
+  because function-exit cleanup does not reliably close the handle yet.
+- The synthesized Luce test entry and the adventure specification relax their
+  zero-census assertion around remaining container reclamation gaps.
+- A bound method owns its function-value storage but only borrows references
+  inside its copied struct receiver. It can therefore outlive the binding that
+  keeps those references alive and reach `use_after_free`.
+- Current interfaces are represented as bound method values and inherit that
+  carrying-receiver lifetime restriction.
+- A list slice and `map.values()` recursively clone copyable reference
+  elements. `array.fill` refuses reference elements. Those are remaining
+  single-owner rules, not the final ARC collection semantics.
+- Passing a container graph to `spawn` can invalidate the caller's reference;
+  even without caller reuse, the minimal transfer reports a leaked object.
+- The module damage hardening test is skipped around two decoder/verifier
+  panic paths; [MISSING.md](MISSING.md) tracks the bug.
 
-## What is preserved
+Until Phase 0 closes these gaps, code must not rely on a file closing or an
+unfinished task joining at the exact last-release point. Runtime teardown is a
+backstop, not proof that mid-run ARC is complete. Public documentation must
+not describe the implementation as release-ready ARC.
 
-The memory model is the whole of the difference from a plain typed Python;
-everything else in the language stands on its own:
+## Completed ARC behavior
 
-- The **type system** — the numeric ladder (`docs/TYPES.md`,
-  `docs/NUMERICS.md`), `enum` (`docs/ENUMS.md`), `union`
-  (`docs/UNION.md`), `interface` (`docs/INTERFACES.md`), the storable
-  function values (`docs/FUNCTIONS.md`), and generics-to-come
-  (`docs/GENERICS.md`).
-- The **pipeline** — lexer, parser, semantics, HIR, MIR, the LLVM
-  backend, the serialized module (`docs/PIPELINE.md`, `docs/CODEGEN.md`).
-- The **two-engine differential guarantee** — the interpreter oracle and
-  the compiled path run every spec and are compared (`docs/ENGINE.md`).
-  ARC is enforced identically on both.
-- **Failure handling** (`T!`/`try`/`catch`), **modes**, **visibility**,
-  **bitwise**, **packages**, the **host boundary**, and the **std
-  library** shape.
+When Phase 0 exits, the following rules hold without qualification.
 
-## Why value + reference + ARC
+### Calls, returns, and replacement
 
-It is the proven way (Swift, C#) to have value performance *and* reference
-ergonomics. It keeps the language **small** — one keyword chooses the
-kind, and there is nothing else to learn but `weak`. It keeps the syntax
-**familiar** — reference semantics is what every easy language does. And
-it is exactly what "**Python, but compiled, typed, and fast**" needs to be
-true: the graph-shaped programs people actually write — UIs, editors,
-ASTs — are ordinary, while the tight loops stay on inline values at C
-speed.
+Passing a value gives the callee a value copy. Passing a reference retains the
+same object for the callee's lifetime. Returning follows the same type rule.
+
+Replacing a `var` releases its old reference before storing the new one.
+Temporaries release at the end of their statement unless a longer-lived place
+retains them. `return`, `break`, `continue`, and recoverable-error propagation
+release every local they leave behind.
+
+The optimizer may remove a retain/release pair only when doing so cannot
+change destruction order, resource behavior, traps, or another observable
+result.
+
+### Aggregates and collections
+
+Copying a value aggregate recursively copies value storage and retains every
+reference field. Storing a reference in a field, optional, union payload,
+list, map, or array retains it. Removing or replacing that place releases it.
+
+A list slice and `map.values()` create a new outer list. Value elements copy;
+reference elements retain and remain shared. There is no universal graph clone
+operator. The worker boundary is the deliberate exception: it recursively
+rebuilds a permitted graph in another runtime because identity cannot be
+shared between workers.
+
+### Resources
+
+`file` and `task` use the same strong count as other references. The last file
+release closes its host handle. The last release of an unfinished task joins
+its worker. `task.wait()` observes the result once; task aliases share that
+one-shot state.
+
+### Bound methods, interfaces, and closures
+
+A bound method copies its value receiver and retains reference fields in that
+copy. The function value can therefore be returned or stored independently of
+the original binding. A completed interface existential owns one payload and
+uses metadata plus a witness table; it follows the payload's value/reference
+semantics without duplicating the receiver once per method.
+
+Capturing closure environments are ARC objects. Immutable value captures are
+snapshots, mutable local captures use a shared cell, and reference captures
+are strong unless a capture list says `weak` or requests an explicit snapshot.
+
+## Workers
+
+Each `spawn` creates a runtime and heap of its own. Scalars and value fields
+copy directly. Permitted container graphs are rebuilt recursively in the
+receiving runtime, preserving relationships within the copied graph but
+sharing no object identity with the sender.
+
+Resources and function values are refused transitively. Future classes, weak
+references, and capturing closure environments are non-sendable in this
+milestone. That boundary makes ordinary data races over Luce objects
+unrepresentable without introducing a second ownership language.
+
+## Cycles and weak references
+
+ARC does not collect a strong cycle. A recursive struct can already form one
+through a container, although the current language has no `weak` syntax to
+break it. The target weak storage therefore covers built-in ARC objects as
+well as classes and reference-backed interface values. Resources and function
+values stay strong-only in the first model. Classes and capturing closures
+make back-edges common, so `weak` must ship before those features are called
+complete. Debug leak reporting must make an accidental surviving cycle
+diagnosable rather than silently treating it as collection.
+
+## Proof required to call ARC complete
+
+- No feature-related test skip or relaxed leak assertion remains.
+- Every normal differential spec ends with zero live objects.
+- Direct runtime tests cover exact reference counts and destruction order.
+- Files close and unfinished tasks join exactly once at the last release.
+- Success, error, trap, allocation rollback, worker transfer, and teardown all
+  release the correct graph on both engines.
+- A worker argument copy leaves the caller graph live and independently
+  mutable, with zero leaked objects across both runtimes.
+- Bound methods and interface values keep carrying receivers alive.
+- Slices of lists, map value lists, and array fill obey ordinary ARC element
+  semantics.
+- The damaged-module corpus is total: reject or run cleanly, never panic.
+
+A change to retain/release instructions or type tags bumps the module format.
+A change to a published host-table representation bumps the host ABI.

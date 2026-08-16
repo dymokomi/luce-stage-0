@@ -1,94 +1,157 @@
 # Interfaces
 
-An interface is a named call contract. It lets a function accept several
-different structs through one type while keeping the implementation choice
-with the value that arrives.
+This is the current interface contract. The owned existential representation
+and mutable class dispatch planned for the ARC language are separate work in
+[ROADMAP.md](ROADMAP.md).
 
-Interfaces are nominal: a struct must list the interface explicitly. A
-matching set of methods is not enough on its own.
+An interface is a nominal set of method requirements. A struct opts in by
+listing the interface and must implement the complete contract. A matching
+struct that does not list the interface does not conform.
 
-```text
-interface Drawable:
-    func draw(scale: long) -> long
+```luce
+interface UIElement:
+    func render(value: long) -> long
+    func label() -> string
 
-struct Button: Drawable:
-    label: string
+struct Button: UIElement:
+    text: string
 
-    func draw(scale: long) -> long:
-        return scale + 1
+    func render(value: long) -> long:
+        return value + 1
+
+    func label() -> string:
+        return self.text
+
+func describe(item: UIElement) -> string:
+    return item.label() + ":" + string(item.render(41))
+
+func main():
+    print(describe(Button(text = "ok")))
 ```
 
-`Button` can now be passed anywhere `Drawable` is expected:
-
-```text
-func paint(item: Drawable) -> long:
-    return item.draw(41)
-```
-
-The conversion happens when a concrete struct lands in an interface-typed
-place. There is no cast syntax and no structural or runtime conformance
-check.
+The conversion from `Button` to `UIElement` happens when the concrete value
+lands in an interface-typed place. There is no cast syntax, structural
+conformance, or runtime “does this type conform?” query.
 
 ## Contract matching
 
-The interface and implementation must agree on:
+For each required method, the witness must agree on:
 
-- method name and instance status;
-- parameter count and types; and
-- return count and types.
+- the method name and instance status;
+- the number, order, names, and types of explicit parameters;
+- the number and types of returned values; and
+- the failure direction.
 
-A concrete struct may have additional methods; they are not part of the
-interface. A method reached through an interface may mutate its receiver:
-an interface value is a reference (see `docs/MEMORY.md`), so dispatch runs
-the concrete method with no restriction on what it writes.
+A concrete struct may define additional methods. A static function cannot
+satisfy an instance requirement. Interface requirements do not declare
+default arguments.
 
-Failure effects are directional. A non-fallible implementation may satisfy a
-fallible requirement, because it is safe for a caller to write `try` when no
-error will be raised. A fallible implementation may not satisfy a
-non-fallible requirement.
+Failure matching is directional. A non-fallible witness may satisfy a
+fallible requirement because a caller may safely write `try` around a call
+that never raises. A fallible witness cannot satisfy a non-fallible
+requirement.
 
-Interfaces in this release contain methods only. They do not inherit from
-other interfaces or expose fields. A method may return a multi-value shape
-using the same \`(T, U)\` syntax as an ordinary function; callers receive it
-with a destructuring \`let\`, \`var\`, or assignment:
+Multiple methods occupy distinct dispatch slots. Multi-value answers use the
+ordinary return-shape rules and must be received by a destructuring `let`,
+`var`, or assignment:
 
-\`\`\`text
+```luce
 interface Measured:
     func span(value: long) -> (long, long)
+
+struct Range: Measured:
+    width: long
+
+    func span(value: long) -> (long, long):
+        return value, value + self.width
 
 func total(item: Measured) -> long:
     let low, high = item.span(10)
     return low + high
-\`\`\`
 
-The shape cannot be used as one scalar expression or passed as one argument.
-
-## Heterogeneous collections
-
-`list(I)` and `map(K, I)` hold interface values, so each element may come
-from a different conforming struct:
-
-```text
-var items = new list(Drawable)
-items.append(Button(label = "one"))
-items.append(OtherDrawable(...))
-
-var named = new map(string, Drawable)
-named["button"] = Button(label = "one")
+func main():
+    print(string(total(Range(width = 7))))
 ```
 
-Reading an element gives back `I`, and dispatch uses the implementation that
-belonged to that element. The same rule applies to arrays and struct fields.
+## Read-only dispatch is a current limitation
 
-An interface value is a reference to the conforming value it was made from,
-paired with its dispatch information. It can be stored in a local, a struct
-field, a list, or a map and kept for as long as you like: ARC keeps the
-underlying object alive while any interface — or any other reference — names
-it, and frees it at the last release. A function may return a concrete value
-as an interface, because the reference outlives the frame that produced it.
+A writing struct method cannot satisfy an interface requirement today. The
+compiler infers whether a method writes `self`; conformance rejects a writer
+with `luce.sema.interface`.
 
-The executable specification is
-[`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig),
-which runs every example through both the interpreter and the compiled
-backend. Negative cases live in
-[`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig).
+This restriction is not the target design. It exists because the current
+interface representation binds value receivers into dispatch fields. The
+roadmap replaces that representation with one owned payload plus metadata and
+a witness table. Only after that change may a value existential mutate its
+boxed copy and a class existential mutate its shared object safely.
+
+Mutation of a reference passed as an ordinary parameter is different. A
+read-only struct witness may still mutate a `list`, `map`, or other reference
+object that it receives or reaches through a field; that does not write the
+struct receiver itself.
+
+## Storage and heterogeneous collections
+
+Interface values may be local variables, return values, optional values,
+struct fields, and elements of lists, maps, and arrays. A value-only concrete
+receiver is self-contained. A receiver with a reference field is subject to
+the current bound-method gap: its interface dispatch values alias that graph
+without retaining it, so another live value must keep the graph alive.
+
+```luce
+interface Named:
+    func name() -> string
+
+struct First: Named:
+    marker: long
+
+    func name() -> string:
+        return "first"
+
+struct Second: Named:
+    marker: long
+
+    func name() -> string:
+        return "second"
+
+func main():
+    var values = new list(Named)
+    values.append(First(marker = 1))
+    values.append(Second(marker = 2))
+    print(values[0].name())
+    print(values[1].name())
+```
+
+The same collection may therefore contain different concrete structs. A
+struct may list more than one interface, and each conversion selects the
+contract requested by the destination type.
+
+## Runtime shape today
+
+The current implementation lowers an interface to a hidden value layout of
+bound function values, one per method. A bound value carries the concrete
+struct receiver snapshot, but current function-value release walks do not own
+references inside that snapshot. Copying the interface copies the value layout
+and does not repair that lifetime restriction.
+
+This representation dispatches correctly for the proved lifetime but scales
+receiver storage with method count, is not independently safe for a carrying
+receiver, and cannot give mutable dispatch the semantics wanted for classes.
+It is explicitly scheduled for replacement, not documented as the final ABI.
+
+## Deliberately absent today
+
+- interface fields and property requirements;
+- default method bodies;
+- interface inheritance or composition syntax;
+- associated types;
+- runtime casting;
+- class-only interfaces; and
+- generic constraints.
+
+The executable positive specification is
+[`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig).
+Conformance and call-site refusals live in
+[`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig). Any new
+observable interface rule belongs in those differential specifications before
+it is described here.

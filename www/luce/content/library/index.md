@@ -8,7 +8,8 @@ maintained `termui` package is documented here because it is a useful example
 of that second kind.
 
 Each module follows the same language rules as application code. Containers
-have scope ownership, arithmetic is checked, and a host-facing module is
+are shared references under the current ARC transition, arithmetic is checked,
+and a host-facing module is
 available only when the program has a host. `std.paths`, `std.math`,
 `std.strings`, `std.lists`, `std.json`, and the byte-only parts of `std.zip`
 are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`, and the
@@ -25,7 +26,7 @@ fact at their boundary rather than making every application know the OS API.
 |---|---|
 | [`std.math`](/library/math/) | scalar math, array reductions, and a seeded generator |
 | [`std.strings`](/library/strings/) | search, splitting, formatting, characters, and UTF-8 bytes |
-| [`std.files`](/library/files/) | text, bytes, directories, and scope-owned file handles |
+| [`std.files`](/library/files/) | text, bytes, directories, and shared file references |
 | [`std.lists`](/library/lists/) | stable comparator sorting for lists |
 | [`std.paths`](/library/paths/) | joining and inspecting path text without touching the host |
 | [`std.os`](/library/os/) | memory, processor, shell, and terminal services |

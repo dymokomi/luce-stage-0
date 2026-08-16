@@ -20,8 +20,9 @@ neither element precedes the other, their original order is preserved. Empty
 and one-element lists are unchanged.
 
 The comparator can be a named function, a static function, or a capture-free
-lambda. Its parameter type is the list's element type. The comparator is
-borrowed for the call; sorting does not change ownership of object elements.
+lambda. Its parameter type is the list's element type. Sorting calls the
+function during the operation and only rearranges the list's existing
+elements; reference elements keep their identity.
 
 ```luce run
 import std.lists

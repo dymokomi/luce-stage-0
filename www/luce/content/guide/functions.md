@@ -114,7 +114,8 @@ func main():
 ```
 
 When the receiver contains a container, the receiver's value copy still
-refers to that container. The bound method therefore borrows the object:
+refers to that container. Current bound values do not retain that reference,
+so the original receiver must remain alive for as long as the function value:
 
 ```luce run
 struct Bag:
