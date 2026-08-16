@@ -453,14 +453,34 @@ test "a task is consumed exactly once through a union optional field" {
     , "4\n");
 }
 
-test "equal constant slice bounds construct an empty resource list without copying" {
+test "a list slice retains resource elements after the source releases them" {
     try agree.prints(
+        \\func work() -> long:
+        \\    return 17
+        \\
         \\func main():
         \\    var running = new list(task(long))
-        \\    let empty = running[0:0]
-        \\    print(string(len(empty)))
+        \\    running.append(spawn work())
+        \\    let kept = running[0:1]
+        \\    running.clear()
+        \\    print(string(kept[0].wait()))
         \\
-    , "0\n");
+    , "17\n");
+}
+
+test "map values retain resource elements after the map releases them" {
+    try agree.prints(
+        \\func work() -> long:
+        \\    return 23
+        \\
+        \\func main():
+        \\    var running = new map(string, task(long))
+        \\    running["job"] = spawn work()
+        \\    let kept = running.values()
+        \\    running.clear()
+        \\    print(string(kept[0].wait()))
+        \\
+    , "23\n");
 }
 
 test "tasks in a list are joined in the order the list holds them" {

@@ -633,21 +633,7 @@ pub fn prints(source: []const u8, expected: []const u8) !void {
 pub fn printsGiven(source: []const u8, provided: Provided, expected: []const u8) !void {
     var session = try compare(source, provided);
     defer session.deinit();
-    switch (session.end) {
-        .finished => {},
-        .trapped => |code| {
-            std.debug.print("expected a finished run, got trap {s}\n", .{@tagName(code)});
-            return error.TestUnexpectedResult;
-        },
-        .errored => |code| {
-            std.debug.print("expected a finished run, got error {s}\n", .{@tagName(code)});
-            return error.TestUnexpectedResult;
-        },
-        .exited => |status| {
-            std.debug.print("expected a finished run, got exit({d})\n", .{status});
-            return error.TestUnexpectedResult;
-        },
-    }
+    try expectClean(&session);
     try testing.expectEqualStrings(expected, session.printed());
 }
 
