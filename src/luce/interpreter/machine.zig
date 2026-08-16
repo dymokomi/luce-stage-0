@@ -15,7 +15,7 @@
 //! a second copy here would be a second place for the same bug.
 
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const mir = @import("../mir.zig");
 const interpreter = @import("../interpreter.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
@@ -1169,7 +1169,7 @@ pub const Machine = struct {
                         //
                         // Emptying it is exactly what the compiled
                         // path does before it returns `errored`
-                        // (`08_llvm/lower.zig`'s `leaveErrored`), and
+                        // (`codegen/lower.zig`'s `leaveErrored`), and
                         // the same shape: the tag it had, with no
                         // storage under it, which every release reads
                         // as nothing to free.

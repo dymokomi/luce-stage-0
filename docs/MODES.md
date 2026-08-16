@@ -122,18 +122,18 @@ byte spans and stable codes in both modes, and render as
 
 ## The machinery, file by file
 
-- `src/luce/04_semantics/` — the builder stamps every emitted
+- `src/luce/semantics/` — the builder stamps every emitted
   instruction with the current statement's offset; one post-pass per
   function converts offsets to `line:column` through a per-module
   line-start table (built once, binary-searched).
-- `src/luce/06_mir/` — `Origin`, `Function.origins`/`source`, the
+- `src/luce/mir/` — `Origin`, `Function.origins`/`source`, the
   verifier's all-or-nothing length check, and `strip()`.
-- `src/luce/06_mir/module.zig` — origins ride in the function record;
+- `src/luce/mir/module.zig` — origins ride in the function record;
   `--release` writes empty tables.
 - `src/luce/runtime/trace.zig` — the trace compiled code carries: the
   C-layout tables, the unwind recorder, and the one report that
   carries the whole trap.
-- `src/luce/08_llvm/lower.zig` — emits those tables as constant data
+- `src/luce/codegen/lower.zig` — emits those tables as constant data
   and calls `luce_rt_unwound` on every unwinding edge.
 - `src/apps/report.zig` — renders the trace, capped at 12 printed
   frames (`max_printed_frames`), for loom and for a standalone binary

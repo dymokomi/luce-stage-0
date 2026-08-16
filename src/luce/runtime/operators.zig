@@ -255,7 +255,7 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         // anything reaches here — wherever a comparison *reaches* one,
         // through a struct field and through a searched element as well
         // as at the top level, which is one walk shared by `==`, `find`
-        // and `contains`.  `06_mir/verify.zig` refuses the same shape in
+        // and `contains`.  `mir/verify.zig` refuses the same shape in
         // a decoded module, which is what makes this arm unreachable
         // rather than merely unreached.
         .function => return false,
@@ -642,7 +642,7 @@ fn narrowFloat(held: f64, to: value.Tag) Value {
 /// ratified wins.
 ///
 /// The range check is the same one in the same three places — here,
-/// the constant folder, and `08_llvm/lower.zig` — because a
+/// the constant folder, and `codegen/lower.zig` — because a
 /// conversion that disagrees at the boundary is a different language.
 /// It runs **after** the rounding, on what rounding produced: NaN and
 /// the infinities survive `@round` unchanged so the one check still
@@ -759,7 +759,7 @@ pub fn extremum(wants_minimum: bool, left: Value, right: Value) Value {
 /// the language.  The rule: a NaN loses to any number, an ordered pair
 /// answers by comparison, and a tie orders the signs (`-0.0` below
 /// `+0.0`), so `min` is negative when either operand is and `max` only
-/// when both are.  `emitExtremum` in `08_llvm/lower.zig` lowers to
+/// when both are.  `emitExtremum` in `codegen/lower.zig` lowers to
 /// exactly this; the spec "min and max reductions over an array agree,
 /// signed zeros and all" holds the two to it.
 fn pick(wants_minimum: bool, left: anytype, right: @TypeOf(left)) @TypeOf(left) {

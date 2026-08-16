@@ -2,21 +2,21 @@
 //! diagnostics out.
 //!
 //! This is the file to read first.  `compileProject` below walks one
-//! source file through every stage in order, and each stage is a
-//! numbered folder beside this one, so the pipeline is legible from a
-//! directory listing:
+//! source file through every stage in order.  Each stage is named for
+//! its responsibility; this list and the calls in `compileProject`
+//! make their order explicit:
 //!
-//!   01_source/     load        bytes            -> source text
-//!   02_lex/        lex         source text      -> tokens
-//!   03_parse/      parse       tokens           -> AST
-//!   04_semantics/  resolve, type-check, record
+//!   source/     load        bytes            -> source text
+//!   lex/        lex         source text      -> tokens
+//!   parse/      parse       tokens           -> AST
+//!   semantics/  resolve, type-check, record
 //!                              AST              -> typed tree
-//!   05_hir/        lower       typed tree       -> recorded emissions
-//!   06_mir/        build       recorded         -> verified MIR
-//!   07_optimize/   optimize    MIR              -> smaller MIR
-//!   08_llvm/       lower       MIR              -> LLVM IR -> object
+//!   hir/        lower       typed tree       -> recorded emissions
+//!   mir/        build       recorded         -> verified MIR
+//!   optimize/   optimize    MIR              -> smaller MIR
+//!   codegen/    lower       MIR              -> LLVM IR -> object
 //!
-//! One irregularity, argued in `04_semantics/declarations.zig`: stages
+//! One irregularity, argued in `semantics/declarations.zig`: stages
 //! 4 and 5 share a driver — `semantics.analyze` checks and records
 //! every body, then hands each recorded tree to `hir.lower`, because
 //! only the analyzer holds the settled declaration tables lower reads.
@@ -25,21 +25,21 @@
 //! Stage 8 is not on this path: `compileProject` stops at verified,
 //! optimized MIR, which is the front end's whole product and what
 //! serializes as a `.lcm`.  `luce build --emit=object|library|exe`
-//! takes that same program on to `08_llvm`, which is where it becomes
+//! takes that same program on to `codegen`, which is where it becomes
 //! machine code.
 //!
 //! The compiler accepts the root's bytes plus a `Loader`, never a
 //! path: opening files is the host's, and which name resolves to what
-//! is stage 1's (`01_source`).  Stage 1 registers every module it
+//! is stage 1's (`source`).  Stage 1 registers every module it
 //! loads, so a diagnostic knows which file its span indexes and a
 //! failure renders with a path, a line, and a column.  Every
 //! successful compile passes the MIR verifier before it is returned.
 
 const std = @import("std");
-const source_mod = @import("01_source.zig");
-const semantics = @import("04_semantics.zig");
-const mir = @import("06_mir.zig");
-const optimize = @import("07_optimize.zig");
+const source_mod = @import("source.zig");
+const semantics = @import("semantics.zig");
+const mir = @import("mir.zig");
+const optimize = @import("optimize.zig");
 const types = @import("support/types.zig");
 const diagnostics_mod = @import("support/diagnostics.zig");
 const module_graph = @import("compile/modules.zig");
@@ -50,7 +50,7 @@ const Diagnostics = diagnostics_mod.Diagnostics;
 pub const Error = error{OutOfMemory};
 
 /// How a host reaches the source of what a program imports.  The seam
-/// belongs to stage 1 — `01_source/load.zig` decides what is asked of
+/// belongs to stage 1 — `source/load.zig` decides what is asked of
 /// it and in what order — and is re-exported here because filling it
 /// in is part of calling the compiler.
 pub const Loader = source_mod.Loader;
@@ -148,7 +148,7 @@ pub fn compileProject(
     }
 
     // Stage 8 is the caller's to ask for: `luce build --emit=exe`
-    // takes this same program on to `08_llvm`.
+    // takes this same program on to `codegen`.
     diagnostics.deinit();
     return .{ .success = program };
 }

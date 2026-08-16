@@ -15,7 +15,7 @@
 //!
 //! This is the reference host behind stage 1's `Loader` seam, and it
 //! carries the two obligations the compiler cannot check for itself
-//! (`01_source/load.zig`):
+//! (`source/load.zig`):
 //!
 //!   * **the match is exact.**  A case-insensitive filesystem — the
 //!     macOS default, Windows, a case-folding ext4 directory — will

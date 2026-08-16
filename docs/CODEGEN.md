@@ -20,13 +20,13 @@ select.  There is nothing to select.
 ## The pipeline
 
 ```text
-FILE.luc → 02_lex → 03_parse → 04_semantics → typed MIR → 07_optimize
+FILE.luc → lex → parse → semantics → typed MIR → optimize
                                              ↓
-                        08_llvm/builder (vendored)  (08_llvm/lower.zig)
+                        codegen/builder (vendored)  (codegen/lower.zig)
                                              ↓
                                         LLVM bitcode
                                              ↓
-                     libLLVM: parse, default<O3>, emit  (08_llvm/emit.zig)
+                     libLLVM: parse, default<O3>, emit  (codegen/emit.zig)
                                              ↓
                                   FILE.o  (relocatable object)
                                              ↓
@@ -157,7 +157,7 @@ has applied, so the machine's name is a run of bytes inside the tag
 artifact — and it is stale by `generator` anyway, since no compiler
 that emits the section shares an identity with one that did not.
 
-**The tag is `08_llvm/artifact.zig` and not `abi.zig`**, and the split
+**The tag is `codegen/artifact.zig` and not `abi.zig`**, and the split
 is the point: `abi.zig` is what generated code and a host agree on,
 while the tag is what a *loader* reads before it can believe any of
 that — including which host ABI the code was generated against, which
@@ -227,7 +227,7 @@ free.
 What the number covers, all by content and never a clock:
 
 - **The lowering and the emitter** — every `.zig` under
-  `src/luce/08_llvm/`, plus the barrel.
+  `src/luce/codegen/`, plus the barrel.
 - **`libluce_rt`** — every `.zig` under `src/luce/runtime/`, plus the
   barrel, since `cc` links it into the artifact.
 - **How those are compiled** — the Zig version, the optimize mode, the
@@ -308,11 +308,11 @@ a single generated instruction.
 
 What makes the split possible is that almost nothing needs libLLVM.
 `lower.zig` builds LLVM IR with the vendored builder
-(`08_llvm/builder/`), which is pure Zig and links nothing; the
+(`codegen/builder/`), which is pure Zig and links nothing; the
 artifact tag names its machine with
 `artifact.machine` rather than an LLVM triple, so a loader can check it
 with no library at all.  Exactly one file calls the C API —
-`08_llvm/emit.zig` — and it is its own build module (`emit`) that only
+`codegen/emit.zig` — and it is its own build module (`emit`) that only
 the `luce` executable imports.  `otool -L build/loom` is the check.
 
 - loom finds the compiler **beside its own executable first, then on
@@ -326,7 +326,7 @@ the `luce` executable imports.  `otool -L build/loom` is the check.
   module reaches the compiler as a `.lcm` — loom writes
   `NAME.lc.<pid>.lcm` beside the artifact it is about to build and
   removes it again.  Re-encoding a decoded module is byte-identical
-  (`06_mir/module.zig`), so the hash matches by construction.  `luce
+  (`mir/module.zig`), so the hash matches by construction.  `luce
   build`, `luce check` and `luce ir` all accept a `.lcm` for the same
   reason, and that front-end/back-end split is a capability in its own
   right.  Nothing writes one as a deliverable: there is no
@@ -355,7 +355,7 @@ hand-written backends cost:
   `.unsupported` naming the tag, so a gap is a message and never wrong
   code.
 
-**IR construction uses the vendored builder** — `08_llvm/builder/`,
+**IR construction uses the vendored builder** — `codegen/builder/`,
 the pinned standard library's pure-Zig `std.zig.llvm.Builder` taken
 in-tree so it can attach metadata to loads, stores and calls, three
 files whose every deviation carries a `LUCE:` comment — and links
@@ -382,13 +382,12 @@ not for the speed — two knobs that both mean "how hard to optimize"
 pointing at two numbers is a question a reader has to answer twice,
 and the honest answer to "why O2 here" was that nobody had chosen it.
 
-**The stage directory is `08_llvm/`, and the numeric prefix is what
-makes that name legal.**  Zig derives symbol names from the source
-path, and LLVM claims every symbol beginning `llvm.` as one of its own
-intrinsics: a file at `src/luce/llvm/abi.zig` makes the compiler abort
-with "llvm intrinsics cannot be defined!".  `08_llvm/abi.zig` yields
-`08_llvm.abi.…`, which does not begin `llvm.`, so the check never
-fires.  Never drop the prefix from this one.
+**The stage directory is `codegen/`, not `llvm/`.** Zig derives symbol
+names from source paths, and LLVM reserves every symbol beginning
+`llvm.` for its intrinsics. A top-level `llvm/abi.zig` would therefore
+make Zig abort with "llvm intrinsics cannot be defined!". `codegen` is
+also the more durable boundary: it names the compiler responsibility,
+while LLVM names the current implementation behind it.
 
 ## The generated module
 
@@ -512,7 +511,7 @@ array stores compare the row owner against `.program` before touching
 the element.  The check stays next to the existing null, generation and
 bounds checks and traps `immutable_object`.
 
-`08_llvm/roots.zig` derives the one case where that owner check may be
+`codegen/roots.zig` derives the one case where that owner check may be
 omitted from the final verified MIR rather than trusting a bit a decoded
 module could forge.  Its fixed-point plan is deliberately conservative:
 parameters, inout slots, calls, `const_container`, and every other
@@ -662,7 +661,7 @@ Three things make it pay, and all three are needed together:
   know it, and a zero's tag is that type.  A per-access branch on the
   object's kind would have been the alternative, and it would have hid
   the problem rather than fixed it.
-- **The resolution leaves the loop** (`08_llvm/loops.zig`).  Resolving
+- **The resolution leaves the loop** (`codegen/loops.zig`).  Resolving
   at every access leaves four loads in front of every element read,
   and LICM cannot lift them: the loop also *stores* an element through
   a pointer loaded out of the row, and nothing in the IR says the two
@@ -674,7 +673,7 @@ Three things make it pay, and all three are needed together:
   storage (`optimize.effects.viewStable`).
 
   **The metadata exists, and the honest number is: it moves nothing
-  this suite measures.**  The IR builder is vendored (`08_llvm/builder/`, three
+  this suite measures.**  The IR builder is vendored (`codegen/builder/`, three
   files, `LUCE:`-marked deviations only) and attaches `!alias.scope`
   and `!noalias` on every row-fact load and every scalar cell access
   — two scopes, rows and elements, that never overlap by
@@ -805,7 +804,7 @@ The snapshot table below is the current price in `stats`.
 Every one of those calls used to be declared bare —
 `declare i32 @luce_rt_len(ptr, ptr, ptr)` — which is the most
 pessimistic thing LLVM can be handed: reads and writes all memory, may
-unwind, may never come back.  `08_llvm/runtime_effects.zig` is the
+unwind, may never come back.  `codegen/runtime_effects.zig` is the
 one place
 that says otherwise, with one arm per entry point and no `else`, so a
 new runtime call is a compile error there rather than a declaration
@@ -1053,7 +1052,7 @@ fits; generated code only ever *writes* the other form, and reads both
 
 ## The published host ABI
 
-`src/luce/08_llvm/abi.zig` is the contract and the only authority on
+`src/luce/codegen/abi.zig` is the contract and the only authority on
 it; `abi.version` is the number a loader checks, currently **19**.  A compiled artifact
 exports one symbol:
 
@@ -1272,7 +1271,7 @@ and the evaluator ports — were cut rather than grown (docs/ENGINE.md
 steps 1 and 2), because nothing constructed a `Bytes` and nothing
 reached an evaluator.
 
-`grep 'self.fail("' src/luce/08_llvm/lower.zig` is still the
+`grep 'self.fail("' src/luce/codegen/lower.zig` is still the
 authority, and what it finds now is entirely refusals of IR that could
 only arrive damaged: a block without a terminator, arithmetic on a
 type that has none, an entry function with more than one parameter.  A

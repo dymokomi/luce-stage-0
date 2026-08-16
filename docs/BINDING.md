@@ -62,12 +62,12 @@ whatever they carry, which is not an honest answer. `==` and `!=` are
 refused, and the refusal is **transitive**: it reaches every comparison
 that descends into a function value — `==` on a struct that holds one, and
 `find`/`contains` over a container of them. The walk that decides it is
-the walk `==` itself uses (`04_semantics/shapes.zig`'s
+the walk `==` itself uses (`semantics/shapes.zig`'s
 `incomparablePart`): it descends a struct's field run, a union's run and
 an optional's payload, and it **stops at a reference**, because `==` does —
 reference equality is identity and never reads the contents. So a struct
 holding `list(Button)` still compares by the references it holds, an
-honest `==`. `06_mir/verify.zig` refuses the same shape in a decoded
+honest `==`. `mir/verify.zig` refuses the same shape in a decoded
 module, which makes the runtime comparator's function arm unreachable
 rather than merely unreached. `string(f)` is how a program asks what a
 value names, and the honest workaround for a search is to keep a name or
@@ -221,7 +221,7 @@ head so an imported union resolves from the reference site's own module.
 A function value is the pair `{function, receiver}`, carried by both
 engines as a **two-slot run**: slot 0 the function's index in the program
 table, slot 1 the receiver or `none`. The run length and the two slot
-numbers are stated once, in `06_mir/defs.zig` beside `boxTag`. The run is
+numbers are stated once, in `mir/defs.zig` beside `boxTag`. The run is
 built the same way whether the value carries a receiver or not, which
 costs a plain function value one allocation it would not otherwise make
 and buys the thing worth having: no reader of a function value branches on
@@ -244,7 +244,7 @@ alternative was two calling conventions at a site that cannot tell them
 apart. The interpreter needs none of this: it has the program in front of
 it and prepends the receiver to the argument run.
 
-In `05_hir`, a call's `ResolvedCallee.Indirect` carries the callee **node**
+In `hir`, a call's `ResolvedCallee.Indirect` carries the callee **node**
 rather than a local id and a narrowed flag, so a narrowed name records the
 same `narrowed_get` every other read of it produces and the storable form
 needs no bookkeeping of its own. The callee is the call's first operand in

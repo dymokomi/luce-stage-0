@@ -3,7 +3,7 @@
 //! Four enums: what a binary operator is, what a trap is called, what
 //! an error is called, and which file service a failed effect was.
 //! They are the whole of what the runtime library needs from the
-//! compiler's vocabulary — every other name in `06_mir/defs.zig` is
+//! compiler's vocabulary — every other name in `mir/defs.zig` is
 //! about the shape of a program, which a runtime never sees.
 //!
 //! **Here rather than in the IR, so the library can stand alone.**
@@ -12,7 +12,7 @@
 //! not have a source dependency on the front end that happens to share
 //! its vocabulary, or a reader cannot tell from the import graph where
 //! the library ends.  So the four live below both, in `support/`, and
-//! `06_mir.zig` re-exports them: the compiler still says `mir.TrapCode`
+//! `mir.zig` re-exports them: the compiler still says `mir.TrapCode`
 //! and there is still exactly one definition of it.  Go solved this
 //! with `internal/abi` and Rust by factoring out `rustc_abi`; both
 //! treat "the runtime must not depend on the compiler" as a hard line.

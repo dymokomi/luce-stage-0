@@ -1,6 +1,6 @@
 //! A serialized module survives a round trip as the same program.
 //!
-//! `06_mir/module.zig` proves the *format*: what encodes, what decodes,
+//! `mir/module.zig` proves the *format*: what encodes, what decodes,
 //! what the verifier refuses, and that a damaged module can never
 //! crash a decoder.  Those are all facts about bytes and live beside
 //! the encoder.

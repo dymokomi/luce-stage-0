@@ -37,8 +37,8 @@ const emit = @import("emit");
 const compile = luce.compile;
 const mir = luce.mir;
 const types = luce.types;
-const abi = luce.llvm.abi;
-const lower = luce.llvm;
+const abi = luce.codegen.abi;
+const lower = luce.codegen;
 
 const Allocator = std.mem.Allocator;
 const testing = std.testing;

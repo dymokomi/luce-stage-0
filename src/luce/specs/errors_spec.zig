@@ -286,7 +286,7 @@ fn expectOnlySayingAt(
 // ---------------------------------------------------------------------------
 //
 // What a *file* can be wrong about, decided before it is ever lexed
-// (01_source/encoding.zig).  These rejections name the file rather
+// (source/encoding.zig).  These rejections name the file rather
 // than a line, because the file never became source.
 
 test "luce.source.utf8: a file that is not valid UTF-8 is refused" {
@@ -1314,7 +1314,7 @@ test "luce.sema.method: searching a container of function values is equality too
 // arm, so `Cell == Cell` walked two slices of unequal length, and a
 // stored function value reached a comparator whose `.function` arm is
 // `unreachable` because there is no honest answer to give.  One walk
-// answers for all three now (`04_semantics/shapes.zig`'s
+// answers for all three now (`semantics/shapes.zig`'s
 // `incomparablePart`), and it stops where `==` stops.
 
 test "luce.sema.union: a struct carrying a union is not compared either (UNION.md D16)" {
@@ -5519,7 +5519,7 @@ test "luce.sema.import: an unknown module in a type is rejected" {
 // NOTE: the namespace-in-a-call form of luce.sema.import
 // ("unknown namespace geo; import geo to use it") fires only when the head
 // names a module that is *loaded elsewhere in the program but not imported
-// here* (04_semantics/builder.zig methodNamespace).  A bare geo.dist(1) with no such
+// here* (semantics/builder.zig methodNamespace).  A bare geo.dist(1) with no such
 // module resolves to luce.sema.name instead, so this path needs a
 // multi-module project and is not reachable through the single-file
 // harness.  The type-resolution form above covers the luce.sema.import code.

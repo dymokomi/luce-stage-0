@@ -59,7 +59,7 @@ reaches MIR, so the MIR, the serialized module, the interpreter oracle,
 the LLVM backend, and the runtime library are exactly what they are
 today. Both engines run identical concrete MIR, so the differential
 guarantee is untouched. The price is code size per instantiation, the
-accepted price of the same choice elsewhere, and `07_optimize/prune`
+accepted price of the same choice elsewhere, and `optimize/prune`
 already drops the instantiations a program does not reach.
 
 The two alternatives are weaker fits. **Dictionary passing** (a vtable

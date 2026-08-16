@@ -17,7 +17,7 @@ const std = @import("std");
 const luce = @import("luce");
 const sanitize = @import("sanitize");
 
-const abi = luce.llvm.abi;
+const abi = luce.codegen.abi;
 
 /// One call in a report: a function, and where in the source it was.
 ///

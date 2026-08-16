@@ -9,7 +9,7 @@ const builtin = @import("builtin");
 const luce = @import("luce");
 const host = @import("host");
 
-const abi = luce.llvm.abi;
+const abi = luce.codegen.abi;
 
 const c = if (builtin.os.tag == .macos) struct {
     extern fn luce_macos_graphics_create() ?*anyopaque;

@@ -22,7 +22,7 @@
 //! The refusals — D1's positional payload, D2's all-bare union, D3's
 //! member-as-type, D5's partial field list, D12's self-containing
 //! union, D15's union map key, D16's `==` — are compile-time facts
-//! and live where every refusal lives: `03_parse/test.zig` and
+//! and live where every refusal lives: `parse/test.zig` and
 //! `compile/test.zig`.  A program that does not compile has no engine
 //! to disagree about.
 

@@ -23,12 +23,12 @@
 //!
 //! The six classes and what they read:
 //!
-//!   keywords  `02_lex/token.zig`'s `keywords`, by kind
+//!   keywords  `lex/token.zig`'s `keywords`, by kind
 //!   ownership the same table's `new` and `spawn`
-//!   symbols   `02_lex/token.zig`'s `Kind`, one row per punctuation
+//!   symbols   `lex/token.zig`'s `Kind`, one row per punctuation
 //!             and operator token — map braces and the bit set included
 //!   types     `support/types.zig`'s `builtin_names`, plus `None`
-//!   builtins  `04_semantics/builtins.zig`'s `builtins`
+//!   builtins  `semantics/builtins.zig`'s `builtins`
 //!   methods   the same file's receiver-method tables
 //!
 //! A keyword the language gains reaches the grammar by itself; a
@@ -120,7 +120,7 @@ const classes = [_]Class{
 /// The class each keyword the lexer reserves belongs to.
 ///
 /// Every keyword kind is named explicitly and `else` yields null, so
-/// adding one to `02_lex/token.zig` and not here is caught — by the
+/// adding one to `lex/token.zig` and not here is caught — by the
 /// generator, which refuses to write a grammar it knows is short a
 /// word, and by the test below, which names the keyword.
 fn keywordClass(kind: luce.lex.Kind) ?Class {
@@ -195,7 +195,7 @@ fn stoppingScope(builtin: luce.semantics.Builtin) ?[]const u8 {
 /// Reserved names the language spells nowhere else.
 ///
 /// `range` is *syntax*: the parser recognises it only in
-/// `for i in range(a, b)` (`03_parse/grammar.zig`) and there is no
+/// `for i in range(a, b)` (`parse/grammar.zig`) and there is no
 /// entry for it in the builtin table.  It is written like a call and
 /// reads like one, so it is coloured like one.
 const reserved_syntax = [_][]const u8{"range"};
@@ -684,7 +684,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     );
 
     // -- comments ----------------------------------------------------------
-    // `#` to end of line, and there is no block form (02_lex/lexer.zig).
+    // `#` to end of line, and there is no block form (lex/lexer.zig).
     const comment_rules = [_]Rule{
         .{ .match = .{
             .scope = "comment.line.number-sign.luce",
@@ -750,7 +750,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
                 // `\b` before the `f` is the lexer's rule: `f"` opens an
                 // f-string only when the byte before it is not part of a
                 // name, so `prefix f"x"` interpolates and `deaf"x"` does
-                // not (02_lex/lexer.zig).
+                // not (lex/lexer.zig).
                 .begin = "\\bf\"",
                 .begin_captures = &.{.{ .group = "0", .scope = "punctuation.definition.string.begin.luce" }},
                 .end = "(\")|$",
@@ -829,7 +829,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     // change to `number()` is a change to be made here by reading.
     //
     // Three bases and the digit separator (docs/BITWISE.md R3, D7),
-    // in the order the lexer decides them (02_lex/lexer.zig's `number`
+    // in the order the lexer decides them (lex/lexer.zig's `number`
     // and `basedNumber`).  The well-formed shapes are written exactly
     // — separators between digits and nowhere else — and everything a
     // digit starts that they decline is one malformed literal, which

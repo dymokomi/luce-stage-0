@@ -27,7 +27,7 @@ const luce = @import("luce");
 
 const interpreter = luce.interpreter;
 const mir = luce.mir;
-const abi = luce.llvm.abi;
+const abi = luce.codegen.abi;
 const runtime = luce.runtime;
 
 const Allocator = std.mem.Allocator;

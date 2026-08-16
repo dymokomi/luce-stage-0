@@ -4,25 +4,25 @@
 //! model, and `docs/PIPELINE.md` the stage-by-stage status table.
 //!
 //! `compile.zig` is the driver and the place to start reading: it
-//! walks a source file through the numbered stage folders below, in
-//! order, and produces verified MIR.  From there `08_llvm` compiles
-//! it, which is the only way a Luce program is ever run.  The
+//! walks a source file through the stage modules below, in order, and
+//! produces verified MIR.  From there `codegen` compiles it, which is
+//! the only way a Luce program is ever run.  The
 //! `interpreter` is the test suite's differential oracle and ships in
 //! nothing; it and generated code both call `runtime`, so there is one
 //! implementation of every semantic (docs/ENGINE.md).
 //!
-//! Exported names drop the numbers — the prefixes order the directory
-//! listing, they are not part of the vocabulary.
+//! Each stage is named for the responsibility it owns.  The order is
+//! written here and in `compile.zig`, rather than encoded in filenames.
 
 // The pipeline, in order.
-pub const source = @import("01_source.zig");
-pub const lex = @import("02_lex.zig");
-pub const parse = @import("03_parse.zig");
-pub const semantics = @import("04_semantics.zig");
-pub const hir = @import("05_hir.zig");
-pub const mir = @import("06_mir.zig");
-pub const optimize = @import("07_optimize.zig");
-pub const llvm = @import("08_llvm.zig");
+pub const source = @import("source.zig");
+pub const lex = @import("lex.zig");
+pub const parse = @import("parse.zig");
+pub const semantics = @import("semantics.zig");
+pub const hir = @import("hir.zig");
+pub const mir = @import("mir.zig");
+pub const optimize = @import("optimize.zig");
+pub const codegen = @import("codegen.zig");
 pub const compile = @import("compile.zig");
 
 // The semantics both engines share, and the one that ships in
@@ -51,7 +51,7 @@ test {
     _ = hir;
     _ = mir;
     _ = optimize;
-    _ = llvm;
+    _ = codegen;
     _ = compile;
     _ = runtime;
     _ = interpreter;

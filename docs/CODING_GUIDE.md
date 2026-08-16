@@ -3,7 +3,7 @@
 Write code that a tired reader can understand a week later.
 Prefer plain, old-school code over clever modern ceremony.
 
-Everything is Zig 0.16.  `src/luce/06_mir/module.zig` is the reference
+Everything is Zig 0.16.  `src/luce/mir/module.zig` is the reference
 style: one clear job, explicit ownership, tests beside the code.
 North star for architecture: [V2.md](V2.md) (Luce the language, loom
 the terminal); [LANGUAGE.md](LANGUAGE.md) is the language itself,
@@ -30,7 +30,7 @@ If a change makes the architecture harder to see, do not merge it.
 - Allocation is explicit: functions that allocate take an `Allocator`
 - Anything that may touch the host takes an explicit `std.Io`; the
   language module (`src/luce/`) never sees the host except through the
-  host table it is handed (`08_llvm/abi.zig`, `interpreter.Host`)
+  host table it is handed (`codegen/abi.zig`, `interpreter.Host`)
 - Tagged unions over class hierarchies (`Value`, `Instruction`,
   `Result`); named payload structs so signatures say what they take —
   `anytype` is for format arguments, not for data
@@ -100,14 +100,14 @@ header, because a reader trusts it.
 
 ```text
 build.zig  build.zig.zon      zig build test runs everything; ./build.sh installs
-src/luce/                     the language, one numbered surface per stage:
+src/luce/                     the language, one responsibility per stage:
   compile.zig                 the driver: the stage sequence, in order
-  01_source 02_lex 03_parse   bytes to tokens to tree
-  04_semantics                resolve + type-check + validate, recording a typed tree
-  05_hir                      that tree, and the one pass that lowers it to MIR
-  06_mir                      the typed MIR, verifier, printer, module format
-  07_optimize                 two MIR passes: prune, dead
-  08_llvm                     MIR to LLVM IR to an object; the host ABI
+  source lex parse   bytes to tokens to tree
+  semantics                resolve + type-check + validate, recording a typed tree
+  hir                      that tree, and the one pass that lowers it to MIR
+  mir                      the typed MIR, verifier, printer, module format
+  optimize                 two MIR passes: prune, dead
+  codegen                     MIR to LLVM IR to an object; the host ABI
   runtime                     libluce_rt: heap, reference counting, resources, workers, text
   interpreter                 the differential oracle over that runtime
   support/                    types and diagnostics, used by every stage
@@ -127,7 +127,7 @@ docs/                         V2.md LANGUAGE.md MEMORY.md CODEGEN.md
 
 A stage that outgrows one file becomes a directory beside a
 same-named barrel that re-exports its public API and pulls in its
-tests: `03_parse.zig` + `03_parse/`, `06_mir.zig` + `06_mir/`, `runtime.zig` +
+tests: `parse.zig` + `parse/`, `mir.zig` + `mir/`, `runtime.zig` +
 `runtime/`.  The barrel is the stage's public surface; the directory
 is its inside.
 

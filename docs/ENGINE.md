@@ -121,13 +121,13 @@ needs the emitter and the libLLVM that `luce` deliberately does not
 link, so the specs cannot live inside the `luce` module and still gain
 a compiled arm. `src/luce/specs.zig` is the one module that imports
 both `luce` and `emit`, built by `build.zig` as its own test target.
-`08_llvm/test.zig` lives there too, because it runs programs.
+`codegen/test.zig` lives there too, because it runs programs.
 
 A handful of things legitimately inspect the interpreter's own
 structure rather than run a program as a specification, and they stay
 beside the code they prove: `interpreter/test.zig`'s frame-storage
 tests (compiled code has no frame stack of its own), and
-`06_mir/module.zig`'s single-byte damage fuzz, where a mutant is not a
+`mir/module.zig`'s single-byte damage fuzz, where a mutant is not a
 Luce program — no source produces it, nothing says what it should
 print, and the interpreter is a **sanitizer** there rather than a
 reference.

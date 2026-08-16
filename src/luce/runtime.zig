@@ -37,7 +37,7 @@
 //! **It stands alone.**  Nothing under `runtime/` imports a compiler
 //! stage: the four enums both sides have to spell the same way — trap
 //! codes, error codes, binary operators, and which file service failed
-//! — are `support/vocabulary.zig`'s, below both, and `06_mir.zig`
+//! — are `support/vocabulary.zig`'s, below both, and `mir.zig`
 //! re-exports them so the compiler still says `mir.TrapCode`.  A
 //! library that is linked into every artifact must not have a source
 //! dependency on the front end, or a reader cannot tell from the import
@@ -88,7 +88,7 @@ pub const null_index = @import("runtime/value.zig").null_index;
 pub const generation_shift = @import("runtime/value.zig").generation_shift;
 /// Where short text sits inside a `Value`, how much of it fits, and the
 /// `inline_length` that says it is somewhere else instead.  Generated
-/// code reads all three (`08_llvm/lower.zig`).
+/// code reads all three (`codegen/lower.zig`).
 pub const inline_at = @import("runtime/value.zig").inline_at;
 pub const inline_capacity = @import("runtime/value.zig").inline_capacity;
 pub const text_outside = @import("runtime/value.zig").text_outside;
@@ -99,7 +99,7 @@ pub const operators = @import("runtime/operators.zig");
 pub const text = @import("runtime/text.zig");
 pub const trace = @import("runtime/trace.zig");
 
-/// The C surface itself.  Published so `08_llvm/runtime_effects.zig`
+/// The C surface itself.  Published so `codegen/runtime_effects.zig`
 /// can read the real signatures back and hold its own description of
 /// them to account: a C object file carries no types, so nothing but a
 /// test comparing the two can catch a `declare` of the wrong shape.

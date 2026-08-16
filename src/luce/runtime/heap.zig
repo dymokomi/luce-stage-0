@@ -802,7 +802,7 @@ fn proofCeiling(comptime magnitude: i128) usize {
 
 /// Where an object row's fields sit, in bytes, for the one reader that
 /// cannot call a function to ask: generated machine code
-/// (`08_llvm/lower.zig`), which indexes a `List` or an `Array` inline.
+/// (`codegen/lower.zig`), which indexes a `List` or an `Array` inline.
 ///
 /// Nothing here is *written down* — every offset is measured from the
 /// Zig types above with `@offsetOf`, so the two cannot drift, and the

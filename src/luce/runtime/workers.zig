@@ -53,7 +53,7 @@ const Value = value.Value;
 
 /// The three answers a fallible service gives, as plain `i32`s.
 ///
-/// Spelled here rather than reused from `08_llvm/abi.zig` for the
+/// Spelled here rather than reused from `codegen/abi.zig` for the
 /// reason `files.zig` spells them: `runtime.zig` is the library the
 /// backend generates calls *into*, and it must not import a compiler
 /// stage to name a number.  The numbers are the same three.

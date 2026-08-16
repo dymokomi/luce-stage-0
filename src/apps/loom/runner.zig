@@ -13,7 +13,7 @@
 //! installed: the artifact carries its own tag, and a file built for
 //! another machine, another host ABI or another code generator is
 //! refused by name before a single instruction of it runs
-//! (`luce.llvm.artifact.Artifact`, `native.open`).
+//! (`luce.codegen.artifact.Artifact`, `native.open`).
 //!
 //! ## loom does not carry a code generator
 //!
@@ -30,7 +30,7 @@
 //! `PATH` after (`native.findCompiler`), which is how a toolchain finds
 //! its tools and what keeps an install tree self-consistent.  What it
 //! is handed is the **serialized module** loom's own front end just
-//! produced (`06_mir/module.zig`), not the source file — the artifact
+//! produced (`mir/module.zig`), not the source file — the artifact
 //! is then keyed to the exact program about to run rather than to
 //! whatever a second compile of the same text would have produced.
 //!
@@ -82,8 +82,8 @@ const macos_graphics = @import("macos_graphics");
 const report = @import("report");
 
 const Allocator = std.mem.Allocator;
-const abi = luce.llvm.abi;
-const artifact = luce.llvm.artifact;
+const abi = luce.codegen.abi;
+const artifact = luce.codegen.artifact;
 
 pub const compile_options: luce.types.CompileOptions = .{
     .allow_host = true,

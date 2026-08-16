@@ -59,7 +59,7 @@ pub const constants = @import("specs/constants_spec.zig");
 pub const threads = @import("specs/threads_spec.zig");
 /// Several files compiled as one program (`compile/modules.zig`).
 pub const modules = @import("specs/modules_spec.zig");
-/// `07_optimize` may not change what a program does, on either engine.
+/// `optimize` may not change what a program does, on either engine.
 pub const optimizer = @import("specs/optimize_spec.zig");
 /// A serialized module read back from bytes is the same program.
 pub const module_format = @import("specs/format_spec.zig");
@@ -87,7 +87,7 @@ pub const host = @import("specs/host_spec.zig");
 // The backend's end-to-end proof: source to machine code to a loaded shared
 // library.  It stays beside the backend it proves and is reached only by this
 // test module, because it runs programs and this is the module that can.
-const backend = @import("08_llvm/test.zig");
+const backend = @import("codegen/test.zig");
 
 /// The flagship program, driven by a scripted keyboard: the only
 /// thing that says what `examples/editor/editor.luc` *does*.

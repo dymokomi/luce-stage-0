@@ -50,7 +50,7 @@ const highlight = @import("highlight.zig");
 
 /// A file that exists in this repository and nowhere else, used to
 /// recognise the root while walking up from the working directory.
-const landmark = "src/luce/06_mir/defs.zig";
+const landmark = "src/luce/mir/defs.zig";
 
 /// How far up to look.  `zig build test` runs from the build root and
 /// `www/luce/build.sh` runs from wherever it was invoked; both are at or
@@ -243,7 +243,7 @@ fn builtins(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/builtins.zig");
+    const source = try repository.read("src/luce/semantics/builtins.zig");
     defer repository.gpa.free(source);
 
     // The table's own closing brace, at column zero — not the first
@@ -284,7 +284,7 @@ const BuiltinSignature = struct {
 /// multi-line row (`term_style`) carries one slot per deeper-indented
 /// line.  Caller frees with `freeSignatures`.
 fn builtinSignatures(repository: Repository) ![]BuiltinSignature {
-    const source = try repository.read("src/luce/04_semantics/builtins.zig");
+    const source = try repository.read("src/luce/semantics/builtins.zig");
     defer repository.gpa.free(source);
     const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
@@ -353,12 +353,12 @@ fn freeSignaturesList(gpa: std.mem.Allocator, rows: *std.ArrayList(BuiltinSignat
     rows.deinit(gpa);
 }
 
-/// Every word the lexer reserves, from `02_lex/token.zig`'s one table.
+/// Every word the lexer reserves, from `lex/token.zig`'s one table.
 fn lexerKeywords(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/02_lex/token.zig");
+    const source = try repository.read("src/luce/lex/token.zig");
     defer repository.gpa.free(source);
 
     const table = between(source, "pub const keywords = [_]struct { word: []const u8, kind: Kind }{", "\n};") orelse
@@ -376,7 +376,7 @@ fn reservedNames(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/context.zig");
+    const source = try repository.read("src/luce/semantics/context.zig");
     defer repository.gpa.free(source);
 
     const table = between(source, "pub const reserved_names = [_][]const u8{", "\n};") orelse
@@ -411,7 +411,7 @@ fn methods(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/builtins.zig");
+    const source = try repository.read("src/luce/semantics/builtins.zig");
     defer repository.gpa.free(source);
 
     for ([_][]const u8{
@@ -572,7 +572,7 @@ fn routedStandardMethods(repository: Repository, module: []const u8) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/calls.zig");
+    const source = try repository.read("src/luce/semantics/calls.zig");
     defer repository.gpa.free(source);
     const opening = try std.fmt.allocPrint(repository.gpa, "\"{s}.", .{module});
     defer repository.gpa.free(opening);
@@ -1025,8 +1025,8 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     const toolchain = try repository.read("www/luce/content/guide/command-line.md");
     defer gpa.free(toolchain);
 
-    const format = try declaredNumber(repository, "src/luce/06_mir/module.zig", "format_version");
-    const published = try declaredNumber(repository, "src/luce/08_llvm/abi.zig", "version");
+    const format = try declaredNumber(repository, "src/luce/mir/module.zig", "format_version");
+    const published = try declaredNumber(repository, "src/luce/codegen/abi.zig", "version");
 
     const claims = [_][]u8{
         try std.fmt.allocPrint(gpa, "`format_version = {d}`", .{format}),

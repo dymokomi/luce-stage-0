@@ -2,7 +2,7 @@
 //! header.
 //!
 //! **It ships in nothing.**  `luce` and `loom` do not reach this
-//! package: what runs a Luce program is machine code (`08_llvm`), and
+//! package: what runs a Luce program is machine code (`llvm`), and
 //! what runs *this* is the executable specification, where every
 //! program is executed on both and the two are compared on printed
 //! bytes, trap code, trap message, call trace frame for frame, leak
@@ -29,13 +29,13 @@
 //!
 //! The types below were `backend.zig` until the boundary they defined
 //! stopped being one.  Stage 10 did not slot in behind them: it
-//! brought its own published ABI (`08_llvm/abi.zig`) and `apps/host.zig`
+//! brought its own published ABI (`codegen/abi.zig`) and `apps/host.zig`
 //! builds that table from the same services, which is the better
 //! outcome and the reason these are the oracle's shapes now and
 //! nobody else's.
 
 const std = @import("std");
-const mir = @import("06_mir.zig");
+const mir = @import("mir.zig");
 const runtime = @import("runtime.zig");
 const machine = @import("interpreter/machine.zig");
 
@@ -117,7 +117,7 @@ pub const Exited = struct {
 
 /// How deep a program may call.  Runaway recursion traps rather than
 /// overflowing the machine's stack — a language promise, kept from the
-/// same number on both engines (`08_llvm/abi.zig`'s `call_depth`).
+/// same number on both engines (`codegen/abi.zig`'s `call_depth`).
 pub const Budget = struct {
     call_depth: u32 = 256,
 };
@@ -135,7 +135,7 @@ pub const Budget = struct {
 ///
 /// **One naming rule, and it is the ABI's:** every slot below is named
 /// for the Luce builtin it stands behind, spelled exactly as
-/// `08_llvm/abi.zig`'s `LuceHost` spells it — `file_read`, `dir_list`,
+/// `codegen/abi.zig`'s `LuceHost` spells it — `file_read`, `dir_list`,
 /// `clock_ms`, `term_write`.  The two tables are the one seam the
 /// executable specification exists to compare frame for frame
 /// (docs/ENGINE.md), so they line up row for row and a reader who has

@@ -43,7 +43,7 @@ test "every executable-specification file has exactly one suite" {
 test "harness and backend tests are assigned without catching unit tests" {
     try testing.expectEqual(@as(usize, 1), suites.matchCount("specs.agree.test.audit"));
     try testing.expectEqual(@as(usize, 1), suites.matchCount("specs.hosts.test.audit"));
-    try testing.expectEqual(@as(usize, 1), suites.matchCount("08_llvm.test.test.audit"));
+    try testing.expectEqual(@as(usize, 1), suites.matchCount("codegen.test.test.audit"));
     try testing.expectEqual(@as(usize, 0), suites.matchCount("runtime.test.audit"));
 }
 

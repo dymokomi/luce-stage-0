@@ -525,7 +525,7 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
 }
 
 /// One program argument, borrowed for the length of the call — the
-/// shape `08_llvm/abi.zig`'s `ArgFn` already has, named here so this
+/// shape `codegen/abi.zig`'s `ArgFn` already has, named here so this
 /// file needs nothing from the host ABI but the calling convention.
 /// Answers `abi.Answer`: anything but zero means the out-parameters
 /// were filled.

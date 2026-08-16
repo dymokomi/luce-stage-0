@@ -5773,7 +5773,7 @@ test "compiled code's byte offsets find the fields they name" {
     try runtime.publishConstant(0, rooted);
     runtime.finishConstants();
 
-    // Exactly the walk `08_llvm/lower.zig` emits: the table base out of
+    // Exactly the walk `codegen/lower.zig` emits: the table base out of
     // the `Runtime`, the row by handle, then `generation`, `count`,
     // `dims`, and `elements` out of the row — every step through
     // `heap.layout`'s numbers and nothing through a field name.

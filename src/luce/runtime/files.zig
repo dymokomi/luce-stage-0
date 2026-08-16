@@ -49,7 +49,7 @@ pub const Mode = enum(i64) {
 };
 
 /// What every slot here answers: 1 yes, 0 no, -1 the host ran out of
-/// memory.  The same three `08_llvm/abi.zig`'s `Answer` gives, spelled
+/// memory.  The same three `codegen/abi.zig`'s `Answer` gives, spelled
 /// as a plain `i32` for the same reason `containers.ArgumentFn` is —
 /// this file needs nothing from the host ABI but the calling
 /// convention, and `runtime.zig` must not import the backend.

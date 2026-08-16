@@ -10,7 +10,7 @@
 //!
 //! * **A fallible call returns `i32`: 1 means the program trapped.**
 //!   That is the convention generated code already uses for Luce
-//!   functions (`08_llvm/lower.zig`), so a runtime call propagates
+//!   functions (`codegen/lower.zig`), so a runtime call propagates
 //!   through the same `if (trapped) return true` edge as any other Luce
 //!   call, with no second mechanism to keep in step.  It is an `i32`
 //!   rather than a C `_Bool` because `_Bool` is the one scalar whose
@@ -57,7 +57,7 @@
 //! ## Why the entry points are `pub`
 //!
 //! Nothing in Zig calls them — they exist for the linker.  They are
-//! `pub` so that `08_llvm/runtime_effects.zig` can name them: the
+//! `pub` so that `codegen/runtime_effects.zig` can name them: the
 //! backend keeps a second description of this surface, one arm per
 //! symbol, from which it builds the LLVM `declare`.  A C object file
 //! carries no signatures, so a `declare` with the wrong arity links

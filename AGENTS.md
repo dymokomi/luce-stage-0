@@ -37,7 +37,7 @@ because each one silently costs you something if you miss it:
 3. **Semantics live in `src/luce/runtime/` and nowhere else.**  The
    compiled path and the oracle both call it, so a rule implemented on
    one side only is a bug by construction.  Host access goes through
-   the published table (`src/luce/08_llvm/abi.zig`, or
+   the published table (`src/luce/codegen/abi.zig`, or
    `interpreter.Host` on the oracle's side) or an explicit `std.Io`;
    `src/luce/` never touches the host directly.  A change to the
    instruction set, the intrinsics or the trap codes bumps

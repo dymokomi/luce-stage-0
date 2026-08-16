@@ -19,7 +19,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const mir = @import("../06_mir.zig");
+const mir = @import("../mir.zig");
 const interpreter = @import("../interpreter.zig");
 const compile_mod = @import("../compile.zig");
 const types = @import("../support/types.zig");

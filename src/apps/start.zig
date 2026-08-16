@@ -2,7 +2,7 @@
 //! executable with.
 //!
 //! A compiled artifact exports `luce_main(const LuceHost *)` and
-//! nothing else (`luce.llvm.abi`).  That is enough to be *loaded* — by
+//! nothing else (`luce.codegen.abi`).  That is enough to be *loaded* — by
 //! loom, by an embedder — but not enough to be *run* by a shell, which
 //! wants a process with an entry point, arguments, a console, and an
 //! exit status.  This file is that shim, and it is a static library so
@@ -31,8 +31,8 @@ const macos_graphics = @import("macos_graphics");
 const report = @import("report");
 const streams = @import("streams");
 
-const abi = luce.llvm.abi;
-const artifact = luce.llvm.artifact;
+const abi = luce.codegen.abi;
+const artifact = luce.codegen.artifact;
 
 /// The program linked beside this shim.  Undefined here on purpose:
 /// the link is what supplies it, and a `libluce_start.a` linked

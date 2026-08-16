@@ -17,8 +17,8 @@ const native = @import("native");
 const emit = @import("emit");
 
 const Allocator = std.mem.Allocator;
-const abi = luce.llvm.abi;
-const artifact = luce.llvm.artifact;
+const abi = luce.codegen.abi;
+const artifact = luce.codegen.artifact;
 
 pub const Result = union(enum) {
     /// The artifact was written to the path the caller named.
@@ -28,7 +28,7 @@ pub const Result = union(enum) {
     ///
     /// **Not "not implemented yet".**  The lowering is total —
     /// everything a program can say lowers — so every `.unsupported`
-    /// left in `08_llvm/lower.zig` guards IR that could only arrive
+    /// left in `codegen/lower.zig` guards IR that could only arrive
     /// damaged, and reaching one here is an invariant violated
     /// upstream rather than a feature owed.  It is a distinct arm and
     /// not a `.failed` because it is about the program's shape and no
@@ -68,7 +68,7 @@ pub fn build(
     const triple = try emit.hostTriple(gpa);
     defer gpa.free(triple);
 
-    const bitcode = switch (try luce.llvm.lower(gpa, program, .{
+    const bitcode = switch (try luce.codegen.lower(gpa, program, .{
         .triple = triple,
         .source_hash = options.source_hash,
     })) {
@@ -93,7 +93,7 @@ pub fn build(
 // The product path, end to end
 // ---------------------------------------------------------------------------
 //
-// `08_llvm/test.zig` proves the *lowering* by linking and loading a
+// `codegen/test.zig` proves the *lowering* by linking and loading a
 // program itself.  These prove the *product*: the same `build`, `open`
 // and link the shipped `luce` calls, over the installed libraries,
 // producing an artifact that a loader accepts and a shell can execute.

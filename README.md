@@ -157,10 +157,10 @@ means **a machine that only runs Luce programs needs neither LLVM nor
 A Luce program is a script with a `main` entry. The language is
 statically typed with inference and has value `struct`s,
 `list`/`map`/`array`/`builder` reference containers created with `new`
-or literals, and `file`/`task` reference resources. The ARC transition shares
-references today, but last-release reclamation and deterministic resource
-cleanup are not yet complete, and container arguments to `spawn` have a
-confirmed caller-lifetime bug (docs/MEMORY.md, docs/MISSING.md).
+or literals, and `file`/`task` reference resources. ARC shares references,
+destroys objects on last release, closes or joins resources deterministically,
+and copies permitted object graphs safely across worker runtimes
+(docs/MEMORY.md).
 User-defined class references, `weak`, and capturing closures are the
 next language milestone, not features claimed by this README
 (docs/ROADMAP.md). The language also has slices and
@@ -194,8 +194,8 @@ program, not a feature of loom, so replacing it is writing another one.
 ## Packages
 
 ```text
-src/luce/                 the Luce language, one numbered stage surface
-                          (01_source .. 08_llvm, folder or barrel, driven
+src/luce/                 the Luce language, one named stage surface
+                          (source through codegen, folder or barrel, driven
                           by compile.zig — docs/PIPELINE.md), plus
                           libluce_rt (the semantics as a linkable
                           library) and the test suite's differential

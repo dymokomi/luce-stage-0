@@ -3,9 +3,9 @@
 
 const std = @import("std");
 const types = @import("../support/types.zig");
-const mir = @import("../06_mir.zig");
+const mir = @import("../mir.zig");
 const compile_mod = @import("../compile.zig");
-const luce_source = @import("../01_source.zig");
+const luce_source = @import("../source.zig");
 
 const testing = std.testing;
 
@@ -56,7 +56,7 @@ fn expectRejectedOptions(
     }
 }
 
-const source_mod = @import("../01_source.zig");
+const source_mod = @import("../source.zig");
 
 fn printDiagnostics(diagnostics: *const compile_mod.CompileResult) void {
     if (diagnostics.* == .success) return;
@@ -333,7 +333,7 @@ test "decode survives every allocation failure" {
         \\
     );
     defer program.deinit();
-    const module = @import("../06_mir.zig").module;
+    const module = @import("../mir.zig").module;
     const encoded = try module.encode(testing.allocator, &program);
     defer testing.allocator.free(encoded);
     try testing.checkAllAllocationFailures(testing.allocator, struct {
@@ -1734,7 +1734,7 @@ test "a namespaced constant resolves through the import that bound it" {
     // The dotted *name* has no unimported-namespace check of its own
     // to pin beside them, and cannot: `ast.Call.callee` is a single
     // identifier token, so the dot branch of `resolveDeclared`
-    // (`luce.sema.import`, 04_semantics/builder.zig) has no input that
+    // (`luce.sema.import`, semantics/builder.zig) has no input that
     // reaches it — every dotted call is parsed as a method and
     // resolved on the other path, which the next test covers.
     const constant_module: TestModule = .{ .name = "sizes", .source =

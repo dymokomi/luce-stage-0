@@ -1,11 +1,11 @@
-//! `07_optimize` may not change what a program does.
+//! `optimize` may not change what a program does.
 //!
 //! The stage rewrites verified MIR in place — reachability pruning,
 //! ownership elision, dead-code sweeping — and the one thing it is not
 //! allowed to do is change one printed byte, one trap code, one trap
 //! message, or one live object.  That is a claim about *running*, so it
 //! is proved here rather than beside the passes: what the passes look
-//! like after each rewrite is checked in `07_optimize/test.zig`, and
+//! like after each rewrite is checked in `optimize/test.zig`, and
 //! what the program still does is checked here.
 //!
 //! Each case is therefore compiled twice — with the whole stage off and

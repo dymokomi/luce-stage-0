@@ -76,7 +76,7 @@ pub const definitions = [_]Definition{
         .label = "backend",
         .step = "test-backend",
         .description = "Run the LLVM backend's end-to-end specification",
-        .filters = &.{"08_llvm.test."},
+        .filters = &.{"codegen.test."},
     },
     .{
         .suite = .editor,

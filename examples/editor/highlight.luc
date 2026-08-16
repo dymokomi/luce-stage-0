@@ -7,8 +7,8 @@
 # what lets a test assert the tokens of a line directly.
 #
 # The word tables are the language's own words, held against the
-# compiler's tables (`02_lex/token.zig` keywords, `support/types.zig`
-# builtin types, `04_semantics/builtins.zig` builtins).  A method name
+# compiler's tables (`lex/token.zig` keywords, `support/types.zig`
+# builtin types, `semantics/builtins.zig` builtins).  A method name
 # is not here: it is only a name after a receiver and a dot, and this
 # highlighter colours words, not receivers.
 

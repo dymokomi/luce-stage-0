@@ -25,7 +25,7 @@
 //! and `llvm-config --libs` never names it), so reaching it would mean
 //! discovering a second toolchain or vendoring one.  `cc` is present
 //! wherever a C toolchain is, knows its own platform's SDK paths,
-//! system libraries and crt objects, and is what `08_llvm/test.zig`
+//! system libraries and crt objects, and is what `codegen/test.zig`
 //! has been linking with all along.  `LUCE_CC` names a different
 //! driver.
 
@@ -34,8 +34,8 @@ const luce = @import("luce");
 const files = @import("files");
 
 const Allocator = std.mem.Allocator;
-const abi = luce.llvm.abi;
-const artifact = luce.llvm.artifact;
+const abi = luce.codegen.abi;
+const artifact = luce.codegen.artifact;
 
 // ---------------------------------------------------------------------------
 // What is being produced

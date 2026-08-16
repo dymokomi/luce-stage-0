@@ -6,7 +6,7 @@
 //! geo.shapes` a file the host finds by mapping dots to folders, and
 //! `import std.math` the embedded library — each binding its last
 //! segment unless an `as` chose otherwise.  Resolution itself is stage 1's
-//! (`01_source/load.zig` answers "what are the bytes of module X",
+//! (`source/load.zig` answers "what are the bytes of module X",
 //! std and host alike, and refuses two modules under one binding);
 //! what this file adds is the *graph*: breadth-first from the root,
 //! each module loaded and parsed exactly once.
@@ -37,9 +37,9 @@
 //! traversal.
 
 const std = @import("std");
-const source_mod = @import("../01_source.zig");
-const parse_mod = @import("../03_parse.zig");
-const semantics = @import("../04_semantics.zig");
+const source_mod = @import("../source.zig");
+const parse_mod = @import("../parse.zig");
+const semantics = @import("../semantics.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
 const types = @import("../support/types.zig");
 

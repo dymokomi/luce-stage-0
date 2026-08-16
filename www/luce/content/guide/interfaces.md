@@ -115,11 +115,10 @@ its components first. A fallible multi-value method follows the ordinary
 ## Values remain alive
 
 Converting a struct to an interface value captures a copy of the concrete
-receiver. A value-only receiver is self-contained and may be returned or
-stored. Current dispatch values do not retain reference fields in that copy;
-when a conformer carries a list, map, array, builder, file, or task, another
-live concrete value must keep that graph alive. This is an incomplete-ARC
-lifetime gap, not the target interface contract.
+receiver. The interface value owns that copy: any list, map, array, builder,
+file, or task fields remain alive for as long as dispatch can reach them, even
+after the original concrete value leaves scope. Releasing the interface value
+releases that captured graph exactly once.
 
 The current representation stores one bound dispatch value per required
 method. It is correct but intentionally not the final representation. The

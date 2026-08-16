@@ -106,7 +106,7 @@ pub const null_index: u32 = std.math.maxInt(u32);
 /// Where a handle's generation sits in `Value.bits`: above the index,
 /// in the high 32 bits, which carried nothing before.  Published
 /// because generated code takes the two halves apart itself
-/// (`08_llvm/lower.zig`) and the two must not drift.
+/// (`codegen/lower.zig`) and the two must not drift.
 pub const generation_shift = 32;
 
 /// Where inline text starts inside a `Value`, and how much of it there

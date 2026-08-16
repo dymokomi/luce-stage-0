@@ -113,7 +113,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_runtime.step);
 
     // Luce: the language — lexer through IR lowering, the interpreter,
-    // the .lc format.  It links nothing: `08_llvm/lower.zig` builds
+    // the .lc format.  It links nothing: `codegen/lower.zig` builds
     // LLVM IR with `std.zig.llvm.Builder`, which is pure Zig.
     const luce = b.addModule("luce", .{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -122,13 +122,13 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     // What produced an artifact's machine code, as one number both
-    // binaries carry (`generatorIdentity` below).  `08_llvm/lower.zig`
+    // binaries carry (`generatorIdentity` below).  `codegen/lower.zig`
     // stamps it into every artifact's tag and every loader checks it,
     // so a `luce` and a `loom` from one build agree, and a `.lc` some
     // earlier build left beside a program is refused rather than run.
     // It belongs to the language module because both halves of that
-    // deal live there: the tag is written in `08_llvm` and read in
-    // `08_llvm/abi.zig`, which is all loom needs to link.
+    // deal live there: the tag is written in `codegen` and read in
+    // `codegen/abi.zig`, which is all loom needs to link.
     const generator = b.addOptions();
     generator.addOption(u64, "generator", generatorIdentity(b, target, optimize, llvm));
     luce.addOptions("build_options", generator);
@@ -319,11 +319,11 @@ pub fn build(b: *std.Build) void {
     test_sanitize_thread_step.dependOn(&b.addRunArtifact(thread_sanitize_tests).step);
 
     // The one module that calls libLLVM: bitcode in, object code out
-    // (`src/luce/08_llvm/emit.zig`).  It carries the backend's
+    // (`src/luce/codegen/emit.zig`).  It carries the backend's
     // end-to-end proof too, because that test is the one thing that
     // takes Luce source all the way into a loaded shared library.
     const emit = b.addModule("emit", .{
-        .root_source_file = b.path("src/luce/08_llvm/emit.zig"),
+        .root_source_file = b.path("src/luce/codegen/emit.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -1677,11 +1677,11 @@ fn linkLlvm(module: *std.Build.Module, llvm: Llvm) void {
 /// reaches the artifact only as the serialized module, which the tag
 /// already hashes as `source_hash`.
 const generator_barrels = [_][]const u8{
-    "src/luce/08_llvm.zig",
+    "src/luce/codegen.zig",
     "src/luce/runtime.zig",
 };
 const generator_trees = [_][]const u8{
-    "src/luce/08_llvm",
+    "src/luce/codegen",
     "src/luce/runtime",
 };
 

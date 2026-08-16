@@ -43,7 +43,7 @@ const front = @import("front.zig");
 
 const Allocator = std.mem.Allocator;
 const Palette = palette_mod.Palette;
-const abi = luce.llvm.abi;
+const abi = luce.codegen.abi;
 
 /// How far a failure's rendering sits under the test name it belongs
 /// to.  One rendering, positioned by whoever is reporting.
@@ -184,7 +184,7 @@ fn runFile(
 
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    const source_hash = luce.llvm.artifact.sourceHash(encoded);
+    const source_hash = luce.codegen.artifact.sourceHash(encoded);
 
     const artifact_path = try artifactFor(gpa, path);
     defer gpa.free(artifact_path);

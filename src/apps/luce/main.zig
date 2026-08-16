@@ -28,7 +28,7 @@
 //!   object     FILE.o     a relocatable object; the caller links it
 //!
 //! **FILE may be a `.lcm` as well as a `.luc`.**  That is the serialized
-//! module (`06_mir/module.zig`) — the front end's hand-over to the back
+//! module (`mir/module.zig`) — the front end's hand-over to the back
 //! end, not a distribution format — and building from one asks nothing
 //! of the front end: it is decoded and handed straight to stage 10.
 //! That is how `loom` gets a program compiled without carrying a code
@@ -310,7 +310,7 @@ fn usage(err: *std.Io.Writer) !u8 {
 ///
 /// The generated code exports `luce_main` and declares no undefined
 /// symbol beyond `libluce_rt`: every effect reaches the outside world
-/// through the host table it is handed (`luce.llvm.abi`).  What the
+/// through the host table it is handed (`luce.codegen.abi`).  What the
 /// three shapes differ in is only what is linked around that — nothing
 /// for an object, nothing but the runtime for a library, and
 /// `libluce_start`'s `main` as well for an executable.
@@ -348,7 +348,7 @@ fn buildNative(
     // that `loom luce` will then hit.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    const source_hash = luce.llvm.artifact.sourceHash(encoded);
+    const source_hash = luce.codegen.artifact.sourceHash(encoded);
 
     var tools = try native.discover(gpa, io, request.library_directory, request.driver);
     defer tools.deinit(gpa);

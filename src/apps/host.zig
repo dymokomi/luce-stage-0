@@ -15,7 +15,7 @@
 //! here**: `report.zig` renders the trap, the uncaught error and the
 //! leak census for every runner alike, and never touches a Host.
 //!
-//! The services reach a program as `luce.llvm.abi`'s C table, which is
+//! The services reach a program as `luce.codegen.abi`'s C table, which is
 //! the one calling convention there is: a compiled artifact indexes it
 //! with `getelementptr`, and every slot is filled, because loom
 //! withholds nothing.  This file built a second table as well until
@@ -31,7 +31,7 @@ const report = @import("report");
 const sanitize = @import("sanitize");
 
 const Allocator = std.mem.Allocator;
-const abi = luce.llvm.abi;
+const abi = luce.codegen.abi;
 
 /// What a host is asked to run on a thread: one C function and one
 /// opaque argument, both `libluce_rt`'s (docs/THREADS.md D8).  Named
@@ -251,7 +251,7 @@ pub const Host = struct {
     // -- setup, teardown, and what the run reported -----------------------
 
     /// The services, as the C table a compiled artifact is handed
-    /// (`luce.llvm.abi`).  Every slot is filled: loom withholds
+    /// (`luce.codegen.abi`).  Every slot is filled: loom withholds
     /// nothing, and a host that withheld something would make the
     /// program trap `host_unavailable` rather than proceed.
     pub fn table(self: *Host) abi.Host {

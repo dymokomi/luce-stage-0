@@ -25,7 +25,7 @@
 //! wants the resolved form anyway.
 
 const std = @import("std");
-const source_mod = @import("../01_source.zig");
+const source_mod = @import("../source.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
@@ -79,7 +79,7 @@ pub const Rendered = struct {
     /// It differs for a span at end of file.  A file ending in a
     /// newline gets one more line index than it has lines of text —
     /// deliberately, because that empty line is where "the thing
-    /// missing at the end" belongs (`01_source/sources.zig`) — and an
+    /// missing at the end" belongs (`source/sources.zig`) — and an
     /// empty line renders as no snippet at all, so `func main():` with
     /// nothing under it reported a correct message with nothing to
     /// look at.  The position stays what it is and the snippet borrows

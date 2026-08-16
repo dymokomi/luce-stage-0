@@ -31,7 +31,7 @@ the checked arithmetic, and the host gate:
 because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
-in `src/luce/01_source/load.zig`; the suite proving them is
+in `src/luce/source/load.zig`; the suite proving them is
 `src/luce/specs/std_spec.zig` and the language specs — all eleven
 modules are ordinary source, with each program run on both engines and
 compared (docs/ENGINE.md).
@@ -849,7 +849,7 @@ that already matched.
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with
    `#` comments in the header.
-2. Add one row to `standard_modules` in `src/luce/01_source/load.zig`
+2. Add one row to `standard_modules` in `src/luce/source/load.zig`
    — the one place that answers "what are the bytes of module X".
 3. Prove it in `std_spec.zig`, the way math, strings and files are —
    a hosted module names the world it wants (`agree.World.withFile`,

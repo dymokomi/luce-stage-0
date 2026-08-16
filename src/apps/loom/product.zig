@@ -809,7 +809,7 @@ test "a script piped into loom ends on the worst thing any line did" {
 // A native artifact is not portable and its name cannot be trusted to
 // say so, so every one carries a tag and a loader reads it — **out of
 // the file's own bytes, before the file is loaded at all** — before a
-// single instruction runs (`luce.llvm.artifact.Artifact`).  Seven ways
+// single instruction runs (`luce.codegen.artifact.Artifact`).  Seven ways
 // an artifact can be wrong, seven sentences, and the sentences are the
 // whole point: "no" tells a person nothing, and three of these name
 // both sides, because the loader is one of them and is holding the
@@ -821,7 +821,7 @@ test "a script piped into loom ends on the worst thing any line did" {
 // each other; this proves each one is what comes out of loom when the
 // matching field is the one that is wrong.
 
-/// Where each field of the tag sits, from `08_llvm/artifact.zig` —
+/// Where each field of the tag sits, from `codegen/artifact.zig` —
 /// whose own test holds these offsets against what the code generator
 /// emits.
 const tag = struct {
@@ -874,7 +874,7 @@ fn change(
     defer gpa.free(bytes);
 
     var magic_bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &magic_bytes, luce.llvm.artifact.magic, .little);
+    std.mem.writeInt(u64, &magic_bytes, luce.codegen.artifact.magic, .little);
     const at = std.mem.indexOf(u8, bytes, &magic_bytes) orelse return error.NoArtifactTag;
     @memcpy(bytes[at + offset ..][0..written.len], &written);
 
@@ -925,7 +925,7 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
     const good = try install.read(gpa, "sums.lc");
     defer gpa.free(good);
 
-    const machine = luce.llvm.artifact.machine;
+    const machine = luce.codegen.artifact.machine;
     const shortened = machine[0 .. machine.len - 1];
     const refusals = [_]struct { offset: usize, value: u64, half: bool = false, says: []const u8 }{
         // No magic at the front: whatever this file is, no Luce
@@ -942,7 +942,7 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
             .half = true,
             .says = std.fmt.comptimePrint(
                 "its tag is layout version 99, and this loader reads version {d}",
-                .{luce.llvm.artifact.format},
+                .{luce.codegen.artifact.format},
             ),
         },
         .{
@@ -951,7 +951,7 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
             .half = true,
             .says = std.fmt.comptimePrint(
                 "it was built against host ABI 9999, and this loader speaks {d}",
-                .{luce.llvm.abi.version},
+                .{luce.codegen.abi.version},
             ),
         },
         // One character short of this machine's name is a different
@@ -967,13 +967,13 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
         // machine, it is a tag nobody can reason from.
         .{
             .offset = tag.machine_length,
-            .value = luce.llvm.artifact.machine_capacity + 1,
+            .value = luce.codegen.artifact.machine_capacity + 1,
             .half = true,
             .says = "it is truncated, or its object file is damaged",
         },
         .{
             .offset = tag.generator,
-            .value = ~luce.llvm.artifact.generator,
+            .value = ~luce.codegen.artifact.generator,
             .says = "it was built by a different code generator",
         },
     };
@@ -1019,8 +1019,8 @@ test "an artifact with a tag and no entry point is not an artifact" {
     var install = try installTree(gpa, false);
     defer install.deinit(gpa);
 
-    const artifact = luce.llvm.artifact;
-    const abi = luce.llvm.abi;
+    const artifact = luce.codegen.artifact;
+    const abi = luce.codegen.abi;
     const source = try std.fmt.allocPrint(gpa,
         \\#include <stdint.h>
         \\

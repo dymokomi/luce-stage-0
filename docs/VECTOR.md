@@ -72,7 +72,7 @@ sophisticated half of the design — it is the half that pays.
 
 The rest of what the tree says, checked rather than assumed:
 
-- **MIR has no unchecked add to lower to.**  `06_mir/defs.zig`'s
+- **MIR has no unchecked add to lower to.**  `mir/defs.zig`'s
   `Instruction.Binary` is `{ op, operand_type, left, right }`.  Checkedness is
   not a field; it is implied by `operand_type` being `.int` or
   `.long`.  Every `.binary` with an integer operand type is checked,
@@ -86,7 +86,7 @@ The rest of what the tree says, checked rather than assumed:
 - **The trap path is cold, not `noreturn`.**  It calls
   `luce_rt_raise`, then `luce_rt_unwound(runtime, function, instruction)`,
   then `ret i32 1`.  Both runtime calls are `.cold`
-  (`08_llvm/runtime_effects.zig`'s table).  The instruction index it
+  (`codegen/runtime_effects.zig`'s table).  The instruction index it
   reports is `Body.current`, set per MIR instruction as `lower.zig`
   walks the block, and resolved against the per-function
   `luce.origins.{d}` table.
@@ -101,7 +101,7 @@ The rest of what the tree says, checked rather than assumed:
   hands one `*const mir.Program` to both arms.  No serialization sits between
   them.
 - **Nothing in the tree does value-range analysis**, and
-  `07_optimize.zig`'s header — "Not for scalar optimization" and "What
+  `optimize.zig`'s header — "Not for scalar optimization" and "What
   deliberately does not run, and why" — records that two passes which tried
   (`flow` and `values`, ~498 lines) were *deleted* after measuring 0%
   benefit on the compiled path, on the ground that `default<O3>` does
@@ -120,7 +120,7 @@ The rest of what the tree says, checked rather than assumed:
 - **`byte` and `short` are storage, not arithmetic**
   (`support/types.zig`'s `Type`, and its `widensTo`).  `byte + byte`
   is an `int`; the verifier refuses storage-width arithmetic outright
-  (`06_mir/verify.zig`, D5: "No operator computes at a storage
+  (`mir/verify.zig`, D5: "No operator computes at a storage
   width").  So the integer accumulator widths are
   `int` and `long`, and only those two.
 - **`abs` already knows `minInt` is a trap** (`lower.zig`'s `.abs`
@@ -144,7 +144,7 @@ identical value.
 
 ## Where the proof lives, and why not where it was expected to
 
-The natural question is "07_optimize with the type and bound facts, or
+The natural question is "optimize with the type and bound facts, or
 the lowering?".  The answer is **the lowering**, and it is not a close
 call.
 
@@ -153,7 +153,7 @@ MIR.  Putting the proof in stage 7 means inventing one — a
 `checked: bool` on `Binary`, or an `add_unchecked` op — which bumps
 `format_version`, and then puts a flag *that turns a trap into a
 silent wrap* into a format `decode` trusts beyond the verifier
-(`06_mir/module.zig`: "instruction types beyond the verifier are
+(`mir/module.zig`: "instruction types beyond the verifier are
 trusted — treat a `.lc` like an executable").  A forged or damaged
 module could then wrap where the language traps.  The alternative —
 re-deriving the proof in the verifier so the flag can be checked — puts
@@ -183,7 +183,7 @@ check cannot fire.  Removing it on one arm and not the other is not a
 divergence; it is the same program with one arm doing less work.  The
 engines agree because the check was dead, not because both dropped it.
 
-So: a new `src/luce/08_llvm/reduce.zig`, sibling to `loops.zig`,
+So: a new `src/luce/codegen/reduce.zig`, sibling to `loops.zig`,
 computing a plan from verified MIR that `lower.zig` consumes.  That is
 exactly `loops.zig`'s contract and exactly its genre — the hoisting
 precedent is the model, down to the shape of the `Plan` and the
@@ -191,7 +191,7 @@ precedent is the model, down to the shape of the `Plan` and the
 
 One structural consequence: `loops.zig`'s `Graph`, `Loop`, `loops()`
 and `preheader()` are private to that file and would now have two
-users.  The right move is to lift them into `src/luce/08_llvm/cfg.zig`
+users.  The right move is to lift them into `src/luce/codegen/cfg.zig`
 — a control-flow graph with dominators, natural loops and preheaders,
 behind three functions (`build`, `loops`, `preheader`).  That meets
 `docs/CODING_GUIDE.md`'s split rule on its own terms: a subproblem
@@ -591,7 +591,7 @@ separate shape and is not in this design).
 
 Two notes on the shape.  `for x in xs: total += x` and
 `for i in range(0, len(xs)): total += xs[i]` are the **same MIR** —
-`04_semantics/builder.zig` desugars the first into the second — so one
+`semantics/builder.zig` desugars the first into the second — so one
 recognizer covers both spellings.  And recognizing at MIR rather than
 at HIR is what makes hand-written loops work, which is the common case
 and always will be.
@@ -650,7 +650,7 @@ first task in the plan for that reason.
 
 # Layer 3 — the whole-array route, with HIR
 
-`src/luce/05_hir.zig`'s header already ratifies the rule this depends
+`src/luce/hir.zig`'s header already ratifies the rule this depends
 on: **whole-array operations survive HIR and MIR as single nodes and
 are never expanded into a scalar loop.**  When `math.sum` and
 `math.dot` arrive at the backend as intrinsics rather than as loops,
@@ -674,7 +674,7 @@ A sketch only; the full design belongs to HIR's own reference.
   and float reductions stay ordered — see below.  Layer 3 buys the
   integer case nothing until integer whole-array operations exist.
   Its value here is representational: it removes the recognition step,
-  it makes `a * b + c` fusible (05_hir's own argument, with the
+  it makes `a * b + c` fusible (hir's own argument, with the
   measurement that LLVM's `LoopFusePass` will not do it), and it is
   the numpy/mlx/GPU on-ramp.
 - **Sequencing: Layers 1 and 2 must not be built on HIR.**  A user's
@@ -867,7 +867,7 @@ has read only the benchmark.
   constant bounds a term to `0 … k−1`, which would qualify
   `bench/loops`' `total += (i * j) % 7` if its trip count were
   array-bounded.  Every such rule is the first step of the value-range
-  lattice `07_optimize` deleted for measuring 0%.  **Type-derived
+  lattice `optimize` deleted for measuring 0%.  **Type-derived
   bounds only**: they need no dataflow and cannot go stale.
 - **`long × long` multiply-accumulate**, which needs a 128-bit product
   magnitude for its witness, and whose witness would fail on
@@ -897,9 +897,9 @@ the witness pass alone and time that.  If the first number does not
 land, stop and find the real obstruction.
 
 **Step 1 — Layer 1. Two to three days.**
-Extract `08_llvm/cfg.zig` from `loops.zig` (`Graph`, `Loop`, `loops`,
+Extract `codegen/cfg.zig` from `loops.zig` (`Graph`, `Loop`, `loops`,
 `preheader`; a pure move, `loops.zig`'s five tests must stay green).
-Add `08_llvm/reduce.zig`: the recognizer, the comptime width table
+Add `codegen/reduce.zig`: the recognizer, the comptime width table
 computed in `i128` from `heap.maxElements(element)`, and the
 table-recomputation test.  Add `heap.maxElements` (already shipped —
 `runtime/heap.zig`'s `maxElements` is the allocation ceiling; the rest
