@@ -75,6 +75,7 @@ selected surface roster is checked during the site build.
 | [ROADMAP.md](ROADMAP.md) | Completed ARC/type/class/closure phases and the ordered path through owned interfaces, userland proof, generics, and release lock. |
 | [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
+| [TERMUI_DECLARATIVE.md](TERMUI_DECLARATIVE.md) | The in-progress declarative termui v0.3 and editor replacement. |
 
 ## Decision records
 

@@ -61,6 +61,7 @@ pub const plans = [_][]const u8{
     "docs/ROADMAP.md",
     "docs/GENERICS.md",
     "docs/VECTOR.md",
+    "docs/TERMUI_DECLARATIVE.md",
 };
 
 /// Completed design records. These may use `luce historical` to quote
