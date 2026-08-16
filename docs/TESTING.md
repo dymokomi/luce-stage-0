@@ -218,6 +218,25 @@ guards bracket the run because every phase imports the shared
 comparator, and the two memory-heavy release-gate binaries are
 serialized to keep their memory use predictable.
 
+Feature work has narrower feedback lanes. They select tests from the same
+owned binaries; they do not create alternate suites or change the release
+gate:
+
+| command | proves |
+|---|---|
+| `zig build test-interfaces` | Interface declarations and refusals, conformance matching, witness layout, heterogeneous dispatch, ARC ownership, and cross-module use. |
+| `zig build test-classes` | Class identity, initialization, mutation, weak edges, deinitialization, runtime hardening, and interface use. |
+| `zig build test-weak-references` | Zeroing storage, upgrades, row reuse, copies, and supported ARC object families. |
+| `zig build test-closures` | Capture ownership, weak captures, bound receivers, cycles, and diagnostics. |
+| `zig build test-exceptional-ownership` | Releases across errors, traps, `catch`, loop exits, returns, and workers. |
+| `zig build test-optimizer` | Reachability and dead-code rewrites preserve ownership and implicit lifecycle edges. |
+
+These lanes are organized by semantic risk rather than by a target test count.
+One differential specification runs on both engines and compares the leak
+census; a structural test pins an exact MIR invariant; a runtime test attacks
+allocation, malformed values, or graph depth directly. Counting all three as
+interchangeable “tests” would hide what is actually proved.
+
 ### Where a test belongs
 
 - A test of observable Luce behavior belongs in `src/luce/specs/` and

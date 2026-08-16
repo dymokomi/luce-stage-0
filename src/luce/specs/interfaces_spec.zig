@@ -370,3 +370,109 @@ test "a named carrying receiver can live behind an interface while its owner liv
         \\
     , "3\n");
 }
+
+test "witness slots follow contract order rather than implementation order" {
+    try agree.prints(
+        \\interface Pair:
+        \\    func left() -> str
+        \\    func right() -> str
+        \\
+        \\struct Reversed: Pair:
+        \\    marker: i64
+        \\    func right() -> str:
+        \\        return "right"
+        \\    func left() -> str:
+        \\        return "left"
+        \\
+        \\func main():
+        \\    let pair: Pair = Reversed(marker = 0)
+        \\    print(pair.left() + "/" + pair.right())
+        \\
+    , "left/right\n");
+}
+
+test "one method can witness two contracts with the same requirement" {
+    try agree.prints(
+        \\interface Named:
+        \\    func text() -> str
+        \\
+        \\interface Titled:
+        \\    func text() -> str
+        \\
+        \\struct Label: Named, Titled:
+        \\    value: str
+        \\    func text() -> str:
+        \\        return self.value
+        \\
+        \\func named(value: Named) -> str:
+        \\    return value.text()
+        \\
+        \\func titled(value: Titled) -> str:
+        \\    return value.text()
+        \\
+        \\func main():
+        \\    let label = Label(value = "shared")
+        \\    print(named(label) + "/" + titled(label))
+        \\
+    , "shared/shared\n");
+}
+
+test "an interface method can return another owned interface value" {
+    try agree.prints(
+        \\interface Named:
+        \\    func text() -> str
+        \\
+        \\interface Factory:
+        \\    func make(value: i64) -> Named
+        \\
+        \\class Item: Named:
+        \\    value: i64
+        \\    func text() -> str:
+        \\        return "item " + str(self.value)
+        \\
+        \\struct Maker: Factory:
+        \\    offset: i64
+        \\    func make(value: i64) -> Named:
+        \\        return Item(value = value + self.offset)
+        \\
+        \\func main():
+        \\    let factory: Factory = Maker(offset = 1)
+        \\    let made = factory.make(41)
+        \\    print(made.text())
+        \\
+    , "item 42\n");
+}
+
+test "replacing heterogeneous class witnesses releases the old receiver first" {
+    try agree.prints(
+        \\interface Reading:
+        \\    func kind() -> str
+        \\    func read() -> i64
+        \\
+        \\class First: Reading:
+        \\    value: i64
+        \\    func kind() -> str:
+        \\        return "first"
+        \\    func read() -> i64:
+        \\        return self.value
+        \\    deinit:
+        \\        print("closed first")
+        \\
+        \\class Second: Reading:
+        \\    value: i64
+        \\    func read() -> i64:
+        \\        return self.value
+        \\    func kind() -> str:
+        \\        return "second"
+        \\    deinit:
+        \\        print("closed second")
+        \\
+        \\func main():
+        \\    var current: Reading = First(value = 1)
+        \\    print(current.kind() + ":" + str(current.read()))
+        \\    current = Second(value = 42)
+        \\    print(current.kind() + ":" + str(current.read()))
+        \\    print("leaving")
+        \\
+    , "first:1\nclosed first\nsecond:42\nleaving\nclosed second\n");
+}

@@ -8464,6 +8464,25 @@ test "ARC class: cross-runtime graph copying is refused without a target shell" 
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
+test "ARC class: final release uses a worklist for a deep class graph" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    var root = try runtime.newClass(9, null, &.{});
+    // Match the generic object-graph proof above at a depth that would exhaust
+    // a native recursive destructor. Each new class adopts the previous root
+    // as its one owned field, so freeing the final root must drain the whole
+    // chain iteratively.
+    for (0..40_000) |_| root = try runtime.newClass(9, null, &.{root});
+
+    runtime.freeValue(root);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "ARC: retain and release count references, and zero frees the object" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });

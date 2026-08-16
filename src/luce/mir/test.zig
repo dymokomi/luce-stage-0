@@ -1460,6 +1460,19 @@ test "bare function fields require whole-object or compiler-owned storage" {
     program.structs[0].reference = false;
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
+    // An interface is the other compiler-owned whole-object layout. Its
+    // hidden witness slots may hold bare functions, but it remains a value
+    // layout and weak storage cannot be forged into it.
+    program.structs[0].interface = true;
+    try verify_mod.verify(testing.allocator, &program);
+    program.structs[0].reference = true;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    program.structs[0].reference = false;
+    struct_fields[0].weak = true;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    struct_fields[0].weak = false;
+    program.structs[0].interface = false;
+
     const member_fields = try arena.dupe(types.StructField, &.{.{
         .name = "callback",
         .field_type = .{ .function = 0 },

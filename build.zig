@@ -492,6 +492,27 @@ pub fn build(b: *std.Build) void {
     );
     test_weak_references_step.dependOn(&b.addRunArtifact(weak_reference_tests).step);
 
+    const interface_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"interface"},
+        .test_runner = progress_test_runner,
+    });
+    const test_interfaces_step = b.step(
+        "test-interfaces",
+        "Run interface conformance, dispatch, ownership, and diagnostic specifications",
+    );
+    test_interfaces_step.dependOn(
+        &addProgressTestRun(b, interface_tests, "interfaces").step,
+    );
+    const interface_internal_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"interface"},
+        .test_runner = progress_test_runner,
+    });
+    test_interfaces_step.dependOn(
+        &addProgressTestRun(b, interface_internal_tests, "interface-internals").step,
+    );
+
     const class_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{ "specs.classes_spec.", "class:" },

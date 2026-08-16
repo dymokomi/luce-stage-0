@@ -2283,6 +2283,71 @@ test "a union round-trips with its members and payload fields" {
     try testing.expectError(error.InvalidModule, decode(testing.allocator, bad));
 }
 
+fn expectReversedInterfaceWitness(program: *const mir.Program) !void {
+    const layout_index: u32 = for (program.structs, 0..) |layout, index| {
+        if (layout.interface and std.mem.eql(u8, layout.name, "Pair")) {
+            break @intCast(index);
+        }
+    } else return error.TestUnexpectedResult;
+    const layout = program.structs[layout_index];
+    try testing.expectEqual(@as(usize, 2), layout.fields.len);
+    try testing.expectEqualStrings("left", layout.fields[0].name);
+    try testing.expectEqualStrings("right", layout.fields[1].name);
+
+    var saw_value = false;
+    for (program.functions) |function| {
+        for (function.instructions) |instruction| {
+            if (instruction != .struct_make or instruction.struct_make.layout != layout_index) continue;
+            const fields = instruction.struct_make.fields;
+            try testing.expectEqual(@as(usize, 2), fields.len);
+            const left = switch (function.instructions[fields[0]]) {
+                .const_function => |bound| bound,
+                else => return error.TestUnexpectedResult,
+            };
+            const right = switch (function.instructions[fields[1]]) {
+                .const_function => |bound| bound,
+                else => return error.TestUnexpectedResult,
+            };
+            try testing.expect(left.receiver != null);
+            try testing.expect(right.receiver != null);
+            try testing.expectEqualStrings("Reversed.left", program.functions[left.function].name);
+            try testing.expectEqualStrings("Reversed.right", program.functions[right.function].name);
+            saw_value = true;
+        }
+    }
+    try testing.expect(saw_value);
+}
+
+test "interface witness slots keep contract order across serialization" {
+    var program = try compileScript(
+        \\interface Pair:
+        \\    func left() -> i64
+        \\    func right() -> i64
+        \\
+        \\struct Reversed: Pair:
+        \\    marker: i64
+        \\    func right() -> i64:
+        \\        return self.marker + 2
+        \\    func left() -> i64:
+        \\        return self.marker + 1
+        \\
+        \\func sum(value: Pair) -> i64:
+        \\    return value.left() + value.right()
+        \\
+        \\func main():
+        \\    print(str(sum(Reversed(marker = 39))))
+        \\
+    );
+    defer program.deinit();
+    try expectReversedInterfaceWitness(&program);
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+    try expectReversedInterfaceWitness(&loaded);
+}
+
 test "an enum register holding no member is refused" {
     var program = try compileScript(
         \\enum Method:

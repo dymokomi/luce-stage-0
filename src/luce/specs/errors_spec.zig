@@ -7673,6 +7673,48 @@ test "luce.sema.interface: an implementation must match the contract signature" 
     , "luce.sema.interface", "does not match interface method");
 }
 
+test "luce.sema.interface: witness parameter count and types match exactly" {
+    try expectHostSaying(
+        \\interface Transform:
+        \\    func apply(value: i64, scale: i64) -> i64
+        \\
+        \\struct Short: Transform:
+        \\    marker: i64
+        \\    func apply(value: i64) -> i64:
+        \\        return value
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.interface", "does not match interface method Transform.apply");
+    try expectHostSaying(
+        \\interface Transform:
+        \\    func apply(value: i64) -> i64
+        \\
+        \\struct Long: Transform:
+        \\    marker: i64
+        \\    func apply(value: i64, scale: i64) -> i64:
+        \\        return value * scale
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.interface", "does not match interface method Transform.apply");
+    try expectHostSaying(
+        \\interface Transform:
+        \\    func apply(value: i64, label: str) -> i64
+        \\
+        \\struct Wrong: Transform:
+        \\    marker: i64
+        \\    func apply(value: i64, label: i64) -> i64:
+        \\        return value + label
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.interface", "does not match interface method Transform.apply");
+}
+
 test "luce.sema.interface: a writing method cannot satisfy a read-only interface" {
     try expectHostSaying(
         \\interface Counter:
