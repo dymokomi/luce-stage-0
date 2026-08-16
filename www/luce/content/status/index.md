@@ -36,8 +36,7 @@ development release must not be described as full ARC until those gates are
 removed.
 
 Current blockers are concrete: four byte/zip file-lifecycle tests are skipped;
-two language specs relax their zero-object census; an early control-flow edge
-inside nested `match`/`for-in` can panic lowering; and damaged compiled-module
+two language specs relax their zero-object census; and damaged compiled-module
 inputs can reach two verifier/runtime panic paths. [Memory Management](/guide/reference/memory/#current-completion-blockers)
 lists the exact boundary.
 

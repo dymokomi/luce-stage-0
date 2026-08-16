@@ -34,8 +34,6 @@ It is not yet honest to call that full ARC:
   release;
 - the synthesized test entry and adventure spec relax their zero-census
   assertions around remaining container reclamation gaps;
-- a `match` arm with an early control-flow edge inside a `for-in` can panic HIR
-  lowering; and
 - the damaged-module byte-mutation hardening test is skipped around two
   decoder/verifier panic paths.
 
@@ -51,8 +49,8 @@ Those are the first milestone, not cleanup to postpone. After them:
 - `weak` references do not exist.
 - The public scalar spellings are still `byte`, `short`, `int`, `long`,
   `half`, `float`, `double`, and `string`.
-- [MISSING.md](MISSING.md) contains a current lowering bug that must be fixed
-  before feature work changes the same seams.
+- [MISSING.md](MISSING.md) contains a damaged-module validation bug that must
+  be fixed before the serialized format changes again.
 
 That inventory is the baseline. A plan item is not allowed to migrate into a
 current reference until its acceptance program and negative matrix pass on
@@ -305,8 +303,8 @@ considered complete, not after every prose or local implementation edit.
 
 ### Phase 0 — finish ARC and restore the release gate
 
-1. Fix every confirmed current bug in [MISSING.md](MISSING.md): the nested
-   early-edge lowering panic and the damaged-module verifier panic.
+1. Fix every confirmed current bug in [MISSING.md](MISSING.md); the remaining
+   one is the damaged-module verifier panic.
 2. Remove every feature-related skip and relaxed census assertion. Keep only
    genuine platform capability skips, and make the test summary distinguish
    them from product gaps.

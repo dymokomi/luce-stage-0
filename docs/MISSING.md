@@ -11,22 +11,6 @@ that context.
 
 Resolved bugs are removed from this file once the fix and its proof land.
 
-## An early control-flow edge in `match` inside `for-in` can panic lowering
-
-Two supported shapes reach `unreachable` in `src/luce/05_hir/lower.zig`
-instead of compiling or reporting a diagnostic:
-
-- a `try` in a `match` arm inside a `for-in` whose iterable is a fallible call
-  reaches the `replayTry` temporary-floor assertion; and
-- a `continue` in that nested arm reaches the corresponding
-  `replayBreakContinue` assertion.
-
-Hoisting the fallible iterable before the loop and avoiding an early edge in
-the nested arm are current source rewrites, not fixes. Lowering must reconcile
-the temporary ledger for every arm exit inside the loop, with differential
-regressions for `try`, `return`, `break`, and `continue` rather than repairing
-only the two shapes that happened to expose it.
-
 ## A damaged compiled module can panic the decoder/runtime path
 
 The single-byte module-mutation hardening test in

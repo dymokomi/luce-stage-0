@@ -1988,6 +1988,7 @@ pub const FunctionBuilder = struct {
         span: Span,
     ) Error!Typed {
         const storage = shapes.ownsStorage(self.analyzer, result_type);
+        const objects = shapes.carriesObjects(self.analyzer, result_type);
 
         // A callee answering nothing has no value to carry: the
         // "value" is the call itself, and so is its node.  The floor
@@ -2010,13 +2011,14 @@ pub const FunctionBuilder = struct {
             .result = result_type,
             .span = origin.span(),
         } });
-        if (storage) {
+        if (storage or objects) {
             // The carried slot's park is recorded like every other
             // (coupling #3): at the park, settled at retractions.
             ledger.setPark(node, .{
                 .local = carried,
                 .storage = storage,
                 .released_storage = storage,
+                .objects = objects,
             });
             try self.temps.append(self.temporary(), .{
                 .local = carried,

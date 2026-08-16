@@ -60,8 +60,6 @@ The repository itself records these open gaps:
   because function-exit cleanup does not reliably close the handle yet.
 - The synthesized Luce test entry and the adventure specification relax their
   zero-census assertion around remaining container reclamation gaps.
-- An early control-flow edge in a `match` nested inside `for-in` can panic HIR
-  lowering instead of compiling or reporting a diagnostic.
 - The module damage hardening test is skipped around two decoder/verifier
   panic paths; [MISSING.md](MISSING.md) tracks the bug.
 

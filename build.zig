@@ -429,6 +429,11 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "S34: catch releases a fallible union result",
             "S34: break and continue release union payloads",
+            "a nested try reconciles a fallible for-in temporary",
+            "a nested catch reconciles a fallible for-in temporary",
+            "continue in match preserves a fallible for-in iterable",
+            "break in match releases a fallible for-in iterable",
+            "return in match releases a fallible for-in iterable",
             "an unwaited nested union result is discarded",
             "exit unwinds a union carrying a callback",
             "nested worker errors unwind owned graphs",

@@ -3233,6 +3233,165 @@ test "continue in a nested loop affects only the inner loop" {
     );
 }
 
+test "a nested try reconciles a fallible for-in temporary before propagating" {
+    try agree.ok(
+        \\enum Kind:
+        \\    first
+        \\    second
+        \\    third
+        \\
+        \\func kinds() -> list(Kind)!:
+        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\    return values
+        \\
+        \\func score(kind: Kind) -> long!:
+        \\    if kind == Kind.second:
+        \\        error("stop")
+        \\    return 1
+        \\
+        \\func run() -> long!:
+        \\    var total: long = 0
+        \\    for kind in try kinds():
+        \\        match kind:
+        \\            first:
+        \\                total += try score(kind)
+        \\            second:
+        \\                total += try score(kind)
+        \\            third:
+        \\                total += try score(kind)
+        \\    return total
+        \\
+        \\func main():
+        \\    var stopped = false
+        \\    run() catch reason:
+        \\        assert(reason == "stop")
+        \\        stopped = true
+        \\    assert(stopped)
+        \\
+    );
+}
+
+test "a nested catch reconciles a fallible for-in temporary on both arms" {
+    try agree.ok(
+        \\enum Kind:
+        \\    first
+        \\    second
+        \\    third
+        \\
+        \\func kinds() -> list(Kind)!:
+        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\    return values
+        \\
+        \\func score(kind: Kind) -> long!:
+        \\    if kind == Kind.second:
+        \\        error("stop")
+        \\    return 1
+        \\
+        \\func run() -> long!:
+        \\    var total: long = 0
+        \\    for kind in try kinds():
+        \\        match kind:
+        \\            first:
+        \\                total += score(kind) catch 10
+        \\            second:
+        \\                total += score(kind) catch 10
+        \\            third:
+        \\                total += score(kind) catch 10
+        \\    return total
+        \\
+        \\func main() -> !:
+        \\    assert((try run()) == 12)
+        \\
+    );
+}
+
+test "continue in match preserves a fallible for-in iterable" {
+    try agree.ok(
+        \\enum Kind:
+        \\    first
+        \\    second
+        \\    third
+        \\
+        \\func kinds() -> list(Kind)!:
+        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\    return values
+        \\
+        \\func run() -> long!:
+        \\    var total: long = 0
+        \\    for kind in try kinds():
+        \\        match kind:
+        \\            first:
+        \\                continue
+        \\            second:
+        \\                total += 2
+        \\            third:
+        \\                total += 3
+        \\    return total
+        \\
+        \\func main() -> !:
+        \\    assert((try run()) == 5)
+        \\
+    );
+}
+
+test "break in match releases a fallible for-in iterable at the loop exit" {
+    try agree.ok(
+        \\enum Kind:
+        \\    first
+        \\    second
+        \\    third
+        \\
+        \\func kinds() -> list(Kind)!:
+        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\    return values
+        \\
+        \\func run() -> long!:
+        \\    var total: long = 0
+        \\    for kind in try kinds():
+        \\        match kind:
+        \\            first:
+        \\                total += 1
+        \\            second:
+        \\                break
+        \\            third:
+        \\                total += 100
+        \\    return total
+        \\
+        \\func main() -> !:
+        \\    assert((try run()) == 1)
+        \\
+    );
+}
+
+test "return in match releases a fallible for-in iterable immediately" {
+    try agree.ok(
+        \\enum Kind:
+        \\    first
+        \\    second
+        \\    third
+        \\
+        \\func kinds() -> list(Kind)!:
+        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\    return values
+        \\
+        \\func run() -> long!:
+        \\    var total: long = 0
+        \\    for kind in try kinds():
+        \\        match kind:
+        \\            first:
+        \\                total += 1
+        \\            second:
+        \\                return total + 10
+        \\            third:
+        \\                total += 100
+        \\    return total
+        \\
+        \\func main() -> !:
+        \\    assert((try run()) == 11)
+        \\
+    );
+}
+
 test "the explicit frame stack survives a deep iterative-recursive sum" {
     try agreeOk(
         \\func sum_to(n: long) -> long:

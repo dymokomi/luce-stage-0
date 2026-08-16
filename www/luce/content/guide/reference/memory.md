@@ -138,7 +138,6 @@ an unfinished worker and discards its unobserved result.
 
 - Four byte/zip tests are skipped by `resource_close_pending`.
 - Two language specs relax their zero-live-object assertion.
-- An early edge from `match` inside `for-in` can panic HIR lowering.
 - The damaged-module mutation test is skipped around verifier panic paths.
 
 ARC is complete only when those gates are removed, all normal differential
