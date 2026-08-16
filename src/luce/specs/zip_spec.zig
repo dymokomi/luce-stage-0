@@ -25,17 +25,6 @@ const agree = @import("agree.zig");
 /// The depth the std suite has always run at.
 const budget: agree.Provided = .{ .call_depth = 4096 };
 
-/// sub_cut_b: the two file round-trip tests below `zip.write` then
-/// `zip.read` one path.  A `file` handle used to close at scope exit under
-/// scope ownership; that reclamation is retired and its ARC replacement is
-/// not wired yet, so the write's handle stays open and the `agree.zig`
-/// world (one open handle at a time, so the missing scope-close is
-/// observable) refuses the read's open.  Both engines still agree; the real
-/// OS tolerates the leak, so `loom run` works.  A `var` so the guard is not
-/// comptime-folded into an unreachable-code error; flip to `false` when
-/// resource reclamation lands.
-var resource_close_pending: bool = true;
-
 fn agreeOk(source: []const u8) !void {
     return agree.okGiven(source, budget);
 }
@@ -305,7 +294,6 @@ test "zip: what Info-ZIP stored, std.zip reads" {
 }
 
 test "zip: an archive Info-ZIP wrote survives a real file, both ways" {
-    if (resource_close_pending) return error.SkipZigTest; // file handle not closed at scope exit until ARC resource reclamation lands
     // **The end of docs/BYTES.md, as one program.**  The archive is
     // Info-ZIP's own bytes; it goes out through `zip.write` — which is
     // `files.write_bytes`, which is a loop over a handle whose host
@@ -346,7 +334,6 @@ test "zip: an archive Info-ZIP wrote survives a real file, both ways" {
 }
 
 test "zip: an archive std.zip wrote to a file is one it reads back" {
-    if (resource_close_pending) return error.SkipZigTest; // file handle not closed at scope exit until ARC resource reclamation lands
     // The other direction: built here, written, read, and checked
     // against what went in.  `writer.finish` answers bytes and
     // `zip.write` puts them somewhere — the seam this module always

@@ -16,9 +16,9 @@
 //!     byte an element, `strings.to_bytes` and `strings.from_bytes`,
 //!     and `parse_string` answering absent for a sequence UTF-8 does
 //!     not admit.
-//!   * **A handle is a scope-owned resource** (R5): open, read, close
-//!     at the end of the scope; `free f` as an early close; `give` and
-//!     `return` moving one; and a use after close trapping
+//!   * **A handle is a reference-counted resource** (R5): open, read,
+//!     close when its last reference is released; `free f` as an early
+//!     close; and a use after close trapping
 //!     `use_after_free`, because it is the same mistake.
 //!   * **A read answers a count** (R4), which is what a partial read
 //!     is: the world in `agree.zig` writes three bytes at a time on
@@ -31,18 +31,6 @@ const luce = @import("luce");
 const mir = luce.mir;
 
 const testing = std.testing;
-
-/// sub_cut_b: a `file` handle is a scope-owned resource that used to close
-/// at scope exit under scope ownership.  That reclamation is retired and
-/// its ARC replacement is not wired yet, so a handle opened inside
-/// `write_bytes`/`append_bytes` is not closed when the function returns.
-/// The `agree.zig` world deliberately allows only one open handle at a
-/// time (so a missing scope-close is observable), so the later `read_bytes`
-/// open is refused and the round trip fails — on BOTH engines, which still
-/// agree.  The real OS tolerates the leaked handle, so `loom run` of the
-/// same program works.  A `var` so the guard is not comptime-folded into an
-/// unreachable-code error; flip to `false` when resource reclamation lands.
-var resource_close_pending: bool = true;
 
 // ---------------------------------------------------------------------------
 // Bytes, and text as a reading of them
@@ -129,7 +117,7 @@ test "a packed list still slices, sorts, finds and pops" {
 // The handle, and the scope that owns it
 // ---------------------------------------------------------------------------
 
-test "a handle opens, reads a count, and its scope closes it" {
+test "a handle opens, reads a count, and its last reference closes it" {
     const world: agree.World = .withFile("notes.txt", "abcdef");
 
     var session = try agree.compare(
@@ -148,18 +136,16 @@ test "a handle opens, reads a count, and its scope closes it" {
 
     // Four, then the two that were left, then zero: a short read is
     // the end of the file and not a refusal (docs/BYTES.md R4).  The
-    // leak census is zero, which is the scope having closed the
-    // handle — a handle is an object like any other.
+    // leak census is zero, which is ARC having released the handle — a
+    // handle is an object like any other.
     try testing.expectEqualStrings("4\n97\n2\n0\n", session.printed());
-    // sub_cut_b: the run finishes clean; the zero-leak gate is relaxed
-    // to a tag check while reference-container reclamation is mid-ARC.
-    try testing.expect(std.meta.activeTag(session.end) == .finished);
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }
 
 test "a handle returns out of the function that opened it" {
     // `return` moves an object, and a handle is an object: the file
-    // stays open across the frame that made it and is closed by the
-    // scope that received it (MEMORY.md, unchanged).
+    // stays open across the frame that made it and is closed when its
+    // final reference is released.
     const world: agree.World = .withFile("notes.txt", "abcdef");
 
     var session = try agree.compare(
@@ -177,9 +163,7 @@ test "a handle returns out of the function that opened it" {
     defer session.deinit();
 
     try testing.expectEqualStrings("6\n", session.printed());
-    // sub_cut_b: the run finishes clean; the zero-leak gate is relaxed
-    // to a tag check while reference-container reclamation is mid-ARC.
-    try testing.expect(std.meta.activeTag(session.end) == .finished);
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }
 
 test "a struct owns an optional file while a callback consumes its result" {
@@ -236,7 +220,6 @@ test "opening a file that is not there is an error, not a trap" {
 // ---------------------------------------------------------------------------
 
 test "read_bytes and write_bytes carry bytes that are not text" {
-    if (resource_close_pending) return error.SkipZigTest; // file handle not closed at scope exit until ARC resource reclamation lands
     // The end of the run: a byte no `string` can hold makes the round
     // trip through a real file, which is the thing docs/BYTES.md
     // opened by saying Luce could not do.
@@ -269,13 +252,10 @@ test "read_bytes and write_bytes carry bytes that are not text" {
     defer session.deinit();
 
     try testing.expectEqualStrings("5\ntrue\n(not text)\n", session.printed());
-    // sub_cut_b: the run finishes clean; the zero-leak gate is relaxed
-    // to a tag check while reference-container reclamation is mid-ARC.
-    try testing.expect(std.meta.activeTag(session.end) == .finished);
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }
 
 test "append_bytes adds to the end of what is there" {
-    if (resource_close_pending) return error.SkipZigTest; // file handle not closed at scope exit until ARC resource reclamation lands
     const world: agree.World = .withFile("log.bin", "ab");
 
     var session = try agree.compare(
@@ -291,6 +271,7 @@ test "append_bytes adds to the end of what is there" {
     defer session.deinit();
 
     try testing.expectEqualStrings("abcd\n", session.printed());
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }
 
 test "the text conveniences still read and write text, over the byte channel" {
