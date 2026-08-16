@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const test_suites = @import("tools/test_suites.zig");
 
-/// termui's modules, entry module first (docs/TERMUI_DECLARATIVE.md).
+/// termui's modules, entry module first (docs/TERMUI.md).
 /// The public facade is small; model, input, layout, canvas and view form the
 /// hidden declarative engine, and runtime owns the terminal loop.
 const termui_version = "0.3.0";

@@ -461,8 +461,9 @@ fn cards(out: *Buffer, section: *const site.Section) !void {
 
 fn partId(part: []const u8) []const u8 {
     if (std.mem.eql(u8, part, "Language Guide")) return "language-guide";
-    if (std.mem.eql(u8, part, "Tools and Projects")) return "tools-and-projects";
     if (std.mem.eql(u8, part, "Language Reference")) return "language-reference";
+    if (std.mem.eql(u8, part, "Toolchain")) return "toolchain";
+    if (std.mem.eql(u8, part, "Projects")) return "projects";
     if (std.mem.eql(u8, part, "Standard Library")) return "standard-library";
     if (std.mem.eql(u8, part, "Maintained Packages")) return "maintained-packages";
     unreachable;

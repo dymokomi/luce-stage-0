@@ -987,7 +987,7 @@ test "the reference keeps implied self and static visible" {
     defer gpa.free(lexical);
     try std.testing.expect(std.mem.indexOf(u8, lexical, "`static` belongs immediately before `func`") != null);
 
-    const toolchain = try repository.read("www/luce/content/guide/command-line.md");
+    const toolchain = try repository.read("www/luce/content/tools/command-line.md");
     defer gpa.free(toolchain);
     try std.testing.expect(std.mem.indexOf(u8, toolchain, "Current release label:") != null);
 }
@@ -1003,7 +1003,7 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const toolchain = try repository.read("www/luce/content/guide/command-line.md");
+    const toolchain = try repository.read("www/luce/content/tools/command-line.md");
     defer gpa.free(toolchain);
 
     const format = try declaredNumber(repository, "src/luce/mir/module.zig", "format_version");
@@ -1021,7 +1021,7 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     defer for (claims) |claim| gpa.free(claim);
     for (claims) |claim| {
         if (std.mem.indexOf(u8, toolchain, claim) != null) continue;
-        std.debug.print("guide/command-line.md does not say {s}\n", .{claim});
+        std.debug.print("tools/command-line.md does not say {s}\n", .{claim});
         return error.TestUnexpectedResult;
     }
 }
@@ -1063,7 +1063,7 @@ test "the toolchain page names every option and command word the binaries take" 
     var names = try commandLine(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "guide/command-line.md", names, &.{});
+    try expectDocumented(repository, "tools/command-line.md", names, &.{});
 }
 
 test "a name is found only as a whole word" {

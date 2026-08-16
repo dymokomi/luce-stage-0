@@ -63,12 +63,9 @@ pub const plans = [_][]const u8{
     "docs/VECTOR.md",
 };
 
-/// Completed design records. These may use `luce historical` to quote
-/// syntax from the point in time they record.
-pub const records = [_][]const u8{
-    "docs/TERMUI_DECLARATIVE.md",
-    "docs/TERMUI_EDITOR_REWRITE.md",
-};
+/// Ratified historical boundaries whose reasoning remains useful. Superseded
+/// pre-release plans do not qualify; the current tree has no such record.
+pub const records = [_][]const u8{};
 
 /// Every catalogued document.
 pub const all = living ++ plans ++ records;
@@ -110,9 +107,8 @@ const index_page = "docs/README.md";
 /// Reads `docs/README.md` and answers, for each row, which heading it
 /// was written under.  A row is a table line whose first cell is a
 /// markdown link — `| [NAME.md](NAME.md) | … |` — and the heading it
-/// belongs to is whichever `## Current` / `## Plans` /
-/// `## Decision records` last
-/// went by.  Caller owns the map and its keys.
+/// belongs to is whichever `## Current` / `## Plans` / `## Decision records`
+/// last went by. Caller owns the map and its keys.
 fn readIndexRows(
     gpa: std.mem.Allocator,
     io: std.Io,

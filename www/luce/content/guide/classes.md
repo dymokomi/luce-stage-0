@@ -1,122 +1,106 @@
 # Classes
 
-A class represents one object with shared identity. Use a class when several
-parts of a program must observe and change the same state. Use a
-[structure](/guide/structures/) when assignment should make an independent
-value instead.
-
-The distinction is small and deliberate:
+A class represents one object with shared identity. Use one when several parts
+of a program must observe and change the same state, or when callbacks and
+interfaces should keep one model alive. Use a [structure](/guide/structures/)
+when assignment should make an independent outer value instead.
 
 | Declaration | Assignment | Mutation through `let` | Comparison |
 |---|---|---|---|
-| `struct` | copies a value | no | value equality, when its fields support it |
-| `class` | shares one object | yes | identity with `is` |
+| `struct` | copies a value | no | value equality when its fields support it |
+| `class` | retains and shares one object | yes | identity with `is` |
 
-## Declare and construct a class
+## Declaring a class
 
-Fields and methods look like structure members. Without an `init` body,
-construction names every required field:
+Fields and methods use the same member syntax as a structure. Without a custom
+initializer, construction names required fields and may omit defaulted fields:
 
 ```luce run
 class Counter:
-    count: i64
+    value: i64 = 0
 
     func add(amount: i64) -> i64:
-        self.count += amount
-        return self.count
+        self.value += amount
+        return self.value
 
 func main():
-    let first = Counter(count = 1)
-    let second = first
-    print(str(second.add(41)))
-    print(str(first.count))
+    let counter = Counter()
+    print(str(counter.add(2)))
+    print(str(counter.add(3)))
 ```
 
 ```output
-42
-42
+2
+5
 ```
 
-`first` and `second` name the same object. The `let` prevents rebinding either
-name; it does not freeze the object. Use `var` only when the binding itself
-must later name another object.
+The constructor creates one ARC object. One custom `init` body may replace the
+memberwise call surface and establish derived or validated fields before the
+object exists. [Initialization](/guide/initialization/) covers memberwise
+construction, defaults, definite initialization, fallible calls, visibility,
+and the restrictions on `self` before identity is published.
 
-Fields without defaults are required. Fields with defaults may be omitted.
-This memberwise form is the shortest choice when construction only stores its
-arguments.
+## Aliases observe one object
 
-## Control construction with `init`
-
-Declare one `init(parameters)` body when construction needs validation,
-derived fields, or a smaller public surface than the stored representation:
+Assignment, parameter passing, returns, fields, optionals, and collection
+storage retain the same object rather than copying its fields:
 
 ```luce run
-class Rectangle:
-    label: str = "rectangle"
-    width: i64
-    height: i64
-    area: i64
+class Counter:
+    value: i64
 
-    init(width: i64, height: i64 = 1):
-        self.width = width
-        self.height = height
-        self.area = self.width * self.height
+func change(counter: Counter):
+    counter.value = 42
 
 func main():
-    let rectangle = Rectangle(6, height = 7)
-    print(rectangle.label)
-    print(str(rectangle.area))
+    let first = Counter(value = 1)
+    let second = first
+    change(second)
+    print(str(first.value))
 ```
 
 ```output
-rectangle
 42
 ```
 
-The class name remains the constructor. `Rectangle.init(...)` is not a call;
-write `Rectangle(...)`. Initializer parameters follow the same positional,
-named, type, and trailing-default rules as function parameters. Declaring
-`init` replaces the memberwise call surface, so callers name parameters such
-as `width`, not private implementation fields such as `area`.
+`first`, `second`, and the parameter in `change` are three strong references
+to one `Counter`. Each keeps the object alive; dropping one name does not
+invalidate the others.
 
-Every successful path through `init` must establish every stored field. A
-field default and a weak field's implicit `none` already count. After assigning
-a field, the initializer may read or update it. Both arms of an `if` or an
-exhaustive `match` must establish a field before code after the branch can use
-it; a loop alone is not enough because it may run zero times. The compiler
-lists every field still missing.
+This is the reason to choose a class. If observing the mutation through
+`first` would be surprising or incorrect, the model should probably be a
+structure value instead.
 
-The object does not exist until initialization succeeds. During `init`, `self`
-can only read and assign stored fields: it cannot be passed, returned,
-captured, replaced, or used to call an instance method. Put reusable
-calculation in a static function. A bare `return` finishes a fully initialized
-object early; returning a value is invalid.
+## `let` keeps the binding stable
 
-An initializer that can reject input writes `-> !`:
+A `let` class binding cannot be rebound to another class object, but its
+object remains mutable. A `var` is needed only when the name itself will later
+refer to a different object:
 
-```luce module file=port.luc
-class Port:
-    number: i64
+```luce run
+class Box:
+    value: i64
 
-    init(number: i64) -> !:
-        if number < 1:
-            error("port must be positive")
-        self.number = number
+func main():
+    let stable = Box(value = 1)
+    stable.value = 2
 
-func open() -> Port!:
-    return try Port(8080)
+    var replaceable = Box(value = 10)
+    replaceable = Box(value = 20)
+    print(f"{stable.value} {replaceable.value}")
 ```
 
-Callers handle it with the ordinary `try` or `catch` rules. Failure cleans any
-values already assigned without publishing a partial object or running
-`deinit`. An initializer may be `private`; code in the same module can then
-offer public static construction functions. Luce has one initializer per
-class—no overload set or multi-phase hierarchy.
+```output
+2 20
+```
 
-## Compare identity with `is`
+This distinction keeps binding intent useful. `let` still promises that the
+name’s identity does not change, even when the object intentionally has
+mutable state.
 
-Two independently constructed objects remain distinct even when their fields
-have equal values:
+## Comparing identity
+
+`is` asks whether two values name the same object:
 
 ```luce run
 class Token:
@@ -126,63 +110,85 @@ func main():
     let first = Token(value = 7)
     let same = first
     let separate = Token(value = 7)
-    assert(first is same)
-    assert(not (first is separate))
-    print("two identities")
+    print(str(first is same))
+    print(str(first is separate))
 ```
 
 ```output
-two identities
+true
+false
 ```
 
-Both operands of `is` must have the same nominal class type. Luce does not
-synthesize `==`, ordering, or hashing for classes. Compare a stable field when
-the program needs value equality.
+Equal field contents do not make two class instances identical. Classes do
+not synthesize `==`, ordering, or hashing from their fields. Compare a stable
+field explicitly when the application needs value equality; use `is` only
+when shared identity is the actual question.
 
-## Classes fit ordinary storage
+Both operands of `is` have the same nominal class type. It is not a runtime
+cast or a general pointer comparison.
 
-A class reference can be a parameter, result, optional, field, or element of a
-list, map, or array. Every such place retains the same object. Removing or
-replacing the value releases that reference.
+## Nested value fields
 
-Classes can conform to interfaces, including interfaces whose methods mutate
-the object:
+A class may contain structure fields. Assigning through a nested path rebuilds
+the value portion until it reaches the surrounding class identity:
 
 ```luce run
-interface Incrementing:
-    func add(amount: i64) -> i64
+struct Point:
+    x: i64
+    y: i64
 
-class Counter: Incrementing:
-    count: i64
-
-    func add(amount: i64) -> i64:
-        self.count += amount
-        return self.count
-
-func apply(item: Incrementing, amount: i64) -> i64:
-    return item.add(amount)
+class Scene:
+    origin: Point
 
 func main():
-    let counter = Counter(count = 1)
-    let items = new list[Incrementing]
-    items.append(counter)
-    print(str(apply(items[0], 41)))
-    print(str(counter.count))
+    let scene = Scene(origin = Point(x = 1, y = 2))
+    scene.origin.x = 40
+    print(str(scene.origin.x + scene.origin.y))
 ```
 
 ```output
 42
-42
 ```
 
-The interface value retains the class identity, so mutation through the
-interface is visible through `counter`.
+`Point` remains a value. The nested assignment installs a changed `Point` back
+into the nearest mutable identity, `scene`. Copying `scene.origin` into a
+separate structure binding would still produce an independent point value.
 
-## Break cycles with `weak`
+## Classes in ordinary storage
 
-Automatic reference counting cannot reclaim a cycle made entirely of strong
-references. Mark a back-edge `weak` when observing its target must not keep
-that target alive:
+Classes may be returned, made optional, stored in structure/class fields, and
+placed in lists, maps, and arrays. Every place retains the same identity:
+
+```luce run
+class Item:
+    name: str
+    count: i64
+
+func find(items: list[Item], name: str) -> Item?:
+    for item in items:
+        if item.name == name:
+            return item
+    return none
+
+func main():
+    let apples = Item(name = "apple", count = 1)
+    let items: list[Item] = [apples]
+    let found = find(items, "apple") else Item(name = "missing", count = 0)
+    found.count += 2
+    print(str(apples.count))
+```
+
+```output
+3
+```
+
+The list and optional result do not create independent `Item` objects. They
+retain and return the same one.
+
+## Weak relationships
+
+ARC cannot collect an unreachable cycle of strong references. A parent may
+own children strongly while each child observes its parent weakly:
 
 ```luce run
 class Node:
@@ -205,49 +211,82 @@ func main():
 true
 ```
 
-A weak place is optional. Reading it takes one owned snapshot: a live target
-becomes `T?`; after the last strong reference disappears it reads `none`.
-Stored closures can create the same kind of cycle, so a capture list can use
-`[weak self]` or another class name. [Functions and
-Closures](/guide/functions/#capture-lists) shows that form.
+A weak field does not retain. Its type is optional because the target may be
+gone. Each read produces an owned optional snapshot, so bind the read once
+when several operations must use the same observed lifetime.
 
-## Finish work in `deinit`
+A class that stores a callback can form the same ownership cycle through a
+closure environment. [Closures: Weak captures](/guide/closures/#weak-captures)
+uses `[weak self]` to make that back-edge non-owning.
 
-A class may declare one bare `deinit` body. It runs exactly once at the last
-strong release, while the object's fields are still alive. Those fields are
-released after the body returns.
+## Classes and interfaces
+
+A class may explicitly conform to one or more interfaces. Landing it in an
+interface-typed place retains the class identity, and methods called through
+the interface can mutate that shared object:
 
 ```luce run
-class Resource:
-    name: str
+interface Adjustable:
+    func adjust(amount: i64) -> i64
 
-    deinit:
-        print("closed " + self.name)
+class Counter: Adjustable:
+    value: i64
+
+    func adjust(amount: i64) -> i64:
+        self.value += amount
+        return self.value
+
+func apply(item: Adjustable, amount: i64) -> i64:
+    return item.adjust(amount)
 
 func main():
-    if true:
-        let first = Resource(name = "cache")
-        let second = first
-        assert(first is second)
-    print("after")
+    let counter = Counter(value = 1)
+    print(str(apply(counter, 41)))
+    print(str(counter.value))
 ```
 
 ```output
-closed cache
-after
+42
+42
 ```
 
-`deinit` has no parameters, result, fallibility marker, visibility, or direct
-call syntax. It may inspect and update fields or call methods. It cannot make
-the dying object strongly reachable again; resurrection is rejected by the
-compiler and defended by the runtime.
+Heterogeneous containers can hold different class and structure conformers.
+The current representation’s one missing case concerns writing value-structure
+witnesses; mutable class dispatch is complete.
+
+## Lifetime and deinitialization
+
+ARC destroys a class after its last strong reference disappears. An optional
+`deinit` body runs once while fields are still alive, then reference fields
+release. Returning, storing, binding a method, capturing strongly, or converting
+to an interface can all extend the lifetime because each creates a real owner.
+
+[Deinitialization](/guide/deinitialization/) explains ordering, cleanup across
+normal/error/worker paths, cycles, resource fields, and the ban on resurrecting
+a dying object.
+
+## Worker boundary
+
+A class reference or graph containing one cannot cross `spawn` or be returned
+through `wait()`. Workers have separate runtimes and never share object
+identity. A worker may declare, construct, mutate, and destroy its own classes
+locally.
+
+Send plain data that describes the work, then create worker-local identity
+inside the worker if needed. This keeps ordinary class programs free of data
+races without adding locks to the object model.
 
 ## Deliberate limits
 
-Classes are final. There is no inheritance, `override`, `super`, initializer
-overloading or delegation, computed property, synthesized equality, or class
-metatype. Reuse behavior with composition and nominal interfaces.
+Classes are final. Luce has no subclassing, inheritance, `override`, `super`,
+metaclasses, synthesized class equality, or initializer overload set. Reuse
+comes from composition, free functions, methods, closures, and interfaces.
 
-Continue with [Constants](/guide/constants/), or read the exact [class type
-rules](/guide/reference/types/#classes) and [ARC
-rules](/guide/reference/memory/).
+These limits keep construction, dispatch, identity, and ARC understandable
+from the declaration in front of the reader. They can be reconsidered only
+for a concrete program that cannot express its design cleanly with the
+existing smaller tools.
+
+The exact type and declaration rules are in [Types: Classes](/guide/reference/types/#classes)
+and [Statements and Declarations: class](/guide/reference/statements/#class).
+Continue with [Initialization](/guide/initialization/).

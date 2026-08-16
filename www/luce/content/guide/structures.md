@@ -1,159 +1,216 @@
-# Structures and Methods
+# Structures
 
-Use a `struct` when a value has a small, known set of fields that belong
-together. A struct gives those fields names, gives callers a type to name,
-and gives you one place for the operations that preserve the value's
-invariants.
+A structure groups related fields into one value. Use one when assignment and
+parameter passing should produce an independent outer value and when the data
+has no shared object identity of its own.
 
-Use a `list` when order and repetition are the point. Use a `map` when the
-keys are discovered at runtime. Use an `enum` when the value is one of a
-fixed set of names with no payload, and a [union](/guide/unions/) when its
-alternatives carry different data.
+Structures are the ordinary building blocks for coordinates, configuration,
+parsed records, small state descriptions, and values returned from a module.
 
-## Start with the data shape
+## Declaring and constructing a structure
 
-Fields are declared with their types. Construction names the fields, which
-makes a call readable and keeps it correct when a struct has several values
-of the same type. A field with a default may be omitted.
-
-```text
-struct Point:
-    x: f64
-    y: f64
-```
-
-The important property is value semantics: copying a struct copies its value
-fields. If a field contains a list, map, array, builder, file, or task, ARC
-retains that reference. Both struct values then reach the same object; copying
-the struct does not silently clone it.
-
-## Put behavior beside the fields
-
-An ordinary method has an implied `self` and is called through an instance.
-A `static func` has no receiver and is called through the struct name. Keep
-methods small and make them express the invariant rather than expose a
-sequence of field writes to every caller.
+Fields state their types inside a `struct` declaration. Construct a value by
+naming every required field:
 
 ```luce run
 struct Point:
-    x: f64
-    y: f64
+    x: i64
+    y: i64
 
-    func length() -> f64:
-        return sqrt(self.x * self.x + self.y * self.y)
-
-    static func plus(a: Point, b: Point) -> Point:
-        return Point(x = a.x + b.x, y = a.y + b.y)
+func distance_squared(point: Point) -> i64:
+    return point.x * point.x + point.y * point.y
 
 func main():
-    let a = Point(x = 3.0, y = 4.0)
-    let b = Point(x = 1.0, y = 2.0)
-    print(str(a.length()))
-    let sum = Point.plus(a, b)
-    print(f"({sum.x}, {sum.y}) has length {sum.length()}")
+    let point = Point(y = 4, x = 3)
+    print(f"{point.x},{point.y}: {distance_squared(point)}")
 ```
 
 ```output
-5
-(4, 6) has length 7.211102550927978
+3,4: 25
 ```
 
-Choose a method when the receiver is part of the operation. Choose a
-static function for a constructor-like operation or an operation involving
-several independent values. A function value can hold either a named
-function or a bound method; a bound method of a value-only struct captures
-the receiver's value at the point it is read.
+Named construction makes the relationship between each argument and field
+visible, and argument order does not need to repeat declaration order. A
+missing, duplicated, unknown, or wrongly typed field is reported at the
+construction.
 
-## Let several structs share a contract
-
-When several structs should answer the same small question, use an interface
-as the boundary between the caller and the implementation. The contract,
-multi-value returns, heterogeneous collections, and lifetime rules are
-explained in [Interfaces](/guide/interfaces/). Keep this
-page focused on the data shape; use that chapter when the design question is
-which behavior belongs behind a shared type.
-
-## Decide who may construct the value
-
-Declarations are public unless marked `private`. A private field is useful
-when callers must go through a factory or method to get a valid value. A
-private field with a default can still be filled by outside construction; a
-private field without a default makes outside construction illegal, so the
-module must expose a public factory.
-
-This is a design boundary, not just an access check:
-
-1. Keep the representation fields private.
-2. Expose a public function that validates input and constructs the struct.
-3. Expose methods that preserve the invariant after construction.
-4. Keep private helpers and implementation types behind the module boundary.
-
-The [Access Control](/guide/access-control/) chapter shows the smallest
-example; the [module reference](/guide/reference/modules/#visibility) lists every boundary
-that visibility checks, including fields, types, constants, and function
-signatures.
-
-## Nested assignment
-
-Fields and indexes are assignable places. A place can be nested, and a
-compound assignment evaluates it once:
+Fields can have folded defaults:
 
 ```luce run
-struct Inner:
-    value: i64
-
-struct Outer:
-    label: str
-    inner: Inner
+struct Request:
+    path: str
+    retries: i64 = 3
+    verbose: bool = false
 
 func main():
-    var box = Outer(label = "answer", inner = Inner(value = 1))
-    box.inner.value = 41
-    box.inner.value += 1
-    print(f"{box.label}: {box.inner.value}")
+    let normal = Request(path = "/status")
+    let loud = Request(verbose = true, path = "/debug", retries = 1)
+    print(f"{normal.retries} {loud.verbose}")
 ```
 
 ```output
-answer: 42
+3 true
 ```
 
-## Structures that carry references
+Defaults are part of the declaration and may be omitted by callers. Structure
+construction does not run a custom initializer; classes own the current
+custom-`init` feature.
 
-A struct containing a `list`, `map`, `array`, `builder`, `file`, or `task` is a
-reference-carrying value. The struct still copies as a value, while ARC keeps
-each referenced object alive. Passing or returning the struct preserves those
-shared identities.
+## Structures are values
 
-Construction needs no transfer syntax:
+Assigning, passing, or returning a structure copies the outer value. Changing
+one copy does not change another:
 
-```text
-var labels = ["new", "ready"]
-let job = Job(labels = labels)
+```luce run
+struct Point:
+    x: i64
+    y: i64
+
+func main():
+    var first = Point(x = 2, y = 3)
+    var second = first
+    second.x = 10
+    print(f"{first.x} {second.x}")
 ```
 
-`job.labels` and `labels` now refer to the same list. Use
-`labels[0:len(labels)]` when the field needs an independent list. [Memory and
-ARC](/guide/memory/) explains sharing, replacement, and the deterministic
-resource-cleanup contract.
+```output
+2 10
+```
 
-## A practical review
+The assignment creates another `Point`; it does not create a second name for
+one point object. A structure has no reference identity, so `is` does not apply
+to it.
 
-Before adding a struct, ask:
+When every field supports equality, structure equality compares the value.
+That is different from class identity: two independently built structures with
+the same fields are equal values, while two independently built classes remain
+separate objects.
 
-- Are these fields always meaningful together?
-- Which operations must preserve an invariant?
-- Should callers construct the value directly, or use a factory?
-- Does a field carry a reference, and should that object be shared?
-- Would a union or enum describe the alternatives more honestly?
+## Mutability belongs to the place
 
-If the answers are unclear, keep the data local until the shape becomes
-stable. A struct is most useful when it makes an invalid state difficult to
-express, not when it merely renames a handful of unrelated variables.
+A `let` structure binding cannot have one of its fields replaced. A `var`
+binding can:
 
-For the exact grammar, defaults, methods, visibility regions, and assignment
-rules, use [Statements and Declarations](/guide/reference/statements/),
-[Types](/guide/reference/types/), and
-[Expressions](/guide/reference/expressions/).
+```luce run
+struct Point:
+    x: i64
+    y: i64
 
-Continue with [Classes](/guide/classes/) when assignment should share mutable
-identity instead of copying a value.
+struct Scene:
+    origin: Point
+    title: str
+
+func main():
+    var scene = Scene(origin = Point(x = 1, y = 2), title = "draft")
+    scene.origin.x = 40
+    scene.title = "ready"
+    print(f"{scene.title}: {scene.origin.x + scene.origin.y}")
+```
+
+```output
+ready: 42
+```
+
+For nested value fields, Luce rebuilds the changed path back to the mutable
+root. If `scene` were `let`, there would be no mutable outer place to receive
+that rebuilt value.
+
+The same rule applies to a writing structure method. A reading method can use
+either binding; a writer needs a mutable bare receiver. [Methods](/guide/methods/)
+explains the inferred receiver effect and bound-method behavior.
+
+## Reference fields remain shared
+
+A structure may contain lists, maps, arrays, classes, files, tasks, closures,
+or other references. Copying the structure copies its value fields and retains
+the same referenced objects:
+
+```luce run
+struct Model:
+    title: str
+    values: list[i64]
+
+func main():
+    var first = Model(title = "first", values = [1])
+    var second = first
+    second.title = "second"
+    second.values.append(2)
+    print(f"{first.title} {second.title}")
+    print(f"{len(first.values)} {len(second.values)}")
+```
+
+```output
+first second
+2 2
+```
+
+The two `Model` values have independent `title` fields. Their `values` fields
+are aliases of one list object. This is a shallow value copy with correct ARC,
+not a recursive deep clone.
+
+Choose a fresh reference object explicitly when the copies should stop
+sharing it. There is no universal deep-copy operator because applications
+need different answers for nested identity, resources, callbacks, and cycles.
+
+## Zero values and late declaration
+
+Scalar and aggregate fields have defined zero values where their types do.
+Local `var` declarations can use a type annotation without an initializer and
+begin at that zero. Function and interface values have no meaningful zero, so
+they require an initializer or an optional type when absence is part of the
+model.
+
+A good structure usually constructs all conceptually required state at once.
+Use late zero initialization for algorithms that genuinely fill a result in
+steps, not to recreate a partially initialized object convention.
+
+## Visibility and module boundaries
+
+Structure declarations and fields are public by default. `private` can keep a
+declaration, individual field, or a field region inside its source file. A
+public signature cannot expose a private type.
+
+Private fields let a module preserve an invariant while returning the
+structure value through a public function or static factory. Another module
+may hold, pass, return, and store that value without being able to name the
+private field.
+
+[Access Control](/guide/access-control/) covers field regions, public
+signatures, construction, and import diagnostics in detail.
+
+## Structures and interfaces
+
+A structure can opt into one or more interfaces by listing them after its
+name. The compiler checks that every required method is present with compatible
+parameters, results, and fallibility. Landing the structure in an
+interface-typed place owns a receiver snapshot and retains reference fields in
+that snapshot.
+
+Read-only structure witnesses work in locals, returns, fields, optionals, and
+heterogeneous containers. A writing structure method is not yet an interface
+witness because the current interface representation does not provide one
+mutable boxed payload. Ordinary writing structure methods are fully supported.
+
+See [Interfaces](/guide/interfaces/) for conformance and dispatch, and
+[Status](/status/#interfaces) for the planned owned-existential improvement.
+
+## Choosing another type
+
+Use a structure when the whole value should copy. Choose another declaration
+when the model says something else:
+
+- use a [class](/guide/classes/) when several parts of a program must observe
+  and mutate one identity;
+- use an [enumeration](/guide/enums/) for one value from a closed set of names;
+- use a [union](/guide/unions/) when a value can have several payload shapes;
+  and
+- use an [interface](/guide/interfaces/) when several concrete types share a
+  behavioral contract.
+
+Avoid turning every group of fields into a class. Shared identity is useful,
+but it also introduces aliasing and possible cycles. A value structure is the
+simpler model when independent copies are correct.
+
+The exact structure declaration, construction, assignment, and visibility
+rules are in [Statements and Declarations](/guide/reference/statements/).
+Continue with [Methods](/guide/methods/).

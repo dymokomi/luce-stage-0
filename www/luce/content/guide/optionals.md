@@ -4,6 +4,33 @@
 not. It is the answer whenever "there is nothing here" is the whole
 story, with no reason worth carrying.
 
+## Creating an optional
+
+A function declares an optional result by adding `?` to its value type. A
+present value converts to that optional automatically; `none` supplies the
+absent case.
+
+```luce run
+func first_even(values: list[i64]) -> i64?:
+    for value in values:
+        if value % 2 == 0:
+            return value
+    return none
+
+func main():
+    let found: i64? = first_even([3, 7, 12, 15])
+    print(str(found else -1))
+```
+
+```output
+12
+```
+
+`none` alone does not tell the compiler which `T` is absent, so a binding,
+field, parameter, or result supplies the type. Luce has one optional layer:
+`T??` is refused. This keeps every narrowing operation about one question—
+present or absent—rather than an arbitrary stack of wrappers.
+
 ```luce run
 func main():
     print(f"{parse_i64("42") else -1}")
@@ -59,6 +86,11 @@ func main(args: list[str]):
 17 squared is 289
 ```
 
+Both `value != none` and `value == none` participate in narrowing. The
+compiler follows the branch that proves presence; it does not treat an
+arbitrary helper returning `bool` as proof. Narrowing is local control-flow
+knowledge, not a runtime cast.
+
 ## else, chained
 
 `else` associates to the right, so a chain of fallbacks reads left to
@@ -79,6 +111,11 @@ func main():
 true
 11
 ```
+
+The fallback must be the payload type, another compatible optional, or an
+expression such as `trap(...)` that does not return. It is evaluated only
+when the left side is absent. Parenthesize a longer fallback when that makes
+the intended grouping easier to see.
 
 ## Optionals as parameters and fields
 
@@ -107,6 +144,31 @@ Narrowing works on locals and parameters, never on a field or an
 element — those could change between the test and the use. Bind the
 field to a name and test that, which is what `describe` does above.
 
+An optional class field does not keep a separate object model: when present,
+it is an ordinary strong class reference unless the field is also declared
+`weak`. A weak class or container field is necessarily optional because its
+target may reach its last strong release at any time. Reading the weak place
+produces an owned optional snapshot that is safe to narrow.
+
+## Optional functions and containers
+
+Parentheses distinguish an optional answer from an optional callable:
+
+```text
+func(str) -> i64?       # the function is present; its result may be absent
+(func(str) -> i64)?     # the function value itself may be absent
+```
+
+Ordinary optional scalar or object elements are not stored directly in
+lists, maps, or arrays. A map lookup already answers `V?`, and a nested
+optional would be required to distinguish “missing key” from “present key
+whose value is absent.” Model a meaningful third state with a union, or put
+the optional in a small structure whose surrounding value gives it context.
+Optional function values are the deliberate storage exception for fields and
+sequence slots because function values have no zero value of their own; the
+[function-value reference](/guide/reference/types/#function) gives the exact
+slot rules.
+
 ## The assert-unwrap
 
 There is no force-unwrap sigil. `x else trap("…")` says the same thing
@@ -123,3 +185,27 @@ func main():
 loom: trap: bad port in config [explicit_trap]
     at main (main.luc:3:5)
 ```
+
+Use this only for an invariant that really makes absence a programmer error.
+If the caller can recover, return the optional, use a fallback, or convert the
+case into a fallible error with a useful message.
+
+## Choosing between optional, union, and error
+
+Choose the type from the question the caller must answer:
+
+| Situation | Result |
+|---|---|
+| a search may find no match | `T?` |
+| several successful shapes carry different data | a `union` |
+| a valid request may fail and the reason matters | `T!` |
+| the program violated a checked precondition | trap |
+
+For example, `parse_i64` uses absence because invalid text has no integer
+answer. Opening a file is fallible because permission, path, and host failures
+need a reason. A network state such as `idle`, `loading`, `ready(data)`, or
+`failed(reason)` is usually a union because every alternative is meaningful
+state, not merely a missing value.
+
+The [Types reference](/guide/reference/types/#optionals-t) states the exact
+storage and function-type grammar. Continue with [Unions](/guide/unions/).

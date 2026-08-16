@@ -1,4 +1,4 @@
-# The i16 terminal module.  `std.os` owns the host-facing system facts and
+# The low-level terminal module. `std.os` owns the host-facing system facts and
 # shell service; `std.term` gives a terminal program the same terminal value
 # without making it reach through the larger OS namespace.
 #

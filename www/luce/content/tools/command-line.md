@@ -1,4 +1,4 @@
-# Command-Line Tools
+# The luce and loom Commands
 
 The first Luce workflow is deliberately ordinary: write a source file,
 compile a native executable, and run that executable.
@@ -65,7 +65,7 @@ for standard input. Standard input needs `-o` because there is no source
 name from which to derive an output path. `check` type-checks without
 writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
-described in [Testing](/guide/testing/).
+described in [Testing](/tools/testing/).
 
 For a `.luc` source, `build` defaults to a standalone executable named after
 the source: `luce build hello.luc` writes `hello`. `-o` chooses a different

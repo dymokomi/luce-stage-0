@@ -273,7 +273,7 @@ with leak checking.
 
 ## Current limits
 
-Version 0.3 deliberately has no retained mutable widget tree, result-builder
+The package deliberately has no retained mutable widget tree, result-builder
 syntax, global environment, global theme, focus registry, scrollbar, or
 grapheme/East-Asian-width engine. Applications keep focus and domain policy in
 their own state. New components belong in the closed `View` model only when a

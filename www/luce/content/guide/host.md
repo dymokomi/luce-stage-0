@@ -1,4 +1,4 @@
-# Host Services
+# Host Effects
 
 Luce programs reach the operating system through host services. `loom` and
 standalone executables provide those services; a host without a service
@@ -211,7 +211,7 @@ Terminal dimensions, drawing, and key input are host services available when
 running in a terminal. `key_read` returns a `str?`; an empty input stream
 therefore ends a draw loop cleanly. Terminal output is sanitized by the
 host. These services need a real terminal and are not demonstrated by the
-site's non-interactive examples. The [editor example](/guide/programs/)
+site's non-interactive examples. The [editor example](/tools/programs/)
 uses them in a complete program.
 
 ## The host gate
@@ -220,4 +220,4 @@ Host-dependent names are gated at compile time. Compiling without the
 corresponding service produces a `luce.sema.host` diagnostic instead of a
 runtime surprise. The [standard-library pages](/library/) document each module's
 available host surface. The next part of this book begins with
-[Command-Line Tools](/guide/command-line/).
+[The `luce` and `loom` Commands](/tools/command-line/).

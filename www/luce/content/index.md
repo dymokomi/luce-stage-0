@@ -40,6 +40,7 @@ language's shape in one sitting and points to the detailed Guide.
 
 Choose the kind of help you need below. [Tour](/tour/) is the one-page
 introduction. [Guide](/guide/) is the complete language book: teaching
-chapters first, tools and projects next, and the exhaustive Language
-Reference at the end. [Library](/library/) documents standard modules and
-maintained packages. [Status](/status/) records what is available now.
+chapters followed by the exhaustive Language Reference. [Tools](/tools/)
+covers the compiler, editor, projects, packages, tests, complete programs, and
+performance. [Library](/library/) documents standard modules and maintained
+packages. [Status](/status/) records what is available now.

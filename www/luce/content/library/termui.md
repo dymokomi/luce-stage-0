@@ -324,7 +324,7 @@ boundaries so each piece can hide its complexity and be tested independently.
 
 ## Current limits
 
-Version 0.3 does not include a mutable retained widget tree, result-builder
+The package does not include a mutable retained widget tree, result-builder
 syntax, a global environment or theme, a focus registry, scrollbars, or a full
 grapheme/East-Asian-width engine. Applications keep focus and domain policy in
 their own model. The shipped editor is the larger reference application: it

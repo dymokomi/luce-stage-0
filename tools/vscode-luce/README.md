@@ -28,13 +28,12 @@ must not be edited by hand.
 zig build grammar     # rewrite syntaxes/luce.tmLanguage.json
 ```
 
-**Why.** The hand-written grammar this replaced spent a release cycle
-highlighting `create_texel`, `texel_output`, `texel_evaluator` and `read_file`
-— Fabric and host builtins the language had deleted — and knew nothing of
-`give`, `copy`, `new`, `try`, `catch`, `none`, or of `List`, `Map`, `Array` and
-`Builder`, whose place in its type list was still held by the removed `Input`
-and `Output`. It listed `input`/`output` port members that no longer exist.
-Nothing tied it to the language, so nothing said anything for a year.
+**Why.** The hand-written grammar this replaced had no mechanical relationship
+to the lexer, type vocabulary, builtins, or receiver methods. It therefore
+kept highlighting removed words while missing implemented ones across several
+language revisions. A generated grammar makes that class of drift a failed
+test on the change that introduced it rather than a documentation archaeology
+task months later.
 
 **The pin.** `zig build test` runs
 `test "the committed grammar is what the generator emits"`, which embeds this
@@ -59,10 +58,10 @@ there is, and checks that every language word it actually uses has a class.
 | `keyword.control.exception.luce` | `try`, `catch` |
 | `keyword.control.import.luce` | `import`, and the module path after it — `std.strings` as readily as a sibling `geometry` |
 | `keyword.control.raise.luce` / `.trap.luce` | `error` and `trap`, the two ways a program stops — **coloured red**, see below |
-| `keyword.operator.word.luce` | `and`, `or`, `not` |
-| `keyword.other.ownership.luce` | `new`, `give`, `copy`, `free`, `spawn` — the words that create or move owned objects and resources, in a class of their own |
-| `storage.type.luce` | `func`, `struct`, `enum`, `const`, `let`, `var` |
-| `storage.modifier.luce` | `private`, `public`, `static` — visibility and namespace markers |
+| `keyword.operator.word.luce` | `and`, `or`, `not`, `is` |
+| `keyword.other.ownership.luce` | `new` and `spawn`, the two words that create a reference-bearing runtime object |
+| `storage.type.luce` | `func`, `struct`, `class`, `init`, `deinit`, `interface`, `alias`, `enum`, `union`, `const`, `let`, `var` |
+| `storage.modifier.luce` | `private`, `public`, `static`, `weak` |
 | `variable.language.luce` | `self`, the receiver supplied by the language |
 | `constant.language.luce` | `true`, `false`, `none` |
 | `support.type.luce` | the builtin type names |

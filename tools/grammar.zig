@@ -2,13 +2,11 @@
 //!
 //!   zig build grammar   # rewrites tools/vscode-luce/syntaxes/luce.tmLanguage.json
 //!
-//! **Generated because the hand-written one drifted.**  The committed
-//! grammar spent a release cycle highlighting `create_texel`,
-//! `texel_output` and `read_file` — Fabric and host builtins the
-//! language had deleted — while knowing nothing of `new`, `class`,
-//! `try`, `catch`, `none`, or the four heap types.  Nothing
-//! pinned it to the language, so nothing said.  Every word below is
-//! read from the table the compiler dispatches on, and
+//! **Generated because the hand-written one drifted.** The old grammar had
+//! no mechanical relationship to the lexer, type vocabulary, builtins, or
+//! receiver methods. It therefore kept removed words and missed implemented
+//! ones across several language revisions. Every word below is read from the
+//! table the compiler dispatches on, and
 //! `test "the committed grammar is what the generator emits"` fails
 //! the suite the moment the two disagree.
 //!

@@ -21,7 +21,7 @@ hello, Luce
 ```
 
 The compiler names the executable after the source file. The
-[Command-Line Tools](/guide/command-line/) chapter covers other artifact
+[The `luce` and `loom` Commands](/tools/command-line/) chapter covers other artifact
 types and build modes after you have something worth building.
 
 ## Command-line arguments

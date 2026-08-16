@@ -5,6 +5,20 @@ choose which concrete type provides it. An interface is a named contract. A
 struct or class opts in explicitly, and the compiler checks the whole contract
 before the first value is converted.
 
+An interface declaration contains method signatures, not storage or method
+bodies:
+
+```text
+interface Name:
+    func title() -> str
+    func measure(width: i64) -> (i64, i64)
+    func load(path: str) -> bytes!
+```
+
+The methods are the complete surface visible through an interface value.
+Fields, static functions, and extra instance methods remain properties of the
+concrete type.
+
 ## Start with the behavior
 
 Keep an interface small. List the operations a caller needs, not every
@@ -62,13 +76,28 @@ cast syntax and no structural conformance: a declaration must write
 `struct Name: Drawable:` or `class Name: Drawable:`. A conforming type may
 have extra methods; they are simply not visible through `Drawable`.
 
+One type may list several independent contracts:
+
+```text
+struct Icon: Drawable, Named, Measured:
+    ...
+```
+
+This is composition of requirements, not interface inheritance. A caller
+that accepts `Named` sees only `Named`, even when the concrete value also
+conforms to `Drawable`.
+
 ## Let the compiler check the contract
 
 Every declared method is required. The implementation must match its name,
-parameter count, parameter types, result count, and result types. The receiver
-is implied by the method declaration. A class witness may mutate its shared
-object. A writing value-struct method cannot currently be a witness, because
-interface dispatch does not expose mutable value storage.
+parameter names, order, types, result count, and result types. The receiver is
+implied by the method declaration. Interface requirements cannot declare
+default arguments; callers only know the contract, so every argument in that
+contract must be supplied.
+
+A class witness may mutate its shared object. A writing value-struct method
+cannot currently be a witness, because interface dispatch does not expose
+mutable value storage.
 
 Failure effects are directional. A non-fallible implementation may satisfy
 a fallible requirement, so a caller may still write `try`. A fallible
@@ -78,6 +107,19 @@ An interface contains method signatures only. It cannot inherit another
 interface, define a default method body, or use a generic parameter. Those
 are separate language features and are not needed for the first interface
 design.
+
+The most useful diagnostics occur at the conformance declaration, before a
+value reaches a caller:
+
+| Mistake | Why it is refused |
+|---|---|
+| a required method is absent | the contract would have an empty dispatch slot |
+| a method is `static` | an interface method needs an instance receiver |
+| a parameter or result differs | the caller and witness would disagree about the call shape |
+| a fallible witness satisfies a non-fallible requirement | the caller has no error path |
+| a value-struct witness writes `self` | the current representation owns a snapshot, not a writable value place |
+
+Extra concrete methods are fine because they do not change any required slot.
 
 ## Return more than one value
 
@@ -113,6 +155,85 @@ The answer is still one call, but it is not one scalar expression. Passing
 its components first. A fallible multi-value method follows the ordinary
 `try`/`catch` rules.
 
+## Store different concrete types together
+
+Interface values may be locals, parameters, results, optionals, structure
+fields, and list, map, or array elements. Each element carries the dispatch
+for its own concrete value, so a collection can be heterogeneous without a
+tag chosen by the caller.
+
+```luce run
+interface Formatter:
+    func format(value: i64) -> str
+
+struct Decimal: Formatter:
+    marker: i64
+
+    func format(value: i64) -> str:
+        return str(value)
+
+struct Brackets: Formatter:
+    marker: i64
+
+    func format(value: i64) -> str:
+        return "[" + str(value) + "]"
+
+func main():
+    let decimal = Decimal(marker = 0)
+    let brackets = Brackets(marker = 0)
+
+    var formats = new map[str, Formatter]
+    formats["plain"] = decimal
+    formats["marked"] = brackets
+
+    let chosen = formats.get("marked") else decimal
+    print(chosen.format(42))
+```
+
+```output
+[42]
+```
+
+The fallback above may have another concrete type because both sides convert
+to `Formatter`. A function may likewise return one of several conforming
+types as its interface result, or return `Formatter?` when no implementation
+may be available.
+
+Use a union instead when callers must know which concrete case they received.
+An interface deliberately hides that choice and exposes only behavior; there
+is no runtime downcast in the current language.
+
+## Class witnesses keep shared identity
+
+Converting a class does not take a snapshot of its fields. The interface
+retains the same class identity, so a writing class method remains visible to
+all aliases.
+
+```luce run
+interface Sequence:
+    func next() -> i64
+
+class Counter: Sequence:
+    value: i64
+
+    func next() -> i64:
+        self.value += 1
+        return self.value
+
+func advance(sequence: Sequence) -> i64:
+    return sequence.next()
+
+func main():
+    let counter = Counter(value = 40)
+    print(str(advance(counter)))
+    print(str(counter.value))
+```
+
+```output
+41
+41
+```
+
 ## Values remain alive
 
 Converting a struct to an interface value captures a copy of the concrete
@@ -126,6 +247,12 @@ method. It is correct but intentionally not the final representation. The
 [status page](/status/#interfaces) describes the planned move to one owned
 payload and a witness table. Mutable class dispatch is already supported; a
 future owned value payload is what enables writing struct witnesses.
+
+That representation detail matters for performance planning and the one
+unsupported mutating case, but not for ordinary lifetime safety. Copying an
+interface value retains everything its methods may reach; dropping the last
+copy releases it. An interface may therefore safely leave the scope where its
+concrete value was created.
 
 The [memory guide](/guide/memory/) explains the lifetime rule. The [interface
 reference](/guide/reference/types/#interface) gives the exact matching,
@@ -142,6 +269,17 @@ Start with the smallest contract that makes the caller simpler. Add a new
 method only when every implementation really has that responsibility; a
 separate interface is usually clearer than a large one with methods some
 implementations cannot meaningfully provide.
+
+An interface is usually the right boundary when:
+
+- several implementations perform one coherent role;
+- callers should not branch on the concrete implementation;
+- tests benefit from supplying a small substitute; or
+- a list or map needs heterogeneous values with common behavior.
+
+It is usually the wrong boundary when one concrete structure is sufficient,
+the caller needs the fields, or the alternatives themselves carry semantic
+meaning better modeled by a union.
 
 For exact syntax and every refusal, see
 [Types: Interface](/guide/reference/types/#interface).

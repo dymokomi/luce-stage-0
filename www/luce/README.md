@@ -1,8 +1,9 @@
 # www/luce — luce.luciaos.com
 
 The Luce language's documentation: a one-page Tour, one Guide that progresses
-from teaching chapters to an exhaustive language reference, the Library, and
-the Status page that says out loud what the language cannot yet do.
+from teaching chapters to an exhaustive language reference, dedicated Tools,
+the Library, and a Status page that says out loud what the language cannot yet
+do.
 
 It lives in this repository so that it changes with the language, and
 it is generated rather than hand-published so that broken samples,
@@ -45,6 +46,47 @@ compiler has that the reference does not is a failed build, on the
 commit that added it.  These checks establish sample behavior and
 selected named-surface coverage; they do not mechanically prove the
 surrounding prose, which remains human-reviewed.
+
+## Editorial standard
+
+The public documentation is one product with four reading modes:
+
+- **Tour:** one page, install first, enough of the language to form a mental
+  model, then clear destinations.
+- **Guide:** teaching chapters in dependency order. Begin with the ordinary
+  use, explain the model behind it, then cover mutation, lifetime, failure,
+  and important refusals.
+- **Language Reference:** exhaustive and deliberately dry. State syntax,
+  type requirements, evaluation, storage, diagnostics, and limits without a
+  motivational narrative.
+- **Library and Tools:** task-oriented API and workflow pages. State how to
+  begin, list the complete surface, show one representative use, then name
+  failure, lifetime, platform, and current boundaries.
+
+This organization follows the useful editorial separation in the Swift book:
+a guided tour, a language guide in conceptual dependency order, and an exact
+reference. Luce adopts the reading model, not Swift's feature roster or
+terminology.
+
+Every page should answer, in order, the questions a reader actually brings:
+
+1. What problem is this for?
+2. What is the smallest correct use?
+3. What model makes that use predictable?
+4. What changes under mutation, copying, ARC, failure, or the host boundary?
+5. What nearby choice is commonly confused with it?
+6. Where is the exact rule or next chapter?
+
+Prefer concrete nouns and verbs over feature praise. Explain why a rule helps
+a caller without announcing that it is “powerful,” “seamless,” “robust,” or
+“modern.” One example should teach one main idea, and its surrounding prose
+must explain the decision rather than restating every code line. Planned
+syntax never appears in a runnable fence; current limits link to Status.
+
+Depth is judged by answered reader questions, not word count. Do not pad a
+small API, but do not publish a signature list that omits ownership, errors,
+ordering, complexity, platform behavior, or the distinction from a neighboring
+API when those facts affect correct use.
 
 ## Build
 

@@ -145,7 +145,15 @@ containers, standard library, or applications.
 - operator overloading, reflection, macros, or metaclasses; and
 - higher-kinded or variadic generics.
 
-There are currently no confirmed bugs in the repository's internal bug
-ledger. That is a statement about reproduced current defects, not a claim that
-unfinished features already exist or that future testing cannot find another
-bug.
+## Known bugs
+
+Two confirmed command-line UX defects are tracked:
+
+- `luce` accepts `luce test [PATH ...]`, but its no-argument usage omits that
+  command and contains a malformed explanation of `--emit`;
+- `luce test` prints a test's name only after the test finishes, so a slow or
+  hung test does not identify itself while it is running.
+
+Neither changes language semantics, but both make the supported toolchain
+harder to understand or diagnose. They remain listed until a fix and a product
+test land together.

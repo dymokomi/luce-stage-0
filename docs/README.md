@@ -8,12 +8,14 @@ The documents have three jobs, and the distinction is enforced by
   and code use the same builtin type vocabulary.
 - **Plans** describe the language we intend to build. Syntax the compiler does
   not yet accept is written as `text`, never as a pasteable Luce example.
-- **Decision records** preserve a completed design in its historical context.
-  Only these may use `luce historical` fences.
+- **Decision records** preserve a ratified boundary when its history remains
+  useful. Only these may use `luce historical` fences.
 
 This separation is an honesty boundary. A feature that merely parses is not a
 working language feature, a planned type name is not a current spelling, and
-a completed implementation plan is not the language reference.
+a proposed implementation is not the language reference. Superseded
+pre-release designs that never established a useful boundary are deleted
+rather than kept as product history.
 
 Start with [V2.md](V2.md) for the product north star and
 [ROADMAP.md](ROADMAP.md) for the dated state audit and ordered path to 1.0.
@@ -78,7 +80,6 @@ selected surface roster is checked during the site build.
 
 ## Decision records
 
-| File | What it records |
-|---|---|
-| [TERMUI_DECLARATIVE.md](TERMUI_DECLARATIVE.md) | The completed termui v0.3 application model and editor migration. |
-| [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The completed termui/editor rewrite plan and the reasoning behind its boundaries. |
+There are no decision records in the current tree. The unreleased TermUI
+rewrite plans were removed once `TERMUI.md` became the single current
+description of the package.

@@ -2,9 +2,9 @@
 #
 # `open` asks the host for a window.  A Window owns the native window handle;
 # `surface` turns that window into the `std.gpu.Surface` used for drawing.
-# The types deliberately stop here.  Layout, widgets, and event loops belong
-# in a higher-level package built on these two modules after owned interface
-# existentials and generics make typed native components practical.
+# The types deliberately stop here. Layout, widgets, event routing, and the
+# application loop belong in a higher-level package built on these two narrow
+# modules; this boundary does not predict that package's component model.
 #
 # The macOS host shipped with `loom` installs the Metal channel (and a small
 # CPU fallback when Metal is unavailable). Other hosts may leave the channel

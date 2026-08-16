@@ -5,6 +5,11 @@ function is total and can be used in a host-less program. Paths use `/`.
 There is no normalization of `.` or `..`, no globbing, and no platform drive
 letter handling.
 
+This separation is deliberate. `paths.join` answers how names combine;
+`files.exists` or `files.read` asks the host what those names refer to. A pure
+path operation cannot race with the filesystem or fail because a file changes
+between two calls.
+
 ```text
 import std.paths
 ```
@@ -43,6 +48,19 @@ src/luce
 main
 ```
 
+Important edge cases are defined rather than trapped:
+
+| Input | `base` | `dir` | `extension` | `stem` |
+|---|---|---|---|---|
+| `""` | `""` | `"."` | `""` | `""` |
+| `"/"` | `"/"` | `"/"` | `""` | `"/"` |
+| `"notes"` | `"notes"` | `"."` | `""` | `"notes"` |
+| `".env"` | `".env"` | `"."` | `""` | `".env"` |
+| `"archive.tar.gz"` | `"archive.tar.gz"` | `"."` | `".gz"` | `"archive.tar"` |
+
+A leading dot belongs to a hidden file's name, not its extension. Only the
+last dot after the first character of the base begins the reported suffix.
+
 ## Join components
 
 `paths.join(head, tail)` inserts one `/` at the seam. An empty side returns
@@ -69,5 +87,23 @@ build/out/main.o
 /etc/hosts
 ```
 
+An absolute component resets everything accumulated before it. This is useful
+when configuration may provide either a relative or absolute path, but it is
+also a reason to validate untrusted components before joining them.
+
+## Paths do not provide containment
+
+Neither `join` nor `joined` removes `.` or `..`, resolves symbolic links, or
+proves that a result remains under a directory. For example,
+`paths.join("uploads", "../private")` returns `"uploads/../private"` exactly as
+text. Do not use a string-prefix check or this module alone as a filesystem
+sandbox.
+
+The functions also do not expand `~`, environment variables, wildcard
+patterns, or backslashes. Convert an external path convention at the boundary
+that receives it, then keep one convention inside the program.
+
 `join` does not resolve `..` or ask whether the resulting path exists. Use
-`std.files` when the next operation is a filesystem operation.
+[`std.files`](/library/files/) when the next operation is a filesystem
+operation. Path strings follow ordinary immutable `str` value semantics; no
+resource is opened and no ARC object is created by inspection.

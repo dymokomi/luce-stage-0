@@ -111,7 +111,7 @@ joins its worker and discards the unobserved answer.
 
 A class can run its own `deinit` body at that point. The body runs once while
 the fields remain alive, then the fields release. See [Classes: Finish work in
-`deinit`](/guide/classes/#finish-work-in-deinit).
+`deinit`](/guide/deinitialization/#the-last-strong-release).
 
 ## Break cycles with `weak`
 
@@ -156,7 +156,7 @@ fields. A bound class method retains the shared class identity.
 
 These ordinary strong edges can participate in cycles. If a class stores a
 closure that refers back to the class, capture the class weakly. [Functions
-and Closures](/guide/functions/#capture-lists) gives a complete example.
+and Closures](/guide/closures/#snapshot-captures) gives a complete example.
 
 ## Interfaces preserve their concrete value
 

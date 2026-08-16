@@ -23,6 +23,12 @@ readings. `cpu_count()` is a reporting fact and a useful bound for sizing a
 batch of independent `spawn` calls. A host that cannot provide a fact traps
 with `host_unavailable`; these functions do not return `none` or `!`.
 
+All memory values are bytes and fit in `i64` on supported hosts. On macOS,
+available memory includes free, inactive, and purgeable pages; on Linux it is
+the kernel's `MemAvailable` estimate when present. Neither value is a quota or
+an allocation guarantee. Let an allocation report exhaustion through the
+runtime rather than trying to reserve memory by reading a gauge first.
+
 ```luce run
 import std.os
 
@@ -39,14 +45,44 @@ available fits inside total: true
 at least one processor: true
 ```
 
-`os.shell.run` is intentionally a single command string, not a portable
-argument-vector API. Quote arguments for the host shell. A host that cannot
-start the command returns `io_failed`.
+## Run a host-shell command
+
+```text
+os.shell.run(command: str) -> str!
+```
+
+`shell.run` starts `/bin/sh -c` on Unix-like hosts and the platform shell on
+Windows. It captures standard output followed by standard error and appends
+one final line:
+
+```text
+exit status: 0
+```
+
+A non-zero exit status is part of that transcript, not a Luce error. Failure
+to start or communicate with the shell is `io_failed`; a host that withholds
+the shell channel traps `host_unavailable`.
+
+The input is intentionally one command string, not a portable argument-vector
+API. Shell quoting, expansion, pipelines, redirection, and command injection
+therefore have their normal host meaning. Do not concatenate untrusted text
+into the command. Prefer `std.files` or another structured host API when it
+already expresses the operation.
+
+```text
+import std.os
+
+func main() -> !:
+    let transcript = try os.shell.run("printf 'hello\\n'")
+    print(transcript)
+```
 
 ## Terminal facade
 
 `os.term` groups terminal output, geometry, and input. `std.term` is a
-shorter alias for the same facade.
+shorter alias for the same facade. New terminal programs normally import
+`std.term`; the methods are repeated here so code that already needs machine
+facts does not require another namespace.
 
 | Method | Purpose |
 |---|---|
@@ -87,3 +123,14 @@ let event = os.term.io.read()
 Loom owns raw mode, alternate-screen setup, escape sequences, and output
 sanitization. A Luce program receives terminal events and writes text; it
 does not need to implement those host details.
+
+[`std.term`](/library/term/) documents the complete frame, color, coordinate,
+event, end-of-input, and restoration behavior. [`termui`](/library/termui/)
+adds declarative layout and owns the application loop.
+
+## Host effects are explicit
+
+Importing `std.os` is harmless; calling one of its services crosses the host
+gate. These operations are not permitted in compile-time constants, and their
+answers should not be used as reproducible test fixtures. Pass a measured
+value into pure logic when that logic deserves deterministic tests.

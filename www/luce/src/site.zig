@@ -4,17 +4,18 @@
 //! the path a reader takes through the language, not the order files happened
 //! to be created in.
 //!
-//! Four sections form the public documentation:
+//! Five sections form the public documentation:
 //!
 //!   Tour      — "Can I see the shape of Luce in one sitting?"
 //!   Guide     — "How do I learn Luce, then look up an exact rule?"
+//!   Tools     — "How do I install, build, edit, test, and package it?"
 //!   Library   — "What does a shipped module or package provide?"
 //!   Status    — "What is implemented today?"
 //!
-//! The Guide is one book with three parts. Its teaching chapters come first,
-//! tools and project work follow, and the intentionally dry language reference
-//! closes the book. That distinction belongs inside the book, not in the top
-//! navigation.
+//! The Guide is one language book with two parts. Teaching chapters come
+//! first; the intentionally dry reference closes the book. Toolchain and
+//! project work have their own section so a language reader never has to step
+//! through editor or package chapters to continue learning semantics.
 
 pub const Page = struct {
     /// The URL path under the section.
@@ -50,37 +51,35 @@ pub const sections = [_]Section{
         .slug = "guide",
         .label = "Guide",
         .title = "The Luce guide",
-        .blurb = "Learn the language in a deliberate sequence, build real programs, then look up the exact rules in the same book.",
+        .blurb = "Learn the language in a deliberate sequence, then look up its exact grammar and semantics in the same book.",
         .pages = &.{
             // Language Guide — teaching chapters, from common ground to the
             // boundaries that matter in larger programs.
+            .{ .slug = "about", .title = "About Luce", .part = "Language Guide", .blurb = "The language's goals, its safety model, and the boundaries it keeps explicit." },
+            .{ .slug = "compatibility", .title = "Version Compatibility", .part = "Language Guide", .blurb = "What a 0.x release promises about source, native artifacts, packages, and the host ABI." },
             .{ .slug = "basics", .title = "The Basics", .part = "Language Guide", .source = "guide/basics.md", .blurb = "A complete program, values, types, bindings and command-line arguments." },
             .{ .slug = "operators", .title = "Basic Operators", .part = "Language Guide", .source = "guide/operators.md", .blurb = "Arithmetic, comparison, Boolean logic, assignment and the checks behind them." },
             .{ .slug = "strings", .title = "Strings and Text", .part = "Language Guide", .blurb = "Immutable UTF-8 values, searching, reshaping, building and byte boundaries." },
             .{ .slug = "collections", .title = "Collection Types", .part = "Language Guide", .blurb = "Choose and use lists, maps and fixed-shape arrays." },
             .{ .slug = "control", .title = "Control Flow", .part = "Language Guide", .blurb = "Conditions, loops, matching, early exits and recursion." },
-            .{ .slug = "functions", .title = "Functions and Closures", .part = "Language Guide", .blurb = "Parameters, returns, stored functions, closures, captures and bound methods." },
+            .{ .slug = "functions", .title = "Functions", .part = "Language Guide", .blurb = "Declare and call functions with named/default arguments, multiple results, failure, and function values." },
+            .{ .slug = "closures", .title = "Closures", .part = "Language Guide", .blurb = "Carry local state in block closures, choose strong, weak, or snapshot captures, and store callbacks safely." },
             .{ .slug = "enums", .title = "Enumerations", .part = "Language Guide", .blurb = "Named alternatives, numeric representation, exhaustive matching and methods." },
-            .{ .slug = "structures", .title = "Structures and Methods", .part = "Language Guide", .blurb = "Keep data, behavior and invariants together in a value type." },
-            .{ .slug = "classes", .title = "Classes", .part = "Language Guide", .blurb = "Build shared identity with definite initialization, ARC, weak references, interfaces and deterministic teardown." },
-            .{ .slug = "constants", .title = "Constants", .part = "Language Guide", .blurb = "File-scope values, compile-time folding, shared tables and immutability." },
+            .{ .slug = "structures", .title = "Structures", .part = "Language Guide", .blurb = "Model related data as a value that copies predictably." },
+            .{ .slug = "methods", .title = "Methods", .part = "Language Guide", .blurb = "Attach instance and static behavior, understand `self`, mutation, binding, and call syntax." },
+            .{ .slug = "classes", .title = "Classes", .part = "Language Guide", .blurb = "Choose shared mutable identity and understand how class aliases differ from copied structures." },
+            .{ .slug = "initialization", .title = "Initialization", .part = "Language Guide", .blurb = "Construct structures and classes, use defaults, and establish every class field before identity exists." },
+            .{ .slug = "deinitialization", .title = "Deinitialization", .part = "Language Guide", .blurb = "Perform deterministic class cleanup at the last strong release without resurrection or manual memory calls." },
             .{ .slug = "optionals", .title = "Optionals", .part = "Language Guide", .blurb = "Represent absence, narrow it safely and provide a fallback." },
             .{ .slug = "unions", .title = "Unions", .part = "Language Guide", .blurb = "Model several valid shapes and match their payloads safely." },
-            .{ .slug = "interfaces", .title = "Interfaces", .part = "Language Guide", .blurb = "Share behavior across different structs and classes with checked, explicit contracts." },
             .{ .slug = "errors", .title = "Error Handling", .part = "Language Guide", .blurb = "Distinguish absence, recoverable errors and traps; propagate or handle each deliberately." },
             .{ .slug = "concurrency", .title = "Concurrency", .part = "Language Guide", .blurb = "Build multi-threaded work with isolated runtimes, copied values, and structured joins." },
+            .{ .slug = "interfaces", .title = "Interfaces", .part = "Language Guide", .blurb = "Share behavior across different structs and classes with checked, explicit contracts." },
             .{ .slug = "memory", .title = "Memory and ARC", .part = "Language Guide", .blurb = "Understand values, shared references, the resource-lifetime contract, and worker isolation." },
             .{ .slug = "access-control", .title = "Access Control", .part = "Language Guide", .source = "guide/access-control.md", .blurb = "Choose public and private boundaries for modules and structures." },
+            .{ .slug = "constants", .title = "Global Constants", .part = "Language Guide", .blurb = "Share folded file-scope values and immutable program-root containers." },
             .{ .slug = "modules", .title = "Modules and Imports", .part = "Language Guide", .blurb = "Split a program into source files, imports, standard modules and aliases." },
-            .{ .slug = "host", .title = "Host Services", .part = "Language Guide", .blurb = "Use arguments, files, terminals, clocks and other explicit effects." },
-
-            // Tools and Projects — things a reader does around language code.
-            .{ .slug = "command-line", .title = "Command-Line Tools", .part = "Tools and Projects", .source = "guide/command-line.md", .blurb = "Install Luce, build and run programs, and choose an artifact or build mode." },
-            .{ .slug = "editor", .title = "Editor Support", .part = "Tools and Projects", .blurb = "Use the shipped editor or the local VS Code extension with the same compiler." },
-            .{ .slug = "packages", .title = "Packages and Projects", .part = "Tools and Projects", .source = "guide/packages.md", .blurb = "Keep source packages beside main.luc, add a manifest, version them and prepare publication." },
-            .{ .slug = "testing", .title = "Testing", .part = "Tools and Projects", .blurb = "Write ordinary test functions and keep failures visible and repeatable." },
-            .{ .slug = "programs", .title = "Complete Programs", .part = "Tools and Projects", .blurb = "Read complete programs that combine modules, data, failure and the standard library." },
-            .{ .slug = "performance", .title = "Performance", .part = "Tools and Projects", .blurb = "Measure release builds and choose efficient text and numeric storage without guessing." },
+            .{ .slug = "host", .title = "Host Effects", .part = "Language Guide", .blurb = "Use arguments, files, terminals, clocks, processes, windows, and other explicit effects." },
 
             // Language Reference — exhaustive lookup chapters in the same book.
             .{ .slug = "reference", .title = "About the Language Reference", .part = "Language Reference", .source = "guide/reference/index.md", .blurb = "How to read the exact syntax and semantic rules that close this book." },
@@ -92,6 +91,20 @@ pub const sections = [_]Section{
             .{ .slug = "reference/failure", .title = "Errors and Traps", .part = "Language Reference", .source = "guide/reference/failure.md", .blurb = "Every stable error and trap code, and the conditions that produce it." },
             .{ .slug = "reference/modules", .title = "Modules", .part = "Language Reference", .source = "guide/reference/modules.md", .blurb = "Imports, visibility, packages and the std namespace." },
             .{ .slug = "reference/builtins", .title = "Built-in Functions and Methods", .part = "Language Reference", .source = "guide/reference/builtins.md", .blurb = "Every standalone built-in and receiver method, with its signature." },
+        },
+    },
+    .{
+        .slug = "tools",
+        .label = "Tools",
+        .title = "Command-Line Tools",
+        .blurb = "Install Luce, build and edit programs, organize packages, run tests, and measure real applications.",
+        .pages = &.{
+            .{ .slug = "command-line", .title = "The luce and loom Commands", .part = "Toolchain", .source = "tools/command-line.md", .blurb = "Install the toolchain, build and run programs, and choose an artifact or build mode." },
+            .{ .slug = "editor", .title = "Editor Support", .part = "Toolchain", .source = "tools/editor.md", .blurb = "Use the shipped declarative terminal editor or the local VS Code extension." },
+            .{ .slug = "packages", .title = "Packages and Projects", .part = "Projects", .source = "tools/packages.md", .blurb = "Keep source packages beside main.luc, add a manifest, version them, and understand the absent registry boundary." },
+            .{ .slug = "testing", .title = "Testing", .part = "Projects", .source = "tools/testing.md", .blurb = "Write ordinary test functions and keep discovery, progress, and failures visible and repeatable." },
+            .{ .slug = "programs", .title = "Complete Programs", .part = "Projects", .source = "tools/programs.md", .blurb = "Read complete programs that combine modules, data, failure, concurrency, and the standard library." },
+            .{ .slug = "performance", .title = "Performance", .part = "Projects", .source = "tools/performance.md", .blurb = "Measure release builds and choose efficient text and numeric storage without guessing." },
         },
     },
     .{
@@ -125,6 +138,12 @@ pub const sections = [_]Section{
 
 test "sections, slugs, and chapter groups are coherent" {
     const std = @import("std");
+    const expected_sections = [_][]const u8{ "tour", "guide", "tools", "library", "status" };
+    try std.testing.expectEqual(expected_sections.len, sections.len);
+    for (sections, expected_sections) |section, expected| {
+        try std.testing.expectEqualStrings(expected, section.slug);
+    }
+
     for (sections, 0..) |section, section_index| {
         try std.testing.expect(section.slug.len > 0);
         try std.testing.expect(section.pages.len < 40);
@@ -153,5 +172,18 @@ test "sections, slugs, and chapter groups are coherent" {
                 previous_part = page.part;
             }
         }
+    }
+
+    for (sections[1].pages) |page| {
+        try std.testing.expect(
+            std.mem.eql(u8, page.part, "Language Guide") or
+                std.mem.eql(u8, page.part, "Language Reference"),
+        );
+    }
+    for (sections[2].pages) |page| {
+        try std.testing.expect(
+            std.mem.eql(u8, page.part, "Toolchain") or
+                std.mem.eql(u8, page.part, "Projects"),
+        );
     }
 }

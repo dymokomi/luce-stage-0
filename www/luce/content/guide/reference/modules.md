@@ -231,8 +231,9 @@ main.luc:1:1: cannot load module geometry (looked for geometry.luc) [luce.import
     ^~~~~~~~~~~~~~~
 ```
 
-Deliberately absent: package managers, search paths, conditional
-imports, and re-exports.
+Deliberately absent at this level: arbitrary search paths, conditional
+imports, wildcard imports, and executable import bodies. Project and package
+resolution are defined below; registry fetch and upload remain unavailable.
 
 ## The `std.` namespace
 

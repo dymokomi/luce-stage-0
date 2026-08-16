@@ -369,8 +369,9 @@ func main():
 ```
 
 A union is a value. Value payloads copy and reference payloads remain shared
-through ARC. Recursive unions must pass through a reference container so the
-layout stays finite.
+through ARC. Recursive unions must pass through an optional, where absence
+terminates the value chain, or a reference container whose handle has a fixed
+size.
 
 ## `list[T]`
 
