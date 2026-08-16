@@ -35,12 +35,12 @@ pub const StatementFrame = struct { statements: std.ArrayList(nodes.Statement) }
 /// the recorded tree rather than a second source-expression folder.
 pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
     return switch (node.*) {
-        .const_long => |literal| literal.value,
+        .const_integer => |literal| literal.value,
         // A folded file-scope constant materializes as its value
-        // does; an integer-family one is a `const_long`.
+        // does; an integer-family one is a `const_integer`.
         .constant_ref => |use| blk: {
             const info = self.analyzer.constant_infos.items[use.constant];
-            break :blk if (info.value == .long) info.value.long else null;
+            break :blk if (info.value == .i64) info.value.i64 else null;
         },
         .convert => |conversion| constantLong(self, conversion.operand),
         .carried_get => |carried| constantLong(self, carried.origin),

@@ -254,14 +254,18 @@ fn writesPlainElement(
         // `array(byte, n)` inside the vectorisation gate rather than
         // outside it (docs/TYPES.md §6).
         .boolean,
-        .byte,
-        .short,
-        .int,
-        .long,
-        .half,
-        .float,
-        .double,
-        .string,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .f16,
+        .f32,
+        .f64,
+        .str,
         => true,
         .none, .strukt, .variant, .heap, .optional => false,
         .enumeration => unreachable, // answered by storage() above
@@ -304,9 +308,9 @@ fn collect(
                 // defaulted, because a missing assignment here is a
                 // hoisted row read after the local that named it moved.
                 .const_boolean,
-                .const_long,
-                .const_double,
-                .const_string,
+                .const_integer,
+                .const_float,
+                .const_str,
                 .const_container,
                 .const_function,
                 .local_get,
@@ -574,7 +578,7 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
 
     try testing.expectEqual(@as(usize, 1), built.made.hoists.len);
     const hoist = built.made.hoists[0];
-    try testing.expectEqual(types.Type.double, hoist.element);
+    try testing.expectEqual(types.Type.f64, hoist.element);
     try testing.expectEqual(@as(u8, 1), hoist.rank);
     // The preheader emits it — at the end, after everything the block
     // itself does — and the loop's blocks read it.

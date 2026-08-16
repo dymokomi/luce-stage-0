@@ -81,7 +81,7 @@ fn expectFunctionReceiver(function: Value, receiver: Value) !void {
 /// consumes its receiver slot, so the slot receives an ordinary ARC copy.
 fn makeBoundFunction(runtime: *Runtime, function: i64, receiver: Value) !Value {
     const owned_receiver = try runtime.copyValue(receiver);
-    return runtime.makeFunction(&.{ Value.ofLong(function), owned_receiver });
+    return runtime.makeFunction(&.{ Value.ofI64(function), owned_receiver });
 }
 
 /// A tiny deterministic generator for the ownership state machine.  The
@@ -130,7 +130,7 @@ fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
 
     const array = runtime.newArray(
         &.{4},
-        Value.ofString("a long array fill value that owns outside storage"),
+        Value.ofStr("a long array fill value that owns outside storage"),
     ) catch |mistake| {
         // The public constructor locates raw element-buffer failure as a
         // runtime allocation trap.  Normalize that boundary back to the
@@ -285,27 +285,27 @@ const CFileState = struct {
 };
 
 fn expectNestedListIntact(runtime: *Runtime, held: Value) !void {
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
-    const word = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asI64());
+    const word = try containers.indexGet(runtime, held, &.{Value.ofI64(0)});
     try testing.expectEqualStrings(
         "a nested object owns bytes that its failed copy must return",
-        word.asString(),
+        word.asStr(),
     );
 }
 
 fn expectNestedSourceIntact(runtime: *Runtime, held: Value, shape: CopyShape) !void {
     switch (shape) {
         .list => {
-            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asI64());
             for (0..2) |index| {
                 try expectNestedListIntact(
                     runtime,
-                    try containers.indexGet(runtime, held, &.{Value.ofLong(@intCast(index))}),
+                    try containers.indexGet(runtime, held, &.{Value.ofI64(@intCast(index))}),
                 );
             }
         },
         .map => {
-            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asI64());
             for (0..2) |index| {
                 try expectNestedListIntact(
                     runtime,
@@ -314,11 +314,11 @@ fn expectNestedSourceIntact(runtime: *Runtime, held: Value, shape: CopyShape) !v
             }
         },
         .array => {
-            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asI64());
             for (0..2) |index| {
                 try expectNestedListIntact(
                     runtime,
-                    try containers.indexGet(runtime, held, &.{Value.ofLong(@intCast(index))}),
+                    try containers.indexGet(runtime, held, &.{Value.ofI64(@intCast(index))}),
                 );
             }
         },
@@ -329,7 +329,7 @@ fn expectNestedSourceIntact(runtime: *Runtime, held: Value, shape: CopyShape) !v
             try expectNestedListIntact(runtime, fields[1]);
             try testing.expectEqualStrings(
                 "the copied struct itself owns outside bytes",
-                fields[2].asString(),
+                fields[2].asStr(),
             );
         },
     }
@@ -338,7 +338,7 @@ fn expectNestedSourceIntact(runtime: *Runtime, held: Value, shape: CopyShape) !v
 fn nestedList(runtime: *Runtime) !Value {
     const list = try runtime.newList(Value.none);
     errdefer runtime.freeValue(list);
-    const words = try runtime.ownValue(Value.ofString(
+    const words = try runtime.ownValue(Value.ofStr(
         "a nested object owns bytes that its failed copy must return",
     ));
     try containers.append(runtime, list, words);
@@ -369,14 +369,14 @@ fn nestedCopySource(runtime: *Runtime, shape: CopyShape) !Value {
             try containers.indexSet(
                 runtime,
                 map,
-                &.{Value.ofString("the first copied map key owns outside bytes")},
+                &.{Value.ofStr("the first copied map key owns outside bytes")},
                 first,
             );
             first_loose = false;
             try containers.indexSet(
                 runtime,
                 map,
-                &.{Value.ofString("the second copied map key owns outside bytes")},
+                &.{Value.ofStr("the second copied map key owns outside bytes")},
                 second,
             );
             second_loose = false;
@@ -385,9 +385,9 @@ fn nestedCopySource(runtime: *Runtime, shape: CopyShape) !Value {
         .array => blk: {
             const array = try runtime.newArray(&.{2}, Value.none);
             errdefer runtime.freeValue(array);
-            try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, first);
+            try containers.indexSet(runtime, array, &.{Value.ofI64(0)}, first);
             first_loose = false;
-            try containers.indexSet(runtime, array, &.{Value.ofLong(1)}, second);
+            try containers.indexSet(runtime, array, &.{Value.ofI64(1)}, second);
             second_loose = false;
             break :blk array;
         },
@@ -395,7 +395,7 @@ fn nestedCopySource(runtime: *Runtime, shape: CopyShape) !Value {
             var fields = [_]Value{
                 first,
                 second,
-                Value.ofString("the copied struct itself owns outside bytes"),
+                Value.ofStr("the copied struct itself owns outside bytes"),
             };
             const record = try runtime.ownValue(Value.ofStruct(&fields));
             first_loose = false;
@@ -414,7 +414,7 @@ fn nestedUnionOptionalSource(runtime: *Runtime, optional_present: bool) !Value {
     // discriminant and payload.  makeStruct consumes the payload even when
     // allocating the run fails, so close that ownership boundary before
     // returning from the failure arm.
-    const union_value = runtime.makeStruct(&.{ Value.ofLong(7), union_payload }) catch |mistake| {
+    const union_value = runtime.makeStruct(&.{ Value.ofI64(7), union_payload }) catch |mistake| {
         union_payload_loose = false;
         return mistake;
     };
@@ -432,7 +432,7 @@ fn nestedUnionOptionalSource(runtime: *Runtime, optional_present: bool) !Value {
     const array_value = try nestedCopySource(runtime, .array);
     var array_loose = true;
     errdefer if (array_loose) runtime.freeValue(array_value);
-    const note = try runtime.ownValue(Value.ofString(
+    const note = try runtime.ownValue(Value.ofStr(
         "a union and optional record owns outside bytes during its failed copy",
     ));
     var note_owned = true;
@@ -468,7 +468,7 @@ fn expectUnionOptionalSourceIntact(
 
     const union_fields = fields[0].asStruct();
     try testing.expectEqual(@as(usize, 2), union_fields.len);
-    try testing.expectEqual(@as(i64, 7), union_fields[0].asLong());
+    try testing.expectEqual(@as(i64, 7), union_fields[0].asI64());
     try expectNestedListIntact(runtime, union_fields[1]);
 
     if (optional_present) {
@@ -480,7 +480,7 @@ fn expectUnionOptionalSourceIntact(
     try expectNestedSourceIntact(runtime, fields[3], .array);
     try testing.expectEqualStrings(
         "a union and optional record owns outside bytes during its failed copy",
-        fields[4].asString(),
+        fields[4].asStr(),
     );
 }
 
@@ -597,7 +597,7 @@ fn expectNestedCopyFailures(shape: CopyShape) !usize {
             try testing.expectEqual(baseline_live, target.live);
             try testing.expectEqual(baseline_table_len, target.table.items.len);
             try testing.expectEqual(baseline_free_row, target.free_row);
-            try testing.expectEqual(@as(i64, 0), (try containers.length(&target, baseline)).asLong());
+            try testing.expectEqual(@as(i64, 0), (try containers.length(&target, baseline)).asI64());
             // A failing allocator may refuse the shrink performed while
             // restoring a grown table.  That retains owned spare capacity,
             // but it is not a leaked row or object and is reclaimed by
@@ -701,8 +701,8 @@ fn expectBuiltListFailures(kind: BuiltList) !usize {
                 try containers.indexSet(
                     &runtime,
                     source,
-                    &.{Value.ofString(key)},
-                    Value.ofLong(@intCast(number)),
+                    &.{Value.ofStr(key)},
+                    Value.ofI64(@intCast(number)),
                 );
             }
         }
@@ -710,7 +710,7 @@ fn expectBuiltListFailures(kind: BuiltList) !usize {
         objects.fail_index = objects.alloc_index + failure_offset;
 
         const outcome = switch (kind) {
-            .map_keys => containers.mapKeys(&runtime, source, Value.ofString("")),
+            .map_keys => containers.mapKeys(&runtime, source, Value.ofStr("")),
             .text_slices => containers.listOfText(&runtime, &built_list_words),
             .joined_text => containers.listOfJoinedText(&runtime, built_list_joined),
             .arguments => containers.listOfArguments(
@@ -791,7 +791,7 @@ const WorkerFailureState = struct {
 
         leaf = runtime.newList(Value.none) catch |mistake| return self.failed(runtime, mistake);
         leaf_owned = true;
-        containers.append(runtime, leaf, Value.ofLong(11)) catch |mistake|
+        containers.append(runtime, leaf, Value.ofI64(11)) catch |mistake|
             return self.failed(runtime, mistake);
 
         branch = runtime.newList(Value.none) catch |mistake| return self.failed(runtime, mistake);
@@ -801,7 +801,7 @@ const WorkerFailureState = struct {
         // The successful append moved the leaf's object edge into branch.
         leaf_owned = false;
 
-        words = runtime.ownValue(Value.ofString(
+        words = runtime.ownValue(Value.ofStr(
             "worker graph result has outside storage",
         )) catch |mistake| return self.failed(runtime, mistake);
         words_owned = true;
@@ -855,7 +855,7 @@ const WorkerFailureState = struct {
             return workers.survived;
         }
         if (!self.produce_result) return workers.survived;
-        const words = runtime.ownValue(Value.ofString(
+        const words = runtime.ownValue(Value.ofStr(
             "the unclaimed worker result owns outside bytes",
         )) catch |mistake| return self.failed(runtime, mistake);
         out.* = runtime.makeStruct(&.{words}) catch |mistake| return self.failed(runtime, mistake);
@@ -1005,12 +1005,12 @@ const ConcurrentTeardown = struct {
             runtime.exhausted = true;
             return workers.raised_trap;
         };
-        containers.append(runtime, leaf, Value.ofLong(7)) catch {
+        containers.append(runtime, leaf, Value.ofI64(7)) catch {
             runtime.freeValue(leaf);
             runtime.exhausted = true;
             return workers.raised_trap;
         };
-        var fields = [_]Value{ leaf, Value.ofLong(11) };
+        var fields = [_]Value{ leaf, Value.ofI64(11) };
         const result = runtime.makeStruct(&fields) catch {
             // `makeStruct` consumes the fields on this failure path.
             runtime.exhausted = true;
@@ -1270,7 +1270,7 @@ const BlockedResourceTeardown = struct {
             _ = runtime.fail(.host_unavailable) catch {};
             return workers.raised_trap;
         };
-        const buffer = runtime.newArray(&.{1}, Value.ofByte(0)) catch |mistake| {
+        const buffer = runtime.newArray(&.{1}, Value.ofU8(0)) catch |mistake| {
             runtime.freeValue(file);
             return failed(runtime, mistake);
         };
@@ -1743,10 +1743,10 @@ test "worker channel exhaustion rejects without orphaning a child" {
     try testing.expectEqual(@as(usize, 1), state.joins);
     try testing.expectEqual(@as(usize, 1), state.closes);
 
-    var rejected: Value = Value.ofLong(99);
+    var rejected: Value = Value.ofI64(99);
     try testing.expectError(error.Trap, workers.spawn(&runtime, 0, &.{}, &rejected));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), rejected.asLong());
+    try testing.expectEqual(@as(i64, 99), rejected.asI64());
     runtime.pending = null;
     try testing.expectEqual(ConcurrentTeardown.capacity, state.spawn_count);
     try testing.expectEqual(@as(usize, 2), state.closes);
@@ -1980,7 +1980,7 @@ fn lifecycleGraph(runtime: *Runtime, with_file: bool, stamp: i64) heap.Error!Lif
     var leaf_owned = true;
     errdefer if (leaf_owned) runtime.freeValue(leaf);
 
-    try containers.append(runtime, leaf, Value.ofLong(stamp));
+    try containers.append(runtime, leaf, Value.ofI64(stamp));
 
     var file: Value = .none;
     var file_owned = false;
@@ -2002,7 +2002,7 @@ fn lifecycleGraph(runtime: *Runtime, with_file: bool, stamp: i64) heap.Error!Lif
     try containers.indexSet(
         runtime,
         branch,
-        &.{Value.ofString("payload")},
+        &.{Value.ofStr("payload")},
         leaf,
     );
     leaf_owned = false;
@@ -2013,12 +2013,12 @@ fn lifecycleGraph(runtime: *Runtime, with_file: bool, stamp: i64) heap.Error!Lif
     try containers.indexSet(
         runtime,
         array,
-        &.{Value.ofLong(0)},
+        &.{Value.ofI64(0)},
         branch,
     );
     branch_owned = false;
 
-    var fields = [_]Value{ array, Value.ofLong(stamp) };
+    var fields = [_]Value{ array, Value.ofI64(stamp) };
     const root = runtime.makeStruct(&fields) catch |mistake| {
         // `makeStruct` consumes all fields even on allocation failure.
         array_owned = false;
@@ -2198,9 +2198,9 @@ fn lifecycleWaitTask(
     task: *LifecycleTask,
 ) !void {
     if (task.joined) {
-        var second: Value = Value.ofLong(99);
+        var second: Value = Value.ofI64(99);
         try expectTrap(.use_after_free, runtime, workers.wait(runtime, task.handle, &second));
-        try testing.expectEqual(@as(i64, 99), second.asLong());
+        try testing.expectEqual(@as(i64, 99), second.asI64());
         runtime.pending = null;
         return;
     }
@@ -2247,8 +2247,8 @@ fn lifecycleAudit(
 ) !void {
     const active_tasks = lifecycleActiveTasks(task_records);
     const active_resources = lifecycleActiveResources(resource_records);
-    try testing.expectEqual(@as(i64, @intCast(active_tasks)), (try containers.length(runtime, tasks)).asLong());
-    try testing.expectEqual(@as(i64, @intCast(active_resources)), (try containers.length(runtime, resources)).asLong());
+    try testing.expectEqual(@as(i64, @intCast(active_tasks)), (try containers.length(runtime, tasks)).asI64());
+    try testing.expectEqual(@as(i64, @intCast(active_resources)), (try containers.length(runtime, resources)).asI64());
 
     var live_task_rows: usize = 0;
     var joined_task_rows: usize = 0;
@@ -2397,7 +2397,7 @@ fn runLifecycleSeed(seed: u64) !void {
             66...71 => if (lifecycleActiveTasks(task_records[0..task_used]) != 0) {
                 const ordinal = random.below(lifecycleActiveTasks(task_records[0..task_used]));
                 const task = lifecycleTaskAt(task_records[0..task_used], ordinal);
-                try containers.remove(&runtime, tasks, Value.ofLong(@intCast(ordinal)));
+                try containers.remove(&runtime, tasks, Value.ofI64(@intCast(ordinal)));
                 task.active = false;
                 lifecycleMarkJoined(&state, task);
             },
@@ -2424,7 +2424,7 @@ fn runLifecycleSeed(seed: u64) !void {
             84...89 => if (lifecycleActiveResources(resource_records[0..resource_used]) != 0) {
                 const ordinal = random.below(lifecycleActiveResources(resource_records[0..resource_used]));
                 const resource = lifecycleResourceAt(resource_records[0..resource_used], ordinal);
-                try containers.remove(&runtime, resources, Value.ofLong(@intCast(ordinal)));
+                try containers.remove(&runtime, resources, Value.ofI64(@intCast(ordinal)));
                 resource.active = false;
                 try expectTrap(.use_after_free, &runtime, runtime.resolve(resource.file));
                 runtime.pending = null;
@@ -2695,7 +2695,7 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     var made: usize = 0;
     while (made < 100_000) : (made += 1) {
         const held = try runtime.newList(Value.none);
-        try containers.append(runtime, held, Value.ofLong(@intCast(made)));
+        try containers.append(runtime, held, Value.ofI64(@intCast(made)));
         runtime.freeObject(held.asObject());
     }
     try testing.expectEqual(@as(usize, 1), runtime.table.items.len);
@@ -2750,17 +2750,17 @@ test "a directory listing splits the same list out of both shapes" {
 
     const from_slices = try containers.listOfText(runtime, &names);
     const from_bytes = try containers.listOfJoinedText(runtime, joined);
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asLong());
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asLong());
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asI64());
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asI64());
     for (names, 0..) |wanted, at| {
-        const index = Value.ofLong(@intCast(at));
+        const index = Value.ofI64(@intCast(at));
         try testing.expectEqualStrings(
             wanted,
-            (try containers.indexGet(runtime, from_slices, &.{index})).asString(),
+            (try containers.indexGet(runtime, from_slices, &.{index})).asStr(),
         );
         try testing.expectEqualStrings(
             wanted,
-            (try containers.indexGet(runtime, from_bytes, &.{index})).asString(),
+            (try containers.indexGet(runtime, from_bytes, &.{index})).asStr(),
         );
     }
 
@@ -2768,9 +2768,9 @@ test "a directory listing splits the same list out of both shapes" {
     // empty name — and a buffer with no trailing separator is still
     // read whole, because a host is not ours to promise for.
     const empty = try containers.listOfJoinedText(runtime, "");
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asI64());
     const unterminated = try containers.listOfJoinedText(runtime, "one\x00two");
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asLong());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asI64());
 
     runtime.freeObject(from_slices.asObject());
     runtime.freeObject(from_bytes.asObject());
@@ -2785,7 +2785,7 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     const runtime = &bench.runtime;
 
     const first = try runtime.newList(Value.none);
-    try containers.append(runtime, first, Value.ofLong(11));
+    try containers.append(runtime, first, Value.ofI64(11));
     runtime.freeObject(first.asObject());
 
     // The very next object takes the row the first one vacated — the
@@ -2799,9 +2799,9 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     // one still opens.
     try expectTrap(.use_after_free, runtime, runtime.resolve(first));
     try expectTrap(.use_after_free, runtime, containers.length(runtime, first));
-    try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofLong(0)}));
+    try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofI64(0)}));
     try expectTrap(.use_after_free, runtime, runtime.deepCopy(first));
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asI64());
 
     // Identity is the object, not the row: the two handles are not
     // equal, and freeing through the stale one takes nothing.
@@ -2823,15 +2823,15 @@ test "stale handles reject every container operation after row reuse" {
     runtime.freeObject(stale_list.asObject());
     const live_list = try runtime.newList(Value.none);
     try expectStale(runtime, containers.length(runtime, stale_list));
-    try expectStale(runtime, containers.indexGet(runtime, stale_list, &.{Value.ofLong(0)}));
+    try expectStale(runtime, containers.indexGet(runtime, stale_list, &.{Value.ofI64(0)}));
     try expectStale(
         runtime,
-        containers.indexSet(runtime, stale_list, &.{Value.ofLong(0)}, Value.none),
+        containers.indexSet(runtime, stale_list, &.{Value.ofI64(0)}, Value.none),
     );
     try expectStale(runtime, containers.append(runtime, stale_list, Value.none));
     try expectStale(runtime, containers.insert(runtime, stale_list, 0, Value.none));
     try expectStale(runtime, containers.pop(runtime, stale_list));
-    try expectStale(runtime, containers.remove(runtime, stale_list, Value.ofLong(0)));
+    try expectStale(runtime, containers.remove(runtime, stale_list, Value.ofI64(0)));
     try expectStale(runtime, containers.clear(runtime, stale_list));
     try expectStale(runtime, containers.sort(runtime, stale_list));
     try expectStale(runtime, containers.reverse(runtime, stale_list));
@@ -2844,18 +2844,18 @@ test "stale handles reject every container operation after row reuse" {
     runtime.freeObject(stale_map.asObject());
     const live_map = try runtime.newMap();
     try expectStale(runtime, containers.length(runtime, stale_map));
-    try expectStale(runtime, containers.indexGet(runtime, stale_map, &.{Value.ofString("k")}));
+    try expectStale(runtime, containers.indexGet(runtime, stale_map, &.{Value.ofStr("k")}));
     try expectStale(
         runtime,
-        containers.indexSet(runtime, stale_map, &.{Value.ofString("k")}, Value.ofLong(1)),
+        containers.indexSet(runtime, stale_map, &.{Value.ofStr("k")}, Value.ofI64(1)),
     );
-    try expectStale(runtime, containers.remove(runtime, stale_map, Value.ofString("k")));
+    try expectStale(runtime, containers.remove(runtime, stale_map, Value.ofStr("k")));
     try expectStale(runtime, containers.clear(runtime, stale_map));
-    try expectStale(runtime, containers.mapKeys(runtime, stale_map, Value.ofString("")));
+    try expectStale(runtime, containers.mapKeys(runtime, stale_map, Value.ofStr("")));
     try expectStale(runtime, containers.mapValues(runtime, stale_map, Value.none));
     try expectStale(
         runtime,
-        containers.mapPlace(runtime, stale_map, Value.ofString("k"), Value.ofLong(0)),
+        containers.mapPlace(runtime, stale_map, Value.ofStr("k"), Value.ofI64(0)),
     );
     try expectStale(runtime, runtime.deepCopy(stale_map));
     runtime.freeValue(stale_map);
@@ -2866,10 +2866,10 @@ test "stale handles reject every container operation after row reuse" {
     const live_array = try runtime.newArray(&.{2}, Value.none);
     try expectStale(runtime, containers.length(runtime, stale_array));
     try expectStale(runtime, containers.dimSize(runtime, stale_array, 0));
-    try expectStale(runtime, containers.indexGet(runtime, stale_array, &.{Value.ofLong(0)}));
+    try expectStale(runtime, containers.indexGet(runtime, stale_array, &.{Value.ofI64(0)}));
     try expectStale(
         runtime,
-        containers.indexSet(runtime, stale_array, &.{Value.ofLong(0)}, Value.none),
+        containers.indexSet(runtime, stale_array, &.{Value.ofI64(0)}, Value.none),
     );
     try expectStale(runtime, containers.arrayFill(runtime, stale_array, Value.none));
     try expectStale(runtime, containers.listSlice(runtime, stale_array, 0, 0));
@@ -2881,7 +2881,7 @@ test "stale handles reject every container operation after row reuse" {
     runtime.freeObject(stale_builder.asObject());
     const live_builder = try runtime.newBuilder();
     try expectStale(runtime, containers.length(runtime, stale_builder));
-    try expectStale(runtime, containers.append(runtime, stale_builder, Value.ofString("x")));
+    try expectStale(runtime, containers.append(runtime, stale_builder, Value.ofStr("x")));
     try expectStale(runtime, containers.appendAscii(runtime, stale_builder, 'x'));
     try expectStale(runtime, containers.clear(runtime, stale_builder));
     try expectStale(runtime, runtime.deepCopy(stale_builder));
@@ -2950,7 +2950,7 @@ test "stale file operations trap before touching the host" {
     };
 
     const stale = try runtime.newFile(17, "stale.bin");
-    const bytes = try runtime.newArray(&.{4}, Value.ofByte(0));
+    const bytes = try runtime.newArray(&.{4}, Value.ofU8(0));
     runtime.freeObject(stale.asObject());
     const replacement = try runtime.newFile(29, "replacement.bin");
     try testing.expect(!stale.asObject().same(replacement.asObject()));
@@ -3014,7 +3014,7 @@ test "nested resource graphs close once and stale handles stay stale" {
     // A copy would create a second owner of the host handle.  Rejection
     // must leave the original graph and its one close edge untouched.
     try expectTrap(.not_owned, runtime, runtime.deepCopy(packet));
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, packet)).asLong());
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, packet)).asI64());
     try testing.expectEqual(@as(u32, 2), runtime.live);
 
     runtime.freeValue(packet);
@@ -3105,17 +3105,17 @@ test "copy duplicates what an object owns, recursively (S31)" {
 
     const outer = try runtime.newList(Value.none);
     const inner = try runtime.newList(Value.none);
-    try containers.append(runtime, inner, Value.ofLong(7));
+    try containers.append(runtime, inner, Value.ofI64(7));
     try containers.append(runtime, outer, inner);
 
     const duplicate = try containers.copyVerb(runtime, outer);
     try testing.expectEqual(@as(u32, 4), runtime.live);
 
     // The copy's element is a different object that holds equal data.
-    const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)});
+    const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofI64(0)});
     try testing.expect(!copied_inner.asObject().same(inner.asObject()));
-    const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofLong(0)});
-    try testing.expectEqual(@as(i64, 7), element.asLong());
+    const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofI64(0)});
+    try testing.expectEqual(@as(i64, 7), element.asI64());
 
     // Freeing the copy takes its own element and nothing of the original.
     runtime.freeObject(duplicate.asObject());
@@ -3150,25 +3150,25 @@ test "a packed list copy ignores retained spare capacity" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const source = try runtime.newList(Value.ofLong(0));
+    const source = try runtime.newList(Value.ofI64(0));
     defer runtime.freeValue(source);
     for (0..64) |number| {
-        try containers.append(runtime, source, Value.ofLong(@intCast(number)));
+        try containers.append(runtime, source, Value.ofI64(@intCast(number)));
     }
     try containers.clear(runtime, source);
-    try containers.append(runtime, source, Value.ofLong(17));
-    try containers.append(runtime, source, Value.ofLong(29));
+    try containers.append(runtime, source, Value.ofI64(17));
+    try containers.append(runtime, source, Value.ofI64(29));
 
     const duplicate = try runtime.deepCopy(source);
     defer runtime.freeValue(duplicate);
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, duplicate)).asLong());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, duplicate)).asI64());
     try testing.expectEqual(
         @as(i64, 17),
-        (try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)})).asLong(),
+        (try containers.indexGet(runtime, duplicate, &.{Value.ofI64(0)})).asI64(),
     );
     try testing.expectEqual(
         @as(i64, 29),
-        (try containers.indexGet(runtime, duplicate, &.{Value.ofLong(1)})).asLong(),
+        (try containers.indexGet(runtime, duplicate, &.{Value.ofI64(1)})).asI64(),
     );
 }
 
@@ -3184,9 +3184,9 @@ test "list growth keeps every raw capacity on an element boundary" {
     // packed and boxed widths through several such steps and inspect the
     // storage contract directly.
     for ([_]Value{
-        Value.ofLong(0),
-        Value.ofShort(0),
-        Value.ofByte(0),
+        Value.ofI64(0),
+        Value.ofI16(0),
+        Value.ofU8(0),
         Value.none,
     }) |zero| {
         const list = try runtime.newList(zero);
@@ -3258,15 +3258,15 @@ test "map place rolls every key value and entry allocation back" {
         const outcome = containers.mapPlace(
             &runtime,
             map,
-            Value.ofString(long_key),
-            Value.ofString(long_zero),
+            Value.ofStr(long_key),
+            Value.ofStr(long_zero),
         );
         objects.fail_index = std.math.maxInt(usize);
 
         if (outcome) |placed| {
-            try testing.expect(placed.tag == .string);
-            try testing.expectEqualStrings(long_zero, placed.asString());
-            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, map)).asLong());
+            try testing.expect(placed.tag == .str);
+            try testing.expectEqualStrings(long_zero, placed.asStr());
+            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, map)).asI64());
             try testing.expectEqual(baseline_live, runtime.live);
             completed = true;
             runtime.freeValue(map);
@@ -3274,7 +3274,7 @@ test "map place rolls every key value and entry allocation back" {
             try testing.expectEqual(error.OutOfMemory, mistake);
             try testing.expect(objects.has_induced_failure);
             try testing.expectEqual(baseline_live, runtime.live);
-            try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, map)).asLong());
+            try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, map)).asI64());
             failures += 1;
             runtime.freeValue(map);
         }
@@ -3306,10 +3306,10 @@ test "builder growth and snapshots preserve bytes through allocation failure" {
             .objects = objects.allocator(),
         });
         const builder = try runtime.newBuilder();
-        try containers.append(&runtime, builder, Value.ofString("seed"));
+        try containers.append(&runtime, builder, Value.ofStr("seed"));
         objects.fail_index = objects.alloc_index + failure_offset;
 
-        const outcome = containers.append(&runtime, builder, Value.ofString(long_text));
+        const outcome = containers.append(&runtime, builder, Value.ofStr(long_text));
         objects.fail_index = std.math.maxInt(usize);
         if (outcome) |_| {
             const object = try runtime.resolve(builder);
@@ -3342,13 +3342,13 @@ test "builder growth and snapshots preserve bytes through allocation failure" {
             .objects = objects.allocator(),
         });
         const builder = try runtime.newBuilder();
-        try containers.append(&runtime, builder, Value.ofString(long_text));
+        try containers.append(&runtime, builder, Value.ofStr(long_text));
         objects.fail_index = objects.alloc_index + failure_offset;
 
         const outcome = text.str(&runtime, builder);
         objects.fail_index = std.math.maxInt(usize);
         if (outcome) |snapshot| {
-            try testing.expectEqualStrings(long_text, snapshot.asString());
+            try testing.expectEqualStrings(long_text, snapshot.asStr());
             runtime.dropStorage(snapshot);
             snapshot_completed = true;
         } else |mistake| {
@@ -3375,26 +3375,26 @@ test "runtime index and struct doors reject malformed rank without touching owne
     const runtime = &bench.runtime;
 
     const list = try runtime.newList(Value.none);
-    try containers.append(runtime, list, Value.ofLong(7));
+    try containers.append(runtime, list, Value.ofI64(7));
     try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, list, &.{}));
     runtime.pending = null;
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, list, &.{ Value.ofLong(0), Value.ofLong(1) }),
+        containers.indexGet(runtime, list, &.{ Value.ofI64(0), Value.ofI64(1) }),
     );
     runtime.pending = null;
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexSet(runtime, list, &.{}, Value.ofLong(8)),
+        containers.indexSet(runtime, list, &.{}, Value.ofI64(8)),
     );
     runtime.pending = null;
     try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
         runtime,
         list,
-        &.{Value.ofLong(0)},
-    )).asLong());
+        &.{Value.ofI64(0)},
+    )).asI64());
 
     const map = try runtime.newMap();
     try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, map, &.{}));
@@ -3405,18 +3405,18 @@ test "runtime index and struct doors reject malformed rank without touching owne
         containers.indexSet(
             runtime,
             map,
-            &.{ Value.ofString("a"), Value.ofString("b") },
-            Value.ofLong(1),
+            &.{ Value.ofStr("a"), Value.ofStr("b") },
+            Value.ofI64(1),
         ),
     );
     runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, map)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, map)).asI64());
 
-    const grid = try runtime.newArray(&.{ 2, 2 }, Value.ofLong(0));
+    const grid = try runtime.newArray(&.{ 2, 2 }, Value.ofI64(0));
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, grid, &.{Value.ofLong(0)}),
+        containers.indexGet(runtime, grid, &.{Value.ofI64(0)}),
     );
     runtime.pending = null;
     try expectTrap(
@@ -3425,25 +3425,25 @@ test "runtime index and struct doors reject malformed rank without touching owne
         containers.indexSet(
             runtime,
             grid,
-            &.{ Value.ofLong(0), Value.ofLong(0), Value.ofLong(0) },
-            Value.ofLong(1),
+            &.{ Value.ofI64(0), Value.ofI64(0), Value.ofI64(0) },
+            Value.ofI64(1),
         ),
     );
     runtime.pending = null;
     try testing.expectEqual(
         @as(i64, 0),
-        (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
+        (try containers.indexGet(runtime, grid, &.{ Value.ofI64(0), Value.ofI64(0) })).asI64(),
     );
     try testing.expectEqual(
         @as(?usize, null),
         heap.flattenIndex(
             &.{ std.math.maxInt(i64), std.math.maxInt(i64), std.math.maxInt(i64) },
-            &.{ Value.ofLong(1), Value.ofLong(1), Value.ofLong(1) },
+            &.{ Value.ofI64(1), Value.ofI64(1), Value.ofI64(1) },
         ),
     );
     try testing.expectEqual(
         @as(?usize, null),
-        heap.flattenIndex(&.{-1}, &.{Value.ofLong(0)}),
+        heap.flattenIndex(&.{-1}, &.{Value.ofI64(0)}),
     );
     // Every axis of a multidimensional store is a long.  The runtime must
     // reject a forged later index before flattenIndex reads its payload, and
@@ -3454,14 +3454,14 @@ test "runtime index and struct doors reject malformed rank without touching owne
         containers.indexSet(
             runtime,
             grid,
-            &.{ Value.ofLong(0), Value.ofBoolean(true) },
-            Value.ofLong(9),
+            &.{ Value.ofI64(0), Value.ofBoolean(true) },
+            Value.ofI64(9),
         ),
     );
     runtime.pending = null;
     try testing.expectEqual(
         @as(i64, 0),
-        (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
+        (try containers.indexGet(runtime, grid, &.{ Value.ofI64(0), Value.ofI64(0) })).asI64(),
     );
 
     const child = try runtime.newList(Value.none);
@@ -3477,12 +3477,12 @@ test "runtime index and struct doors reject malformed rank without touching owne
 
     // The C door must reject a negative field before converting it to usize,
     // and must leave its out slot untouched on the trapped call.
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 1),
-        luce_rt_struct_set(runtime, &record, -1, &Value.ofLong(3), &out),
+        luce_rt_struct_set(runtime, &record, -1, &Value.ofI64(3), &out),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
     runtime.pending = null;
 
@@ -3511,12 +3511,12 @@ test "rank-zero arrays are rejected before allocation" {
     // dimension pointer is deliberately non-null here so this isolates the
     // malformed rank from the separate null-pointer contract.
     const dimensions = [_]i64{7};
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 1),
         luce_rt_new_array(runtime, &dimensions, 0, &Value.none, &out),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
     runtime.pending = null;
     try testing.expectEqual(@as(u32, 0), runtime.live);
@@ -3527,11 +3527,11 @@ test "failed function-value storage copies return every nested allocation" {
     bench.setup();
     defer bench.deinit();
 
-    const label = try bench.runtime.ownValue(Value.ofString(
+    const label = try bench.runtime.ownValue(Value.ofStr(
         "a receiver string that must be duplicated with the function run",
     ));
     const receiver = try bench.runtime.makeStruct(&.{label});
-    const function = try bench.runtime.makeFunction(&.{ Value.ofLong(7), receiver });
+    const function = try bench.runtime.makeFunction(&.{ Value.ofI64(7), receiver });
     defer bench.runtime.freeValue(function);
 
     try testing.checkAllAllocationFailures(
@@ -3581,7 +3581,7 @@ test "failed worker argument transfer returns carried struct storage" {
         parent.dropStorage(arguments[0]);
         parent.freeValue(arguments[1]);
     }
-    var fields = [_]Value{Value.ofString(
+    var fields = [_]Value{Value.ofStr(
         "the carried worker struct owns these outside bytes",
     )};
     arguments[0] = try parent.ownValue(Value.ofStruct(&fields));
@@ -3589,7 +3589,7 @@ test "failed worker argument transfer returns carried struct storage" {
     try containers.append(
         &parent,
         arguments[1],
-        try parent.ownValue(Value.ofString("the refused worker object owns other bytes")),
+        try parent.ownValue(Value.ofStr("the refused worker object owns other bytes")),
     );
 
     var task: Value = .none;
@@ -3642,10 +3642,10 @@ test "failed struct and function construction consume their owned fields" {
 
     try testing.expectError(
         error.OutOfMemory,
-        function_runtime.makeFunction(&.{ Value.ofLong(0), receiver }),
+        function_runtime.makeFunction(&.{ Value.ofI64(0), receiver }),
     );
     try testing.expectEqual(@as(u32, 1), function_runtime.live);
-    try testing.expectEqual(@as(i64, 0), (try containers.length(&function_runtime, receiver)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&function_runtime, receiver)).asI64());
     function_runtime.freeValue(receiver);
     try testing.expectEqual(@as(u32, 0), function_runtime.live);
     function_runtime.deinit();
@@ -3677,7 +3677,7 @@ test "failed struct replacement consumes an object field without freeing the old
     try testing.expectEqual(baseline_live - 1, runtime.live);
     try expectTrap(.use_after_free, &runtime, runtime.resolve(replacement));
     runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, old_child)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, old_child)).asI64());
 
     runtime.freeValue(record);
     try testing.expectEqual(@as(u32, 0), runtime.live);
@@ -3747,10 +3747,10 @@ test "worker inputs fail closed before allocation or start" {
     var state: WorkerFailureState = .{ .child = &child };
     state.install(&parent);
 
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
     try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, -1, &.{}, &out));
     parent.pending = null;
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(usize, 0), state.spawns);
     try testing.expectEqual(@as(u32, 0), parent.live);
 
@@ -3786,9 +3786,9 @@ test "a failed spawn joins a callback-published thread before child close" {
         };
         state.install(&parent);
 
-        var task = Value.ofLong(99);
+        var task = Value.ofI64(99);
         try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, 0, &.{}, &task));
-        try testing.expectEqual(@as(i64, 99), task.asLong());
+        try testing.expectEqual(@as(i64, 99), task.asI64());
         try testing.expectEqual(@as(usize, 1), state.spawns);
         try testing.expectEqual(@as(usize, 1), state.joins);
         try testing.expectEqual(@as(usize, 1), state.closes);
@@ -3905,9 +3905,9 @@ test "waiting a task is one-shot and releasing its row never joins twice" {
     try testing.expectEqual(@as(usize, 1), state.joins);
     try testing.expectEqual(@as(usize, 1), state.closes);
 
-    var second: Value = .ofLong(99);
+    var second: Value = .ofI64(99);
     try expectTrap(.use_after_free, &parent, workers.wait(&parent, task, &second));
-    try testing.expectEqual(@as(i64, 99), second.asLong());
+    try testing.expectEqual(@as(i64, 99), second.asI64());
     parent.freeValue(task);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
@@ -3934,10 +3934,10 @@ test "waiting a task fails closed when the host rejects the join" {
 
         var task: Value = .none;
         try workers.spawn(&parent, 0, &.{}, &task);
-        var answer = Value.ofLong(99);
+        var answer = Value.ofI64(99);
         try testing.expectError(error.Trap, workers.wait(&parent, task, &answer));
         try testing.expectEqual(vocabulary.TrapCode.host_unavailable, parent.pending.?.code);
-        try testing.expectEqual(@as(i64, 99), answer.asLong());
+        try testing.expectEqual(@as(i64, 99), answer.asI64());
         try testing.expectEqual(@as(usize, 1), state.spawns);
         try testing.expectEqual(@as(usize, 1), state.joins);
         try testing.expectEqual(@as(usize, 1), state.closes);
@@ -3975,10 +3975,10 @@ test "malformed worker outcomes fail closed before wait copies a result" {
 
         var task: Value = .none;
         try workers.spawn(&parent, 0, &.{}, &task);
-        var answer = Value.ofLong(99);
+        var answer = Value.ofI64(99);
         try testing.expectError(error.Trap, workers.wait(&parent, task, &answer));
         try testing.expectEqual(vocabulary.TrapCode.host_unavailable, parent.pending.?.code);
-        try testing.expectEqual(@as(i64, 99), answer.asLong());
+        try testing.expectEqual(@as(i64, 99), answer.asI64());
         try testing.expectEqual(@as(usize, 1), state.spawns);
         try testing.expectEqual(@as(usize, 1), state.joins);
         try testing.expectEqual(@as(usize, 1), state.closes);
@@ -4004,9 +4004,9 @@ test "a failed struct store consumes only its replacement and preserves the sour
     defer runtime.deinit();
 
     const child = try runtime.newList(Value.none);
-    var fields = [_]Value{ Value.ofLong(1), child };
+    var fields = [_]Value{ Value.ofI64(1), child };
     const record = try runtime.makeStruct(&fields);
-    const replacement = try runtime.ownValue(Value.ofString(
+    const replacement = try runtime.ownValue(Value.ofStr(
         "replacement text that is outside the value",
     ));
     objects.fail_index = objects.alloc_index;
@@ -4015,7 +4015,7 @@ test "a failed struct store consumes only its replacement and preserves the sour
     objects.fail_index = std.math.maxInt(usize);
     try testing.expectEqual(@as(u32, 1), runtime.live);
     try testing.expect(record.asStruct()[1].asObject().same(child.asObject()));
-    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, child)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, child)).asI64());
     try testing.expect(runtime.pending == null);
 
     runtime.freeValue(record);
@@ -4179,7 +4179,7 @@ test "a cross-runtime copy preserves target allocation failure" {
     const baseline_live = target.live;
     const baseline_bytes = target_objects.allocated_bytes - target_objects.freed_bytes;
     const carried = try source.newList(Value.none);
-    try containers.append(&source, carried, Value.ofLong(7));
+    try containers.append(&source, carried, Value.ofI64(7));
 
     target_objects.fail_index = target_objects.alloc_index;
     try testing.expectError(error.OutOfMemory, target.copyFrom(&source, carried));
@@ -4220,7 +4220,7 @@ test "cross-runtime copies reject function values transitively" {
     defer target.deinit();
 
     const receiver = try source.newList(Value.none);
-    const function = try source.makeFunction(&.{ Value.ofLong(7), receiver });
+    const function = try source.makeFunction(&.{ Value.ofI64(7), receiver });
     try expectTrap(.not_owned, &target, target.copyFrom(&source, function));
     target.pending = null;
     try testing.expectEqual(@as(u32, 0), target.live);
@@ -4229,7 +4229,7 @@ test "cross-runtime copies reject function values transitively" {
     source.freeValue(receiver);
 
     const nested_receiver = try source.newList(Value.none);
-    const nested_function = try source.makeFunction(&.{ Value.ofLong(9), nested_receiver });
+    const nested_function = try source.makeFunction(&.{ Value.ofI64(9), nested_receiver });
     const record = try source.makeStruct(&.{nested_function});
     try expectTrap(.not_owned, &target, target.copyFrom(&source, record));
     target.pending = null;
@@ -4257,7 +4257,7 @@ test "cross-runtime copy preserves aliases across roots and nested edges" {
     defer target.deinit();
 
     const leaf = try source.newList(Value.none);
-    try containers.append(&source, leaf, Value.ofLong(7));
+    try containers.append(&source, leaf, Value.ofI64(7));
     const outer = try source.newList(Value.none);
     source.retainValue(leaf);
     try containers.append(&source, outer, leaf);
@@ -4265,14 +4265,14 @@ test "cross-runtime copy preserves aliases across roots and nested edges" {
     try containers.append(&source, outer, leaf);
 
     const copied = try target.copyValuesFrom(&source, &.{ outer, leaf });
-    const nested_first = try containers.indexGet(&target, copied[0], &.{Value.ofLong(0)});
-    const nested_second = try containers.indexGet(&target, copied[0], &.{Value.ofLong(1)});
+    const nested_first = try containers.indexGet(&target, copied[0], &.{Value.ofI64(0)});
+    const nested_second = try containers.indexGet(&target, copied[0], &.{Value.ofI64(1)});
     try testing.expect(nested_first.asObject().same(nested_second.asObject()));
     try testing.expect(nested_first.asObject().same(copied[1].asObject()));
 
-    try containers.append(&target, copied[1], Value.ofLong(8));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(&target, nested_first)).asLong());
-    try testing.expectEqual(@as(i64, 1), (try containers.length(&source, leaf)).asLong());
+    try containers.append(&target, copied[1], Value.ofI64(8));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(&target, nested_first)).asI64());
+    try testing.expectEqual(@as(i64, 1), (try containers.length(&source, leaf)).asI64());
 
     target.freeValue(Value.ofStruct(copied));
     try testing.expectEqual(@as(u32, 0), target.live);
@@ -4329,23 +4329,23 @@ test "every boxed container mutation refuses a program root without consuming a 
 
     try runtime.beginConstants(4);
 
-    const list = try runtime.newList(Value.ofString(""));
-    try containers.append(runtime, list, try runtime.ownValue(Value.ofString("three")));
-    try containers.append(runtime, list, try runtime.ownValue(Value.ofString("one")));
+    const list = try runtime.newList(Value.ofStr(""));
+    try containers.append(runtime, list, try runtime.ownValue(Value.ofStr("three")));
+    try containers.append(runtime, list, try runtime.ownValue(Value.ofStr("one")));
     try runtime.publishConstant(0, list);
 
     const map = try runtime.newMap();
-    try containers.indexSet(runtime, map, &.{Value.ofString("a")}, Value.ofLong(1));
+    try containers.indexSet(runtime, map, &.{Value.ofStr("a")}, Value.ofI64(1));
     try runtime.publishConstant(1, map);
 
-    const array = try runtime.newArray(&.{3}, Value.ofLong(0));
+    const array = try runtime.newArray(&.{3}, Value.ofI64(0));
     try runtime.publishConstant(2, array);
 
     // Builder is not a legal constant-container pool row.  Rooting
     // one by hand proves the shared mutation gate stays total for a
     // damaged artifact instead of leaving one object kind writable.
     const builder = try runtime.newBuilder();
-    try containers.append(runtime, builder, Value.ofString("seed"));
+    try containers.append(runtime, builder, Value.ofStr("seed"));
     try runtime.publishConstant(3, builder);
     runtime.finishConstants();
 
@@ -4359,22 +4359,22 @@ test "every boxed container mutation refuses a program root without consuming a 
         containers.indexSet(
             runtime,
             list,
-            &.{Value.ofLong(0)},
-            try runtime.ownValue(Value.ofString(long_text)),
+            &.{Value.ofI64(0)},
+            try runtime.ownValue(Value.ofStr(long_text)),
         ),
     );
     try expectTrap(
         .immutable_object,
         runtime,
-        containers.append(runtime, list, try runtime.ownValue(Value.ofString(long_text))),
+        containers.append(runtime, list, try runtime.ownValue(Value.ofStr(long_text))),
     );
     try expectTrap(
         .immutable_object,
         runtime,
-        containers.insert(runtime, list, 0, try runtime.ownValue(Value.ofString(long_text))),
+        containers.insert(runtime, list, 0, try runtime.ownValue(Value.ofStr(long_text))),
     );
     try expectTrap(.immutable_object, runtime, containers.pop(runtime, list));
-    try expectTrap(.immutable_object, runtime, containers.remove(runtime, list, Value.ofLong(0)));
+    try expectTrap(.immutable_object, runtime, containers.remove(runtime, list, Value.ofI64(0)));
     try expectTrap(.immutable_object, runtime, containers.sort(runtime, list));
     try expectTrap(.immutable_object, runtime, containers.reverse(runtime, list));
     try expectTrap(.immutable_object, runtime, containers.clear(runtime, list));
@@ -4385,31 +4385,31 @@ test "every boxed container mutation refuses a program root without consuming a 
         containers.indexSet(
             runtime,
             map,
-            &.{Value.ofString("b")},
-            try runtime.ownValue(Value.ofString(long_text)),
+            &.{Value.ofStr("b")},
+            try runtime.ownValue(Value.ofStr(long_text)),
         ),
     );
-    try expectTrap(.immutable_object, runtime, containers.remove(runtime, map, Value.ofString("a")));
+    try expectTrap(.immutable_object, runtime, containers.remove(runtime, map, Value.ofStr("a")));
     try expectTrap(
         .immutable_object,
         runtime,
-        containers.mapPlace(runtime, map, Value.ofString("a"), Value.ofLong(0)),
+        containers.mapPlace(runtime, map, Value.ofStr("a"), Value.ofI64(0)),
     );
     try expectTrap(.immutable_object, runtime, containers.clear(runtime, map));
 
     try expectTrap(
         .immutable_object,
         runtime,
-        containers.indexSet(runtime, array, &.{Value.ofLong(0)}, Value.ofLong(1)),
+        containers.indexSet(runtime, array, &.{Value.ofI64(0)}, Value.ofI64(1)),
     );
-    try expectTrap(.immutable_object, runtime, containers.arrayFill(runtime, array, Value.ofLong(2)));
+    try expectTrap(.immutable_object, runtime, containers.arrayFill(runtime, array, Value.ofI64(2)));
 
     // Builder append is a borrow, unlike List append.  The failed
     // mutation must leave the caller's owned String intact.
-    const borrowed = try runtime.ownValue(Value.ofString(long_text));
+    const borrowed = try runtime.ownValue(Value.ofStr(long_text));
     defer runtime.dropStorage(borrowed);
     try expectTrap(.immutable_object, runtime, containers.append(runtime, builder, borrowed));
-    try testing.expectEqualStrings(long_text, borrowed.asString());
+    try testing.expectEqualStrings(long_text, borrowed.asStr());
     try expectTrap(.immutable_object, runtime, containers.appendAscii(runtime, builder, 'x'));
     try expectTrap(.immutable_object, runtime, containers.clear(runtime, builder));
 
@@ -4441,7 +4441,7 @@ test "a host read cannot write into a program-root byte array" {
     runtime.files = .{ .context = &host, .read = Host.read };
 
     try runtime.beginConstants(1);
-    const bytes = try runtime.newArray(&.{8}, Value.ofByte(0));
+    const bytes = try runtime.newArray(&.{8}, Value.ofU8(0));
     try runtime.publishConstant(0, bytes);
     runtime.finishConstants();
     const file = try runtime.newFile(17, "input.bin");
@@ -4865,7 +4865,7 @@ test "host byte counts are bounded before runtime slices or advances" {
         .close = Host.close,
     };
     const file = try runtime.newFile(41, "counts.bin");
-    const buffer = try runtime.newArray(&.{8}, Value.ofByte(0));
+    const buffer = try runtime.newArray(&.{8}, Value.ofU8(0));
 
     try expectTrap(.host_unavailable, runtime, files.read(runtime, file, buffer));
     runtime.pending = null;
@@ -5056,7 +5056,7 @@ test "file callbacks reject unknown answers before using their outputs" {
             .close = Host.close,
         };
         const file = try runtime.newFile(51, "malformed-operation.txt");
-        const buffer = try runtime.newArray(&.{4}, Value.ofByte(0));
+        const buffer = try runtime.newArray(&.{4}, Value.ofU8(0));
 
         try expectTrap(.host_unavailable, runtime, files.read(runtime, file, buffer));
         runtime.pending = null;
@@ -5104,11 +5104,11 @@ test "failed materialization discards its partial object and every published roo
     const runtime = &bench.runtime;
 
     try runtime.beginConstants(2);
-    const published = try runtime.newList(Value.ofString(""));
+    const published = try runtime.newList(Value.ofStr(""));
     try containers.append(
         runtime,
         published,
-        try runtime.ownValue(Value.ofString("published storage lives here")),
+        try runtime.ownValue(Value.ofStr("published storage lives here")),
     );
     try runtime.publishConstant(0, published);
 
@@ -5116,8 +5116,8 @@ test "failed materialization discards its partial object and every published roo
     try containers.indexSet(
         runtime,
         partial,
-        &.{Value.ofString("long key that owns its bytes")},
-        try runtime.ownValue(Value.ofString("partial storage lives here too")),
+        &.{Value.ofStr("long key that owns its bytes")},
+        try runtime.ownValue(Value.ofStr("partial storage lives here too")),
     );
     runtime.discardLoose(partial);
     runtime.abortConstants();
@@ -5153,16 +5153,16 @@ test "freeing an object gives its storage back, during the run" {
     for (0..8) |_| {
         const list = try runtime.newList(Value.none);
         for (0..64) |number| {
-            try containers.append(&runtime, list, Value.ofLong(@intCast(number)));
+            try containers.append(&runtime, list, Value.ofI64(@intCast(number)));
         }
         const map = try runtime.newMap();
         for (0..64) |number| {
-            const key = Value.ofLong(@intCast(number));
-            try containers.indexSet(&runtime, map, &.{key}, Value.ofLong(0));
+            const key = Value.ofI64(@intCast(number));
+            try containers.indexSet(&runtime, map, &.{key}, Value.ofI64(0));
         }
         const builder = try runtime.newBuilder();
-        for (0..64) |_| try containers.append(&runtime, builder, Value.ofString("word"));
-        const array = try runtime.newArray(&.{ 8, 8 }, Value.ofLong(0));
+        for (0..64) |_| try containers.append(&runtime, builder, Value.ofStr("word"));
+        const array = try runtime.newArray(&.{ 8, 8 }, Value.ofI64(0));
 
         runtime.freeObject(list.asObject());
         runtime.freeObject(map.asObject());
@@ -5190,30 +5190,30 @@ test "a map keeps insertion order through growth, lookup, and removal" {
     const count = 200;
     const map = try runtime.newMap();
     for (0..count) |number| {
-        const key = Value.ofLong(@intCast(number * 7));
-        try containers.indexSet(runtime, map, &.{key}, Value.ofLong(@intCast(number)));
+        const key = Value.ofI64(@intCast(number * 7));
+        try containers.indexSet(runtime, map, &.{key}, Value.ofI64(@intCast(number)));
     }
-    try testing.expectEqual(@as(i64, count), (try containers.length(runtime, map)).asLong());
+    try testing.expectEqual(@as(i64, count), (try containers.length(runtime, map)).asI64());
     for (0..count) |number| {
-        const key = Value.ofLong(@intCast(number * 7));
+        const key = Value.ofI64(@intCast(number * 7));
         const found = try containers.indexGet(runtime, map, &.{key});
-        try testing.expectEqual(@as(i64, @intCast(number)), found.asLong());
-        try testing.expectEqual(key.asLong(), (try containers.keyAt(runtime, map, @intCast(number))).asLong());
+        try testing.expectEqual(@as(i64, @intCast(number)), found.asI64());
+        try testing.expectEqual(key.asI64(), (try containers.keyAt(runtime, map, @intCast(number))).asI64());
     }
     // A key that was never stored is absent however close it hashes.
-    try testing.expect(!(try containers.hasKey(runtime, map, Value.ofLong(3))).asBoolean());
+    try testing.expect(!(try containers.hasKey(runtime, map, Value.ofI64(3))).asBoolean());
 
     // Removal renumbers the entries; the survivors keep their order
     // and still look up.
     for (0..count) |number| {
         if (number % 2 == 0) continue;
-        try containers.remove(runtime, map, Value.ofLong(@intCast(number * 7)));
+        try containers.remove(runtime, map, Value.ofI64(@intCast(number * 7)));
     }
-    try testing.expectEqual(@as(i64, count / 2), (try containers.length(runtime, map)).asLong());
+    try testing.expectEqual(@as(i64, count / 2), (try containers.length(runtime, map)).asI64());
     for (0..count / 2) |position| {
         const wanted: i64 = @intCast(position * 14);
-        try testing.expectEqual(wanted, (try containers.keyAt(runtime, map, @intCast(position))).asLong());
-        try testing.expect((try containers.hasKey(runtime, map, Value.ofLong(wanted))).asBoolean());
+        try testing.expectEqual(wanted, (try containers.keyAt(runtime, map, @intCast(position))).asI64());
+        try testing.expect((try containers.hasKey(runtime, map, Value.ofI64(wanted))).asBoolean());
     }
     runtime.freeObject(map.asObject());
 }
@@ -5230,24 +5230,24 @@ test "map keys hash as they compare, for long and for String" {
     var first: [3]u8 = "abc".*;
     var second: [3]u8 = "abc".*;
     const map = try runtime.newMap();
-    try containers.indexSet(runtime, map, &.{Value.ofString(&first)}, Value.ofLong(1));
-    try containers.indexSet(runtime, map, &.{Value.ofString(&second)}, Value.ofLong(2));
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, map)).asLong());
+    try containers.indexSet(runtime, map, &.{Value.ofStr(&first)}, Value.ofI64(1));
+    try containers.indexSet(runtime, map, &.{Value.ofStr(&second)}, Value.ofI64(2));
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, map)).asI64());
     try testing.expectEqual(
         @as(i64, 2),
-        (try containers.indexGet(runtime, map, &.{Value.ofString("abc")})).asLong(),
+        (try containers.indexGet(runtime, map, &.{Value.ofStr("abc")})).asI64(),
     );
 
     // Negative long keys travel through the same bit mixer as positive
     // ones and come back.
     const numbers = try runtime.newMap();
     for ([_]i64{ -1, 0, 1, std.math.minInt(i64), std.math.maxInt(i64) }) |key| {
-        try containers.indexSet(runtime, numbers, &.{Value.ofLong(key)}, Value.ofLong(key));
+        try containers.indexSet(runtime, numbers, &.{Value.ofI64(key)}, Value.ofI64(key));
     }
     for ([_]i64{ -1, 0, 1, std.math.minInt(i64), std.math.maxInt(i64) }) |key| {
         try testing.expectEqual(
             key,
-            (try containers.indexGet(runtime, numbers, &.{Value.ofLong(key)})).asLong(),
+            (try containers.indexGet(runtime, numbers, &.{Value.ofI64(key)})).asI64(),
         );
     }
     runtime.freeObject(map.asObject());
@@ -5264,7 +5264,7 @@ test "function values retain their receiver through every value container" {
     // below names this same graph and owns one reference to it.
     const receiver = try runtime.newList(Value.none);
     const nested = try runtime.newList(Value.none);
-    try containers.append(runtime, nested, try runtime.ownValue(Value.ofString(
+    try containers.append(runtime, nested, try runtime.ownValue(Value.ofStr(
         "receiver bytes outlive every borrowed callback run",
     )));
     try containers.append(runtime, receiver, nested);
@@ -5276,7 +5276,7 @@ test "function values retain their receiver through every value container" {
 
     const map = try runtime.newMap();
     var map_function = try makeBoundFunction(runtime, 2, receiver);
-    try containers.indexSet(runtime, map, &.{Value.ofInlineText(.string, "callback")}, map_function);
+    try containers.indexSet(runtime, map, &.{Value.ofInlineText(.str, "callback")}, map_function);
     map_function = .none;
 
     // A function value is a value-shaped array element.  `arrayFill` makes a
@@ -5293,16 +5293,16 @@ test "function values retain their receiver through every value container" {
     record_function = .none;
 
     try expectFunctionReceiver(
-        try containers.indexGet(runtime, list, &.{Value.ofLong(0)}),
+        try containers.indexGet(runtime, list, &.{Value.ofI64(0)}),
         receiver,
     );
     try expectFunctionReceiver(
-        try containers.mapGet(runtime, map, Value.ofInlineText(.string, "callback")),
+        try containers.mapGet(runtime, map, Value.ofInlineText(.str, "callback")),
         receiver,
     );
     for (0..3) |index| {
         try expectFunctionReceiver(
-            try containers.indexGet(runtime, array, &.{Value.ofLong(@intCast(index))}),
+            try containers.indexGet(runtime, array, &.{Value.ofI64(@intCast(index))}),
             receiver,
         );
     }
@@ -5315,16 +5315,16 @@ test "function values retain their receiver through every value container" {
     const copied_array = try runtime.deepCopy(array);
     const copied_record = try runtime.deepCopy(record);
     try expectFunctionReceiver(
-        try containers.indexGet(runtime, copied_list, &.{Value.ofLong(0)}),
+        try containers.indexGet(runtime, copied_list, &.{Value.ofI64(0)}),
         receiver,
     );
     try expectFunctionReceiver(
-        try containers.mapGet(runtime, copied_map, Value.ofInlineText(.string, "callback")),
+        try containers.mapGet(runtime, copied_map, Value.ofInlineText(.str, "callback")),
         receiver,
     );
     for (0..3) |index| {
         try expectFunctionReceiver(
-            try containers.indexGet(runtime, copied_array, &.{Value.ofLong(@intCast(index))}),
+            try containers.indexGet(runtime, copied_array, &.{Value.ofI64(@intCast(index))}),
             receiver,
         );
     }
@@ -5359,27 +5359,27 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newList(Value.none);
-    try containers.append(runtime, held, Value.ofLong(10));
-    try containers.append(runtime, held, Value.ofLong(30));
-    try containers.insert(runtime, held, 1, Value.ofLong(20));
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, held)).asLong());
+    try containers.append(runtime, held, Value.ofI64(10));
+    try containers.append(runtime, held, Value.ofI64(30));
+    try containers.insert(runtime, held, 1, Value.ofI64(20));
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, held)).asI64());
     try testing.expectEqual(
         @as(i64, 20),
-        (try containers.indexGet(runtime, held, &.{Value.ofLong(1)})).asLong(),
+        (try containers.indexGet(runtime, held, &.{Value.ofI64(1)})).asI64(),
     );
 
-    try containers.indexSet(runtime, held, &.{Value.ofLong(0)}, Value.ofLong(-1));
-    try testing.expectEqual(@as(i64, 1), (try containers.find(runtime, held, Value.ofLong(20))).asLong());
-    try testing.expect((try containers.find(runtime, held, Value.ofLong(99))).isNone());
+    try containers.indexSet(runtime, held, &.{Value.ofI64(0)}, Value.ofI64(-1));
+    try testing.expectEqual(@as(i64, 1), (try containers.find(runtime, held, Value.ofI64(20))).asI64());
+    try testing.expect((try containers.find(runtime, held, Value.ofI64(99))).isNone());
 
-    try testing.expectEqual(@as(i64, 30), (try containers.pop(runtime, held)).asLong());
-    try containers.remove(runtime, held, Value.ofLong(0));
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
+    try testing.expectEqual(@as(i64, 30), (try containers.pop(runtime, held)).asI64());
+    try containers.remove(runtime, held, Value.ofI64(0));
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asI64());
 
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, held, &.{Value.ofLong(5)}),
+        containers.indexGet(runtime, held, &.{Value.ofI64(5)}),
     );
     try containers.clear(runtime, held);
     try expectTrap(.empty_collection, runtime, containers.pop(runtime, held));
@@ -5398,20 +5398,20 @@ test "array fill keeps its old values through every copy allocation failure" {
             .arena = arena.allocator(),
             .objects = objects.allocator(),
         });
-        const array = try runtime.newArray(&.{3}, Value.ofString("old"));
+        const array = try runtime.newArray(&.{3}, Value.ofStr("old"));
         objects.fail_index = objects.alloc_index + offset;
 
         const outcome = containers.arrayFill(
             &runtime,
             array,
-            Value.ofString(long_text),
+            Value.ofStr(long_text),
         );
         objects.fail_index = std.math.maxInt(usize);
         if (outcome) |_| {
             for (0..3) |index| {
                 try testing.expectEqualStrings(
                     long_text,
-                    (try containers.indexGet(&runtime, array, &.{Value.ofLong(@intCast(index))})).asString(),
+                    (try containers.indexGet(&runtime, array, &.{Value.ofI64(@intCast(index))})).asStr(),
                 );
             }
         } else |mistake| {
@@ -5419,7 +5419,7 @@ test "array fill keeps its old values through every copy allocation failure" {
             for (0..3) |index| {
                 try testing.expectEqualStrings(
                     "old",
-                    (try containers.indexGet(&runtime, array, &.{Value.ofLong(@intCast(index))})).asString(),
+                    (try containers.indexGet(&runtime, array, &.{Value.ofI64(@intCast(index))})).asStr(),
                 );
             }
         }
@@ -5449,7 +5449,7 @@ test "array fill rolls owned function values back at every allocation failure" {
 
         const receiver = try runtime.newList(Value.none);
         const nested = try runtime.newList(Value.none);
-        try containers.append(&runtime, nested, try runtime.ownValue(Value.ofString(
+        try containers.append(&runtime, nested, try runtime.ownValue(Value.ofStr(
             "owned receiver graph survives each failed function copy",
         )));
         try containers.append(&runtime, receiver, nested);
@@ -5468,10 +5468,10 @@ test "array fill rolls owned function values back at every allocation failure" {
                 const cell = try containers.indexGet(
                     &runtime,
                     array,
-                    &.{Value.ofLong(@intCast(index))},
+                    &.{Value.ofI64(@intCast(index))},
                 );
                 try testing.expectEqual(value.Tag.function, cell.tag);
-                try testing.expectEqual(@as(i64, 9), cell.asStruct()[0].asLong());
+                try testing.expectEqual(@as(i64, 9), cell.asStruct()[0].asI64());
                 try testing.expect(cell.asStruct()[1].asObject().same(receiver.asObject()));
             }
             completed = true;
@@ -5485,13 +5485,13 @@ test "array fill rolls owned function values back at every allocation failure" {
                     (try containers.indexGet(
                         &runtime,
                         array,
-                        &.{Value.ofLong(@intCast(index))},
+                        &.{Value.ofI64(@intCast(index))},
                     )).isNone(),
                 );
             }
             try testing.expectEqual(
                 @as(i64, 1),
-                (try containers.length(&runtime, receiver)).asLong(),
+                (try containers.length(&runtime, receiver)).asI64(),
             );
             failures += 1;
         }
@@ -5536,52 +5536,52 @@ test "every list bound is checked at the last legal index and the first illegal 
     const runtime = &bench.runtime;
 
     const held = try runtime.newList(Value.none);
-    for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofLong(element));
+    for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofI64(element));
 
     // Reading: 0 and len-1 answer, -1 and len trap.
-    try testing.expectEqual(@as(i64, 10), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
-    try testing.expectEqual(@as(i64, 30), (try containers.indexGet(runtime, held, &.{Value.ofLong(2)})).asLong());
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofLong(3)}));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofLong(-1)}));
+    try testing.expectEqual(@as(i64, 10), (try containers.indexGet(runtime, held, &.{Value.ofI64(0)})).asI64());
+    try testing.expectEqual(@as(i64, 30), (try containers.indexGet(runtime, held, &.{Value.ofI64(2)})).asI64());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofI64(3)}));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofI64(-1)}));
 
     // Writing has the same bound, and it is a separate comparison.
-    try containers.indexSet(runtime, held, &.{Value.ofLong(2)}, Value.ofLong(31));
+    try containers.indexSet(runtime, held, &.{Value.ofI64(2)}, Value.ofI64(31));
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexSet(runtime, held, &.{Value.ofLong(3)}, Value.ofLong(0)),
+        containers.indexSet(runtime, held, &.{Value.ofI64(3)}, Value.ofI64(0)),
     );
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexSet(runtime, held, &.{Value.ofLong(-1)}, Value.ofLong(0)),
+        containers.indexSet(runtime, held, &.{Value.ofI64(-1)}, Value.ofI64(0)),
     );
 
     // Insert is the one whose bound is *not* the same as the others:
     // `xs.insert(len, v)` appends, so len is legal and len+1 is not.
     // Reading this bound as "like index_get" is an off-by-one that
     // silently loses the append form.
-    try containers.insert(runtime, held, 3, Value.ofLong(40));
-    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, held)).asLong());
-    try testing.expectEqual(@as(i64, 40), (try containers.indexGet(runtime, held, &.{Value.ofLong(3)})).asLong());
-    try containers.insert(runtime, held, 0, Value.ofLong(5));
-    try testing.expectEqual(@as(i64, 5), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
-    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, 6, Value.ofLong(0)));
-    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, -1, Value.ofLong(0)));
-    try testing.expectEqual(@as(i64, 5), (try containers.length(runtime, held)).asLong());
+    try containers.insert(runtime, held, 3, Value.ofI64(40));
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, held)).asI64());
+    try testing.expectEqual(@as(i64, 40), (try containers.indexGet(runtime, held, &.{Value.ofI64(3)})).asI64());
+    try containers.insert(runtime, held, 0, Value.ofI64(5));
+    try testing.expectEqual(@as(i64, 5), (try containers.indexGet(runtime, held, &.{Value.ofI64(0)})).asI64());
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, 6, Value.ofI64(0)));
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, -1, Value.ofI64(0)));
+    try testing.expectEqual(@as(i64, 5), (try containers.length(runtime, held)).asI64());
 
     // Remove is bounded like a read: len-1 is the last element there
     // is to take out.
-    try containers.remove(runtime, held, Value.ofLong(4));
-    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofLong(4)));
-    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofLong(-1)));
+    try containers.remove(runtime, held, Value.ofI64(4));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofI64(4)));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofI64(-1)));
 
     // A slice is half-open: end may be len, start may equal end, and
     // an inverted pair is refused rather than answered empty.
     const whole = bench.made(try containers.listSlice(runtime, held, 0, 4));
-    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, whole)).asLong());
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, whole)).asI64());
     const empty = bench.made(try containers.listSlice(runtime, held, 4, 4));
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asI64());
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 0, 5));
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 3, 2));
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, -1, 2));
@@ -5599,12 +5599,12 @@ test "every map and array bound is checked on both sides too" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newMap();
-    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofLong(1));
-    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofLong(2));
+    try containers.indexSet(runtime, held, &.{Value.ofStr("a")}, Value.ofI64(1));
+    try containers.indexSet(runtime, held, &.{Value.ofStr("b")}, Value.ofI64(2));
 
     // Positional access over a map's entries is bounded by its count.
-    try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 1)).asString());
-    try testing.expectEqual(@as(i64, 2), (try containers.valueAt(runtime, held, 1)).asLong());
+    try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 1)).asStr());
+    try testing.expectEqual(@as(i64, 2), (try containers.valueAt(runtime, held, 1)).asI64());
     try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, 2));
     try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, -1));
     try expectTrap(.index_bounds, runtime, containers.valueAt(runtime, held, 2));
@@ -5612,25 +5612,25 @@ test "every map and array bound is checked on both sides too" {
 
     // A key a map does not hold traps on read, and removing one does
     // nothing at all — the two are different questions on purpose.
-    try expectTrap(.key_missing, runtime, containers.indexGet(runtime, held, &.{Value.ofString("z")}));
-    try containers.remove(runtime, held, Value.ofString("z"));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+    try expectTrap(.key_missing, runtime, containers.indexGet(runtime, held, &.{Value.ofStr("z")}));
+    try containers.remove(runtime, held, Value.ofStr("z"));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asI64());
 
     // Every axis of an array is bounded independently, and so is the
     // axis number `dim_size` is asked about.
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofLong(0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofLong(7));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofI64(0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofI64(1), Value.ofI64(2) }, Value.ofI64(7));
     try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
         runtime,
         grid,
-        &.{ Value.ofLong(1), Value.ofLong(2) },
-    )).asLong());
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(2), Value.ofLong(2) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(3) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(-1), Value.ofLong(0) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(-1) }));
-    try testing.expectEqual(@as(i64, 2), (try containers.dimSize(runtime, grid, 0)).asLong());
-    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asLong());
+        &.{ Value.ofI64(1), Value.ofI64(2) },
+    )).asI64());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofI64(2), Value.ofI64(2) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofI64(1), Value.ofI64(3) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofI64(-1), Value.ofI64(0) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofI64(0), Value.ofI64(-1) }));
+    try testing.expectEqual(@as(i64, 2), (try containers.dimSize(runtime, grid, 0)).asI64());
+    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asI64());
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, 2));
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, -1));
 
@@ -5642,7 +5642,7 @@ test "every map and array bound is checked on both sides too" {
     try containers.appendAscii(runtime, builder, 0x7F);
     try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, 0x80));
     try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, -1));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, builder)).asLong());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, builder)).asI64());
 }
 
 test "maps keep insertion order and answer for missing keys three ways" {
@@ -5652,26 +5652,26 @@ test "maps keep insertion order and answer for missing keys three ways" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newMap();
-    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofLong(2));
-    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofLong(1));
-    try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 0)).asString());
-    try testing.expectEqual(@as(i64, 1), (try containers.valueAt(runtime, held, 1)).asLong());
+    try containers.indexSet(runtime, held, &.{Value.ofStr("b")}, Value.ofI64(2));
+    try containers.indexSet(runtime, held, &.{Value.ofStr("a")}, Value.ofI64(1));
+    try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 0)).asStr());
+    try testing.expectEqual(@as(i64, 1), (try containers.valueAt(runtime, held, 1)).asI64());
 
     // has_key answers false, get answers absence, m[key] traps.
-    try testing.expect(!(try containers.hasKey(runtime, held, Value.ofString("c"))).asBoolean());
-    try testing.expect((try containers.mapGet(runtime, held, Value.ofString("c"))).isNone());
+    try testing.expect(!(try containers.hasKey(runtime, held, Value.ofStr("c"))).asBoolean());
+    try testing.expect((try containers.mapGet(runtime, held, Value.ofStr("c"))).isNone());
     try testing.expectEqual(
         @as(i64, 2),
-        (try containers.mapGet(runtime, held, Value.ofString("b"))).asLong(),
+        (try containers.mapGet(runtime, held, Value.ofStr("b"))).asI64(),
     );
     try expectTrap(
         .key_missing,
         runtime,
-        containers.indexGet(runtime, held, &.{Value.ofString("c")}),
+        containers.indexGet(runtime, held, &.{Value.ofStr("c")}),
     );
 
-    const keys = try containers.mapKeys(runtime, held, Value.ofString(""));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, keys)).asLong());
+    const keys = try containers.mapKeys(runtime, held, Value.ofStr(""));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, keys)).asI64());
 }
 
 test "a list the runtime builds is packed the way its element type says" {
@@ -5685,26 +5685,26 @@ test "a list the runtime builds is packed the way its element type says" {
     // that happened to build the list (docs/BYTES.md R1).  A map of
     // long to double answers two *packed* lists.
     const held = try runtime.newMap();
-    try containers.indexSet(runtime, held, &.{Value.ofLong(7)}, Value.ofDouble(0.5));
+    try containers.indexSet(runtime, held, &.{Value.ofI64(7)}, Value.ofF64(0.5));
 
-    const keys = try containers.mapKeys(runtime, held, Value.ofLong(0));
-    try testing.expectEqual(heap.Object.ElementKind.long, (try runtime.resolve(keys)).elements.kind);
+    const keys = try containers.mapKeys(runtime, held, Value.ofI64(0));
+    try testing.expectEqual(heap.Object.ElementKind.i64, (try runtime.resolve(keys)).elements.kind);
     try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
         runtime,
         keys,
-        &.{Value.ofLong(0)},
-    )).asLong());
+        &.{Value.ofI64(0)},
+    )).asI64());
 
-    const values = try containers.mapValues(runtime, held, Value.ofDouble(0));
+    const values = try containers.mapValues(runtime, held, Value.ofF64(0));
     try testing.expectEqual(
-        heap.Object.ElementKind.double,
+        heap.Object.ElementKind.f64,
         (try runtime.resolve(values)).elements.kind,
     );
     try testing.expectEqual(@as(f64, 0.5), (try containers.indexGet(
         runtime,
         values,
-        &.{Value.ofLong(0)},
-    )).asDouble());
+        &.{Value.ofI64(0)},
+    )).asF64());
 }
 
 test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
@@ -5713,18 +5713,18 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofLong(0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofLong(5));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofI64(0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofI64(1), Value.ofI64(2) }, Value.ofI64(5));
     try testing.expectEqual(@as(i64, 5), (try containers.indexGet(
         runtime,
         grid,
-        &.{ Value.ofLong(1), Value.ofLong(2) },
-    )).asLong());
-    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asLong());
+        &.{ Value.ofI64(1), Value.ofI64(2) },
+    )).asI64());
+    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asI64());
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, grid, &.{ Value.ofLong(2), Value.ofLong(0) }),
+        containers.indexGet(runtime, grid, &.{ Value.ofI64(2), Value.ofI64(0) }),
     );
 
     // Both refusals happen before anything is allocated, which is what
@@ -5734,7 +5734,7 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     // than the machine has reaches the same trap from the allocator.
     try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 40, 1 << 40 }, Value.none));
     try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
-    try testing.expectError(error.Trap, runtime.newArray(&.{1 << 41}, Value.ofByte(0)));
+    try testing.expectError(error.Trap, runtime.newArray(&.{1 << 41}, Value.ofU8(0)));
     try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
 }
 
@@ -5744,9 +5744,9 @@ test "the element ceilings are the ones docs/VECTOR.md's proof needs" {
     // `i64` is the width the arithmetic is about.
     const largest: i128 = std.math.maxInt(i64);
     inline for (.{
-        .{ heap.Object.ElementKind.byte, 255 * 32768 },
-        .{ heap.Object.ElementKind.short, 1 << 30 },
-        .{ heap.Object.ElementKind.int, 1 << 31 },
+        .{ heap.Object.ElementKind.u8, 255 * 32768 },
+        .{ heap.Object.ElementKind.i16, 1 << 30 },
+        .{ heap.Object.ElementKind.i32, 1 << 31 },
     }) |row| {
         const ceiling: i128 = heap.maxElements(row[0]);
         try testing.expect(ceiling * row[1] <= largest);
@@ -5756,7 +5756,7 @@ test "the element ceilings are the ones docs/VECTOR.md's proof needs" {
     // their only ceiling is what keeps a byte count addressable.
     try testing.expectEqual(
         @as(usize, std.math.maxInt(usize) / 8),
-        heap.maxElements(.long),
+        heap.maxElements(.i64),
     );
 }
 
@@ -5766,10 +5766,10 @@ test "compiled code's byte offsets find the fields they name" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofDouble(0.0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofDouble(7.5));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofF64(0.0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofI64(1), Value.ofI64(2) }, Value.ofF64(7.5));
     try runtime.beginConstants(1);
-    const rooted = try runtime.newList(Value.ofLong(0));
+    const rooted = try runtime.newList(Value.ofI64(0));
     try runtime.publishConstant(0, rooted);
     runtime.finishConstants();
 
@@ -5846,8 +5846,8 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
     const lengths = [_]usize{ 0, 1, 21, 22, 23, 64 };
     for (lengths) |length| {
         const wanted = words[0..length];
-        const owned = try runtime.ownValue(Value.ofString(wanted));
-        try testing.expectEqualStrings(wanted, owned.asString());
+        const owned = try runtime.ownValue(Value.ofStr(wanted));
+        try testing.expectEqualStrings(wanted, owned.asStr());
         try testing.expectEqual(Value.fitsInline(length), owned.textIsInline());
         try testing.expectEqual(!Value.fitsInline(length), owned.ownsStorage());
 
@@ -5855,13 +5855,13 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
         // view of inline bytes is never a view of somebody's frame.
         const cut = try text.slice(runtime, owned, 0, @intCast(length));
         try testing.expectEqual(owned.textIsInline(), cut.textIsInline());
-        try testing.expectEqualStrings(wanted, cut.asString());
+        try testing.expectEqualStrings(wanted, cut.asStr());
 
         // Leaving the frame always answers text with an address, and
         // does it by transfer when there already was one.
         const handed = try runtime.exportValue(owned);
         try testing.expect(!handed.textIsInline());
-        try testing.expectEqualStrings(wanted, handed.asString());
+        try testing.expectEqualStrings(wanted, handed.asStr());
         if (!Value.fitsInline(length)) {
             try testing.expectEqual(owned.bits, handed.bits);
         }
@@ -5869,7 +5869,7 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
 
         // And releasing a place twice frees nothing the second time.
         const emptied = heap.Runtime.emptied(handed);
-        try testing.expectEqualStrings("", emptied.asString());
+        try testing.expectEqualStrings("", emptied.asStr());
         runtime.dropStorage(emptied);
     }
 
@@ -5880,14 +5880,14 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
     const table = try runtime.newMap();
     for (lengths) |length| {
         const wanted = words[0..length];
-        try containers.append(runtime, kept, try runtime.ownValue(Value.ofString(wanted)));
-        try containers.indexSet(runtime, table, &.{Value.ofString(wanted)}, Value.ofLong(1));
+        try containers.append(runtime, kept, try runtime.ownValue(Value.ofStr(wanted)));
+        try containers.indexSet(runtime, table, &.{Value.ofStr(wanted)}, Value.ofI64(1));
     }
     for (lengths, 0..) |length, index| {
-        const held = try containers.indexGet(runtime, kept, &.{Value.ofLong(@intCast(index))});
-        try testing.expectEqualStrings(words[0..length], held.asString());
+        const held = try containers.indexGet(runtime, kept, &.{Value.ofI64(@intCast(index))});
+        try testing.expectEqualStrings(words[0..length], held.asStr());
     }
-    try testing.expectEqual(@as(i64, lengths.len), (try containers.length(runtime, table)).asLong());
+    try testing.expectEqual(@as(i64, lengths.len), (try containers.length(runtime, table)).asI64());
     runtime.freeObject(kept.asObject());
     runtime.freeObject(table.asObject());
 }
@@ -5901,13 +5901,13 @@ test "str and chr answer text that needs no allocation at all" {
     // Twenty digits and a sign is the widest an i64 gets, so no
     // number's text ever leaves the value it is answered in.
     for ([_]i64{ 0, -1, 9, 1234567, std.math.minInt(i64), std.math.maxInt(i64) }) |number| {
-        const made = try text.str(runtime, Value.ofLong(number));
+        const made = try text.str(runtime, Value.ofI64(number));
         try testing.expect(made.textIsInline());
         try testing.expect(!made.ownsStorage());
         var digits: [24]u8 = undefined;
         try testing.expectEqualStrings(
             try std.fmt.bufPrint(&digits, "{d}", .{number}),
-            made.asString(),
+            made.asStr(),
         );
     }
     // A codepoint is four bytes at the most.
@@ -5917,7 +5917,7 @@ test "str and chr answer text that needs no allocation at all" {
     }
     // Text long enough to need one still allocates, and is released
     // like any other owned storage.
-    const long = try text.str(runtime, Value.ofString("a" ** 40));
+    const long = try text.str(runtime, Value.ofStr("a" ** 40));
     try testing.expect(long.ownsStorage());
     runtime.dropStorage(long);
 }
@@ -5929,14 +5929,14 @@ test "a builder collects bytes and str takes a snapshot of them" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newBuilder();
-    try containers.append(runtime, held, Value.ofString("ab"));
+    try containers.append(runtime, held, Value.ofStr("ab"));
     try containers.appendAscii(runtime, held, 'c');
     const taken = bench.made(try text.str(runtime, held));
-    try testing.expectEqualStrings("abc", taken.asString());
+    try testing.expectEqualStrings("abc", taken.asStr());
 
     // The snapshot does not change when the builder grows again.
     try containers.appendAscii(runtime, held, 'd');
-    try testing.expectEqualStrings("abc", taken.asString());
+    try testing.expectEqualStrings("abc", taken.asStr());
     try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, held, 200));
 }
 
@@ -5947,11 +5947,11 @@ test "sort and reverse work in place on lists and arrays alike" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newList(Value.none);
-    for ([_]i64{ 3, 1, 2 }) |number| try containers.append(runtime, held, Value.ofLong(number));
+    for ([_]i64{ 3, 1, 2 }) |number| try containers.append(runtime, held, Value.ofI64(number));
     try containers.sort(runtime, held);
-    try testing.expectEqual(@as(i64, 1), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
+    try testing.expectEqual(@as(i64, 1), (try containers.indexGet(runtime, held, &.{Value.ofI64(0)})).asI64());
     try containers.reverse(runtime, held);
-    try testing.expectEqual(@as(i64, 3), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
+    try testing.expectEqual(@as(i64, 3), (try containers.indexGet(runtime, held, &.{Value.ofI64(0)})).asI64());
 }
 
 test "a list slice shares object identity through retained references" {
@@ -5964,8 +5964,8 @@ test "a list slice shares object identity through retained references" {
     try containers.append(runtime, held, try runtime.newList(Value.none));
     const taken = try containers.listSlice(runtime, held, 0, 1);
 
-    const original = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
-    const copied = try containers.indexGet(runtime, taken, &.{Value.ofLong(0)});
+    const original = try containers.indexGet(runtime, held, &.{Value.ofI64(0)});
+    const copied = try containers.indexGet(runtime, taken, &.{Value.ofI64(0)});
     try testing.expect(original.asObject().same(copied.asObject()));
     runtime.freeValue(held);
     _ = try runtime.resolve(copied);
@@ -5983,15 +5983,15 @@ test "string slicing is checked twice: in range, and on a UTF-8 boundary" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = Value.ofString("a\xF0\x9F\x99\x82b");
-    try testing.expectEqualStrings("a", (try text.slice(runtime, held, 0, 1)).asString());
-    try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.slice(runtime, held, 1, 5)).asString());
+    const held = Value.ofStr("a\xF0\x9F\x99\x82b");
+    try testing.expectEqualStrings("a", (try text.slice(runtime, held, 0, 1)).asStr());
+    try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.slice(runtime, held, 1, 5)).asStr());
     try expectTrap(.string_boundary, runtime, text.slice(runtime, held, 0, 2));
     try expectTrap(.string_bounds, runtime, text.slice(runtime, held, 0, 99));
 
-    try testing.expectEqual(@as(i64, 0xf0), (try text.byteAt(runtime, held, 1)).asLong());
-    try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asLong());
-    try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asLong());
+    try testing.expectEqual(@as(i64, 0xf0), (try text.byteAt(runtime, held, 1)).asI64());
+    try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asI64());
+    try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asI64());
 }
 
 test "direct text primitives reject non-string values before decoding payloads" {
@@ -5999,7 +5999,7 @@ test "direct text primitives reject non-string values before decoding payloads" 
     bench.setup();
     defer bench.deinit();
     const runtime = &bench.runtime;
-    const forged = Value.ofLong(0);
+    const forged = Value.ofI64(0);
 
     try expectTrap(.not_owned, runtime, text.slice(runtime, forged, 0, 1));
     runtime.pending = null;
@@ -6021,13 +6021,13 @@ test "the conversions round trip and refuse what they cannot represent" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    try testing.expectEqualStrings("-12", bench.made(try text.str(runtime, Value.ofLong(-12))).asString());
-    try testing.expectEqualStrings("true", bench.made(try text.str(runtime, Value.ofBoolean(true))).asString());
+    try testing.expectEqualStrings("-12", bench.made(try text.str(runtime, Value.ofI64(-12))).asStr());
+    try testing.expectEqualStrings("true", bench.made(try text.str(runtime, Value.ofBoolean(true))).asStr());
     // Shortest text that round trips, not a fixed number of digits.
-    try testing.expectEqualStrings("0.1", bench.made(try text.str(runtime, Value.ofDouble(0.1))).asString());
+    try testing.expectEqualStrings("0.1", bench.made(try text.str(runtime, Value.ofF64(0.1))).asStr());
     try testing.expectEqualStrings(
         "1000000000000000000000",
-        bench.made(try text.str(runtime, Value.ofDouble(1e21))).asString(),
+        bench.made(try text.str(runtime, Value.ofF64(1e21))).asStr(),
     );
     // Every NaN renders as "nan", whichever sign bit the hardware
     // chose — the formatter is the one place the sign could ever be
@@ -6035,32 +6035,32 @@ test "the conversions round trip and refuse what they cannot represent" {
     // host that produces the other one cannot regress this silently).
     try testing.expectEqualStrings(
         "nan",
-        bench.made(try text.str(runtime, Value.ofDouble(@bitCast(@as(u64, 0x7ff8000000000000))))).asString(),
+        bench.made(try text.str(runtime, Value.ofF64(@bitCast(@as(u64, 0x7ff8000000000000))))).asStr(),
     );
     try testing.expectEqualStrings(
         "nan",
-        bench.made(try text.str(runtime, Value.ofDouble(@bitCast(@as(u64, 0xfff8000000000000))))).asString(),
+        bench.made(try text.str(runtime, Value.ofF64(@bitCast(@as(u64, 0xfff8000000000000))))).asStr(),
     );
-    try testing.expectEqualStrings("inf", bench.made(try text.str(runtime, Value.ofDouble(std.math.inf(f64)))).asString());
-    try testing.expectEqualStrings("-inf", bench.made(try text.str(runtime, Value.ofDouble(-std.math.inf(f64)))).asString());
+    try testing.expectEqualStrings("inf", bench.made(try text.str(runtime, Value.ofF64(std.math.inf(f64)))).asStr());
+    try testing.expectEqualStrings("-inf", bench.made(try text.str(runtime, Value.ofF64(-std.math.inf(f64)))).asStr());
 
     // The parsers answer absence rather than trapping: "not a number"
     // is the same reason every time and the name says it already.
-    try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofString("42"))).asLong());
-    try testing.expect((try text.parseInt(runtime, Value.ofString("4 2"))).isNone());
-    try testing.expect((try text.parseInt(runtime, Value.ofString(""))).isNone());
-    try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofString("1.5"))).asDouble());
-    try testing.expect((try text.parseFloat(runtime, Value.ofString("inf"))).isNone());
-    try testing.expect((try text.parseFloat(runtime, Value.ofString("nan"))).isNone());
-    try testing.expect((try text.parseFloat(runtime, Value.ofString("zero"))).isNone());
+    try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofStr("42"))).asI64());
+    try testing.expect((try text.parseInt(runtime, Value.ofStr("4 2"))).isNone());
+    try testing.expect((try text.parseInt(runtime, Value.ofStr(""))).isNone());
+    try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofStr("1.5"))).asF64());
+    try testing.expect((try text.parseFloat(runtime, Value.ofStr("inf"))).isNone());
+    try testing.expect((try text.parseFloat(runtime, Value.ofStr("nan"))).isNone());
+    try testing.expect((try text.parseFloat(runtime, Value.ofStr("zero"))).isNone());
 
     try testing.expectEqualStrings(
         "\xF0\x9F\x99\x82",
-        bench.made(try text.chr(runtime, 0x1F642)).asString(),
+        bench.made(try text.chr(runtime, 0x1F642)).asStr(),
     );
     try expectTrap(.bad_codepoint, runtime, text.chr(runtime, 0x110000));
-    try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofString("\xF0\x9F\x99\x82"))).asLong());
-    try expectTrap(.bad_codepoint, runtime, text.ord(runtime, Value.ofString("")));
+    try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofStr("\xF0\x9F\x99\x82"))).asI64());
+    try expectTrap(.bad_codepoint, runtime, text.ord(runtime, Value.ofStr("")));
 }
 
 test "integer arithmetic is checked and float arithmetic is IEEE" {
@@ -6069,34 +6069,33 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const biggest = Value.ofLong(std.math.maxInt(i64));
-    try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofLong(1)));
+    const biggest = Value.ofI64(std.math.maxInt(i64));
+    try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofI64(1)));
     // The operators that still produce a long are the ones that still
     // trap: `/` answers a double and is IEEE (docs/NUMERICS.md §4).
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofLong(0)));
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofLong(0)));
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofI64(0)));
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofI64(0)));
     try expectTrap(
         .integer_overflow,
         runtime,
-        operators.binary(runtime, .floor_divide, Value.ofLong(std.math.minInt(i64)), Value.ofLong(-1)),
+        operators.binary(runtime, .floor_divide, Value.ofI64(std.math.minInt(i64)), Value.ofI64(-1)),
     );
-    try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofLong(std.math.minInt(i64))));
+    try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofI64(std.math.minInt(i64))));
 
-    const divided = try operators.binary(runtime, .divide, Value.ofDouble(1.0), Value.ofDouble(0.0));
-    try testing.expect(std.math.isInf(divided.asDouble()));
+    const divided = try operators.binary(runtime, .divide, Value.ofF64(1.0), Value.ofF64(0.0));
+    try testing.expect(std.math.isInf(divided.asF64()));
     // Negation keeps the sign of zero, which `0.0 - x` would not.
-    try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofDouble(0.0))).asDouble()));
+    try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofF64(0.0))).asF64()));
 
-    try expectTrap(.conversion_range, runtime, operators.convert(runtime, Value.ofDouble(1e30), .long));
-    // `long(x)` rounds half away from zero (docs/NUMERICS.md §7);
-    // `trunc(x)` is how truncation is spelled now.
-    try testing.expectEqual(@as(i64, -2), (try operators.convert(runtime, Value.ofDouble(-1.9), .long)).asLong());
-    try testing.expectEqual(@as(i64, 3), (try operators.convert(runtime, Value.ofDouble(2.5), .long)).asLong());
-    try testing.expectEqual(@as(i64, -3), (try operators.convert(runtime, Value.ofDouble(-2.5), .long)).asLong());
-    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofDouble(-1.9)).asDouble());
+    try expectTrap(.conversion_range, runtime, operators.convert(runtime, Value.ofF64(1e30), .i64));
+    // Float-to-integer conversion truncates toward zero.
+    try testing.expectEqual(@as(i64, -1), (try operators.convert(runtime, Value.ofF64(-1.9), .i64)).asI64());
+    try testing.expectEqual(@as(i64, 2), (try operators.convert(runtime, Value.ofF64(2.5), .i64)).asI64());
+    try testing.expectEqual(@as(i64, -2), (try operators.convert(runtime, Value.ofF64(-2.5), .i64)).asI64());
+    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofF64(-1.9)).asF64());
 
-    const joined = bench.made(try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b")));
-    try testing.expectEqualStrings("ab", joined.asString());
+    const joined = bench.made(try operators.binary(runtime, .add, Value.ofStr("a"), Value.ofStr("b")));
+    try testing.expectEqualStrings("ab", joined.asStr());
 }
 
 test "object comparison is identity, struct comparison is by field" {
@@ -6110,10 +6109,10 @@ test "object comparison is identity, struct comparison is by field" {
     try testing.expect(operators.compare(.equal, first, first));
     try testing.expect(operators.compare(.not_equal, first, second));
 
-    var left = [_]Value{ Value.ofLong(1), Value.ofString("x") };
-    var right = [_]Value{ Value.ofLong(1), Value.ofString("x") };
+    var left = [_]Value{ Value.ofI64(1), Value.ofStr("x") };
+    var right = [_]Value{ Value.ofI64(1), Value.ofStr("x") };
     try testing.expect(operators.compare(.equal, Value.ofStruct(&left), Value.ofStruct(&right)));
-    right[0] = Value.ofLong(2);
+    right[0] = Value.ofI64(2);
     try testing.expect(operators.compare(.not_equal, Value.ofStruct(&left), Value.ofStruct(&right)));
 }
 
@@ -6442,7 +6441,7 @@ extern fn luce_rt_struct_set(
     out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_compare(op: i32, left: [*c]const Value, right: [*c]const Value) callconv(.c) i32;
-extern fn luce_rt_compare_long_double(op: i32, left: i64, right: f64) callconv(.c) i32;
+extern fn luce_rt_compare_i64_f64(op: i32, left: i64, right: f64) callconv(.c) i32;
 
 /// What a host learns from the trap callback, without allocating: these
 /// are entered from C and must stay simple.
@@ -6510,17 +6509,17 @@ test "the C surface opens a run, carries values, and reports its own traps" {
 
     var held: Value = .none;
     try testing.expectEqual(0, luce_rt_new_list(runtime, &Value.none, &held));
-    try testing.expectEqual(0, luce_rt_append(runtime, &held, &Value.ofLong(21)));
+    try testing.expectEqual(0, luce_rt_append(runtime, &held, &Value.ofI64(21)));
 
     var read: Value = .none;
-    try testing.expectEqual(0, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofLong(0)}, 1, &read));
+    try testing.expectEqual(0, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofI64(0)}, 1, &read));
     var printed: Value = .none;
     try testing.expectEqual(0, luce_rt_str(runtime, &read, &printed));
-    try testing.expectEqualStrings("21", printed.asString());
+    try testing.expectEqualStrings("21", printed.asStr());
 
     // Out of range: the call answers trapped, and the trap waits in the
     // runtime while the frames record themselves on the way out.
-    try testing.expectEqual(1, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofLong(1)}, 1, &read));
+    try testing.expectEqual(1, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofI64(1)}, 1, &read));
     luce_rt_unwound(runtime, 0, 1);
     luce_rt_unwound(runtime, 1, 0);
     luce_rt_report(runtime, &reported, Reported.take);
@@ -6556,31 +6555,31 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
     const runtime = &bench.runtime;
     const bytes = "x";
 
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
     try testing.expectEqual(@as(i32, 1), luce_rt_intern_text(runtime, bytes, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, 1, bytes, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     // `present` is a Boolean produced by the compiler, not a general
     // truthy flag.  A damaged artifact must be rejected before the runtime
     // looks at the borrowed bytes or writes the result slot.
     for ([_]i32{ -1, 2 }) |raw| {
-        out = Value.ofLong(99);
+        out = Value.ofI64(99);
         try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, raw, null, 1, &out));
         try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-        try testing.expectEqual(@as(i64, 99), out.asLong());
+        try testing.expectEqual(@as(i64, 99), out.asI64());
         runtime.pending = null;
     }
 
     try testing.expectEqual(@as(i32, 1), luce_rt_names_list(runtime, bytes, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, bytes, -1));
@@ -6589,40 +6588,40 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
 
     try testing.expectEqual(@as(i32, 1), luce_rt_args_list(runtime, null, Host.negativeCount, null, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     const dims = [_]i64{1};
     try testing.expectEqual(@as(i32, 1), luce_rt_new_array(runtime, &dims, -1, &Value.none, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
-    const fields = [_]Value{Value.ofLong(1)};
+    const fields = [_]Value{Value.ofI64(1)};
     try testing.expectEqual(@as(i32, 1), luce_rt_struct_make(runtime, &fields, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_function_make(runtime, &fields, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
-    const indices = [_]Value{Value.ofLong(0)};
+    const indices = [_]Value{Value.ofI64(0)};
     try testing.expectEqual(@as(i32, 1), luce_rt_index_get(runtime, &Value.none, &indices, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_index_set(runtime, &Value.none, &indices, -1, &Value.none));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
     runtime.pending = null;
 
-    const arguments = [_]Value{Value.ofLong(1)};
+    const arguments = [_]Value{Value.ofI64(1)};
     try testing.expectEqual(@as(i32, 1), luce_rt_spawn(runtime, 0, &arguments, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     var opened: i32 = 17;
@@ -6631,7 +6630,7 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
         luce_rt_file_open(runtime, bytes, -1, @intFromEnum(files.Mode.read), &out, &opened, 0, 0),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 17), opened);
     runtime.pending = null;
 
@@ -6641,7 +6640,7 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
         luce_rt_file_read_text(runtime, bytes, -1, &out, &ok, 0, 0),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 23), ok);
     runtime.pending = null;
 
@@ -6653,7 +6652,7 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
     try testing.expectEqual(@as(i32, 23), ok);
     runtime.pending = null;
 
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, bytes, -1, &out));
     try testing.expect(out.isNone());
 
@@ -6675,10 +6674,10 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
     try testing.expectEqual(@as(i32, 23), ok);
     runtime.pending = null;
 
-    try testing.expectEqual(@as(i32, 0), luce_rt_compare(999, &Value.ofLong(1), &Value.ofLong(1)));
+    try testing.expectEqual(@as(i32, 0), luce_rt_compare(999, &Value.ofI64(1), &Value.ofI64(1)));
     try testing.expectEqual(
         @as(i32, 0),
-        luce_rt_compare_long_double(999, 1, 1.0),
+        luce_rt_compare_i64_f64(999, 1, 1.0),
     );
 }
 
@@ -6689,14 +6688,14 @@ test "C byte pointers reject null before slicing or host access" {
     const runtime = &bench.runtime;
     const null_bytes: [*c]const u8 = null;
     const bytes = "path";
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
 
     try testing.expectEqual(
         @as(i32, 1),
         luce_rt_intern_text(runtime, null_bytes, 1, &out),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(
@@ -6704,7 +6703,7 @@ test "C byte pointers reject null before slicing or host access" {
         luce_rt_maybe_text(runtime, 1, null_bytes, 1, &out),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(
@@ -6712,7 +6711,7 @@ test "C byte pointers reject null before slicing or host access" {
         luce_rt_names_list(runtime, null_bytes, 1, &out),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, null_bytes, 1));
@@ -6734,7 +6733,7 @@ test "C byte pointers reject null before slicing or host access" {
         ),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 17), opened);
     runtime.pending = null;
 
@@ -6744,7 +6743,7 @@ test "C byte pointers reject null before slicing or host access" {
         luce_rt_file_read_text(runtime, null_bytes, 1, &out, &ok, 0, 0),
     );
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 23), ok);
     runtime.pending = null;
 
@@ -6796,7 +6795,7 @@ test "C byte pointers reject null before slicing or host access" {
 
     // An absent optional result does not read the byte pointer at all;
     // the null buffer is therefore irrelevant and the call succeeds.
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, null_bytes, 1, &out));
     try testing.expect(out.isNone());
 
@@ -6805,15 +6804,15 @@ test "C byte pointers reject null before slicing or host access" {
     // checkedBytes, so exercise several consumers without ever dereferencing
     // the forged pointer.
     const wrapping_bytes: [*c]const u8 = @ptrFromInt(std.math.maxInt(usize) - 3);
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(@as(i32, 1), luce_rt_intern_text(runtime, wrapping_bytes, 8, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_names_list(runtime, wrapping_bytes, 8, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, wrapping_bytes, 8));
@@ -6822,7 +6821,7 @@ test "C byte pointers reject null before slicing or host access" {
 
     try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, 1, wrapping_bytes, 8, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.pending = null;
 
     luce_rt_raise(runtime, 0, wrapping_bytes, 8);
@@ -6861,58 +6860,58 @@ test "C container doors reject wrong tags and object shapes before mutation" {
 
     var list: Value = .none;
     try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &list));
-    const forged_scalar = Value.ofLong(0);
-    const index = [_]Value{Value.ofLong(0)};
-    var out = Value.ofLong(99);
+    const forged_scalar = Value.ofI64(0);
+    const index = [_]Value{Value.ofI64(0)};
+    var out = Value.ofI64(99);
 
     // A scalar with object-like bits is rejected before any resolver sees it.
     try expectCTrapCode(runtime, luce_rt_len(runtime, &forged_scalar, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_index_get(runtime, &forged_scalar, &index, 1, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_append_ascii(runtime, &forged_scalar, 'x'), .not_owned);
     try expectCTrapCode(runtime, luce_rt_parse_string(runtime, &forged_scalar, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_string_slice(runtime, &forged_scalar, 0, 1, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
 
     // An object tag alone is not enough: map-only doors must also validate
     // the row's data variant before reading union fields.
-    try expectCTrapCode(runtime, luce_rt_map_get(runtime, &list, &Value.ofLong(0), &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_map_get(runtime, &list, &Value.ofI64(0), &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_key_at(runtime, &list, 0, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_value_at(runtime, &list, 0, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_map_keys(runtime, &list, &Value.none, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_map_values(runtime, &list, &Value.none, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
-    try expectCTrapCode(runtime, luce_rt_map_place(runtime, &list, &Value.ofLong(0), &Value.none, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
+    try expectCTrapCode(runtime, luce_rt_map_place(runtime, &list, &Value.ofI64(0), &Value.none, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_array_fill(runtime, &list, &Value.none), .not_owned);
     try testing.expectEqual(@as(u32, 1), runtime.live);
 
     // `string(builder)` accepts only a Builder object.  A list must not be
     // interpreted through the builder arm of the same union.
     try expectCTrapCode(runtime, luce_rt_str(runtime, &list, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     var map: Value = .none;
     try testing.expectEqual(@as(i32, 0), luce_rt_new_map(runtime, &map));
-    const map_key = Value.ofString("stored key");
-    const map_zero = Value.ofLong(17);
+    const map_key = Value.ofStr("stored key");
+    const map_zero = Value.ofI64(17);
     try testing.expectEqual(@as(i32, 0), luce_rt_map_place(runtime, &map, &map_key, &map_zero, &out));
     const forged_key = Value.ofBoolean(true);
     try expectCTrapCode(runtime, luce_rt_map_get(runtime, &map, &forged_key, &out), .not_owned);
     try expectCTrapCode(runtime, luce_rt_index_get(runtime, &map, &forged_key, 1, &out), .not_owned);
     try expectCTrapCode(runtime, luce_rt_map_place(runtime, &map, &forged_key, &map_zero, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asLong());
+    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asI64());
 
-    var malformed_inline = Value.ofInlineText(.string, "x");
+    var malformed_inline = Value.ofInlineText(.str, "x");
     malformed_inline.inline_length = value.inline_capacity + 1;
     try expectCTrapCode(runtime, luce_rt_string_slice(runtime, &malformed_inline, 0, 1, &out), .not_owned);
     var malformed_outside: Value = .{
-        .tag = .string,
+        .tag = .str,
         .inline_length = value.text_outside,
         .bits = 0,
         .length = 1,
@@ -6920,7 +6919,7 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     try expectCTrapCode(runtime, luce_rt_string_byte(runtime, &malformed_outside, 0, &out), .not_owned);
 
     const wrapping_string: Value = .{
-        .tag = .string,
+        .tag = .str,
         .inline_length = value.text_outside,
         .bits = std.math.maxInt(u64) - 3,
         .length = 8,
@@ -6934,7 +6933,7 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     };
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &aligned_wrapping_run, &out), .not_owned);
 
-    var invalid_function_slots = [_]Value{ Value.ofLong(1), Value.none, Value.none };
+    var invalid_function_slots = [_]Value{ Value.ofI64(1), Value.none, Value.none };
     const invalid_function = Value.ofFunction(&invalid_function_slots);
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &invalid_function, &out), .not_owned);
     try expectCTrapCode(
@@ -6944,39 +6943,39 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     );
 
     const overflowing_left: Value = .{
-        .tag = .string,
+        .tag = .str,
         .inline_length = value.text_outside,
         .bits = 1,
         .length = @intCast(std.math.maxInt(usize) - 3),
     };
     const overflowing_right: Value = .{
-        .tag = .string,
+        .tag = .str,
         .inline_length = value.text_outside,
         .bits = 1,
         .length = 8,
     };
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 1),
         luce_rt_concat(runtime, &overflowing_left, &overflowing_right, &out),
     );
     try testing.expect(runtime.exhausted);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     runtime.exhausted = false;
 
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     // Composite values carry a pointer/length run too.  A null run with a
     // nonzero length must be rejected before give/copy or any ownership walk
     // can reinterpret it as an empty or foreign graph.  Function values are
     // additionally required to retain their fixed two-slot representation.
     const malformed_struct: Value = .{ .tag = .strukt, .length = 1 };
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_struct, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     const malformed_function: Value = .{ .tag = .function, .length = 2 };
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_function, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
 
-    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asLong());
+    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asI64());
     try testing.expectEqual(@as(i64, 2), luce_rt_leaked(runtime));
 }
 
@@ -6986,12 +6985,12 @@ test "C Value output pointers reject null before work" {
     defer bench.deinit();
     const runtime = &bench.runtime;
     const null_out: [*c]Value = null;
-    const held = Value.ofLong(7);
-    const text_value = Value.ofString("value output");
+    const held = Value.ofI64(7);
+    const text_value = Value.ofStr("value output");
     const bytes = "path";
     const dimensions = [_]i64{2};
-    const fields = [_]Value{Value.ofLong(1)};
-    const indices = [_]Value{Value.ofLong(0)};
+    const fields = [_]Value{Value.ofI64(1)};
+    const indices = [_]Value{Value.ofI64(0)};
 
     luce_rt_error_message(runtime, null_out);
     try expectCNullValueVoid(runtime);
@@ -7068,7 +7067,7 @@ test "C status output pointers reject null before host file work" {
     const runtime = &bench.runtime;
     const bytes = "path";
     const held = Value.none;
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
     const opened: i32 = 17;
     var ok: i32 = 23;
     var filled: i64 = 29;
@@ -7089,7 +7088,7 @@ test "C status output pointers reject null before host file work" {
             0,
         ),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 17), opened);
 
     try expectCNullValueTrap(
@@ -7121,7 +7120,7 @@ test "C status output pointers reject null before host file work" {
         runtime,
         luce_rt_file_read_text(runtime, bytes, bytes.len, &out, null_i32, 0, 0),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCNullValueTrap(
         runtime,
         luce_rt_file_write_text(
@@ -7148,11 +7147,11 @@ test "C borrowed Value and array pointers reject null before work" {
     const null_value: [*c]const Value = null;
     const null_values: [*c]const Value = null;
     const null_dims: [*c]const i64 = null;
-    const held = Value.ofLong(7);
-    const text_value = Value.ofString("borrowed input");
+    const held = Value.ofI64(7);
+    const text_value = Value.ofStr("borrowed input");
     const dimensions = [_]i64{2};
-    const indices = [_]Value{Value.ofLong(0)};
-    var out = Value.ofLong(99);
+    const indices = [_]Value{Value.ofI64(0)};
+    var out = Value.ofI64(99);
     var ok: i32 = 23;
     var filled: i64 = 29;
     var written: i64 = 31;
@@ -7257,7 +7256,7 @@ test "C borrowed Value and array pointers reject null before work" {
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, null_value, &held));
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, &held, null_value));
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, null_value, null_value));
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(i32, 23), ok);
     try testing.expectEqual(@as(i64, 29), filled);
     try testing.expectEqual(@as(i64, 31), written);
@@ -7269,13 +7268,13 @@ test "C callbacks fail closed on null report and argument buffers" {
     bench.setup();
     defer bench.deinit();
     const runtime = &bench.runtime;
-    var out = Value.ofLong(99);
+    var out = Value.ofI64(99);
 
     try expectCNullValueTrap(
         runtime,
         luce_rt_args_list(runtime, null, NullArgument.count, NullArgument.get, &out),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(u32, 0), runtime.live);
 
     try expectCNullValueTrap(
@@ -7288,7 +7287,7 @@ test "C callbacks fail closed on null report and argument buffers" {
             &out,
         ),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(@as(u32, 0), runtime.live);
 
     _ = runtime.fail(.host_unavailable) catch {};
@@ -7314,8 +7313,8 @@ test "C callbacks fail closed on null report and argument buffers" {
 test "allocating C doors preserve outputs and rows at every failure point" {
     const long_text = "a host string long enough to require owned storage";
     const dims = [_]i64{3};
-    const fields = [_]Value{ Value.ofLong(1), Value.ofLong(2) };
-    const slots = [_]Value{ Value.ofLong(3), Value.ofLong(4) };
+    const fields = [_]Value{ Value.ofI64(1), Value.ofI64(2) };
+    const slots = [_]Value{ Value.ofI64(3), Value.ofI64(4) };
     const doors = [_]CAllocationDoor{
         .new_list,
         .new_map,
@@ -7339,18 +7338,18 @@ test "allocating C doors preserve outputs and rows at every failure point" {
                 .arena = arena.allocator(),
                 .objects = objects.allocator(),
             });
-            var out = Value.ofLong(99);
+            var out = Value.ofI64(99);
             objects.fail_index = objects.alloc_index + failure_offset;
 
             const status = switch (door) {
                 .new_list => luce_rt_new_list(&runtime, &Value.none, &out),
                 .new_map => luce_rt_new_map(&runtime, &out),
                 .new_builder => luce_rt_new_builder(&runtime, &out),
-                .new_array => luce_rt_new_array(&runtime, &dims, dims.len, &Value.ofLong(0), &out),
+                .new_array => luce_rt_new_array(&runtime, &dims, dims.len, &Value.ofI64(0), &out),
                 .struct_make => luce_rt_struct_make(&runtime, &fields, fields.len, &out),
                 .function_make => luce_rt_function_make(&runtime, &slots, slots.len, &out),
                 .intern_text => luce_rt_intern_text(&runtime, long_text, long_text.len, &out),
-                .own_storage => luce_rt_own_storage(&runtime, &Value.ofString(long_text), &out),
+                .own_storage => luce_rt_own_storage(&runtime, &Value.ofStr(long_text), &out),
                 .names_list => luce_rt_names_list(&runtime, built_list_joined, built_list_joined.len, &out),
                 .args_list => luce_rt_args_list(
                     &runtime,
@@ -7370,7 +7369,7 @@ test "allocating C doors preserve outputs and rows at every failure point" {
                 completed = true;
             } else {
                 try testing.expectEqual(@as(i32, 1), status);
-                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expectEqual(@as(i64, 99), out.asI64());
                 try testing.expectEqual(@as(u32, 0), runtime.live);
                 if (runtime.pending) |pending| {
                     try testing.expectEqual(CAllocationDoor.new_array, door);
@@ -7414,12 +7413,12 @@ test "a function value allocation failure consumes only its receiver copy" {
         };
 
         const list = try runtime.newList(Value.none);
-        try containers.append(&runtime, list, Value.ofLong(7));
-        const owned_text = try runtime.ownValue(Value.ofString(long_text));
+        try containers.append(&runtime, list, Value.ofI64(7));
+        const owned_text = try runtime.ownValue(Value.ofStr(long_text));
         const receiver = try runtime.makeStruct(&.{ list, owned_text });
         const copied_receiver = try runtime.copyValue(receiver);
-        var slots = [_]Value{ Value.ofInt(3), copied_receiver };
-        var out = Value.ofLong(99);
+        var slots = [_]Value{ Value.ofI32(3), copied_receiver };
+        var out = Value.ofI64(99);
 
         objects.fail_index = objects.alloc_index + failure_offset;
         const status = luce_rt_function_make(&runtime, &slots, slots.len, &out);
@@ -7432,11 +7431,11 @@ test "a function value allocation failure consumes only its receiver copy" {
             completed = true;
         } else {
             try testing.expectEqual(@as(i32, 1), status);
-            try testing.expectEqual(@as(i64, 99), out.asLong());
+            try testing.expectEqual(@as(i64, 99), out.asI64());
             try testing.expect(runtime.exhausted);
             const fields = receiver.asStruct();
-            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, fields[0])).asLong());
-            try testing.expectEqualStrings(long_text, fields[1].asString());
+            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, fields[0])).asI64());
+            try testing.expectEqualStrings(long_text, fields[1].asStr());
             runtime.freeValue(receiver);
             failures += 1;
         }
@@ -7455,7 +7454,7 @@ test "a function value allocation failure consumes only its receiver copy" {
 
 test "allocating C value doors preserve graphs and slots at every failure point" {
     const long_text = "a C value door string long enough to require owned storage";
-    const inline_text = Value.ofInlineText(.string, "inline return bytes");
+    const inline_text = Value.ofInlineText(.str, "inline return bytes");
     const previous_key = "the previous key text remains on a failed replacement";
     const next_key = "the next key text replaces it only after allocation succeeds";
     const doors = [_]CValueAllocationDoor{
@@ -7497,15 +7496,15 @@ test "allocating C value doors preserve graphs and slots at every failure point"
                 );
             }
 
-            var out = Value.ofLong(99);
+            var out = Value.ofI64(99);
             objects.fail_index = objects.alloc_index + failure_offset;
             const status = switch (door) {
                 .export_storage => luce_rt_export_storage(&runtime, &inline_text, &out),
                 .copy => luce_rt_copy(&runtime, &source, &out),
                 .list_slice => luce_rt_list_slice(&runtime, &source, 0, 2, &out),
-                .map_keys => luce_rt_map_keys(&runtime, &source, &Value.ofString(""), &out),
+                .map_keys => luce_rt_map_keys(&runtime, &source, &Value.ofStr(""), &out),
                 .map_values => luce_rt_map_values(&runtime, &source, &Value.none, &out),
-                .str => luce_rt_str(&runtime, &Value.ofString(long_text), &out),
+                .str => luce_rt_str(&runtime, &Value.ofStr(long_text), &out),
                 .set_key_text => luce_rt_set_key_text(&runtime, next_key, next_key.len),
             };
             objects.fail_index = std.math.maxInt(usize);
@@ -7513,7 +7512,7 @@ test "allocating C value doors preserve graphs and slots at every failure point"
             if (status == 0) {
                 switch (door) {
                     .export_storage => {
-                        try testing.expectEqualStrings(inline_text.asString(), out.asString());
+                        try testing.expectEqualStrings(inline_text.asStr(), out.asStr());
                         try testing.expect(!out.textIsInline());
                         runtime.dropStorage(out);
                     },
@@ -7522,19 +7521,19 @@ test "allocating C value doors preserve graphs and slots at every failure point"
                         runtime.freeValue(out);
                     },
                     .map_keys => {
-                        try testing.expectEqual(@as(i64, 2), (try containers.length(&runtime, out)).asLong());
+                        try testing.expectEqual(@as(i64, 2), (try containers.length(&runtime, out)).asI64());
                         try testing.expectEqualStrings(
                             "the first copied map key owns outside bytes",
-                            (try containers.indexGet(&runtime, out, &.{Value.ofLong(0)})).asString(),
+                            (try containers.indexGet(&runtime, out, &.{Value.ofI64(0)})).asStr(),
                         );
                         try testing.expectEqualStrings(
                             "the second copied map key owns outside bytes",
-                            (try containers.indexGet(&runtime, out, &.{Value.ofLong(1)})).asString(),
+                            (try containers.indexGet(&runtime, out, &.{Value.ofI64(1)})).asStr(),
                         );
                         runtime.freeValue(out);
                     },
                     .str => {
-                        try testing.expectEqualStrings(long_text, out.asString());
+                        try testing.expectEqualStrings(long_text, out.asStr());
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
                     },
@@ -7543,7 +7542,7 @@ test "allocating C value doors preserve graphs and slots at every failure point"
                 completed = true;
             } else {
                 try testing.expectEqual(@as(i32, 1), status);
-                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expectEqual(@as(i64, 99), out.asI64());
                 try testing.expect(runtime.pending == null);
                 try testing.expect(runtime.exhausted);
                 try testing.expect(objects.has_induced_failure);
@@ -7598,7 +7597,7 @@ test "C file acquisition closes raw handles through every allocation failure" {
             };
             state.install(&runtime);
 
-            var out = Value.ofLong(99);
+            var out = Value.ofI64(99);
             var opened: i32 = 17;
             var ok: i32 = 23;
             objects.fail_index = objects.alloc_index + failure_offset;
@@ -7645,7 +7644,7 @@ test "C file acquisition closes raw handles through every allocation failure" {
                     },
                     .read_text => {
                         try testing.expectEqual(@as(i32, 1), ok);
-                        try testing.expectEqualStrings(payload, out.asString());
+                        try testing.expectEqualStrings(payload, out.asStr());
                         runtime.dropStorage(out);
                     },
                     .write_text => {
@@ -7658,7 +7657,7 @@ test "C file acquisition closes raw handles through every allocation failure" {
                 completed = true;
             } else {
                 try testing.expectEqual(@as(i32, 1), status);
-                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expectEqual(@as(i64, 99), out.asI64());
                 try testing.expectEqual(@as(i32, 17), opened);
                 try testing.expectEqual(@as(i32, 23), ok);
                 try testing.expect(runtime.pending == null);
@@ -7711,7 +7710,7 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
             child_arena.deinit();
         };
 
-        var out = Value.ofLong(99);
+        var out = Value.ofI64(99);
         parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
         // The generated ABI passes a null argument pointer for an empty
         // call.  It is valid at count zero, including on every rollback
@@ -7727,7 +7726,7 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
             completed = true;
         } else {
             try testing.expectEqual(@as(i32, 1), status);
-            try testing.expectEqual(@as(i64, 99), out.asLong());
+            try testing.expectEqual(@as(i64, 99), out.asI64());
             try testing.expect(parent.pending == null);
             try testing.expect(parent.exhausted);
             try testing.expect(parent_objects.has_induced_failure);
@@ -7785,7 +7784,7 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
             try testing.expect(task.tag == .object);
             const task_live = parent.live;
 
-            var answer = Value.ofLong(99);
+            var answer = Value.ofI64(99);
             parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
             const status = switch (door) {
                 .wait_result => luce_rt_task_wait(&parent, &task, &answer),
@@ -7803,21 +7802,21 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
                 try testing.expectEqual(@as(usize, 2), fields.len);
                 try testing.expectEqualStrings(
                     "worker graph result has outside storage",
-                    fields[1].asString(),
+                    fields[1].asStr(),
                 );
                 const branch = fields[0];
-                try testing.expectEqual(@as(i64, 1), (try containers.length(&parent, branch)).asLong());
-                const leaf = try containers.indexGet(&parent, branch, &.{Value.ofLong(0)});
+                try testing.expectEqual(@as(i64, 1), (try containers.length(&parent, branch)).asI64());
+                const leaf = try containers.indexGet(&parent, branch, &.{Value.ofI64(0)});
                 try testing.expectEqual(@as(i64, 11), (try containers.indexGet(
                     &parent,
                     leaf,
-                    &.{Value.ofLong(0)},
-                )).asLong());
+                    &.{Value.ofI64(0)},
+                )).asI64());
                 parent.freeValue(answer);
                 completed = true;
             } else {
                 try testing.expectEqual(@as(i32, 1), status);
-                try testing.expectEqual(@as(i64, 99), answer.asLong());
+                try testing.expectEqual(@as(i64, 99), answer.asI64());
                 try testing.expect(state.ran);
                 try testing.expect(parent.exhausted);
                 try testing.expect(parent.pending == null);
@@ -7831,9 +7830,9 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
             // `wait` detaches before copying.  A second C wait must trap
             // without joining or touching the sentinel result, regardless
             // of whether the first wait copied or failed.
-            var second = Value.ofLong(77);
+            var second = Value.ofI64(77);
             try testing.expectEqual(@as(i32, 1), luce_rt_task_wait(&parent, &task, &second));
-            try testing.expectEqual(@as(i64, 77), second.asLong());
+            try testing.expectEqual(@as(i64, 77), second.asI64());
             try testing.expectEqual(vocabulary.TrapCode.use_after_free, parent.pending.?.code);
             try testing.expectEqual(@as(usize, 1), state.joins);
             try testing.expectEqual(@as(usize, 1), state.closes);
@@ -7899,11 +7898,11 @@ test "C compound value doors preserve destinations through every allocation fail
 
             switch (door) {
                 .struct_set => {
-                    const first = try runtime.ownValue(Value.ofString(old_field));
-                    const second = try runtime.ownValue(Value.ofString(other_field));
+                    const first = try runtime.ownValue(Value.ofStr(old_field));
+                    const second = try runtime.ownValue(Value.ofStr(other_field));
                     source = try runtime.makeStruct(&.{ first, second });
                     source_owned = true;
-                    replacement = try runtime.ownValue(Value.ofString(new_field));
+                    replacement = try runtime.ownValue(Value.ofStr(new_field));
                     replacement_owned = true;
                 },
                 .map_place => {
@@ -7911,21 +7910,21 @@ test "C compound value doors preserve destinations through every allocation fail
                     source_owned = true;
                 },
                 .array_fill => {
-                    source = try runtime.newArray(&.{3}, Value.ofInlineText(.string, "old"));
+                    source = try runtime.newArray(&.{3}, Value.ofInlineText(.str, "old"));
                     source_owned = true;
                 },
                 .parse_string => {
-                    source = try runtime.newList(Value.ofByte(0));
+                    source = try runtime.newList(Value.ofU8(0));
                     source_owned = true;
                     for (parse_text) |byte| {
-                        try containers.append(&runtime, source, Value.ofByte(byte));
+                        try containers.append(&runtime, source, Value.ofU8(byte));
                     }
                 },
                 .maybe_text, .concat => {},
             }
             const baseline_live = runtime.live;
 
-            var out = Value.ofLong(99);
+            var out = Value.ofI64(99);
             objects.fail_index = objects.alloc_index + failure_offset;
             const status = switch (door) {
                 .maybe_text => luce_rt_maybe_text(&runtime, 1, parse_text, parse_text.len, &out),
@@ -7939,19 +7938,19 @@ test "C compound value doors preserve destinations through every allocation fail
                 .map_place => luce_rt_map_place(
                     &runtime,
                     &source,
-                    &Value.ofString(map_key),
-                    &Value.ofString(map_zero),
+                    &Value.ofStr(map_key),
+                    &Value.ofStr(map_zero),
                     &out,
                 ),
                 .array_fill => luce_rt_array_fill(
                     &runtime,
                     &source,
-                    &Value.ofString(fill_text),
+                    &Value.ofStr(fill_text),
                 ),
                 .concat => luce_rt_concat(
                     &runtime,
-                    &Value.ofString(left_text),
-                    &Value.ofString(right_text),
+                    &Value.ofStr(left_text),
+                    &Value.ofStr(right_text),
                     &out,
                 ),
                 .parse_string => luce_rt_parse_string(&runtime, &source, &out),
@@ -7961,25 +7960,25 @@ test "C compound value doors preserve destinations through every allocation fail
             if (status == 0) {
                 switch (door) {
                     .maybe_text => {
-                        try testing.expectEqualStrings(parse_text, out.asString());
+                        try testing.expectEqualStrings(parse_text, out.asStr());
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
                     },
                     .struct_set => {
                         const fields = out.asStruct();
                         try testing.expectEqual(@as(usize, 2), fields.len);
-                        try testing.expectEqualStrings(new_field, fields[0].asString());
-                        try testing.expectEqualStrings(other_field, fields[1].asString());
+                        try testing.expectEqualStrings(new_field, fields[0].asStr());
+                        try testing.expectEqualStrings(other_field, fields[1].asStr());
                         runtime.dropStorage(out);
-                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asString());
-                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asString());
+                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asStr());
+                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asStr());
                     },
                     .map_place => {
-                        try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, source)).asLong());
-                        try testing.expectEqualStrings(map_zero, out.asString());
+                        try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, source)).asI64());
+                        try testing.expectEqualStrings(map_zero, out.asStr());
                         try testing.expectEqualStrings(
                             map_key,
-                            (try containers.keyAt(&runtime, source, 0)).asString(),
+                            (try containers.keyAt(&runtime, source, 0)).asStr(),
                         );
                     },
                     .array_fill => {
@@ -7988,17 +7987,17 @@ test "C compound value doors preserve destinations through every allocation fail
                             (try containers.indexGet(
                                 &runtime,
                                 source,
-                                &.{Value.ofLong(@intCast(index))},
-                            )).asString(),
+                                &.{Value.ofI64(@intCast(index))},
+                            )).asStr(),
                         );
                     },
                     .concat => {
-                        try testing.expectEqualStrings(left_text ++ right_text, out.asString());
+                        try testing.expectEqualStrings(left_text ++ right_text, out.asStr());
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
                     },
                     .parse_string => {
-                        try testing.expectEqualStrings(parse_text, out.asString());
+                        try testing.expectEqualStrings(parse_text, out.asStr());
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
                     },
@@ -8006,27 +8005,27 @@ test "C compound value doors preserve destinations through every allocation fail
                 completed = true;
             } else {
                 try testing.expectEqual(@as(i32, 1), status);
-                if (door != .array_fill) try testing.expectEqual(@as(i64, 99), out.asLong());
+                if (door != .array_fill) try testing.expectEqual(@as(i64, 99), out.asI64());
                 try testing.expect(runtime.pending == null);
                 try testing.expect(runtime.exhausted);
                 try testing.expect(objects.has_induced_failure);
                 try testing.expectEqual(baseline_live, runtime.live);
                 switch (door) {
                     .struct_set => {
-                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asString());
-                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asString());
+                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asStr());
+                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asStr());
                     },
                     .map_place => try testing.expectEqual(
                         @as(i64, 0),
-                        (try containers.length(&runtime, source)).asLong(),
+                        (try containers.length(&runtime, source)).asI64(),
                     ),
                     .array_fill => for (0..3) |index| try testing.expectEqualStrings(
                         "old",
                         (try containers.indexGet(
                             &runtime,
                             source,
-                            &.{Value.ofLong(@intCast(index))},
-                        )).asString(),
+                            &.{Value.ofI64(@intCast(index))},
+                        )).asStr(),
                     ),
                     .parse_string => try testing.expectEqualSlices(
                         u8,
@@ -8066,43 +8065,43 @@ test "C string slices preserve views and refuse invalid boundaries" {
         arena.deinit();
     }
 
-    const outside = Value.ofString("outside text remains behind the view");
-    var out = Value.ofLong(99);
+    const outside = Value.ofStr("outside text remains behind the view");
+    var out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 0),
         luce_rt_string_slice(&runtime, &outside, 8, 12, &out),
     );
-    try testing.expectEqualStrings("text", out.asString());
+    try testing.expectEqualStrings("text", out.asStr());
     // An outside view and owned outside text have the same wire shape;
     // this result is a borrow because its pointer is inside the source.
     // The caller must not pass it to dropStorage.
     try testing.expect(!out.textIsInline());
-    try testing.expectEqual(@intFromPtr(outside.asString().ptr) + 8, @intFromPtr(out.asString().ptr));
+    try testing.expectEqual(@intFromPtr(outside.asStr().ptr) + 8, @intFromPtr(out.asStr().ptr));
 
-    const inline_text = Value.ofInlineText(.string, "inline🙂text");
-    out = Value.ofLong(99);
+    const inline_text = Value.ofInlineText(.str, "inline🙂text");
+    out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 0),
         luce_rt_string_slice(&runtime, &inline_text, 0, 6, &out),
     );
-    try testing.expectEqualStrings("inline", out.asString());
+    try testing.expectEqualStrings("inline", out.asStr());
     try testing.expect(out.textIsInline());
 
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 1),
         luce_rt_string_slice(&runtime, &outside, 0, -1, &out),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(vocabulary.TrapCode.string_bounds, runtime.pending.?.code);
     runtime.pending = null;
 
-    out = Value.ofLong(99);
+    out = Value.ofI64(99);
     try testing.expectEqual(
         @as(i32, 1),
         luce_rt_string_slice(&runtime, &inline_text, 6, 7, &out),
     );
-    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 99), out.asI64());
     try testing.expectEqual(vocabulary.TrapCode.string_boundary, runtime.pending.?.code);
     runtime.pending = null;
 }
@@ -8111,21 +8110,21 @@ test "the C materialization surface roots, loads, freezes, and excludes a consta
     const runtime = luce_rt_open(null, 0).?;
     defer luce_rt_close(runtime);
 
-    var invalid: Value = Value.ofLong(99);
+    var invalid: Value = Value.ofI64(99);
     luce_rt_constant_load(runtime, 0, &invalid);
     try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), invalid.asLong());
+    try testing.expectEqual(@as(i64, 99), invalid.asI64());
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 0), luce_rt_constants_begin(runtime, 1));
     var rooted: Value = .none;
     try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &rooted));
-    try testing.expectEqual(@as(i32, 0), luce_rt_append(runtime, &rooted, &Value.ofLong(3)));
+    try testing.expectEqual(@as(i32, 0), luce_rt_append(runtime, &rooted, &Value.ofI64(3)));
     try testing.expectEqual(@as(i32, 0), luce_rt_constant_publish(runtime, 0, &rooted));
-    invalid = Value.ofLong(98);
+    invalid = Value.ofI64(98);
     luce_rt_constant_load(runtime, 1, &invalid);
     try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 98), invalid.asLong());
+    try testing.expectEqual(@as(i64, 98), invalid.asI64());
     runtime.pending = null;
     luce_rt_constants_finish(runtime);
 
@@ -8133,7 +8132,7 @@ test "the C materialization surface roots, loads, freezes, and excludes a consta
     luce_rt_constant_load(runtime, 0, &loaded);
     try testing.expect(loaded.asObject().same(rooted.asObject()));
     try testing.expectEqual(@as(i64, 0), luce_rt_leaked(runtime));
-    try testing.expectEqual(@as(i32, 1), luce_rt_append(runtime, &loaded, &Value.ofLong(4)));
+    try testing.expectEqual(@as(i32, 1), luce_rt_append(runtime, &loaded, &Value.ofI64(4)));
     try testing.expectEqual(vocabulary.TrapCode.immutable_object, runtime.pending.?.code);
 }
 
@@ -8163,7 +8162,7 @@ test "materialization allocation failure traps and its C cleanup leaves no rows"
     var partial: Value = .none;
     try testing.expectEqual(@as(i32, 0), luce_rt_new_list(&runtime, &Value.none, &partial));
     objects.fail_index = objects.alloc_index;
-    try testing.expectEqual(@as(i32, 1), luce_rt_append(&runtime, &partial, &Value.ofLong(1)));
+    try testing.expectEqual(@as(i32, 1), luce_rt_append(&runtime, &partial, &Value.ofI64(1)));
     try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
     try testing.expect(!runtime.exhausted);
     luce_rt_discard_loose(&runtime, &partial);
@@ -8202,21 +8201,21 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     // so every behavioural test stays green while the memory quietly
     // doubles.  This asserts the widths themselves.
     const Kind = heap.Object.ElementKind;
-    try testing.expectEqual(@as(usize, 1), Kind.width(.byte));
+    try testing.expectEqual(@as(usize, 1), Kind.width(.u8));
     try testing.expectEqual(@as(usize, 1), Kind.width(.boolean));
-    try testing.expectEqual(@as(usize, 2), Kind.width(.short));
-    try testing.expectEqual(@as(usize, 2), Kind.width(.half));
-    try testing.expectEqual(@as(usize, 4), Kind.width(.int));
-    try testing.expectEqual(@as(usize, 4), Kind.width(.float));
-    try testing.expectEqual(@as(usize, 8), Kind.width(.long));
-    try testing.expectEqual(@as(usize, 8), Kind.width(.double));
+    try testing.expectEqual(@as(usize, 2), Kind.width(.i16));
+    try testing.expectEqual(@as(usize, 2), Kind.width(.f16));
+    try testing.expectEqual(@as(usize, 4), Kind.width(.i32));
+    try testing.expectEqual(@as(usize, 4), Kind.width(.f32));
+    try testing.expectEqual(@as(usize, 8), Kind.width(.i64));
+    try testing.expectEqual(@as(usize, 8), Kind.width(.f64));
     try testing.expectEqual(@as(usize, 24), Kind.width(.value));
 
     // And the element zero's tag is what picks the kind, because the
     // runtime is handed a zero and never the program's type table.
-    try testing.expectEqual(Kind.byte, Kind.of(Value.ofByte(0)));
-    try testing.expectEqual(Kind.short, Kind.of(Value.ofShort(0)));
-    try testing.expectEqual(Kind.half, Kind.of(Value.ofHalf(0.0)));
+    try testing.expectEqual(Kind.u8, Kind.of(Value.ofU8(0)));
+    try testing.expectEqual(Kind.i16, Kind.of(Value.ofI16(0)));
+    try testing.expectEqual(Kind.f16, Kind.of(Value.ofF16(0.0)));
 
     var bench: Bench = undefined;
     bench.setup();
@@ -8226,8 +8225,8 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     // End to end: a byte array of a thousand elements occupies a
     // thousand bytes and a long array of the same length eight
     // thousand.  The ratio is the measurement, and it is 8.
-    const bytes = try runtime.newArray(&.{1000}, Value.ofByte(0));
-    const longs = try runtime.newArray(&.{1000}, Value.ofLong(0));
+    const bytes = try runtime.newArray(&.{1000}, Value.ofU8(0));
+    const longs = try runtime.newArray(&.{1000}, Value.ofI64(0));
     const byte_row = try runtime.resolve(bytes);
     const long_row = try runtime.resolve(longs);
     try testing.expectEqual(@as(usize, 1000), byte_row.elements.bytes.len);
@@ -8237,10 +8236,10 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     // one-byte cell, which is what says the width is honest rather
     // than merely small.  128 and 255 are the two that would come
     // back negative if anything on the way read the bits as signed.
-    for (0..256) |at| byte_row.elements.put(at, Value.ofByte(@intCast(at)));
-    try testing.expectEqual(@as(u8, 0), byte_row.elements.at(0).asByte());
-    try testing.expectEqual(@as(u8, 128), byte_row.elements.at(128).asByte());
-    try testing.expectEqual(@as(u8, 255), byte_row.elements.at(255).asByte());
+    for (0..256) |at| byte_row.elements.put(at, Value.ofU8(@intCast(at)));
+    try testing.expectEqual(@as(u8, 0), byte_row.elements.at(0).asU8());
+    try testing.expectEqual(@as(u8, 128), byte_row.elements.at(128).asU8());
+    try testing.expectEqual(@as(u8, 255), byte_row.elements.at(255).asU8());
 }
 
 // ---------------------------------------------------------------------------

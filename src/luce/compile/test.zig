@@ -124,7 +124,7 @@ test "lexer diagnostics carry the right code and location, and do not cascade" {
     try expectDiagnostics(
         "func main():\n    let a = \"open\n",
         .{},
-        &.{.{ .code = "luce.lex.string", .line = 2, .column = 13 }},
+        &.{.{ .code = "luce.lex.str", .line = 2, .column = 13 }},
     );
 }
 
@@ -552,8 +552,8 @@ test "functions unreachable from the entry are pruned from the artifact" {
 // one float width, landing and widening-afterwards agree on every
 // value, so no program can tell them apart — which is exactly why the
 // claim has to be checked here, against the IR, rather than by
-// running something.  A landed literal is one `const_double`; a
-// promoted one is a `const_long` and a `convert` beside it, and the
+// running something.  A landed literal is one `const_float`; a
+// promoted one is a `const_integer` and a `convert` beside it, and the
 // difference stops being cosmetic the moment the widths differ, where
 // the promoted form rounds twice.
 //
@@ -584,7 +584,7 @@ test "a literal lands at its context's type, with no conversion behind it" {
     for (program.functions) |function| {
         for (function.instructions) |instruction| {
             switch (instruction) {
-                .const_double => floats += 1,
+                .const_float => floats += 1,
                 .convert => conversions += 1,
                 else => {},
             }
@@ -617,11 +617,10 @@ test "the IR dump is readable and deterministic" {
 
     try testing.expectEqualStrings(first, second);
     try testing.expect(std.mem.indexOf(u8, first, "func main() -> None") != null);
-    // Unannotated, so `value` is an `i32` and the multiply is at that
-    // width — the resize's default, read straight off the IR
-    // (docs/TYPES.md, the ladder's rule 1).
-    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: i32") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "multiply.i32") != null);
+    // Unannotated integer literals default to `i64`, and arithmetic
+    // stays at that explicit width.
+    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: i64") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "multiply.i64") != null);
 }
 
 test "a named call lowers to byte-identical MIR — names die in stage 4" {
@@ -688,13 +687,13 @@ test "the IR dump has a stable golden shape (short-circuit)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): list[i32]
-        \\    local %1 xs: list[i32]
+        \\    local %0 (temporary): list[i64]
+        \\    local %1 xs: list[i64]
         \\    local %2 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
-        \\    r2 = heap_new list[i32]
+        \\    r2 = heap_new list[i64]
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
         \\    local_set %1, r2
@@ -709,7 +708,7 @@ test "the IR dump has a stable golden shape (short-circuit)" {
         \\    r13 = const 0
         \\    r14 = intrinsic index_get, r12, r13
         \\    r15 = const 1
-        \\    r16 = equal.i32 r14, r15
+        \\    r16 = equal.i64 r14, r15
         \\    local_set %2, r16
         \\    jump b2
         \\  b2:

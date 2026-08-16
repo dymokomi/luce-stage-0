@@ -25,14 +25,18 @@ pub fn boxTag(of: Type) ?value.Tag {
     return switch (of) {
         .none => .none,
         .boolean => .boolean,
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .string => .string,
+        .u8 => .u8,
+        .u16 => .u16,
+        .u32 => .u32,
+        .u64 => .u64,
+        .i8 => .i8,
+        .i16 => .i16,
+        .i32 => .i32,
+        .i64 => .i64,
+        .f16 => .f16,
+        .f32 => .f32,
+        .f64 => .f64,
+        .str => .str,
         .strukt => .strukt,
         // A union value is a struct value whose field 0 is the tag
         // (docs/UNION.md D8): to the runtime it is a field run, so it
@@ -56,27 +60,12 @@ pub fn boxTag(of: Type) ?value.Tag {
         .optional => null,
     };
 }
-/// How a **map key** is stored, whatever type the program keys by: a
-/// key reaches `libluce_rt` as the integer a `long` key would be, so an
-/// enum key widens to `long` where it goes in and narrows back where one
-/// comes out (docs/ENUMS.md).  `long` and `string` answer themselves.
-///
-/// **This is why `libluce_rt` learned nothing when enums became keys.**
-/// `heap.Map.hashOf` and `value.keyEquals` read exactly two payloads and
-/// still do; an enum is a set of names at an integer width, and the
-/// width the key slot speaks is `long`.  The narrowing on the way out is
-/// exact because the widening was: `int(-1)` widens to `long(-1)` and
-/// truncates back to `int(-1)`, which is the same round trip a boxed
-/// value already makes between `boxBits` and `asInt`.
-///
-/// Here beside `boxTag` and for its reason — **both engines widen and
-/// both narrow**, and a disagreement would put a key in a map that no
-/// lookup on the other engine could find.
+/// How a **map key** is stored. Integers keep their exact explicit width;
+/// an enum uses its exact backing width; `str` answers itself. Both engines
+/// call this seam, so a key cannot be boxed under one tag and searched under
+/// another.
 pub fn mapKeyStorage(key: Type) Type {
-    return switch (key) {
-        .enumeration => .long,
-        else => key,
-    };
+    return key.storage();
 }
 
 /// A function value's field run: how long it is, and which slot holds
@@ -124,7 +113,7 @@ pub const Intrinsic = enum {
     /// single `operand_type` and cannot say that its two sides are
     /// different types.  Stage 4 mirrors the operator when the double
     /// was written on the left, so the long is always argument one.
-    compare_long_double,
+    compare_i64_f64,
     len,
     string_slice,
     string_byte,
@@ -507,7 +496,7 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_long_double,
+            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -612,7 +601,7 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_long_double,
+            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -729,7 +718,7 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_long_double,
+            .compare_i64_f64,
             .len,
             // The name of a function is a constant of the program's
             // own, not bytes anybody has to give back
@@ -839,7 +828,7 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_long_double,
+            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -957,9 +946,9 @@ pub const Instruction = union(enum) {
     /// instruction of its own — which is why adding `byte`, `short`
     /// and `half` will add none either.  `mir/verify.zig` checks
     /// the value really does fit the register it lands in.
-    const_long: i64,
-    const_double: f64,
-    const_string: u32,
+    const_integer: i128,
+    const_float: f64,
+    const_str: u32,
     /// A program-root constant container: the index of the row whose
     /// contents each runtime materializes before it executes a
     /// function.  The register's heap type must be the row's `heap`.
@@ -1123,9 +1112,9 @@ pub const Origin = struct {
 /// All slices and their contents are arena-owned by the program.
 pub const ConstantValue = union(enum) {
     boolean: bool,
-    long: i64,
-    double: f64,
-    string: u32,
+    integer: i128,
+    float: f64,
+    str: u32,
     strukt: Struct,
     absent,
 

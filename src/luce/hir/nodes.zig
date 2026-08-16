@@ -173,15 +173,15 @@ pub const Expression = union(enum) {
 
     /// An integer literal, parsed at the width it landed on
     /// (docs/TYPES.md D3) — the value, not the text.
-    const_long: ConstLong,
+    const_integer: ConstInteger,
     /// A float literal (or an integer literal that landed on a float),
     /// parsed at its landing width.
-    const_double: ConstDouble,
+    const_float: ConstFloat,
     const_boolean: ConstBoolean,
     /// A string literal.  Carries the interned pool slot rather than
     /// the bytes, because the pool is filled during checking and the
     /// order must not move (hir.zig, coupling #6).
-    const_string: ConstString,
+    const_str: ConstStr,
     /// The typed absence a `T?` place gives a bare `none`, and the
     /// zero a declared-only `var` starts as — `result` is the whole of
     /// its value (docs/ARGS.md D9).
@@ -301,14 +301,14 @@ pub const Expression = union(enum) {
 
     // Payloads --------------------------------------------------------------
 
-    pub const ConstLong = struct {
-        value: i64,
+    pub const ConstInteger = struct {
+        value: i128,
         result: Type,
         span: Span,
         park: ?Park = null,
     };
 
-    pub const ConstDouble = struct {
+    pub const ConstFloat = struct {
         value: f64,
         result: Type,
         span: Span,
@@ -322,7 +322,7 @@ pub const Expression = union(enum) {
         park: ?Park = null,
     };
 
-    pub const ConstString = struct {
+    pub const ConstStr = struct {
         /// The interned constant-pool slot (hir.zig, coupling #6).
         constant: u32,
         result: Type,
@@ -1080,7 +1080,7 @@ pub const Statement = union(enum) {
 pub fn provenance(expression: *const Expression) Provenance {
     return switch (expression.*) {
         // Constants own nothing and view nothing.
-        .const_long, .const_double, .const_boolean, .const_string => .plain,
+        .const_integer, .const_float, .const_boolean, .const_str => .plain,
         // A struct or union zero is a built value that owns its run;
         // every other absence is a constant (`zeroOf`'s rule).
         .absent => |payload| zeroOf(payload.result),
@@ -1102,7 +1102,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         .carried_get => |payload| provenance(payload.origin),
         // String `+` allocates the joined bytes; every numeric binary
         // answers a scalar.
-        .binary => |payload| if (payload.result == .string) .fresh else .plain,
+        .binary => |payload| if (payload.result == .str) .fresh else .plain,
         .convert, .unary, .compare => .plain,
         // The wrapped value is a new scalar-shaped `T?`; the storage a
         // string payload views keeps its owner (the tape reads
@@ -1118,7 +1118,7 @@ pub fn provenance(expression: *const Expression) Provenance {
             .intrinsic => |kind| ofIntrinsic(kind),
             // `string(x)` allocates its text; the numeric conversions
             // answer scalars.
-            .conversion => |produced| if (produced == .string) .fresh else .plain,
+            .conversion => |produced| if (produced == .str) .fresh else .plain,
             // The member chains answer a reload of their result slot.
             .enum_name, .variant_name => .view,
         },
@@ -1243,10 +1243,10 @@ pub const Declarations = struct {
 pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool {
     return switch (expression.*) {
         // Values, reads and materializations: straight-line, all.
-        .const_long,
+        .const_integer,
         .const_boolean,
-        .const_double,
-        .const_string,
+        .const_float,
+        .const_str,
         .absent,
         .local_get,
         .narrowed_get,
@@ -1306,7 +1306,7 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
         // `string(m)` over a one-member enum is that member's name and
         // nothing else; every other chain compares and branches
         // (docs/ENUMS.md D5, R2).
-        .enum_name => |index| called.result != .string or
+        .enum_name => |index| called.result != .str or
             declared.enums[index].members.len > 1,
         .variant_name => |index| declared.variants[index].members.len > 1,
         // The callee expression is lowered in this frame beside the
@@ -1352,18 +1352,18 @@ test "nodes build, and the accessors answer every payload" {
     const target = try arena.create(Expression);
     target.* = .{ .local_get = .{ .local = 0, .result = .{ .heap = 2 }, .span = test_span } };
     const left = try arena.create(Expression);
-    left.* = .{ .local_get = .{ .local = 1, .result = .long, .span = test_span } };
+    left.* = .{ .local_get = .{ .local = 1, .result = .i64, .span = test_span } };
     const right = try arena.create(Expression);
-    right.* = .{ .const_long = .{ .value = 1, .result = .long, .span = test_span } };
+    right.* = .{ .const_integer = .{ .value = 1, .result = .i64, .span = test_span } };
     const sum = try arena.create(Expression);
-    sum.* = .{ .binary = .{ .op = .add, .left = left, .right = right, .result = .long, .span = test_span } };
+    sum.* = .{ .binary = .{ .op = .add, .left = left, .right = right, .result = .i64, .span = test_span } };
     const indices = try arena.alloc(Operand, 1);
     indices[0] = .{ .node = sum };
     const element = try arena.create(Expression);
     element.* = .{ .index_get = .{
         .target = .{ .node = target },
         .indices = indices,
-        .result = .string,
+        .result = .str,
         .span = test_span,
         .park = .{
             .local = 5,
@@ -1372,19 +1372,19 @@ test "nodes build, and the accessors answer every payload" {
         },
     } };
 
-    try testing.expect(element.result() == .string);
+    try testing.expect(element.result() == .str);
     try testing.expectEqual(test_span.start, element.span().start);
     try testing.expectEqual(@as(LocalId, 5), element.park().?.local);
     try testing.expect(element.park().?.storage);
     try testing.expect(target.park() == null);
-    try testing.expect(sum.result() == .long);
+    try testing.expect(sum.result() == .i64);
 
     // A narrowed read remembers the payload the flow analysis proved.
     const narrowed = try arena.create(Expression);
     narrowed.* = .{ .narrowed_get = .{
         .local = 2,
-        .payload = .double,
-        .result = .double,
+        .payload = .f64,
+        .result = .f64,
         .span = test_span,
     } };
     try testing.expect(narrowed.narrowed_get.payload.eql(narrowed.result()));
@@ -1466,7 +1466,7 @@ test "nodes build, and the accessors answer every payload" {
     // and carries the flip's gap gate.
     const locals = try arena.alloc(LocalDecl, 2);
     locals[0] = .{ .name = "xs", .local_type = .{ .heap = 2 }, .owns_storage = false, .span = test_span };
-    locals[1] = .{ .name = null, .local_type = .string, .owns_storage = true, .span = test_span };
+    locals[1] = .{ .name = null, .local_type = .str, .owns_storage = true, .span = test_span };
     const body: Body = .{ .statements = statements, .locals = locals };
     try testing.expect(body.locals[1].name == null);
     try testing.expect(body.locals[1].owns_storage);
@@ -1487,44 +1487,44 @@ test "provenance mirrors the storage categories the walk stamps" {
     }.make;
 
     // Literals are plain; a struct-typed absence is a built value.
-    const text = try node(arena, .{ .const_string = .{ .constant = 0, .result = .string, .span = test_span } });
+    const text = try node(arena, .{ .const_str = .{ .constant = 0, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(text));
     const zero = try node(arena, .{ .absent = .{ .result = .{ .strukt = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(zero));
-    const none = try node(arena, .{ .absent = .{ .result = .{ .optional = .long }, .span = test_span } });
+    const none = try node(arena, .{ .absent = .{ .result = .{ .optional = .i64 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(none));
 
     // Reads are views; the narrowed unwrap is neither fresh nor view.
-    const name = try node(arena, .{ .local_get = .{ .local = 0, .result = .string, .span = test_span } });
+    const name = try node(arena, .{ .local_get = .{ .local = 0, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(name));
-    const narrowed = try node(arena, .{ .narrowed_get = .{ .local = 0, .payload = .string, .result = .string, .span = test_span } });
+    const narrowed = try node(arena, .{ .narrowed_get = .{ .local = 0, .payload = .str, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(narrowed));
-    const field = try node(arena, .{ .field_get = .{ .target = name, .layout = 0, .field = 1, .result = .string, .span = test_span } });
+    const field = try node(arena, .{ .field_get = .{ .target = name, .layout = 0, .field = 1, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(field));
-    const payload = try node(arena, .{ .variant_payload = .{ .target = name, .variant = 0, .member = 1, .field = 0, .result = .string, .span = test_span } });
+    const payload = try node(arena, .{ .variant_payload = .{ .target = name, .variant = 0, .member = 1, .field = 0, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(payload));
     const indices = try arena.alloc(Operand, 0);
-    const element = try node(arena, .{ .index_get = .{ .target = .{ .node = name }, .indices = indices, .result = .string, .span = test_span } });
+    const element = try node(arena, .{ .index_get = .{ .target = .{ .node = name }, .indices = indices, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(element));
 
     // A folded constant materializes as its value does.
     const folded_struct = try node(arena, .{ .constant_ref = .{ .constant = 0, .result = .{ .strukt = 1 }, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(folded_struct));
-    const folded_text = try node(arena, .{ .constant_ref = .{ .constant = 1, .result = .string, .span = test_span } });
+    const folded_text = try node(arena, .{ .constant_ref = .{ .constant = 1, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(folded_text));
 
     // String `+` allocates; numeric binaries answer scalars.
-    const join = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = text, .result = .string, .span = test_span } });
+    const join = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = text, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(join));
-    const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = name, .result = .long, .span = test_span } });
+    const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = name, .result = .i64, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(sum));
 
     // Both slot-merging operators answer a reload of the slot.
     const either = try node(arena, .{ .short_circuit = .{ .op = .logic_or, .left = name, .right = name, .result = .boolean, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(either));
-    const fallback = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .value = text }, .result = .string, .span = test_span } });
+    const fallback = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .value = text }, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(fallback));
-    const asserted = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .leaving = text }, .result = .string, .span = test_span } });
+    const asserted = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .leaving = text }, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(asserted));
 
     // A call's answer is the caller's — through a name or a function
@@ -1532,25 +1532,25 @@ test "provenance mirrors the storage categories the walk stamps" {
     // member chains answer a reload; the carried reload and `try`
     // follow the call.
     const batch: OperandBatch = .{ .operands = &.{}, .slots = &.{}, .borrow_copy = &.{} };
-    const called = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = batch, .fallible = true, .result = .string, .span = test_span } });
+    const called = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = batch, .fallible = true, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(called));
-    const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .callee = name, .signature = 0 } }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .callee = name, .signature = 0 } }, .operands = batch, .fallible = false, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(through));
-    const looked_up = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .map_get }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const looked_up = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .map_get }, .operands = batch, .fallible = false, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(looked_up));
-    const made_text = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .str_value }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const made_text = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .str_value }, .operands = batch, .fallible = false, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(made_text));
-    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = batch, .fallible = false, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(member_name));
-    const union_name = try node(arena, .{ .call = .{ .callee = .{ .variant_name = 0 }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const union_name = try node(arena, .{ .call = .{ .callee = .{ .variant_name = 0 }, .operands = batch, .fallible = false, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(union_name));
-    const carried = try node(arena, .{ .carried_get = .{ .slot = 4, .origin = called, .result = .string, .span = test_span } });
+    const carried = try node(arena, .{ .carried_get = .{ .slot = 4, .origin = called, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(carried));
-    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .string, .span = test_span } });
+    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(attempted));
-    const caught = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .value = text }, .temps_floor = 0, .result = .string, .span = test_span } });
+    const caught = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .value = text }, .temps_floor = 0, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(caught));
-    const asserted_catch = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .leaving = text }, .temps_floor = 1, .result = .string, .span = test_span } });
+    const asserted_catch = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .leaving = text }, .temps_floor = 1, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(asserted_catch));
 
     // Construction: built values own their runs; a fresh container is
@@ -1577,7 +1577,7 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expect(listed.list_literal.elements[0].copied);
     const fresh_object = try node(arena, .{ .new_object = .{ .heap_type = 0, .operands = &.{}, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(fresh_object));
-    const sliced = try node(arena, .{ .slice = .{ .target = .{ .node = name }, .start = null, .stop = null, .result = .string, .span = test_span } });
+    const sliced = try node(arena, .{ .slice = .{ .target = .{ .node = name }, .start = null, .stop = null, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(sliced));
     const worker = try node(arena, .{ .spawn = .{ .call = called, .result = .{ .heap = 1 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(worker));
@@ -1598,7 +1598,7 @@ test "provenance mirrors the storage categories the walk stamps" {
     // The two folded/widened materializations that ride construction:
     // a wrapped optional is a new plain value whatever its payload
     // was, and a program-root container row is a handle.
-    const wrapped = try node(arena, .{ .wrap_optional = .{ .operand = name, .result = .{ .optional = .string }, .span = test_span } });
+    const wrapped = try node(arena, .{ .wrap_optional = .{ .operand = name, .result = .{ .optional = .str }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(wrapped));
     const rooted = try node(arena, .{ .container_ref = .{ .row = 4, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(rooted));
@@ -1625,30 +1625,30 @@ test "splitsBlocks names exactly the lowerings that open a block" {
         .{ .name = "deflated", .value = 1 },
     };
     const enums = [_]types.EnumType{
-        .{ .name = "Single", .backing = .int, .members = &one_member },
-        .{ .name = "Method", .backing = .int, .members = &two_members },
+        .{ .name = "Single", .backing = .i32, .members = &one_member },
+        .{ .name = "Method", .backing = .i32, .members = &two_members },
     };
     const declared: Declarations = .{ .enums = &enums };
 
-    const name = try node(arena, .{ .local_get = .{ .local = 0, .result = .long, .span = test_span } });
-    const literal = try node(arena, .{ .const_long = .{ .value = 1, .result = .long, .span = test_span } });
+    const name = try node(arena, .{ .local_get = .{ .local = 0, .result = .i64, .span = test_span } });
+    const literal = try node(arena, .{ .const_integer = .{ .value = 1, .result = .i64, .span = test_span } });
     try testing.expect(!splitsBlocks(name, declared));
     try testing.expect(!splitsBlocks(literal, declared));
 
     // Straight-line operators stay straight-line, and ask their
     // operands.
-    const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = literal, .result = .long, .span = test_span } });
+    const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = literal, .result = .i64, .span = test_span } });
     try testing.expect(!splitsBlocks(sum, declared));
 
     // `and`/`or` and the optional fallback are control flow.
     const flag = try node(arena, .{ .const_boolean = .{ .value = true, .result = .boolean, .span = test_span } });
     const circuit = try node(arena, .{ .short_circuit = .{ .op = .logic_and, .left = flag, .right = flag, .result = .boolean, .span = test_span } });
     try testing.expect(splitsBlocks(circuit, declared));
-    const fallback = try node(arena, .{ .coalesce = .{ .value = name, .fallback = .{ .value = literal }, .result = .long, .span = test_span } });
+    const fallback = try node(arena, .{ .coalesce = .{ .value = name, .fallback = .{ .value = literal }, .result = .i64, .span = test_span } });
     try testing.expect(splitsBlocks(fallback, declared));
 
     // A split anywhere inside an operand run reaches the run.
-    const outer = try node(arena, .{ .binary = .{ .op = .add, .left = sum, .right = fallback, .result = .long, .span = test_span } });
+    const outer = try node(arena, .{ .binary = .{ .op = .add, .left = sum, .right = fallback, .result = .i64, .span = test_span } });
     try testing.expect(splitsBlocks(outer, declared));
 
     // A call: its operands, its fallibility, and the member chains.
@@ -1659,23 +1659,23 @@ test "splitsBlocks names exactly the lowerings that open a block" {
     const no_copies = try arena.alloc(bool, 1);
     no_copies[0] = false;
     const one_operand: OperandBatch = .{ .written = 1, .operands = operands, .slots = slots, .borrow_copy = no_copies };
-    const plain_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = false, .result = .long, .span = test_span } });
+    const plain_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = false, .result = .i64, .span = test_span } });
     try testing.expect(!splitsBlocks(plain_call, declared));
-    const fallible_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = true, .result = .long, .span = test_span } });
+    const fallible_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = true, .result = .i64, .span = test_span } });
     try testing.expect(splitsBlocks(fallible_call, declared));
-    const single_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .string, .span = test_span } });
+    const single_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .str, .span = test_span } });
     try testing.expect(!splitsBlocks(single_name, declared));
-    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 1 }, .operands = one_operand, .fallible = false, .result = .string, .span = test_span } });
+    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 1 }, .operands = one_operand, .fallible = false, .result = .str, .span = test_span } });
     try testing.expect(splitsBlocks(member_name, declared));
     // `Method(n)` compares its way in whatever the member count.
-    const from_number = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .{ .optional = .{ .enumeration = .{ .index = 0, .backing = .int } } }, .span = test_span } });
+    const from_number = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .{ .optional = .{ .enumeration = .{ .index = 0, .backing = .i32 } } }, .span = test_span } });
     try testing.expect(splitsBlocks(from_number, declared));
 
     // `try` and `catch` are the fallible branch itself; a spawn is
     // one instruction and asks only what it is given.
-    const carried = try node(arena, .{ .carried_get = .{ .slot = 1, .origin = fallible_call, .result = .long, .span = test_span } });
+    const carried = try node(arena, .{ .carried_get = .{ .slot = 1, .origin = fallible_call, .result = .i64, .span = test_span } });
     try testing.expect(splitsBlocks(carried, declared));
-    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .long, .span = test_span } });
+    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .i64, .span = test_span } });
     try testing.expect(splitsBlocks(attempted, declared));
     const worker = try node(arena, .{ .spawn = .{ .call = fallible_call, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expect(!splitsBlocks(worker, declared));

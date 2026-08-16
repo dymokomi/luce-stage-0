@@ -94,7 +94,7 @@
 //!    can read.
 //!
 //! The codes this stage can produce, in full: `luce.lex.tab`,
-//! `luce.lex.indent`, `luce.lex.number`, `luce.lex.string`,
+//! `luce.lex.indent`, `luce.lex.number`, `luce.lex.str`,
 //! `luce.lex.escape`, `luce.lex.character`, `luce.lex.comment`,
 //! `luce.lex.bidi`, `luce.lex.name`, `luce.lex.limit`.
 //!
@@ -1059,13 +1059,13 @@ const Lexer = struct {
         // likeliest mistake is that the quote meant to close it.
         if (escaped_quote) {
             try self.report(
-                "luce.lex.string",
+                "luce.lex.str",
                 span,
                 "unterminated string; perhaps you escaped the closing quote?",
                 .{},
             );
         } else {
-            try self.report("luce.lex.string", span, "unterminated string", .{});
+            try self.report("luce.lex.str", span, "unterminated string", .{});
         }
         // Recovery: hand the parser a literal anyway.  It slices the
         // quotes off, so this needs the opening quote plus one byte to
@@ -1128,7 +1128,7 @@ const Lexer = struct {
             }
         }
         const span: Span = .{ .start = start, .end = self.offset };
-        try self.report("luce.lex.string", span, "unterminated f-string", .{});
+        try self.report("luce.lex.str", span, "unterminated f-string", .{});
         // Recovery, as for `string()`: the parser slices off `f"` and
         // the closing quote, so three bytes is the minimum it can hold.
         if (span.end - span.start >= 3) try self.emit(.fstring, span);
@@ -1820,7 +1820,7 @@ test "a string never crosses a line, not even behind a backslash" {
             .identifier,  .assign, .string_literal, .newline,
             .end_of_file,
         },
-        &.{"luce.lex.string"},
+        &.{"luce.lex.str"},
     );
 }
 
@@ -1832,7 +1832,7 @@ test "an unterminated string reports once and still yields an operand" {
             .identifier, .assign,      .string_literal, .newline,     .identifier,
             .assign,     .int_literal, .newline,        .end_of_file,
         },
-        &.{"luce.lex.string"},
+        &.{"luce.lex.str"},
     );
 }
 
@@ -1863,7 +1863,7 @@ test "an unterminated f-string stops at the line and still yields an operand" {
             .identifier, .assign,      .fstring, .newline,     .identifier,
             .assign,     .int_literal, .newline, .end_of_file,
         },
-        &.{"luce.lex.string"},
+        &.{"luce.lex.str"},
     );
 }
 
@@ -2077,7 +2077,7 @@ test "several malformed constructs on one line each get their own diagnostic" {
     try testing.expectEqual(@as(usize, 5), found);
     try testing.expectEqualStrings("luce.lex.number", codes[0]);
     try testing.expectEqualStrings("luce.lex.character", codes[1]);
-    try testing.expectEqualStrings("luce.lex.string", codes[2]);
+    try testing.expectEqualStrings("luce.lex.str", codes[2]);
     try testing.expectEqualStrings("luce.lex.number", codes[3]);
     try testing.expectEqualStrings("luce.lex.character", codes[4]);
     // The last, well-formed line still lexes.

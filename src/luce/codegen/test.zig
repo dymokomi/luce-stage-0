@@ -100,7 +100,7 @@ test "floats, structs, and the host services all lower" {
         \\
         \\func main(args: list[str]) -> !:
         \\    let p = Point(x = 1.5, y = -0.0)
-        \\    print(str(p.x * 2.0) + str(i64(p.y)) + str(sqrt(4.0)) + str(sqrt(p.x)))
+        \\    print(str(p.x * 2.0) + str(i64(p.y)) + str(sqrt(f32(4.0))) + str(sqrt(p.x)))
         \\    print(args[0] + str(len(args)) + str(try path_kind("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
@@ -113,10 +113,9 @@ test "floats, structs, and the host services all lower" {
         "fneg",
         "fptosi",
         // `sqrt` answers whichever float width it was given
-        // (docs/TYPES.md §9): the unannotated literal is a `float` and
-        // the struct field is a `double`, so both intrinsics have to
-        // be here — one of them alone would mean the analyzer had
-        // widened something it was told not to.
+        // (docs/TYPES.md §9): the first call explicitly asks for f32
+        // and the struct field is f64, so both intrinsics have to be
+        // here — one alone would mean a written width was discarded.
         "llvm.sqrt.f32",
         "llvm.sqrt.f64",
         "declare i32 @luce_rt_struct_make",
@@ -1496,7 +1495,7 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
         \\    var i = 0
         \\    var total: i64 = 0
         \\    while i < len(text):
-        \\        total += text.byte_at(i)
+        \\        total += i64(text.byte_at(i))
         \\        i += 1
         \\    print(str(total))
         \\

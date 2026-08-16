@@ -117,7 +117,7 @@ fn collectEnumName(
     }
     // The width, before the members: it is what says which of them
     // fit, and the default is `int` (D2).
-    var backing: types.Type.EnumRef.Backing = .int;
+    var backing: types.Type.EnumRef.Backing = .i32;
     if (declaration.backing) |written| {
         const resolved = (try resolve.resolveType(self, module_index, written)) orelse return;
         backing = types.Type.EnumRef.Backing.of(resolved) orelse {
@@ -338,8 +338,8 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
                 // names the enum's width and the fix for it —
                 // rather than by the literal's, which would talk
                 // about a place the reader never wrote.
-                const folded = (try constants.fold(self, info.module, expression, .long)) orelse continue;
-                if (folded.value != .long or !folded.value_type.isInteger()) {
+                const folded = (try constants.fold(self, info.module, expression, .i64)) orelse continue;
+                if (folded.value != .integer or !folded.value_type.isInteger()) {
                     try self.fail(
                         "luce.sema.enum",
                         expression.span(),
@@ -348,7 +348,7 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
                     );
                     continue;
                 }
-                value = folded.value.long;
+                value = folded.value.integer;
             }
             if (value < bounds.low or value > bounds.high) {
                 try self.fail(
@@ -370,7 +370,7 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
             // for one number make `string(m)` a coin toss and
             // `match` a set of arms that cannot all be reached.
             for (self.enums.items[index].members[0..slot]) |earlier| {
-                if (earlier.value != @as(i64, @intCast(value))) continue;
+                if (earlier.value != value) continue;
                 try self.fail(
                     "luce.sema.enum",
                     written.span,
@@ -379,7 +379,7 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
                 );
                 break;
             }
-            self.enums.items[index].members[slot].value = @intCast(value);
+            self.enums.items[index].members[slot].value = value;
             next = value + 1;
         }
         self.enum_decls.items[index].settled = true;
@@ -608,7 +608,7 @@ pub fn settleVariantMembers(self: *Analyzer) Error!void {
                 // message and never an undefined read.
                 resolved_slot.* = .{
                     .name = try self.arena.dupe(u8, field.name),
-                    .field_type = .long,
+                    .field_type = .i64,
                 };
                 if (field.default == null) {
                     if (first_defaulted) |earlier| {

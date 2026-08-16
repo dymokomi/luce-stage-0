@@ -86,7 +86,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         // Its row and width are checked like any other enum's.
         .map => |pair| {
             switch (pair.key) {
-                .long, .string, .enumeration => try verifyType(program, pair.key),
+                .i64, .str, .enumeration => try verifyType(program, pair.key),
                 else => return error.BadStruct,
             }
             // A map's missing-key answer already supplies the one
@@ -171,7 +171,7 @@ test "function and constant trace sites share one u32 index" {
 fn isCommandLine(program: *const Program, of: Type) bool {
     if (of != .heap or of.heap >= program.heap_types.len) return false;
     const descriptor = program.heap_types[of.heap];
-    return descriptor == .list and descriptor.list == .string;
+    return descriptor == .list and descriptor.list == .str;
 }
 
 fn verifyType(program: *const Program, of: Type) VerifyError!void {
@@ -200,14 +200,18 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         // otherwise pass a crafted `.lcm` straight through `decode`.
         .none,
         .boolean,
-        .byte,
-        .short,
-        .int,
-        .long,
-        .half,
-        .float,
-        .double,
-        .string,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .f16,
+        .f32,
+        .f64,
+        .str,
         => {},
     }
 }
@@ -531,16 +535,17 @@ fn operandType(function: *const Function, defined: *const std.AutoHashMapUnmanag
     return result;
 }
 
-/// Whether a type is one an operator never computes at: `byte`,
-/// `short` and `half` are storage, and promotion has removed them
-/// before any arithmetic or comparison is emitted (docs/TYPES.md D5).
+/// Kept as the single seam for serialized modules produced before the
+/// explicit-width type system. Every current numeric width computes at
+/// its own width, so no current `Type` is storage-only.
 fn isStorageWidth(of: Type) bool {
-    return of == .byte or of == .short or of == .half;
+    _ = of;
+    return false;
 }
 
-/// Whether an integer constant, carried as an `i64`, is exactly what
+/// Whether an integer constant, carried as an `i128`, is exactly what
 /// a register of type `at` would hold.
-fn fitsInteger(held: i64, at: Type) bool {
+fn fitsInteger(held: i128, at: Type) bool {
     if (!at.isInteger()) return false;
     const bounds = at.integerRange();
     return held >= bounds.low and held <= bounds.high;
@@ -552,10 +557,10 @@ fn fitsInteger(held: i64, at: Type) bool {
 /// survives the round trip and needs no arm of its own.
 fn fitsFloat(held: f64, at: Type) bool {
     return switch (at) {
-        .double => true,
-        .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
-        .half => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
+        .f64 => true,
+        .f32 => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
+        .f16 => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
+        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
     };
 }
 
@@ -626,8 +631,8 @@ fn verifyContainerConstant(
 /// two separate slots holding equal text are duplicates too.
 ///
 /// The keys are compared **as they are stored** (`mir.mapKeyStorage`):
-/// an enum key is a number, so two arms answer for three key types and a
-/// duplicated member is the duplicated `long` it folds to.
+/// an enum key is a number, so every integer width shares this path and
+/// a duplicated member is the duplicated integer it folds to.
 fn verifyDistinctKeys(
     allocator: Allocator,
     program: *const Program,
@@ -635,24 +640,24 @@ fn verifyDistinctKeys(
     key_type: Type,
 ) VerifyError!void {
     switch (defs.mapKeyStorage(key_type)) {
-        .long => {
-            var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => {
+            var seen: std.AutoHashMapUnmanaged(i128, void) = .empty;
             defer seen.deinit(allocator);
             for (entries) |entry| {
                 const key = switch (entry.key) {
-                    .long => |value| value,
+                    .integer => |value| value,
                     else => unreachable, // verified against the map shape above
                 };
                 const result = try seen.getOrPut(allocator, key);
                 if (result.found_existing) return error.BadConstant;
             }
         },
-        .string => {
+        .str => {
             var seen: std.StringHashMapUnmanaged(void) = .empty;
             defer seen.deinit(allocator);
             for (entries) |entry| {
                 const index = switch (entry.key) {
-                    .string => |value| value,
+                    .str => |value| value,
                     else => unreachable, // verified against the map shape above
                 };
                 const bytes = program.constants[index];
@@ -690,7 +695,7 @@ fn verifyConstantValue(
 
     switch (constant) {
         .boolean => if (expected != .boolean) return error.BadConstant,
-        .long => |held| {
+        .integer => |held| {
             if (expected == .enumeration) {
                 if (!fitsInteger(held, expected.storage())) return error.BadConstant;
                 if (!isMember(program, held, expected)) return error.BadConstant;
@@ -698,9 +703,9 @@ fn verifyConstantValue(
                 if (!fitsInteger(held, expected)) return error.BadConstant;
             }
         },
-        .double => |held| if (!fitsFloat(held, expected)) return error.BadConstant,
-        .string => |index| {
-            if (expected != .string or index >= program.constants.len) return error.BadConstant;
+        .float => |held| if (!fitsFloat(held, expected)) return error.BadConstant,
+        .str => |index| {
+            if (expected != .str or index >= program.constants.len) return error.BadConstant;
         },
         .strukt => |held| {
             if (expected != .strukt or held.layout != expected.strukt) return error.BadConstant;
@@ -722,7 +727,7 @@ fn verifyConstantValue(
 /// the last arm is the fallthrough and nothing traps.  So a module that
 /// puts a number no member holds in an enum register is refused here,
 /// where a hand-made one arrives.
-fn isMember(program: *const Program, held: i64, of: Type) bool {
+fn isMember(program: *const Program, held: i128, of: Type) bool {
     if (of.enumeration.index >= program.enums.len) return false;
     return program.enums[of.enumeration.index].memberOfValue(held) != null;
 }
@@ -790,7 +795,7 @@ fn verifyInstruction(
         // checked is not the tag but the *value*: it must be exactly
         // representable where it lands, or the constant and its type
         // would disagree about which number this is.
-        .const_long => |held| {
+        .const_integer => |held| {
             if (result == .enumeration) {
                 if (!fitsInteger(held, result.storage())) return error.BadConstant;
                 if (!isMember(program, held, result)) return error.BadConstant;
@@ -799,13 +804,13 @@ fn verifyInstruction(
             if (!result.isInteger()) return error.TypeMismatch;
             if (!fitsInteger(held, result)) return error.BadConstant;
         },
-        .const_double => |held| {
+        .const_float => |held| {
             if (!result.isFloating()) return error.TypeMismatch;
             if (!fitsFloat(held, result)) return error.BadConstant;
         },
-        .const_string => |constant| {
+        .const_str => |constant| {
             if (constant >= program.constants.len) return error.BadConstant;
-            try expectType(result, .string);
+            try expectType(result, .str);
         },
         .const_container => |constant| {
             if (constant >= program.container_constants.len) return error.BadConstant;
@@ -836,14 +841,8 @@ fn verifyInstruction(
             const right = try operandType(function, defined, binary.right);
             try expectType(left, binary.operand_type);
             try expectType(right, binary.operand_type);
-            // **No operator computes at a storage width** (D5): stage
-            // 4 promotes `byte` and `short` to `int` and `half` to
-            // `float` before it emits anything, so IR that says
-            // otherwise is damaged.  Refusing it here is what makes
-            // the backend's storage-width arms unreachable rather
-            // than merely unreached, and what stops a hand-made
-            // module asking either engine for 8-bit checked
-            // arithmetic neither of them has.
+            // This seam is intentionally retained for old serialized
+            // formats even though every current numeric width computes.
             if (isStorageWidth(binary.operand_type)) return error.TypeMismatch;
             if (binary.op.isComparison()) {
                 switch (binary.op) {
@@ -863,20 +862,20 @@ fn verifyInstruction(
                         program,
                         binary.operand_type,
                     )) return error.TypeMismatch,
-                    else => if (!binary.operand_type.isNumeric() and binary.operand_type != .string)
+                    else => if (!binary.operand_type.isNumeric() and binary.operand_type != .str)
                         return error.TypeMismatch,
                 }
                 try expectType(result, .boolean);
             } else {
-                const concat = binary.op == .add and binary.operand_type == .string;
+                const concat = binary.op == .add and binary.operand_type == .str;
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
-                // `/` is real division and always answers a double
-                // (docs/NUMERICS.md §2), so `Binary { .divide, .long }`
+                // `/` is real division and always answers `f64`
+                // (docs/NUMERICS.md §2), so `Binary { .divide, .i64 }`
                 // is not a shape stage 4 can emit — the quotient that
                 // answers a long is `floor_divide`.  Rejecting it here
                 // is what lets the runtime and the lowering stop
                 // carrying an integer `/` at all.
-                if (binary.op == .divide and binary.operand_type == .long) {
+                if (binary.op == .divide and binary.operand_type.isInteger()) {
                     return error.TypeMismatch;
                 }
                 // The bit set operates on the integers and nothing
@@ -884,8 +883,7 @@ fn verifyInstruction(
                 // program may see, and a string certainly does not.
                 switch (binary.op) {
                     .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
-                        if (binary.operand_type != .int and binary.operand_type != .long)
-                            return error.TypeMismatch;
+                        if (!binary.operand_type.isInteger()) return error.TypeMismatch;
                     },
                     else => {},
                 }
@@ -897,13 +895,11 @@ fn verifyInstruction(
             switch (unary.op) {
                 .negate => {
                     if (!operand.isNumeric()) return error.TypeMismatch;
-                    if (isStorageWidth(operand)) return error.TypeMismatch;
+                    if (operand.isUnsigned()) return error.TypeMismatch;
                     try expectType(result, operand);
                 },
                 .bit_not => {
-                    // Integers only, at the two arithmetic widths
-                    // (docs/BITWISE.md D2).
-                    if (operand != .int and operand != .long) return error.TypeMismatch;
+                    if (!operand.isInteger()) return error.TypeMismatch;
                     try expectType(result, operand);
                 },
                 .logic_not => {
@@ -985,7 +981,7 @@ fn verifyInstruction(
         .variant_tag => |tag| {
             const target = try operandType(function, defined, tag.target);
             if (target != .variant) return error.TypeMismatch;
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .variant_field => |get| {
             if (get.variant >= program.variants.len) return error.BadStruct;
@@ -1096,7 +1092,7 @@ fn verifyInstruction(
             if (new.dims.len != expected_dims) return error.BadStruct;
             for (new.dims) |dimension| {
                 const value = try operandType(function, defined, dimension);
-                try expectType(value, .long);
+                try expectType(value, .i64);
             }
             try expectType(result, .{ .heap = new.heap });
         },
@@ -1297,14 +1293,14 @@ fn verifyIntrinsic(
             if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
-        .compare_long_double => {
+        .compare_i64_f64 => {
             try exactly(arguments, 3);
             // The operator travels as a long because an intrinsic call
             // carries registers and no immediates; which operator it
             // names is trusted exactly as an instruction's type is.
-            try expectType(arguments[0], .long);
-            try expectType(arguments[1], .long);
-            try expectType(arguments[2], .double);
+            try expectType(arguments[0], .i64);
+            try expectType(arguments[1], .i64);
+            try expectType(arguments[2], .f64);
             try expectType(result, .boolean);
         },
         .len => {
@@ -1312,38 +1308,38 @@ fn verifyIntrinsic(
             // A `file` and a `task` are heap types with no length, and
             // `containers.length` says so with an `unreachable` — so
             // the shape is what decides here, not the tag.
-            if (arguments[0] != .string) {
+            if (arguments[0] != .str) {
                 if (arguments[0] != .heap) return error.BadIntrinsic;
                 switch (try heapShape(program, arguments[0])) {
                     .list, .map, .array, .builder => {},
                     .file, .task => return error.BadIntrinsic,
                 }
             }
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .string_slice => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .long);
-            try expectType(arguments[2], .long);
-            try expectType(result, .string);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .i64);
+            try expectType(arguments[2], .i64);
+            try expectType(result, .str);
         },
         .string_byte => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .long);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .i64);
             // The one intrinsic that answers a `byte` (docs/TYPES.md §9).
-            try expectType(result, .byte);
+            try expectType(result, .u8);
         },
         .string_find_byte => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             // The byte looked for is a `byte`, so "outside 0..255" is
             // refused where it is written instead of trapping where it
             // is read.
-            try expectType(arguments[1], .byte);
-            try expectType(arguments[2], .long);
-            try expectType(result, .long);
+            try expectType(arguments[1], .u8);
+            try expectType(arguments[2], .i64);
+            try expectType(result, .i64);
         },
         .assert_true => {
             try exactly(arguments, 1);
@@ -1352,12 +1348,12 @@ fn verifyIntrinsic(
         },
         .trap_message => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             try expectType(result, .none);
         },
         .exit_program => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .long);
+            try expectType(arguments[0], .i64);
             try expectType(result, .none);
         },
         .null_object => {
@@ -1387,7 +1383,7 @@ fn verifyIntrinsic(
         .errored => return error.BadIntrinsic,
         .error_message => {
             try exactly(arguments, 0);
-            try expectType(result, .string);
+            try expectType(result, .str);
         },
         .forget => {
             try exactly(arguments, 0);
@@ -1396,7 +1392,7 @@ fn verifyIntrinsic(
         .raise_error => {
             if (!function.fallible) return error.NotFallible;
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             try expectType(result, .none);
         },
         .own_storage, .drop_storage, .export_storage => {
@@ -1417,7 +1413,7 @@ fn verifyIntrinsic(
             const element: Type = switch (try heapShape(program, arguments[0])) {
                 .list => |item| blk: {
                     try exactly(arguments, 2 + value_slots);
-                    try expectType(arguments[1], .long);
+                    try expectType(arguments[1], .i64);
                     break :blk item;
                 },
                 .map => |pair| blk: {
@@ -1427,7 +1423,7 @@ fn verifyIntrinsic(
                 },
                 .array => |shape| blk: {
                     try exactly(arguments, 1 + shape.rank + value_slots);
-                    for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .long);
+                    for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .i64);
                     break :blk shape.element;
                 },
                 .builder, .file, .task => return error.BadIntrinsic,
@@ -1442,15 +1438,15 @@ fn verifyIntrinsic(
         .list_slice => {
             try exactly(arguments, 3);
             if (try heapShape(program, arguments[0]) != .list) return error.BadIntrinsic;
-            try expectType(arguments[1], .long);
-            try expectType(arguments[2], .long);
+            try expectType(arguments[1], .i64);
+            try expectType(arguments[2], .i64);
             try expectType(result, arguments[0]);
         },
         .append_value => {
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .list => |element| try expectType(arguments[1], element),
-                .builder => try expectType(arguments[1], .string),
+                .builder => try expectType(arguments[1], .str),
                 else => return error.BadIntrinsic,
             }
             try expectType(result, .none);
@@ -1458,7 +1454,7 @@ fn verifyIntrinsic(
         .append_ascii => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .builder) return error.BadIntrinsic;
-            try expectType(arguments[1], .long);
+            try expectType(arguments[1], .i64);
             try expectType(result, .none);
         },
         .pop_value => {
@@ -1472,7 +1468,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 3);
             switch (try heapShape(program, arguments[0])) {
                 .list => |element| {
-                    try expectType(arguments[1], .long);
+                    try expectType(arguments[1], .i64);
                     try expectType(arguments[2], element);
                 },
                 else => return error.BadIntrinsic,
@@ -1482,7 +1478,7 @@ fn verifyIntrinsic(
         .remove_entry => {
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
-                .list => try expectType(arguments[1], .long),
+                .list => try expectType(arguments[1], .i64),
                 .map => |pair| try expectType(arguments[1], pair.key),
                 else => return error.BadIntrinsic,
             }
@@ -1500,7 +1496,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| {
-                    try expectType(arguments[1], .long);
+                    try expectType(arguments[1], .i64);
                     try expectType(result, pair.key);
                 },
                 else => return error.BadIntrinsic,
@@ -1510,7 +1506,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| {
-                    try expectType(arguments[1], .long);
+                    try expectType(arguments[1], .i64);
                     try expectType(result, pair.value);
                 },
                 else => return error.BadIntrinsic,
@@ -1519,8 +1515,8 @@ fn verifyIntrinsic(
         .dim_size => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .array) return error.BadIntrinsic;
-            try expectType(arguments[1], .long);
-            try expectType(result, .long);
+            try expectType(arguments[1], .i64);
+            try expectType(result, .i64);
         },
         .copy_object => {
             try exactly(arguments, 1);
@@ -1536,7 +1532,7 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             };
             if (call.kind == .list_sort and
-                !element.isNumeric() and element != .string)
+                !element.isNumeric() and element != .str)
             {
                 return error.BadIntrinsic;
             }
@@ -1551,7 +1547,7 @@ fn verifyIntrinsic(
             };
             try expectType(arguments[1], element);
             try expectType(result, if (call.kind == .list_find)
-                Type{ .optional = .long }
+                Type{ .optional = .i64 }
             else
                 .boolean);
         },
@@ -1622,27 +1618,27 @@ fn verifyIntrinsic(
         .str_value => {
             try exactly(arguments, 1);
             const stringable = switch (arguments[0]) {
-                .byte, .short, .int, .long, .half, .float, .double, .boolean, .string => true,
+                .u8, .i16, .i32, .i64, .f16, .f32, .f64, .boolean, .str => true,
                 .heap => (try heapShape(program, arguments[0])) == .builder,
                 else => false,
             };
             if (!stringable) return error.BadIntrinsic;
-            try expectType(result, .string);
+            try expectType(result, .str);
         },
         // `string(f)` reads a name out of the program's function
         // table: a function value in, text out (docs/FUNCTIONS.md D3).
         .function_name => {
             try exactly(arguments, 1);
             if (arguments[0] != .function) return error.BadIntrinsic;
-            try expectType(result, .string);
+            try expectType(result, .str);
         },
         .parse_int, .parse_float => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             try expectType(result, if (call.kind == .parse_int)
-                .{ .optional = .long }
+                .{ .optional = .i64 }
             else
-                .{ .optional = .double });
+                .{ .optional = .f64 });
         },
         .parse_string => {
             try exactly(arguments, 1);
@@ -1651,38 +1647,38 @@ fn verifyIntrinsic(
             // passing the analyzer, so the element type is checked
             // here rather than trusted.
             const shape = try heapShape(program, arguments[0]);
-            if (shape != .list or shape.list != .byte) return error.BadIntrinsic;
-            try expectType(result, .{ .optional = .string });
+            if (shape != .list or shape.list != .u8) return error.BadIntrinsic;
+            try expectType(result, .{ .optional = .str });
         },
         .chr_code => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .long);
-            try expectType(result, .string);
+            try expectType(arguments[0], .i64);
+            try expectType(result, .str);
         },
         .ord_text => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .long);
+            try expectType(arguments[0], .str);
+            try expectType(result, .i64);
         },
         .print, .term_write => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             try expectType(result, .none);
         },
         .shell_run => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .string);
+            try expectType(arguments[0], .str);
+            try expectType(result, .str);
         },
         .file_read => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .string);
+            try expectType(arguments[0], .str);
+            try expectType(result, .str);
         },
         .file_write => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .string);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .str);
             // Answers nothing: a write that did not land is an error
             // in the channel, not a bool (docs/FAILURE.md).
             try expectType(result, .none);
@@ -1693,18 +1689,18 @@ fn verifyIntrinsic(
         // `std.files` is where the codes get their names.
         .path_kind => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .long);
+            try expectType(arguments[0], .str);
+            try expectType(result, .i64);
         },
         .gpu_backend => {
             try exactly(arguments, 0);
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .ui_window_open => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .long);
-            try expectType(arguments[2], .long);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .i64);
+            try expectType(arguments[2], .i64);
             if (try heapShape(program, result) != .file) return error.BadIntrinsic;
         },
         .ui_window_surface => {
@@ -1715,19 +1711,19 @@ fn verifyIntrinsic(
         .gpu_surface_size => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
-            try expectType(arguments[1], .long);
-            try expectType(result, .long);
+            try expectType(arguments[1], .i64);
+            try expectType(result, .i64);
         },
         .gpu_surface_clear => {
             try exactly(arguments, 5);
             if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
-            for (arguments[1..]) |argument| try expectType(argument, .long);
+            for (arguments[1..]) |argument| try expectType(argument, .i64);
             try expectType(result, .none);
         },
         .gpu_surface_fill_rect => {
             try exactly(arguments, 9);
             if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
-            for (arguments[1..]) |argument| try expectType(argument, .long);
+            for (arguments[1..]) |argument| try expectType(argument, .i64);
             try expectType(result, .none);
         },
         .gpu_surface_present => {
@@ -1737,12 +1733,12 @@ fn verifyIntrinsic(
         },
         .term_rows, .term_cols => {
             try exactly(arguments, 0);
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .term_event_data => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .long);
-            try expectType(result, .long);
+            try expectType(arguments[0], .i64);
+            try expectType(result, .i64);
         },
         .term_clear, .term_flush => {
             try exactly(arguments, 0);
@@ -1750,71 +1746,71 @@ fn verifyIntrinsic(
         },
         .term_move => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .long);
-            try expectType(arguments[1], .long);
+            try expectType(arguments[0], .i64);
+            try expectType(arguments[1], .i64);
             try expectType(result, .none);
         },
         .term_style => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .long);
-            try expectType(arguments[1], .long);
+            try expectType(arguments[0], .i64);
+            try expectType(arguments[1], .i64);
             try expectType(arguments[2], .boolean);
             try expectType(result, .none);
         },
         .key_text => {
             try exactly(arguments, 0);
-            try expectType(result, .string);
+            try expectType(result, .str);
         },
         .key_read => {
             // `string?`: a keyboard that has run dry has nothing to
             // hand over, which is absence and not news (docs/FAILURE.md).
             try exactly(arguments, 0);
-            try expectType(result, .{ .optional = .string });
+            try expectType(result, .{ .optional = .str });
         },
         .read_line, .env_get => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .{ .optional = .string });
+            try expectType(arguments[0], .str);
+            try expectType(result, .{ .optional = .str });
         },
         .print_error => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             try expectType(result, .none);
         },
         .clock_ms, .epoch_ms => {
             try exactly(arguments, 0);
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         // The machine's facts: nothing to ask with, a number back.
         .os_total_memory, .os_available_memory, .os_cpu_count => {
             try exactly(arguments, 0);
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .sleep_ms => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .long);
+            try expectType(arguments[0], .i64);
             try expectType(result, .none);
         },
         .file_append, .file_rename => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .string);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .str);
             // Answers nothing: what the world said travels in the
             // error channel, like every other file service.
             try expectType(result, .none);
         },
         .file_delete, .dir_create => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             // Answers nothing: whether the world took it travels in
             // the error channel, like every other file service.
             try expectType(result, .none);
         },
         .dir_list => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
+            try expectType(arguments[0], .str);
             const shape = try heapShape(program, result);
-            if (shape != .list or shape.list != .string) return error.BadIntrinsic;
+            if (shape != .list or shape.list != .str) return error.BadIntrinsic;
         },
         // The byte channel (docs/BYTES.md).  The buffer is an
         // `array(byte, _)` in both directions and is checked here
@@ -1824,22 +1820,22 @@ fn verifyIntrinsic(
         // the one shape damaged IR must not be able to ask for.
         .file_open => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .long);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .i64);
             if (try heapShape(program, result) != .file) return error.BadIntrinsic;
         },
         .handle_read => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
             try expectByteBuffer(program, arguments[1]);
-            try expectType(result, .long);
+            try expectType(result, .i64);
         },
         .handle_write => {
             try exactly(arguments, 3);
             if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
             try expectByteBuffer(program, arguments[1]);
-            try expectType(arguments[2], .long);
-            try expectType(result, .long);
+            try expectType(arguments[2], .i64);
+            try expectType(result, .i64);
         },
         // `t.wait()` — one task in, the worker's result out
         // (docs/THREADS.md D4).  The result type is read out of the
@@ -1867,7 +1863,7 @@ fn verifyIntrinsic(
 fn expectByteBuffer(program: *const Program, of: Type) VerifyError!void {
     const shape = try heapShape(program, of);
     if (shape != .array) return error.BadIntrinsic;
-    if (shape.array.element != .byte or shape.array.rank != 1) return error.BadIntrinsic;
+    if (shape.array.element != .u8 or shape.array.rank != 1) return error.BadIntrinsic;
 }
 
 // ---------------------------------------------------------------------------
@@ -1937,17 +1933,21 @@ fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) 
 /// the representation contract the lowerer records.
 fn typeCanOwnStorage(of: Type) bool {
     return switch (of) {
-        .string, .strukt, .variant, .function => true,
+        .str, .strukt, .variant, .function => true,
         .optional => |payload| typeCanOwnStorage(payload.asType()),
         .none,
         .boolean,
-        .byte,
-        .short,
-        .int,
-        .long,
-        .half,
-        .float,
-        .double,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .f16,
+        .f32,
+        .f64,
         .heap,
         .enumeration,
         => false,
@@ -2024,14 +2024,18 @@ fn typeCarriesWorker(
             },
             .none,
             .boolean,
-            .byte,
-            .short,
-            .int,
-            .long,
-            .half,
-            .float,
-            .double,
-            .string,
+            .u8,
+            .u16,
+            .u32,
+            .u64,
+            .i8,
+            .i16,
+            .i32,
+            .i64,
+            .f16,
+            .f32,
+            .f64,
+            .str,
             .enumeration,
             => {},
         }

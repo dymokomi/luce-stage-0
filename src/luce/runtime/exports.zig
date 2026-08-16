@@ -320,10 +320,10 @@ pub export fn luce_rt_raise_io(
 pub export fn luce_rt_error_message(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
     if (!requireValueOut(runtime, out)) return;
     const raised = runtime.raised orelse {
-        out.* = Value.ofString("");
+        out.* = Value.ofStr("");
         return;
     };
-    out.* = Value.ofString(raised.message);
+    out.* = Value.ofStr(raised.message);
 }
 
 /// `catch` handled it: forget the error and its words.
@@ -372,7 +372,7 @@ pub export fn luce_rt_intern_text(
     if (!requireValueOut(runtime, out)) return raised_trap;
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.ownValue(Value.ofString(borrowed)) catch |mistake|
+    out.* = runtime.ownValue(Value.ofStr(borrowed)) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -398,7 +398,7 @@ pub export fn luce_rt_maybe_text(
     }
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.ownValue(Value.ofString(borrowed)) catch |mistake|
+    out.* = runtime.ownValue(Value.ofStr(borrowed)) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -525,7 +525,7 @@ pub export fn luce_rt_release(runtime: *Runtime, held: [*c]const Value) callconv
 /// The text payload of the most recent `key_read`.
 pub export fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
     if (!requireValueOut(runtime, out)) return;
-    out.* = Value.ofString(runtime.last_key_text);
+    out.* = Value.ofStr(runtime.last_key_text);
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,7 +1678,7 @@ pub export fn luce_rt_concat(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, left) or !requireStringInput(runtime, right)) return raised_trap;
-    out.* = text.concat(runtime, left.*.asString(), right.*.asString()) catch |mistake|
+    out.* = text.concat(runtime, left.*.asStr(), right.*.asStr()) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1802,11 +1802,11 @@ pub export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
 /// Two scalars and an operator: it reads no memory at all, cannot
 /// fail, and takes no runtime.  The long is always the left operand —
 /// stage 4 mirrors the operator when the double was written first.
-pub export fn luce_rt_compare_long_double(
+pub export fn luce_rt_compare_i64_f64(
     op: i32,
     left: i64,
     right: f64,
 ) callconv(.c) i32 {
     const operation = std.enums.fromInt(vocabulary.BinaryOp, op) orelse return 0;
-    return @intFromBool(operators.compareLongDouble(operation, left, right));
+    return @intFromBool(operators.compareI64F64(operation, left, right));
 }

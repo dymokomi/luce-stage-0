@@ -44,7 +44,7 @@ pub const Error = error{OutOfMemory};
 // ---------------------------------------------------------------------------
 
 /// The program's string and byte constants, interned: one slot per
-/// distinct value, so `const_string` is an index and two identical
+/// distinct value, so `const_str` is an index and two identical
 /// literals cost one copy.
 ///
 /// Interning happens while stage 4 checks — a string literal is a
@@ -403,8 +403,8 @@ pub const Lowering = struct {
         return switch (of) {
             .none => unreachable, // no annotation resolves to None
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
-            .byte, .short, .int, .long => try self.emit(.{ .const_long = 0 }, of),
-            .half, .float, .double => try self.emit(.{ .const_double = 0.0 }, of),
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => try self.emit(.{ .const_integer = 0 }, of),
+            .f16, .f32, .f64 => try self.emit(.{ .const_float = 0.0 }, of),
             // **An enum's zero is its first declared member.**  Zero
             // itself would be a value no member holds — the one thing
             // an enum promises is that every value of it is a member,
@@ -413,10 +413,10 @@ pub const Lowering = struct {
             // what `var m: Method` starts at and what an
             // `array(Method, n)` is filled with.
             .enumeration => |reference| try self.emit(
-                .{ .const_long = self.enums[reference.index].members[0].value },
+                .{ .const_integer = self.enums[reference.index].members[0].value },
                 of,
             ),
-            .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
+            .str => try self.emit(.{ .const_str = try self.pool.intern("") }, .str),
             // A function value has no zero: every value of the type
             // names a function, and a slot with no function in it names
             // none.  Stage 4 refuses the one declaration that would ask
@@ -445,7 +445,7 @@ pub const Lowering = struct {
                     // and a nested struct's own run moves in whole
                     // (docs/STRINGS.md).
                     slot.* = switch (field.field_type) {
-                        .string => try self.ownStorage(zero),
+                        .str => try self.ownStorage(zero),
                         else => zero,
                     };
                 }
@@ -466,7 +466,7 @@ pub const Lowering = struct {
                 for (member.fields, fields) |field, *slot| {
                     const zero = try self.zeroOf(field.field_type);
                     slot.* = switch (field.field_type) {
-                        .string => try self.ownStorage(zero),
+                        .str => try self.ownStorage(zero),
                         else => zero,
                     };
                 }
@@ -586,7 +586,7 @@ pub const Lowering = struct {
     pub fn errorMessage(self: *Lowering) Error!Register {
         return self.emit(
             .{ .intrinsic = .{ .kind = .error_message, .arguments = &.{} } },
-            .string,
+            .str,
         );
     }
 
@@ -674,13 +674,13 @@ pub const Lowering = struct {
     /// A long local, one higher.
     fn advance(self: *Lowering, counter: LocalId) Error!void {
         const current = try self.load(counter);
-        const one = try self.emit(.{ .const_long = 1 }, .long);
+        const one = try self.emit(.{ .const_integer = 1 }, .i64);
         const stepped = try self.emit(.{ .binary = .{
             .op = .add,
-            .operand_type = .long,
+            .operand_type = .i64,
             .left = current,
             .right = one,
-        } }, .long);
+        } }, .i64);
         try self.store(counter, stepped);
     }
 
@@ -700,7 +700,7 @@ pub const Lowering = struct {
     /// iteration stays bounds-safe.
     pub fn startIteration(self: *Lowering, loop: *Iteration, object: Register) Error!void {
         try self.store(loop.object, object);
-        const zero = try self.emit(.{ .const_long = 0 }, .long);
+        const zero = try self.emit(.{ .const_integer = 0 }, .i64);
         try self.store(loop.position, zero);
 
         loop.header = try self.reserveBlock();
@@ -715,12 +715,12 @@ pub const Lowering = struct {
         arguments[0] = collection;
         const length = try self.emit(
             .{ .intrinsic = .{ .kind = .len, .arguments = arguments } },
-            .long,
+            .i64,
         );
         const at = try self.load(loop.position);
         const keep_going = try self.emit(.{ .binary = .{
             .op = .less,
-            .operand_type = .long,
+            .operand_type = .i64,
             .left = at,
             .right = length,
         } }, .boolean);
@@ -897,7 +897,7 @@ test "container pool preserves declaration identity" {
     defer pool.deinit();
 
     const values = try arena.alloc(defs.ConstantValue, 1);
-    values[0] = .{ .long = 7 };
+    values[0] = .{ .integer = 7 };
     const first = try pool.addContainer(
         "first",
         source_mod.root_file,

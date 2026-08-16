@@ -25,8 +25,8 @@ const Value = value.Value;
 /// map, the first axis for an array, bytes for a Builder.
 pub fn length(runtime: *Runtime, target: Value) Error!Value {
     const measured: usize = switch (target.tag) {
-        .string => if (target.hasValidStringRepresentation())
-            target.asString().len
+        .str => if (target.hasValidStringRepresentation())
+            target.asStr().len
         else
             return runtime.fail(.not_owned),
         .object => blk: {
@@ -43,7 +43,7 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
         },
         else => return runtime.fail(.not_owned),
     };
-    return Value.ofLong(@intCast(measured));
+    return Value.ofI64(@intCast(measured));
 }
 
 /// `a[i]`, `m[key]`, `grid[r, c]`.  A list or array index out of range
@@ -56,7 +56,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
     switch (object.data) {
         .list => {
             try requireLongIndex(runtime, indices[0]);
-            const index = indices[0].asLong();
+            const index = indices[0].asI64();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
@@ -97,7 +97,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
     switch (object.data) {
         .list => {
             try requireLongIndex(runtime, indices[0]);
-            const index = indices[0].asLong();
+            const index = indices[0].asI64();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
@@ -153,13 +153,13 @@ fn requireIndexRank(runtime: *Runtime, object: *const heap.Object, indices: []co
 }
 
 fn requireLongIndex(runtime: *Runtime, index: Value) Error!void {
-    if (index.tag != .long) return runtime.fail(.not_owned);
+    if (index.tag != .i64) return runtime.fail(.not_owned);
 }
 
 fn requireMapKey(runtime: *Runtime, key: Value) Error!void {
     switch (key.tag) {
-        .long => {},
-        .string => if (!key.hasValidStringRepresentation()) return runtime.fail(.not_owned),
+        .i64 => {},
+        .str => if (!key.hasValidStringRepresentation()) return runtime.fail(.not_owned),
         else => return runtime.fail(.not_owned),
     }
 }
@@ -212,7 +212,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
         .builder => {
             try runtime.requireMutable(object);
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-            try object.data.builder.appendSlice(runtime.objects, held.asString());
+            try object.data.builder.appendSlice(runtime.objects, held.asStr());
         },
         .map, .array, .file, .task => return runtime.fail(.not_owned),
     }
@@ -262,7 +262,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     switch (object.data) {
         .list => {
             try requireLongIndex(runtime, which);
-            const index = which.asLong();
+            const index = which.asI64();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
@@ -322,7 +322,7 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
         .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (axis < 0 or axis >= dims.len) return runtime.fail(.index_bounds);
-    return Value.ofLong(dims[@intCast(axis)]);
+    return Value.ofI64(dims[@intCast(axis)]);
 }
 
 /// `xs.sort()` and `xs.reverse()`, in place, on a list or an array.
@@ -371,7 +371,7 @@ pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!Value {
         .list, .array => {
             const stored = object.elements;
             for (0..stored.count) |at| {
-                if (operators.compare(.equal, stored.at(at), wanted)) return Value.ofLong(@intCast(at));
+                if (operators.compare(.equal, stored.at(at), wanted)) return Value.ofI64(@intCast(at));
             }
         },
         .map, .builder, .file, .task => return runtime.fail(.not_owned),
@@ -392,13 +392,17 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
         fn lift(cell: kind.Cell()) Value {
             return switch (kind) {
                 .value => cell,
-                .double => Value.ofDouble(cell),
-                .long => Value.ofLong(cell),
-                .float => Value.ofFloat(cell),
-                .int => Value.ofInt(cell),
-                .half => Value.ofHalf(cell),
-                .short => Value.ofShort(cell),
-                .byte => Value.ofByte(cell),
+                .f64 => Value.ofF64(cell),
+                .i64 => Value.ofI64(cell),
+                .u64 => Value.ofU64(cell),
+                .f32 => Value.ofF32(cell),
+                .i32 => Value.ofI32(cell),
+                .u32 => Value.ofU32(cell),
+                .f16 => Value.ofF16(cell),
+                .u16 => Value.ofU16(cell),
+                .i16 => Value.ofI16(cell),
+                .u8 => Value.ofU8(cell),
+                .i8 => Value.ofI8(cell),
                 .boolean => Value.ofBoolean(cell != 0),
             };
         }
@@ -436,7 +440,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 ///
 /// **That is also what gives an enum-keyed map its `list(Key)`.**  A key
 /// is stored as the integer a `long` key would be (docs/ENUMS.md), and
-/// the zero of an enum key names `.byte`/`.short`/`.int` cells — so
+/// the zero of an enum key names `.u8`/`.i16`/`.i32` cells — so
 /// `put` narrows each key into its own width on the way in, which is the
 /// exact inverse of the widening that stored it, and this function does
 /// not learn that enums exist.
@@ -495,7 +499,7 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
     errdefer dropBuilt(runtime, &listed);
     try listed.ensureCapacity(runtime.objects, names.len);
     for (names) |name| {
-        const held = try runtime.ownValue(Value.ofString(name));
+        const held = try runtime.ownValue(Value.ofStr(name));
         errdefer runtime.dropStorage(held);
         try listed.append(runtime.objects, held);
     }
@@ -516,7 +520,7 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
     var rest = joined;
     while (rest.len != 0) {
         const stop = std.mem.indexOfScalar(u8, rest, 0) orelse rest.len;
-        const held = try runtime.ownValue(Value.ofString(rest[0..stop]));
+        const held = try runtime.ownValue(Value.ofStr(rest[0..stop]));
         errdefer runtime.dropStorage(held);
         try listed.append(runtime.objects, held);
         rest = if (stop == rest.len) rest[stop..] else rest[stop + 1 ..];
@@ -575,7 +579,7 @@ pub fn listOfArguments(
             const text_length = std.math.cast(usize, size) orelse
                 return runtime.fail(.host_unavailable);
             const borrowed = text[0..text_length];
-            const held = try runtime.ownValue(Value.ofString(borrowed));
+            const held = try runtime.ownValue(Value.ofStr(borrowed));
             errdefer runtime.dropStorage(held);
             try listed.append(runtime.objects, held);
         }

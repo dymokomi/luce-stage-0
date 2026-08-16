@@ -177,7 +177,12 @@ pub const magic = "LUCE";
 /// join `Intrinsic`, appended after `term_event_data` so no tag before them
 /// renumbers.  A 46 module has no way to spell them, so the bump is only the
 /// usual refuse-a-stale-module warrant rather than a renumbering one.
-pub const format_version: u32 = 47;
+///
+/// 48 — the explicit numeric vocabulary replaces the old numeric ladder.
+/// `types.Type` gains four integer tags, every integer constant widens from
+/// i64 to i128 on the wire so it can represent the full u64 range, and enum
+/// backing tags grow to all eight integer widths.
+pub const format_version: u32 = 48;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -231,7 +236,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         try writer.int(u32, @intCast(declared.members.len));
         for (declared.members) |member| {
             try writer.blob(member.name);
-            try writer.int(i64, member.value);
+            try writer.int(i128, member.value);
         }
     }
 
@@ -326,9 +331,9 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(constant)));
         switch (constant) {
             .boolean => |value| try self.int(u8, @intFromBool(value)),
-            .long => |value| try self.int(i64, value),
-            .double => |value| try self.int(u64, @bitCast(value)),
-            .string => |index| try self.int(u32, index),
+            .integer => |value| try self.int(i128, value),
+            .float => |value| try self.int(u64, @bitCast(value)),
+            .str => |index| try self.int(u32, index),
             .strukt => |value| {
                 try self.int(u32, value.layout);
                 try self.int(u32, @intCast(value.fields.len));
@@ -402,9 +407,9 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         switch (of) {
             .const_boolean => |value| try self.int(u8, @intFromBool(value)),
-            .const_long => |value| try self.int(i64, value),
-            .const_double => |value| try self.int(u64, @bitCast(value)),
-            .const_string => |constant| try self.int(u32, constant),
+            .const_integer => |value| try self.int(i128, value),
+            .const_float => |value| try self.int(u64, @bitCast(value)),
+            .const_str => |constant| try self.int(u32, constant),
             .const_container => |constant| try self.int(u32, constant),
             .const_function => |named| {
                 try self.int(u32, named.function);
@@ -551,7 +556,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         const members = try arena.alloc(types.EnumMember, member_count);
         for (members) |*member| {
             member.name = try arena.dupe(u8, try reader.blob());
-            member.value = try reader.int(i64);
+            member.value = try reader.int(i128);
         }
         declared.members = members;
     }
@@ -659,14 +664,18 @@ const Reader = struct {
         return switch (tag) {
             .none => .none,
             .boolean => .boolean,
-            .byte => .byte,
-            .short => .short,
-            .int => .int,
-            .long => .long,
-            .half => .half,
-            .float => .float,
-            .double => .double,
-            .string => .string,
+            .u8 => .u8,
+            .u16 => .u16,
+            .u32 => .u32,
+            .u64 => .u64,
+            .i8 => .i8,
+            .i16 => .i16,
+            .i32 => .i32,
+            .i64 => .i64,
+            .f16 => .f16,
+            .f32 => .f32,
+            .f64 => .f64,
+            .str => .str,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
             .variant => .{ .variant = try self.int(u32) },
@@ -712,9 +721,9 @@ const Reader = struct {
                 if (raw > 1) return error.InvalidModule;
                 break :blk .{ .boolean = raw != 0 };
             },
-            .long => .{ .long = try self.int(i64) },
-            .double => .{ .double = @bitCast(try self.int(u64)) },
-            .string => .{ .string = try self.int(u32) },
+            .integer => .{ .integer = try self.int(i128) },
+            .float => .{ .float = @bitCast(try self.int(u64)) },
+            .str => .{ .str = try self.int(u32) },
             .strukt => blk: {
                 const layout = try self.int(u32);
                 const field_count = try self.count();
@@ -814,9 +823,9 @@ const Reader = struct {
         const tag = try self.enumTag(std.meta.Tag(mir.Instruction));
         return switch (tag) {
             .const_boolean => .{ .const_boolean = (try self.int(u8)) != 0 },
-            .const_long => .{ .const_long = try self.int(i64) },
-            .const_double => .{ .const_double = @bitCast(try self.int(u64)) },
-            .const_string => .{ .const_string = try self.int(u32) },
+            .const_integer => .{ .const_integer = try self.int(i128) },
+            .const_float => .{ .const_float = @bitCast(try self.int(u64)) },
+            .const_str => .{ .const_str = try self.int(u32) },
             .const_container => .{ .const_container = try self.int(u32) },
             .const_function => blk: {
                 const named = try self.int(u32);
@@ -953,19 +962,19 @@ fn constantContainerProgram() !mir.Program {
     program.structs = try arena.dupe(types.StructLayout, &.{.{
         .name = "Label",
         .fields = try arena.dupe(types.StructField, &.{
-            .{ .name = "text", .field_type = .string },
-            .{ .name = "fallback", .field_type = .{ .optional = .long } },
+            .{ .name = "text", .field_type = .str },
+            .{ .name = "fallback", .field_type = .{ .optional = .i64 } },
             .{ .name = "enabled", .field_type = .boolean },
         }),
     }});
     program.heap_types = try arena.dupe(types.HeapType, &.{
         .{ .list = .{ .strukt = 0 } },
-        .{ .map = .{ .key = .string, .value = .long } },
-        .{ .array = .{ .element = .double, .rank = 1 } },
+        .{ .map = .{ .key = .str, .value = .i64 } },
+        .{ .array = .{ .element = .f64, .rank = 1 } },
     });
 
     const label_fields = try arena.dupe(mir.ConstantValue, &.{
-        .{ .string = 1 },
+        .{ .str = 1 },
         .absent,
         .{ .boolean = true },
     });
@@ -973,16 +982,16 @@ fn constantContainerProgram() !mir.Program {
         .strukt = .{ .layout = 0, .fields = label_fields },
     }});
     const entries = try arena.dupe(mir.ContainerConstant.MapEntry, &.{
-        .{ .key = .{ .string = 1 }, .value = .{ .long = 10 } },
-        .{ .key = .{ .string = 2 }, .value = .{ .long = 20 } },
+        .{ .key = .{ .str = 1 }, .value = .{ .integer = 10 } },
+        .{ .key = .{ .str = 2 }, .value = .{ .integer = 20 } },
     });
     const measurements = try arena.dupe(mir.ConstantValue, &.{
-        .{ .double = 1.5 },
-        .{ .double = 2.5 },
+        .{ .float = 1.5 },
+        .{ .float = 2.5 },
     });
     const same_measurements = try arena.dupe(mir.ConstantValue, &.{
-        .{ .double = 1.5 },
-        .{ .double = 2.5 },
+        .{ .float = 1.5 },
+        .{ .float = 2.5 },
     });
     program.container_constants = try arena.dupe(mir.ContainerConstant, &.{
         .{
@@ -1058,7 +1067,7 @@ test "constant containers round-trip with declaration identity and exact values"
     try testing.expectEqualStrings("same_measurements", loaded.container_constants[3].name);
     try testing.expectEqual(@as(u32, 12), loaded.container_constants[2].origin.line);
     try testing.expectEqual(@as(usize, 2), loaded.container_constants[2].payload.sequence.len);
-    try testing.expectEqual(@as(f64, 2.5), loaded.container_constants[2].payload.sequence[1].double);
+    try testing.expectEqual(@as(f64, 2.5), loaded.container_constants[2].payload.sequence[1].float);
     try testing.expect(loaded.container_constants[0].payload.sequence[0].strukt.fields[1] == .absent);
     const dump = try mir.print(testing.allocator, &loaded);
     defer testing.allocator.free(dump);
@@ -1087,9 +1096,9 @@ test "constant container rows are exhaustively verified after decode" {
     program.container_constants[0].payload.sequence[0] = saved_label;
 
     // Two distinct string slots with equal bytes are the same map key.
-    program.container_constants[1].payload.map[1].key = .{ .string = 3 };
+    program.container_constants[1].payload.map[1].key = .{ .str = 3 };
     try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
-    program.container_constants[1].payload.map[1].key = .{ .string = 2 };
+    program.container_constants[1].payload.map[1].key = .{ .str = 2 };
 
     const saved_entries = program.container_constants[1].payload.map;
     program.container_constants[1].payload = .{ .map = &.{} };
@@ -1114,7 +1123,7 @@ test "constant container rows are exhaustively verified after decode" {
     // module's trust boundary.  Encode the damage to prove decode's
     // verifier checks the pool whole rather than on demand.
     const saved_measurement = program.container_constants[3].payload.sequence[0];
-    program.container_constants[3].payload.sequence[0] = .{ .string = 99 };
+    program.container_constants[3].payload.sequence[0] = .{ .str = 99 };
     const damaged = try encode(testing.allocator, &program);
     defer testing.allocator.free(damaged);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, damaged));
@@ -1402,7 +1411,7 @@ test "decoded function types and conversions are verified before execution" {
     const original_instruction = entry.instructions[storing.?];
     const original_result = entry.result_types[storing.?];
     entry.instructions[storing.?] = .{ .convert = function_value.? };
-    entry.result_types[storing.?] = .int;
+    entry.result_types[storing.?] = .i32;
     {
         const encoded = try encode(testing.allocator, &program);
         defer testing.allocator.free(encoded);
@@ -1438,7 +1447,7 @@ test "a decoded bound function value rejects a forged receiver" {
                 .const_function => |named| if (named.receiver != null) {
                     site = .{ .function = function_index, .instruction = register };
                     for (function.result_types, 0..) |result, candidate| {
-                        if (result.eql(.long)) scalar = @intCast(candidate);
+                        if (result.eql(.i64)) scalar = @intCast(candidate);
                     }
                 },
                 else => {},
@@ -1519,7 +1528,7 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
     // has no representation, so it must be refused rather than nested.
     const nested = try testing.allocator.dupe(u8, encoded);
     defer testing.allocator.free(nested);
-    const optional_tag: u8 = @intFromEnum(std.meta.activeTag(@as(types.Type, .{ .optional = .long })));
+    const optional_tag: u8 = @intFromEnum(std.meta.activeTag(@as(types.Type, .{ .optional = .i64 })));
     var damaged = false;
     for (nested, 0..) |byte, at| {
         if (byte != optional_tag or at + 1 >= nested.len) continue;
@@ -1644,7 +1653,7 @@ test "a damaged register reference fails verification, not execution" {
     // decoder's verifier pass must reject the module.
     program.functions[0].instructions[2] = .{ .binary = .{
         .op = .add,
-        .operand_type = .long,
+        .operand_type = .i64,
         .left = 900,
         .right = 901,
     } };
@@ -1908,8 +1917,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 46 -> 47: ARC arrives — the `retain` and `release` intrinsics are
     // appended after `term_event_data`, so the hash moves with the two new
     // names and no tag before them renumbers.
-    try testing.expectEqual(@as(u32, 47), format_version);
-    try testing.expectEqual(@as(u64, 3520324807276805816), hasher.final());
+    try testing.expectEqual(@as(u32, 48), format_version);
+    try testing.expectEqual(@as(u64, 3532110430299157339), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
@@ -1973,8 +1982,8 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
     var widened = try testing.allocator.dupe(u8, encoded);
     defer testing.allocator.free(widened);
     const table_at = std.mem.indexOf(u8, widened, "Method").? + "Method".len;
-    try testing.expectEqual(@intFromEnum(types.Type.EnumRef.Backing.byte), widened[table_at]);
-    widened[table_at] = @intFromEnum(types.Type.EnumRef.Backing.long);
+    try testing.expectEqual(@intFromEnum(types.Type.EnumRef.Backing.u8), widened[table_at]);
+    widened[table_at] = @intFromEnum(types.Type.EnumRef.Backing.i64);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, widened));
 }
 
@@ -2065,8 +2074,8 @@ test "an enum register holding no member is refused" {
     // hand-made module that puts 3 in a `Method` register is what that
     // promise has to be defended against.
     for (program.functions[0].instructions, program.functions[0].result_types) |*instruction, of| {
-        if (of != .enumeration or instruction.* != .const_long) continue;
-        instruction.* = .{ .const_long = 3 };
+        if (of != .enumeration or instruction.* != .const_integer) continue;
+        instruction.* = .{ .const_integer = 3 };
         break;
     }
     const encoded = try encode(testing.allocator, &program);

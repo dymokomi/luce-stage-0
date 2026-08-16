@@ -124,7 +124,7 @@ private func fold_case(s: str, first: i64, last: i64, shift: i64) -> str:
     var at = 0
     let size = len(s)
     while at < size:
-        let code = s.byte_at(at)
+        let code = i64(s.byte_at(at))
         if code >= first and code <= last:
             # Adjacent folded bytes leave an empty run; appending it
             # would cost a slice and a service call for nothing.  The

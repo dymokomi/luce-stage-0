@@ -489,8 +489,8 @@ test "luce.lex.number: a leading decimal point keeps the message it always had" 
     );
 }
 
-test "luce.lex.string: an unterminated string is caught" {
-    try expectRejected("func main():\n    let a = \"open\n", "luce.lex.string");
+test "luce.lex.str: an unterminated string is caught" {
+    try expectRejected("func main():\n    let a = \"open\n", "luce.lex.str");
 }
 
 test "luce.lex.escape: an unknown escape is rejected" {
@@ -505,8 +505,8 @@ test "luce.lex.character: a stray control byte is rejected" {
 // Parser
 // ---------------------------------------------------------------------------
 
-test "luce.lex.string: an unterminated f-string is caught" {
-    try expectRejected("func main():\n    let a = f\"open {x}\n", "luce.lex.string");
+test "luce.lex.str: an unterminated f-string is caught" {
+    try expectRejected("func main():\n    let a = f\"open {x}\n", "luce.lex.str");
 }
 
 test "luce.parse.fstring: a malformed or unmatched hole is rejected" {
@@ -3020,8 +3020,8 @@ test "luce.lex.number: a malformed literal is pinned to its start" {
     try expectRejectedAt("func main():\n    let a = 12ab\n", "luce.lex.number", 2, 13);
 }
 
-test "luce.lex.string: an unterminated string is pinned to its opening quote" {
-    try expectRejectedAt("func main():\n    let a = \"open\n", "luce.lex.string", 2, 13);
+test "luce.lex.str: an unterminated string is pinned to its opening quote" {
+    try expectRejectedAt("func main():\n    let a = \"open\n", "luce.lex.str", 2, 13);
 }
 
 test "luce.lex.escape: an unknown escape is pinned to the backslash" {

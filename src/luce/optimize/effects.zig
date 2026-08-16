@@ -67,7 +67,7 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // Values out of thin air, and reads of things nothing can
         // change: a local (invalidated by its own `local_set`, which
         // the caller tracks), a field of an immutable struct value.
-        .const_boolean, .const_long, .const_double, .const_string, .const_container => .pure,
+        .const_boolean, .const_integer, .const_float, .const_str, .const_container => .pure,
         // A function value is a fresh two-slot run — the function it
         // names beside the receiver it carries — so making one has the
         // identity and the allocation `struct_make` has, and for the
@@ -111,7 +111,7 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
             // The operators that can still trap are `//` and `%`, the
             // two that produce a long.
             .pure
-        else if (binary.operand_type == .string)
+        else if (binary.operand_type == .str)
             // string `+` allocates bytes somebody has to free.
             .impure
         else
@@ -171,7 +171,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs(long.min) overflows.
-        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_long_double => .pure,
+        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_i64_f64 => .pure,
         .abs => if (first_argument) |argument|
             (if (argument.isFloating()) .pure else .stable)
         else
@@ -357,9 +357,9 @@ pub fn viewStable(instruction: Instruction) bool {
         // Values, locals, immutable struct storage, control flow: the
         // object table is not involved at all.
         .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
+        .const_integer,
+        .const_float,
+        .const_str,
         .const_container,
         .const_function,
         .local_get,
@@ -407,7 +407,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .floor,
             .ceil,
             .trunc,
-            .compare_long_double,
+            .compare_i64_f64,
             .string_slice,
             .string_byte,
             .string_find_byte,

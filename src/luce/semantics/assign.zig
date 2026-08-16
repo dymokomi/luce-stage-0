@@ -333,7 +333,7 @@ fn compoundCombine(
         );
         return null;
     }
-    const string_concat = op == .add and place_type == .string;
+    const string_concat = op == .add and place_type == .str;
     if (!place_type.isNumeric() and !string_concat) {
         try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on str){s}", .{
             try self.analyzer.typeName(place_type),
@@ -342,11 +342,10 @@ fn compoundCombine(
         return null;
     }
     // The bit set has its compound forms too (docs/BITWISE.md
-    // D5), and its own gate: integers only, at the two arithmetic
-    // widths.
+    // D5), and its own gate: every explicit integer width, no floats.
     switch (op) {
         .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
-            if (place_type != .int and place_type != .long) {
+            if (!place_type.isInteger()) {
                 try self.fail(
                     "luce.sema.type",
                     span,
@@ -592,7 +591,7 @@ pub fn checkIndex(
     span: Span,
 ) Error!?Type {
     const descriptor = self.analyzer.heapOf(object_type) orelse {
-        if (object_type == .string) {
+        if (object_type == .str) {
             try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
         } else {
             try self.fail("luce.sema.index", span, "{s} cannot be indexed{s}", .{
@@ -609,7 +608,7 @@ pub fn checkIndex(
 
     switch (descriptor) {
         .list => |element| {
-            if (indices.len != 1 or !try self.widensInto(&indices[0], .long)) {
+            if (indices.len != 1 or !try self.widensInto(&indices[0], .i64)) {
                 try self.fail("luce.sema.index", span, "lists index with one i64", .{});
                 return null;
             }
@@ -624,7 +623,7 @@ pub fn checkIndex(
                 return null;
             }
             for (indices) |*index_value| {
-                if (!try self.widensInto(index_value, .long)) {
+                if (!try self.widensInto(index_value, .i64)) {
                     try self.fail("luce.sema.index", span, "array indices are i64", .{});
                     return null;
                 }

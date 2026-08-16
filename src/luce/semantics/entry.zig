@@ -105,7 +105,7 @@ fn check(self: *Analyzer) Error!void {
 /// Whether a type is the one shape the entry's parameter may have.
 fn isCommandLine(self: *const Analyzer, of: Type) bool {
     const descriptor = self.heapOf(of) orelse return false;
-    return descriptor == .list and descriptor.list == .string;
+    return descriptor == .list and descriptor.list == .str;
 }
 
 // ---------------------------------------------------------------------------

@@ -36,13 +36,20 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
     }
 
     switch (left.view()) {
-        .int => |held| return integer(runtime, op, i32, held, right.asInt()),
-        .long => |held| return integer(runtime, op, i64, held, right.asLong()),
-        .float => |held| return floating(op, f32, held, right.asFloat()),
-        .double => |held| return floating(op, f64, held, right.asDouble()),
-        .string => |left_string| {
+        .u8 => |held| return integer(runtime, op, u8, held, right.asU8()),
+        .u16 => |held| return integer(runtime, op, u16, held, right.asU16()),
+        .u32 => |held| return integer(runtime, op, u32, held, right.asU32()),
+        .u64 => |held| return integer(runtime, op, u64, held, right.asU64()),
+        .i8 => |held| return integer(runtime, op, i8, held, right.asI8()),
+        .i16 => |held| return integer(runtime, op, i16, held, right.asI16()),
+        .i32 => |held| return integer(runtime, op, i32, held, right.asI32()),
+        .i64 => |held| return integer(runtime, op, i64, held, right.asI64()),
+        .f16 => |held| return floating(op, f16, held, right.asF16()),
+        .f32 => |held| return floating(op, f32, held, right.asF32()),
+        .f64 => |held| return floating(op, f64, held, right.asF64()),
+        .str => |left_string| {
             // The analyzer only admits + for strings.
-            return text.concat(runtime, left_string, right.asString());
+            return text.concat(runtime, left_string, right.asStr());
         },
         else => unreachable,
     }
@@ -63,7 +70,7 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
         .multiply => @mulWithOverflow(left, right),
         // `/` never reaches here: it is real division and always
         // answers a float (docs/NUMERICS.md §2), which the IR verifier
-        // enforces — `Binary { .divide, .long }` is refused before
+        // enforces — `Binary { .divide, .i64 }` is refused before
         // either engine sees it.
         .divide => unreachable,
         // `//` and `%` are the integer pair and they **floor**
@@ -77,8 +84,10 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
             // but `@mod` computes it through a division that can, so
             // the pair is guarded together and answers what `//`
             // answers.
-            if (left == std.math.minInt(T) and right == -1) {
-                return runtime.fail(.integer_overflow);
+            if (comptime @typeInfo(T).int.signedness == .signed) {
+                if (left == std.math.minInt(T) and right == -1) {
+                    return runtime.fail(.integer_overflow);
+                }
             }
             const computed = if (op == .floor_divide)
                 @divFloor(left, right)
@@ -94,15 +103,19 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
         .bit_or => return boxInteger(T, left | right),
         .bit_xor => return boxInteger(T, left ^ right),
         .shift_left, .shift_right => {
-            if (right < 0 or right >= @bitSizeOf(T)) {
+            if (comptime @typeInfo(T).int.signedness == .signed) {
+                if (right < 0) return runtime.fail(.shift_out_of_range);
+            }
+            if (right >= @bitSizeOf(T)) {
                 return runtime.fail(.shift_out_of_range);
             }
             const count: std.math.Log2Int(T) = @intCast(right);
-            const computed = if (op == .shift_left)
-                left << count
-            else
-                left >> count;
-            return boxInteger(T, computed);
+            if (op == .shift_left) {
+                const shifted = @shlWithOverflow(left, count);
+                if (shifted[1] != 0) return runtime.fail(.integer_overflow);
+                return boxInteger(T, shifted[0]);
+            }
+            return boxInteger(T, left >> count);
         },
         else => unreachable,
     };
@@ -111,11 +124,26 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
 }
 
 fn boxInteger(comptime T: type, held: T) Value {
-    return if (T == i32) Value.ofInt(held) else Value.ofLong(held);
+    return switch (T) {
+        u8 => Value.ofU8(held),
+        u16 => Value.ofU16(held),
+        u32 => Value.ofU32(held),
+        u64 => Value.ofU64(held),
+        i8 => Value.ofI8(held),
+        i16 => Value.ofI16(held),
+        i32 => Value.ofI32(held),
+        i64 => Value.ofI64(held),
+        else => unreachable,
+    };
 }
 
 fn boxFloating(comptime T: type, held: T) Value {
-    return if (T == f32) Value.ofFloat(held) else Value.ofDouble(held);
+    return switch (T) {
+        f16 => Value.ofF16(held),
+        f32 => Value.ofF32(held),
+        f64 => Value.ofF64(held),
+        else => unreachable,
+    };
 }
 
 /// Float arithmetic, at whichever of the two widths the operands
@@ -188,19 +216,23 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
     // Comparison is also exposed through a C entry point with no trap
     // channel.  Make malformed or mixed representations a false answer
     // instead of letting a payload accessor reinterpret unrelated bits.
-    if (left.tag == .string and !left.hasValidStringRepresentation()) return false;
-    if (right.tag == .string and !right.hasValidStringRepresentation()) return false;
+    if (left.tag == .str and !left.hasValidStringRepresentation()) return false;
+    if (right.tag == .str and !right.hasValidStringRepresentation()) return false;
     switch (left.view()) {
-        .byte => |held| return if (right.tag == .byte) ordered(op, held, right.asByte()) else false,
-        .short => |held| return if (right.tag == .short) ordered(op, held, right.asShort()) else false,
-        .int => |held| return if (right.tag == .int) ordered(op, held, right.asInt()) else false,
-        .long => |held| return if (right.tag == .long) ordered(op, held, right.asLong()) else false,
-        .half => |held| return if (right.tag == .half) ordered(op, held, right.asHalf()) else false,
-        .float => |held| return if (right.tag == .float) ordered(op, held, right.asFloat()) else false,
-        .double => |held| return if (right.tag == .double) ordered(op, held, right.asDouble()) else false,
-        .string => |held| {
-            if (right.tag != .string) return false;
-            const order = std.mem.order(u8, held, right.asString());
+        .u8 => |held| return if (right.tag == .u8) ordered(op, held, right.asU8()) else false,
+        .u16 => |held| return if (right.tag == .u16) ordered(op, held, right.asU16()) else false,
+        .u32 => |held| return if (right.tag == .u32) ordered(op, held, right.asU32()) else false,
+        .u64 => |held| return if (right.tag == .u64) ordered(op, held, right.asU64()) else false,
+        .i8 => |held| return if (right.tag == .i8) ordered(op, held, right.asI8()) else false,
+        .i16 => |held| return if (right.tag == .i16) ordered(op, held, right.asI16()) else false,
+        .i32 => |held| return if (right.tag == .i32) ordered(op, held, right.asI32()) else false,
+        .i64 => |held| return if (right.tag == .i64) ordered(op, held, right.asI64()) else false,
+        .f16 => |held| return if (right.tag == .f16) ordered(op, held, right.asF16()) else false,
+        .f32 => |held| return if (right.tag == .f32) ordered(op, held, right.asF32()) else false,
+        .f64 => |held| return if (right.tag == .f64) ordered(op, held, right.asF64()) else false,
+        .str => |held| {
+            if (right.tag != .str) return false;
+            const order = std.mem.order(u8, held, right.asStr());
             return switch (op) {
                 .equal => order == .eq,
                 .not_equal => order != .eq,
@@ -270,7 +302,7 @@ test "a struct holding none compares, in either order, instead of crashing" {
     // `.none` arm below and panic the process; absent on the right read
     // a zeroed payload and got the right answer by accident.
     const absent = Value.none;
-    const present = Value.ofLong(5);
+    const present = Value.ofI64(5);
 
     try std.testing.expect(compare(.equal, absent, absent));
     try std.testing.expect(!compare(.not_equal, absent, absent));
@@ -288,8 +320,8 @@ test "two runs of different lengths are different, instead of walking off one" {
     // union is refused now — in stage 4 wherever `==` reaches one, and
     // in the MIR verifier beside it — so this is what a damaged module
     // meets rather than undefined behaviour.
-    var short = [_]Value{Value.ofLong(1)};
-    var long = [_]Value{ Value.ofLong(1), Value.ofLong(2) };
+    var short = [_]Value{Value.ofI64(1)};
+    var long = [_]Value{ Value.ofI64(1), Value.ofI64(2) };
 
     try std.testing.expect(!compare(.equal, Value.ofStruct(&short), Value.ofStruct(&long)));
     try std.testing.expect(!compare(.equal, Value.ofStruct(&long), Value.ofStruct(&short)));
@@ -298,13 +330,13 @@ test "two runs of different lengths are different, instead of walking off one" {
 }
 
 test "comparison rejects mixed and malformed payloads without access faults" {
-    var malformed = Value.ofInlineText(.string, "x");
+    var malformed = Value.ofInlineText(.str, "x");
     malformed.inline_length = value.inline_capacity + 1;
-    try std.testing.expect(!compare(.equal, Value.ofString("x"), Value.ofLong(0)));
-    try std.testing.expect(!compare(.equal, Value.ofLong(0), Value.ofString("x")));
-    try std.testing.expect(!compare(.equal, malformed, Value.ofString("x")));
+    try std.testing.expect(!compare(.equal, Value.ofStr("x"), Value.ofI64(0)));
+    try std.testing.expect(!compare(.equal, Value.ofI64(0), Value.ofStr("x")));
+    try std.testing.expect(!compare(.equal, malformed, Value.ofStr("x")));
 
-    var function_slots = [_]Value{ Value.ofLong(1), Value.none };
+    var function_slots = [_]Value{ Value.ofI64(1), Value.none };
     const function = Value.ofFunction(&function_slots);
     try std.testing.expect(!compare(.equal, function, function));
 }
@@ -383,7 +415,7 @@ test "float % floors with //, and the identity holds" {
 /// **The long is always the left operand.**  Stage 4 mirrors the
 /// operator when the double was written first, so there is one shape
 /// here and one to prove.
-pub fn compareLongDouble(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
+pub fn compareI64F64(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
     // NaN is unordered with everything, itself included, so only `!=`
     // is true of it — the same answer `compare` gives above.
     if (std.math.isNan(right)) return op == .not_equal;
@@ -435,29 +467,29 @@ test "mixed comparison is exact at 2^53, where widening stops being" {
     const as_float: f64 = 9007199254740992.0;
 
     // The number that does not survive `sitofp`.
-    try std.testing.expect(!compareLongDouble(.equal, two53 + 1, as_float));
-    try std.testing.expect(compareLongDouble(.greater, two53 + 1, as_float));
-    try std.testing.expect(!compareLongDouble(.less_equal, two53 + 1, as_float));
+    try std.testing.expect(!compareI64F64(.equal, two53 + 1, as_float));
+    try std.testing.expect(compareI64F64(.greater, two53 + 1, as_float));
+    try std.testing.expect(!compareI64F64(.less_equal, two53 + 1, as_float));
     // And the one that does.
-    try std.testing.expect(compareLongDouble(.equal, two53, as_float));
-    try std.testing.expect(compareLongDouble(.less_equal, two53, as_float));
+    try std.testing.expect(compareI64F64(.equal, two53, as_float));
+    try std.testing.expect(compareI64F64(.less_equal, two53, as_float));
 
     // Fractions on both sides of zero.
-    try std.testing.expect(compareLongDouble(.less, 1, 1.5));
-    try std.testing.expect(compareLongDouble(.greater, -1, -1.5));
-    try std.testing.expect(compareLongDouble(.equal, 1, 1.0));
+    try std.testing.expect(compareI64F64(.less, 1, 1.5));
+    try std.testing.expect(compareI64F64(.greater, -1, -1.5));
+    try std.testing.expect(compareI64F64(.equal, 1, 1.0));
 
     // The infinities and NaN.
-    try std.testing.expect(compareLongDouble(.less, std.math.maxInt(i64), std.math.inf(f64)));
-    try std.testing.expect(compareLongDouble(.greater, std.math.minInt(i64), -std.math.inf(f64)));
-    try std.testing.expect(compareLongDouble(.not_equal, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareLongDouble(.equal, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareLongDouble(.less, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareLongDouble(.greater_equal, 0, std.math.nan(f64)));
+    try std.testing.expect(compareI64F64(.less, std.math.maxInt(i64), std.math.inf(f64)));
+    try std.testing.expect(compareI64F64(.greater, std.math.minInt(i64), -std.math.inf(f64)));
+    try std.testing.expect(compareI64F64(.not_equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareI64F64(.equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareI64F64(.less, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareI64F64(.greater_equal, 0, std.math.nan(f64)));
 
     // The i64 edges, where the bound itself is representable.
-    try std.testing.expect(compareLongDouble(.equal, std.math.minInt(i64), -9223372036854775808.0));
-    try std.testing.expect(compareLongDouble(.less, std.math.maxInt(i64), 9223372036854775808.0));
+    try std.testing.expect(compareI64F64(.equal, std.math.minInt(i64), -9223372036854775808.0));
+    try std.testing.expect(compareI64F64(.less, std.math.maxInt(i64), 9223372036854775808.0));
 }
 
 /// Ordering for sort: elements are numbers of any width, or Strings
@@ -465,14 +497,18 @@ test "mixed comparison is exact at 2^53, where widening stops being" {
 pub fn orderedBefore(context: void, left: Value, right: Value) bool {
     _ = context;
     return switch (left.view()) {
-        .byte => |held| held < right.asByte(),
-        .short => |held| held < right.asShort(),
-        .int => |held| held < right.asInt(),
-        .long => |held| held < right.asLong(),
-        .half => |held| held < right.asHalf(),
-        .float => |held| held < right.asFloat(),
-        .double => |held| held < right.asDouble(),
-        .string => |held| std.mem.order(u8, held, right.asString()) == .lt,
+        .u8 => |held| held < right.asU8(),
+        .u16 => |held| held < right.asU16(),
+        .u32 => |held| held < right.asU32(),
+        .u64 => |held| held < right.asU64(),
+        .i8 => |held| held < right.asI8(),
+        .i16 => |held| held < right.asI16(),
+        .i32 => |held| held < right.asI32(),
+        .i64 => |held| held < right.asI64(),
+        .f16 => |held| held < right.asF16(),
+        .f32 => |held| held < right.asF32(),
+        .f64 => |held| held < right.asF64(),
+        .str => |held| std.mem.order(u8, held, right.asStr()) == .lt,
         else => unreachable,
     };
 }
@@ -482,25 +518,40 @@ pub fn orderedBefore(context: void, left: Value, right: Value) bool {
 /// cannot overflow (docs/BITWISE.md D3).
 pub fn bitNot(operand: Value) Value {
     return switch (operand.view()) {
-        .int => |held| Value.ofInt(~held),
-        .long => |held| Value.ofLong(~held),
+        .u8 => |held| Value.ofU8(~held),
+        .u16 => |held| Value.ofU16(~held),
+        .u32 => |held| Value.ofU32(~held),
+        .u64 => |held| Value.ofU64(~held),
+        .i8 => |held| Value.ofI8(~held),
+        .i16 => |held| Value.ofI16(~held),
+        .i32 => |held| Value.ofI32(~held),
+        .i64 => |held| Value.ofI64(~held),
         else => unreachable,
     };
 }
 
 pub fn negate(runtime: *Runtime, operand: Value) Error!Value {
     return switch (operand.view()) {
-        .int => |held| if (held == std.math.minInt(i32))
+        .i8 => |held| if (held == std.math.minInt(i8))
             runtime.fail(.integer_overflow)
         else
-            Value.ofInt(-held),
-        .long => |held| if (held == std.math.minInt(i64))
+            Value.ofI8(-held),
+        .i16 => |held| if (held == std.math.minInt(i16))
             runtime.fail(.integer_overflow)
         else
-            Value.ofLong(-held),
+            Value.ofI16(-held),
+        .i32 => |held| if (held == std.math.minInt(i32))
+            runtime.fail(.integer_overflow)
+        else
+            Value.ofI32(-held),
+        .i64 => |held| if (held == std.math.minInt(i64))
+            runtime.fail(.integer_overflow)
+        else
+            Value.ofI64(-held),
         // A true sign-bit flip, not `0.0 - x`: the two differ for +0.0.
-        .float => |held| Value.ofFloat(-held),
-        .double => |held| Value.ofDouble(-held),
+        .f16 => |held| Value.ofF16(-held),
+        .f32 => |held| Value.ofF32(-held),
+        .f64 => |held| Value.ofF64(-held),
         else => unreachable,
     };
 }
@@ -547,20 +598,24 @@ pub fn convert(runtime: *Runtime, operand: Value, to: value.Tag) Error!Value {
 /// unsigned; the other three are signed (docs/TYPES.md D4).
 fn integerTag(tag: value.Tag) bool {
     return switch (tag) {
-        .byte, .short, .int, .long => true,
-        .half, .float, .double => false,
-        .none, .boolean, .string, .strukt, .function, .object => unreachable,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => true,
+        .f16, .f32, .f64 => false,
+        .none, .boolean, .str, .strukt, .function, .object => unreachable,
     };
 }
 
 /// An integer of any width, read at `i64` — exact for all four,
 /// with `byte` read as the magnitude its bits are (D4).
-fn wideInteger(operand: Value) i64 {
+fn wideInteger(operand: Value) i128 {
     return switch (operand.tag) {
-        .byte => operand.asByte(),
-        .short => operand.asShort(),
-        .int => operand.asInt(),
-        .long => operand.asLong(),
+        .u8 => operand.asU8(),
+        .u16 => operand.asU16(),
+        .u32 => operand.asU32(),
+        .u64 => operand.asU64(),
+        .i8 => operand.asI8(),
+        .i16 => operand.asI16(),
+        .i32 => operand.asI32(),
+        .i64 => operand.asI64(),
         else => unreachable,
     };
 }
@@ -568,9 +623,9 @@ fn wideInteger(operand: Value) i64 {
 /// A float of any width, read at `f64` — exact for all three.
 fn wideFloat(operand: Value) f64 {
     return switch (operand.tag) {
-        .half => operand.asHalf(),
-        .float => operand.asFloat(),
-        .double => operand.asDouble(),
+        .f16 => operand.asF16(),
+        .f32 => operand.asF32(),
+        .f64 => operand.asF64(),
         else => unreachable,
     };
 }
@@ -580,25 +635,48 @@ fn wideFloat(operand: Value) f64 {
 /// anything and `byte(300)` is not 44.  A widening cannot fail and
 /// takes the same path, which is what keeps one statement of the
 /// bounds rather than one per direction.
-fn narrowInteger(runtime: *Runtime, held: i64, to: value.Tag) Error!Value {
+fn narrowInteger(runtime: *Runtime, held: i128, to: value.Tag) Error!Value {
     switch (to) {
-        .byte => {
-            if (held < 0 or held > 255) return runtime.fail(.conversion_range);
-            return Value.ofByte(@intCast(held));
+        .u8 => {
+            if (held < 0 or held > std.math.maxInt(u8)) return runtime.fail(.conversion_range);
+            return Value.ofU8(@intCast(held));
         },
-        .short => {
+        .u16 => {
+            if (held < 0 or held > std.math.maxInt(u16)) return runtime.fail(.conversion_range);
+            return Value.ofU16(@intCast(held));
+        },
+        .u32 => {
+            if (held < 0 or held > std.math.maxInt(u32)) return runtime.fail(.conversion_range);
+            return Value.ofU32(@intCast(held));
+        },
+        .u64 => {
+            if (held < 0 or held > std.math.maxInt(u64)) return runtime.fail(.conversion_range);
+            return Value.ofU64(@intCast(held));
+        },
+        .i8 => {
+            if (held < std.math.minInt(i8) or held > std.math.maxInt(i8)) {
+                return runtime.fail(.conversion_range);
+            }
+            return Value.ofI8(@intCast(held));
+        },
+        .i16 => {
             if (held < std.math.minInt(i16) or held > std.math.maxInt(i16)) {
                 return runtime.fail(.conversion_range);
             }
-            return Value.ofShort(@intCast(held));
+            return Value.ofI16(@intCast(held));
         },
-        .int => {
+        .i32 => {
             if (held < std.math.minInt(i32) or held > std.math.maxInt(i32)) {
                 return runtime.fail(.conversion_range);
             }
-            return Value.ofInt(@intCast(held));
+            return Value.ofI32(@intCast(held));
         },
-        .long => return Value.ofLong(held),
+        .i64 => {
+            if (held < std.math.minInt(i64) or held > std.math.maxInt(i64)) {
+                return runtime.fail(.conversion_range);
+            }
+            return Value.ofI64(@intCast(held));
+        },
         else => unreachable,
     }
 }
@@ -607,11 +685,11 @@ fn narrowInteger(runtime: *Runtime, held: i64, to: value.Tag) Error!Value {
 /// destination width, so there is exactly one rounding.  Never traps —
 /// every integer has a nearest float, `inf` included once the
 /// magnitude passes the top of a `half`.
-fn floatFromInteger(held: i64, to: value.Tag) Value {
+fn floatFromInteger(held: i128, to: value.Tag) Value {
     return switch (to) {
-        .half => Value.ofHalf(@floatFromInt(held)),
-        .float => Value.ofFloat(@floatFromInt(held)),
-        .double => Value.ofDouble(@floatFromInt(held)),
+        .f16 => Value.ofF16(@floatFromInt(held)),
+        .f32 => Value.ofF32(@floatFromInt(held)),
+        .f64 => Value.ofF64(@floatFromInt(held)),
         else => unreachable,
     };
 }
@@ -623,9 +701,9 @@ fn floatFromInteger(held: i64, to: value.Tag) Value {
 /// binary32 (docs/TYPES.md §7).
 fn narrowFloat(held: f64, to: value.Tag) Value {
     return switch (to) {
-        .half => Value.ofHalf(@floatCast(held)),
-        .float => Value.ofFloat(@floatCast(held)),
-        .double => Value.ofDouble(held),
+        .f16 => Value.ofF16(@floatCast(held)),
+        .f32 => Value.ofF32(@floatCast(held)),
+        .f64 => Value.ofF64(held),
         else => unreachable,
     };
 }
@@ -649,26 +727,34 @@ fn narrowFloat(held: f64, to: value.Tag) Value {
 /// catches them, and a value rounding carried past the top of the
 /// range is refused rather than wrapped.
 fn floatToInteger(runtime: *Runtime, held: f64, to: value.Tag) Error!Value {
-    const rounded = roundHalfAway(f64, held);
+    const rounded = @trunc(held);
     // The bottom of the range and *one past* the top, tested with
     // `>=`: every one of those eight bounds is a small integer or a
     // power of two and therefore exact in binary64, while `maxInt`
     // itself is not once the width reaches 64.
     const bounds: struct { lowest: f64, past_top: f64 } = switch (to) {
-        .byte => .{ .lowest = 0.0, .past_top = 256.0 },
-        .short => .{ .lowest = -32768.0, .past_top = 32768.0 },
-        .int => .{ .lowest = -2147483648.0, .past_top = 2147483648.0 },
-        .long => .{ .lowest = -9223372036854775808.0, .past_top = 9223372036854775808.0 },
+        .u8 => .{ .lowest = 0.0, .past_top = 256.0 },
+        .u16 => .{ .lowest = 0.0, .past_top = 65536.0 },
+        .u32 => .{ .lowest = 0.0, .past_top = 4294967296.0 },
+        .u64 => .{ .lowest = 0.0, .past_top = 18446744073709551616.0 },
+        .i8 => .{ .lowest = -128.0, .past_top = 128.0 },
+        .i16 => .{ .lowest = -32768.0, .past_top = 32768.0 },
+        .i32 => .{ .lowest = -2147483648.0, .past_top = 2147483648.0 },
+        .i64 => .{ .lowest = -9223372036854775808.0, .past_top = 9223372036854775808.0 },
         else => unreachable,
     };
     if (std.math.isNan(rounded) or rounded < bounds.lowest or rounded >= bounds.past_top) {
         return runtime.fail(.conversion_range);
     }
     return switch (to) {
-        .byte => Value.ofByte(@intFromFloat(rounded)),
-        .short => Value.ofShort(@intFromFloat(rounded)),
-        .int => Value.ofInt(@intFromFloat(rounded)),
-        .long => Value.ofLong(@intFromFloat(rounded)),
+        .u8 => Value.ofU8(@intFromFloat(rounded)),
+        .u16 => Value.ofU16(@intFromFloat(rounded)),
+        .u32 => Value.ofU32(@intFromFloat(rounded)),
+        .u64 => Value.ofU64(@intFromFloat(rounded)),
+        .i8 => Value.ofI8(@intFromFloat(rounded)),
+        .i16 => Value.ofI16(@intFromFloat(rounded)),
+        .i32 => Value.ofI32(@intFromFloat(rounded)),
+        .i64 => Value.ofI64(@intFromFloat(rounded)),
         else => unreachable,
     };
 }
@@ -725,16 +811,29 @@ test "long(x) rounds half away from zero, on both sides of it" {
 
 pub fn absolute(runtime: *Runtime, operand: Value) Error!Value {
     return switch (operand.view()) {
-        .int => |held| if (held == std.math.minInt(i32))
+        .u8 => |held| Value.ofU8(held),
+        .u16 => |held| Value.ofU16(held),
+        .u32 => |held| Value.ofU32(held),
+        .u64 => |held| Value.ofU64(held),
+        .i8 => |held| if (held == std.math.minInt(i8))
             runtime.fail(.integer_overflow)
         else
-            Value.ofInt(@intCast(@abs(held))),
-        .long => |held| if (held == std.math.minInt(i64))
+            Value.ofI8(@intCast(@abs(held))),
+        .i16 => |held| if (held == std.math.minInt(i16))
             runtime.fail(.integer_overflow)
         else
-            Value.ofLong(@intCast(@abs(held))),
-        .float => |held| Value.ofFloat(@abs(held)),
-        .double => |held| Value.ofDouble(@abs(held)),
+            Value.ofI16(@intCast(@abs(held))),
+        .i32 => |held| if (held == std.math.minInt(i32))
+            runtime.fail(.integer_overflow)
+        else
+            Value.ofI32(@intCast(@abs(held))),
+        .i64 => |held| if (held == std.math.minInt(i64))
+            runtime.fail(.integer_overflow)
+        else
+            Value.ofI64(@intCast(@abs(held))),
+        .f16 => |held| Value.ofF16(@abs(held)),
+        .f32 => |held| Value.ofF32(@abs(held)),
+        .f64 => |held| Value.ofF64(@abs(held)),
         else => unreachable,
     };
 }
@@ -743,10 +842,17 @@ pub fn absolute(runtime: *Runtime, operand: Value) Error!Value {
 /// two differ by a single comparison.
 pub fn extremum(wants_minimum: bool, left: Value, right: Value) Value {
     return switch (left.view()) {
-        .int => |held| boxInteger(i32, pick(wants_minimum, held, right.asInt())),
-        .long => |held| boxInteger(i64, pick(wants_minimum, held, right.asLong())),
-        .float => |held| boxFloating(f32, pick(wants_minimum, held, right.asFloat())),
-        .double => |held| boxFloating(f64, pick(wants_minimum, held, right.asDouble())),
+        .u8 => |held| boxInteger(u8, pick(wants_minimum, held, right.asU8())),
+        .u16 => |held| boxInteger(u16, pick(wants_minimum, held, right.asU16())),
+        .u32 => |held| boxInteger(u32, pick(wants_minimum, held, right.asU32())),
+        .u64 => |held| boxInteger(u64, pick(wants_minimum, held, right.asU64())),
+        .i8 => |held| boxInteger(i8, pick(wants_minimum, held, right.asI8())),
+        .i16 => |held| boxInteger(i16, pick(wants_minimum, held, right.asI16())),
+        .i32 => |held| boxInteger(i32, pick(wants_minimum, held, right.asI32())),
+        .i64 => |held| boxInteger(i64, pick(wants_minimum, held, right.asI64())),
+        .f16 => |held| boxFloating(f16, pick(wants_minimum, held, right.asF16())),
+        .f32 => |held| boxFloating(f32, pick(wants_minimum, held, right.asF32())),
+        .f64 => |held| boxFloating(f64, pick(wants_minimum, held, right.asF64())),
         else => unreachable,
     };
 }
@@ -785,10 +891,10 @@ test "float extrema choose the canonical signed zero" {
     const zeros = [_]f64{ 0.0, -0.0 };
     for (zeros) |left| {
         for (zeros) |right| {
-            const smallest = extremum(true, Value.ofDouble(left), Value.ofDouble(right)).asDouble();
+            const smallest = extremum(true, Value.ofF64(left), Value.ofF64(right)).asF64();
             try std.testing.expectEqual(std.math.signbit(left) or std.math.signbit(right), std.math.signbit(smallest));
 
-            const largest = extremum(false, Value.ofDouble(left), Value.ofDouble(right)).asDouble();
+            const largest = extremum(false, Value.ofF64(left), Value.ofF64(right)).asF64();
             try std.testing.expectEqual(std.math.signbit(left) and std.math.signbit(right), std.math.signbit(largest));
         }
     }
@@ -796,10 +902,10 @@ test "float extrema choose the canonical signed zero" {
 
 test "float extrema keep the number when one operand is NaN" {
     const nan = std.math.nan(f64);
-    try std.testing.expectEqual(@as(f64, 1.5), extremum(true, Value.ofDouble(nan), Value.ofDouble(1.5)).asDouble());
-    try std.testing.expectEqual(@as(f64, 1.5), extremum(false, Value.ofDouble(1.5), Value.ofDouble(nan)).asDouble());
-    try std.testing.expect(std.math.isNan(extremum(true, Value.ofDouble(nan), Value.ofDouble(nan)).asDouble()));
-    try std.testing.expect(std.math.isNan(extremum(false, Value.ofDouble(nan), Value.ofDouble(nan)).asDouble()));
+    try std.testing.expectEqual(@as(f64, 1.5), extremum(true, Value.ofF64(nan), Value.ofF64(1.5)).asF64());
+    try std.testing.expectEqual(@as(f64, 1.5), extremum(false, Value.ofF64(1.5), Value.ofF64(nan)).asF64());
+    try std.testing.expect(std.math.isNan(extremum(true, Value.ofF64(nan), Value.ofF64(nan)).asF64()));
+    try std.testing.expect(std.math.isNan(extremum(false, Value.ofF64(nan), Value.ofF64(nan)).asF64()));
 }
 
 /// `min(max(middle, low), high)`, in that order — the order decides the
@@ -807,10 +913,17 @@ test "float extrema keep the number when one operand is NaN" {
 /// or a signed-zero bound clamps the same way `min` and `max` answer.
 pub fn clamp(held: Value, low: Value, high: Value) Value {
     return switch (held.view()) {
-        .int => |middle| Value.ofInt(pick(true, pick(false, middle, low.asInt()), high.asInt())),
-        .long => |middle| Value.ofLong(pick(true, pick(false, middle, low.asLong()), high.asLong())),
-        .float => |middle| Value.ofFloat(pick(true, pick(false, middle, low.asFloat()), high.asFloat())),
-        .double => |middle| Value.ofDouble(pick(true, pick(false, middle, low.asDouble()), high.asDouble())),
+        .u8 => |middle| Value.ofU8(pick(true, pick(false, middle, low.asU8()), high.asU8())),
+        .u16 => |middle| Value.ofU16(pick(true, pick(false, middle, low.asU16()), high.asU16())),
+        .u32 => |middle| Value.ofU32(pick(true, pick(false, middle, low.asU32()), high.asU32())),
+        .u64 => |middle| Value.ofU64(pick(true, pick(false, middle, low.asU64()), high.asU64())),
+        .i8 => |middle| Value.ofI8(pick(true, pick(false, middle, low.asI8()), high.asI8())),
+        .i16 => |middle| Value.ofI16(pick(true, pick(false, middle, low.asI16()), high.asI16())),
+        .i32 => |middle| Value.ofI32(pick(true, pick(false, middle, low.asI32()), high.asI32())),
+        .i64 => |middle| Value.ofI64(pick(true, pick(false, middle, low.asI64()), high.asI64())),
+        .f16 => |middle| Value.ofF16(pick(true, pick(false, middle, low.asF16()), high.asF16())),
+        .f32 => |middle| Value.ofF32(pick(true, pick(false, middle, low.asF32()), high.asF32())),
+        .f64 => |middle| Value.ofF64(pick(true, pick(false, middle, low.asF64()), high.asF64())),
         else => unreachable,
     };
 }
@@ -841,8 +954,9 @@ const Rounding = enum { square_root, floor, ceil, truncate };
 
 fn atOwnWidth(comptime which: Rounding, operand: Value) Value {
     return switch (operand.tag) {
-        .float => Value.ofFloat(applied(which, f32, operand.asFloat())),
-        else => Value.ofDouble(applied(which, f64, operand.asDouble())),
+        .f16 => Value.ofF16(applied(which, f16, operand.asF16())),
+        .f32 => Value.ofF32(applied(which, f32, operand.asF32())),
+        else => Value.ofF64(applied(which, f64, operand.asF64())),
     };
 }
 

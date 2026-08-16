@@ -36,14 +36,14 @@ pub fn isStringBoundary(held: []const u8, index: usize) bool {
 pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Value {
     const length = std.math.add(usize, left.len, right.len) catch
         return error.OutOfMemory;
-    if (length == 0) return Value.ofString("");
+    if (length == 0) return Value.ofStr("");
     if (Value.fitsInline(length)) {
         var joined: [value.inline_capacity]u8 = undefined;
         @memcpy(joined[0..left.len], left);
         @memcpy(joined[left.len..length], right);
-        return Value.ofInlineText(.string, joined[0..length]);
+        return Value.ofInlineText(.str, joined[0..length]);
     }
-    return Value.ofString(try std.mem.concat(runtime.objects, u8, &.{ left, right }));
+    return Value.ofStr(try std.mem.concat(runtime.objects, u8, &.{ left, right }));
 }
 
 /// `s[start:end]` — a borrow of the original bytes, checked twice: in
@@ -57,7 +57,7 @@ pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Valu
 /// something about to go (docs/STRINGS.md).
 pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asString();
+    const text = held.asStr();
     if (start < 0 or end < start or end > text.len) return runtime.fail(.string_bounds);
     const start_index: usize = @intCast(start);
     const end_index: usize = @intCast(end);
@@ -66,15 +66,15 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     }
     const wanted = text[start_index..end_index];
     if (held.textIsInline()) return Value.ofInlineText(held.tag, wanted);
-    return Value.ofString(wanted);
+    return Value.ofStr(wanted);
 }
 
 /// `s.byte_at(i)` — one raw byte, below the UTF-8 layer on purpose.
 pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asString();
+    const text = held.asStr();
     if (index < 0 or index >= text.len) return runtime.fail(.string_bounds);
-    return Value.ofByte(text[@intCast(index)]);
+    return Value.ofU8(text[@intCast(index)]);
 }
 
 /// `s.find_byte(b, from)` — the scanning primitive std's substring
@@ -82,13 +82,13 @@ pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
 /// -1 when the byte is not there.
 pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asString();
+    const text = held.asStr();
     if (byte < 0 or byte > 0xFF) return runtime.fail(.bad_codepoint);
     if (start < 0 or start > text.len) return runtime.fail(.string_bounds);
     const from: usize = @intCast(start);
     const at = std.mem.indexOfScalarPos(u8, text, from, @intCast(byte)) orelse
-        return Value.ofLong(-1);
-    return Value.ofLong(@intCast(at));
+        return Value.ofI64(-1);
+    return Value.ofI64(@intCast(at));
 }
 
 // ---------------------------------------------------------------------------
@@ -108,27 +108,27 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         // Twenty digits and a sign is the longest an i64 gets, so a
         // number's text always fits inside the value and `string(i)` in
         // a loop allocates nothing at all.
-        .byte => |number| return digitsOf(number),
-        .short => |number| return digitsOf(number),
-        .int => |number| return digitsOf(number),
-        .long => |number| return digitsOf(number),
+        .u8 => |number| return digitsOf(number),
+        .i16 => |number| return digitsOf(number),
+        .i32 => |number| return digitsOf(number),
+        .i64 => |number| return digitsOf(number),
         // `{d}` on a float is the shortest representation that round
         // trips **at its own width** — Zig's Ryū-derived formatter,
         // which is width-generic, so `string(float(1.0) / float(3.0))`
         // is "0.33333334" and not binary64's seventeen digits
         // (docs/TYPES.md §3).
-        .half => |number| return floatText(runtime, number),
-        .float => |number| return floatText(runtime, number),
-        .double => |number| return floatText(runtime, number),
+        .f16 => |number| return floatText(runtime, number),
+        .f32 => |number| return floatText(runtime, number),
+        .f64 => |number| return floatText(runtime, number),
         .boolean => |held_bool| return runtime.ownValue(
-            Value.ofString(if (held_bool) "true" else "false"),
+            Value.ofStr(if (held_bool) "true" else "false"),
         ),
-        .string => {
+        .str => {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             return runtime.ownValue(held);
         },
         .object => switch ((try runtime.resolve(held)).data) {
-            .builder => |builder| return runtime.ownValue(Value.ofString(builder.items)),
+            .builder => |builder| return runtime.ownValue(Value.ofStr(builder.items)),
             .list, .map, .array, .file, .task => return runtime.fail(.not_owned),
         },
         else => return runtime.fail(.not_owned),
@@ -139,7 +139,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
 /// the value, so this allocates nothing.
 fn digitsOf(number: anytype) Value {
     var digits: [24]u8 = undefined;
-    return Value.ofInlineText(.string, std.fmt.bufPrint(
+    return Value.ofInlineText(.str, std.fmt.bufPrint(
         &digits,
         "{d}",
         .{number},
@@ -157,15 +157,15 @@ fn digitsOf(number: anytype) Value {
 /// NaN-producing operation print identically on every host, so the
 /// backend needs no per-operation canonicalization at all.
 fn floatText(runtime: *Runtime, number: anytype) Error!Value {
-    if (std.math.isNan(number)) return Value.ofInlineText(.string, "nan");
+    if (std.math.isNan(number)) return Value.ofInlineText(.str, "nan");
     var written: [64]u8 = undefined;
     const rendered = std.fmt.bufPrint(&written, "{d}", .{number}) catch
-        return Value.ofString(try std.fmt.allocPrint(
+        return Value.ofStr(try std.fmt.allocPrint(
             runtime.objects,
             "{d}",
             .{number},
         ));
-    return runtime.ownValue(Value.ofString(rendered));
+    return runtime.ownValue(Value.ofStr(rendered));
 }
 
 /// `parse_int(s) -> long?`.  "Not a number" is the same reason every
@@ -173,8 +173,8 @@ fn floatText(runtime: *Runtime, number: anytype) Error!Value {
 /// absence rather than a trap or an error (docs/FAILURE.md).
 pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const parsed = std.fmt.parseInt(i64, held.asString(), 10) catch return Value.none;
-    return Value.ofLong(parsed);
+    const parsed = std.fmt.parseInt(i64, held.asStr(), 10) catch return Value.none;
+    return Value.ofI64(parsed);
 }
 
 /// `parse_float(s) -> double?`.  Refuses what `str` would never produce
@@ -182,9 +182,9 @@ pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
 /// here so a double that came from text is always finite.
 pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const parsed = std.fmt.parseFloat(f64, held.asString()) catch return Value.none;
+    const parsed = std.fmt.parseFloat(f64, held.asStr()) catch return Value.none;
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
-    return Value.ofDouble(parsed);
+    return Value.ofF64(parsed);
 }
 
 /// `chr(code)` — one codepoint, UTF-8 encoded into fresh owned
@@ -197,19 +197,19 @@ pub fn chr(runtime: *Runtime, code: i64) Error!Value {
     const length = std.unicode.utf8Encode(codepoint, &buffer) catch
         return runtime.fail(.bad_codepoint);
     // Four bytes at the most, so a codepoint always fits in the value.
-    return Value.ofInlineText(.string, buffer[0..length]);
+    return Value.ofInlineText(.str, buffer[0..length]);
 }
 
 /// `ord(s)` — the first codepoint of `s`, or a trap when there is none
 /// or the bytes are not a whole sequence.
 pub fn ord(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asString();
+    const text = held.asStr();
     if (text.len == 0) return runtime.fail(.bad_codepoint);
     const length = std.unicode.utf8ByteSequenceLength(text[0]) catch
         return runtime.fail(.bad_codepoint);
     if (text.len < length) return runtime.fail(.bad_codepoint);
     const codepoint = std.unicode.utf8Decode(text[0..length]) catch
         return runtime.fail(.bad_codepoint);
-    return Value.ofLong(codepoint);
+    return Value.ofI64(codepoint);
 }

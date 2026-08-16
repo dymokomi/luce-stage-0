@@ -91,9 +91,9 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         // Everything else: `call_indirect` carries its callee in a
         // register, and the rest is data, storage or control flow.
         .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
+        .const_integer,
+        .const_float,
+        .const_str,
         .const_container,
         .local_get,
         .local_set,
@@ -121,18 +121,18 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
 /// The constant row an instruction names, or null — the one place that
 /// knows which instructions carry one, for the reason `functionSlot` is
 /// the one place for functions.  The pointer borrows the instruction.
-const ConstantSlot = union(enum) { container: *u32, string: *u32 };
+const ConstantSlot = union(enum) { container: *u32, str: *u32 };
 
 fn constantSlot(instruction: *Instruction) ?ConstantSlot {
     return switch (instruction.*) {
         .const_container => |*index| .{ .container = index },
-        .const_string => |*index| .{ .string = index },
+        .const_str => |*index| .{ .str = index },
         // A container's own contents name strings too, but they are
         // reached through the row rather than through an instruction
         // (`markStrings`).
         .const_boolean,
-        .const_long,
-        .const_double,
+        .const_integer,
+        .const_float,
         .const_function,
         .local_get,
         .local_set,
@@ -185,7 +185,7 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
                 const slot = constantSlot(&function.instructions[item]) orelse continue;
                 switch (slot) {
                     .container => |index| used_containers[index.*] = true,
-                    .string => |index| used_strings[index.*] = true,
+                    .str => |index| used_strings[index.*] = true,
                 }
             }
         }
@@ -223,7 +223,7 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
                     const slot = constantSlot(&function.instructions[item]) orelse continue;
                     switch (slot) {
                         .container => |index| index.* = moved_containers[index.*],
-                        .string => {},
+                        .str => {},
                     }
                 }
             }
@@ -250,7 +250,7 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
                 for (block.items) |item| {
                     const slot = constantSlot(&function.instructions[item]) orelse continue;
                     switch (slot) {
-                        .string => |index| index.* = moved_strings[index.*],
+                        .str => |index| index.* = moved_strings[index.*],
                         .container => {},
                     }
                 }
@@ -268,17 +268,17 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
 
 fn markStrings(constant: defs.ConstantValue, used: []bool) void {
     switch (constant) {
-        .string => |index| used[index] = true,
+        .str => |index| used[index] = true,
         .strukt => |value| for (value.fields) |field| markStrings(field, used),
-        .boolean, .long, .double, .absent => {},
+        .boolean, .integer, .float, .absent => {},
     }
 }
 
 fn remapStrings(constant: *defs.ConstantValue, moved: []const u32) void {
     switch (constant.*) {
-        .string => |*index| index.* = moved[index.*],
+        .str => |*index| index.* = moved[index.*],
         .strukt => |*value| for (value.fields) |*field| remapStrings(field, moved),
-        .boolean, .long, .double, .absent => {},
+        .boolean, .integer, .float, .absent => {},
     }
 }
 
@@ -293,7 +293,7 @@ test "unreachable functions are pruned and call targets renumbered" {
     const functions = try arena.alloc(Function, 5);
     for (functions, 0..) |*function, index| {
         const instructions = try arena.dupe(Instruction, &.{
-            .{ .const_long = 1 },
+            .{ .const_integer = 1 },
             .{ .ret = 0 },
         });
         const items = try arena.dupe(Register, &.{ 0, 1 });
@@ -302,17 +302,17 @@ test "unreachable functions are pruned and call targets renumbered" {
         function.* = .{
             .name = try std.fmt.allocPrint(arena, "f{d}", .{index}),
             .parameter_count = 0,
-            .return_type = .long,
+            .return_type = .i64,
             .locals = &.{},
             .instructions = instructions,
-            .result_types = try arena.dupe(types_mod.Type, &.{ .long, .none }),
+            .result_types = try arena.dupe(types_mod.Type, &.{ .i64, .none }),
             .blocks = blocks,
         };
     }
     functions[1].name = try arena.dupe(u8, "main");
     functions[1].locals = try arena.dupe(defs.Local, &.{.{
         .name = "receiver",
-        .local_type = .long,
+        .local_type = .i64,
     }});
     functions[1].instructions[0] = .{ .call_inout = .{
         .function = 3,
@@ -323,7 +323,7 @@ test "unreachable functions are pruned and call targets renumbered" {
     functions[3].parameter_count = 1;
     functions[3].locals = try arena.dupe(defs.Local, &.{.{
         .name = "self",
-        .local_type = .long,
+        .local_type = .i64,
         .inout = true,
     }});
     functions[3].instructions[0] = .{ .call = .{ .function = 4, .arguments = &.{} } };
@@ -362,13 +362,13 @@ test "constant rows and shared strings compact from surviving block items" {
     });
     program.structs = try arena.dupe(types_mod.StructLayout, &.{.{
         .name = "Label",
-        .fields = try arena.dupe(types_mod.StructField, &.{.{ .name = "text", .field_type = .string }}),
+        .fields = try arena.dupe(types_mod.StructField, &.{.{ .name = "text", .field_type = .str }}),
     }});
     program.heap_types = try arena.dupe(types_mod.HeapType, &.{.{ .list = .{ .strukt = 0 } }});
-    const dead_fields = try arena.dupe(defs.ConstantValue, &.{.{ .string = 3 }});
-    const first_fields = try arena.dupe(defs.ConstantValue, &.{.{ .string = 2 }});
-    const second_fields = try arena.dupe(defs.ConstantValue, &.{.{ .string = 2 }});
-    const orphan_fields = try arena.dupe(defs.ConstantValue, &.{.{ .string = 4 }});
+    const dead_fields = try arena.dupe(defs.ConstantValue, &.{.{ .str = 3 }});
+    const first_fields = try arena.dupe(defs.ConstantValue, &.{.{ .str = 2 }});
+    const second_fields = try arena.dupe(defs.ConstantValue, &.{.{ .str = 2 }});
+    const orphan_fields = try arena.dupe(defs.ConstantValue, &.{.{ .str = 4 }});
     const dead_values = try arena.dupe(defs.ConstantValue, &.{.{ .strukt = .{ .layout = 0, .fields = dead_fields } }});
     const first_values = try arena.dupe(defs.ConstantValue, &.{.{ .strukt = .{ .layout = 0, .fields = first_fields } }});
     const second_values = try arena.dupe(defs.ConstantValue, &.{.{ .strukt = .{ .layout = 0, .fields = second_fields } }});
@@ -389,11 +389,11 @@ test "constant rows and shared strings compact from surviving block items" {
         .instructions = try arena.dupe(Instruction, &.{
             .{ .const_container = 0 },
             .{ .intrinsic = .{ .kind = .len, .arguments = try arena.dupe(Register, &.{0}) } },
-            .{ .const_string = 0 },
+            .{ .const_str = 0 },
             .{ .intrinsic = .{ .kind = .print, .arguments = try arena.dupe(Register, &.{2}) } },
             .{ .ret = null },
         }),
-        .result_types = try arena.dupe(types_mod.Type, &.{ .{ .heap = 0 }, .long, .string, .none, .none }),
+        .result_types = try arena.dupe(types_mod.Type, &.{ .{ .heap = 0 }, .i64, .str, .none, .none }),
         .blocks = try arena.dupe(defs.Block, &.{.{
             .items = try arena.dupe(Register, &.{ 0, 1, 2, 3, 4 }),
         }}),
@@ -408,23 +408,23 @@ test "constant rows and shared strings compact from surviving block items" {
             .{ .intrinsic = .{ .kind = .len, .arguments = try arena.dupe(Register, &.{0}) } },
             .{ .const_container = 2 },
             .{ .intrinsic = .{ .kind = .len, .arguments = try arena.dupe(Register, &.{2}) } },
-            .{ .const_string = 1 },
+            .{ .const_str = 1 },
             .{ .intrinsic = .{ .kind = .print, .arguments = try arena.dupe(Register, &.{4}) } },
             // Neither orphan belongs to a block.  A pool scan over the
             // raw instruction slice would retain both by mistake.
             .{ .const_container = 3 },
-            .{ .const_string = 4 },
+            .{ .const_str = 4 },
             .{ .ret = null },
         }),
         .result_types = try arena.dupe(types_mod.Type, &.{
             .{ .heap = 0 },
-            .long,
+            .i64,
             .{ .heap = 0 },
-            .long,
-            .string,
+            .i64,
+            .str,
             .none,
             .{ .heap = 0 },
-            .string,
+            .str,
             .none,
         }),
         .blocks = try arena.dupe(defs.Block, &.{.{
@@ -446,14 +446,14 @@ test "constant rows and shared strings compact from surviving block items" {
     try testing.expectEqualStrings("second", program.container_constants[1].name);
     try testing.expectEqual(
         @as(u32, 1),
-        program.container_constants[0].payload.sequence[0].strukt.fields[0].string,
+        program.container_constants[0].payload.sequence[0].strukt.fields[0].str,
     );
     try testing.expectEqual(@as(usize, 2), program.constants.len);
     try testing.expectEqualStrings("live direct", program.constants[0]);
     try testing.expectEqualStrings("shared row", program.constants[1]);
     try testing.expectEqual(@as(u32, 0), program.functions[0].instructions[0].const_container);
     try testing.expectEqual(@as(u32, 1), program.functions[0].instructions[2].const_container);
-    try testing.expectEqual(@as(u32, 0), program.functions[0].instructions[4].const_string);
+    try testing.expectEqual(@as(u32, 0), program.functions[0].instructions[4].const_str);
 
     try compactConstants(arena, &program);
     try testing.expectEqual(@as(usize, 2), program.container_constants.len);

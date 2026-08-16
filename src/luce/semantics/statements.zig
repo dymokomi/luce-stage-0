@@ -1206,7 +1206,7 @@ fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
     // Widened *before* the registers are read: a bound written as
     // an `int` reaches a `long` loop by widening, and the counted
     // loop the IR opens is a `long` one (docs/TYPES.md §2).
-    if (!try self.widensInto(&bounds[0], .long) or !try self.widensInto(&bounds[1], .long)) {
+    if (!try self.widensInto(&bounds[0], .i64) or !try self.widensInto(&bounds[1], .i64)) {
         try self.fail("luce.sema.type", loop.span, "range bounds must be i64", .{});
         return;
     }
@@ -1217,11 +1217,11 @@ fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
 
     try self.pushScope();
     defer self.popScope();
-    const index_local = (try self.declareLocal(loop.name, .long, false, loop.span)) orelse return;
+    const index_local = (try self.declareLocal(loop.name, .i64, false, loop.span)) orelse return;
     // The loop's hidden limit slot, mirrored into the tree's
     // locals table in creation order (lower's counted loop makes
     // it right after the counter's row).
-    _ = try recorder.recordLocal(self, null, .long, false, loop.span);
+    _ = try recorder.recordLocal(self, null, .i64, false, loop.span);
 
     try self.loops.append(self.temporary(), .{
         .scope_depth = self.scopes.items.len,
@@ -1260,7 +1260,7 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     // the element).  `for x in c:` binds the payload for
     // sequences and the key for maps (Python's habit); `for a, b
     // in c:` binds position then payload.
-    var position_type: Type = .long;
+    var position_type: Type = .i64;
     const payload_type: Type = switch (descriptor) {
         .list => |element| element,
         .array => |shape| blk: {
@@ -1294,7 +1294,7 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     // position, in creation order (lower's `replayForIn` takes the
     // same rows at the same point).
     _ = try recorder.recordLocal(self, null, iterable.value_type, false, loop.span);
-    _ = try recorder.recordLocal(self, null, .long, false, loop.span);
+    _ = try recorder.recordLocal(self, null, .i64, false, loop.span);
 
     // Which type each declared name binds at.  Single name:
     // payload for sequences, key for maps.  Two names: first =
@@ -1582,7 +1582,7 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     var error_local: ?LocalId = null;
     if (guarded.binding) |binding| {
         try self.pushScope();
-        if (try self.declareLocal(binding.text, .string, false, binding.span)) |local| {
+        if (try self.declareLocal(binding.text, .str, false, binding.span)) |local| {
             error_local = local;
         }
         try lowerBlock(self, guarded.handler);

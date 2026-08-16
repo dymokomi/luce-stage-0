@@ -67,26 +67,20 @@ pub const Entry = union(enum) {
 pub const Type = union(enum) {
     none,
     boolean,
-    /// The seven numeric types, in ladder order: four integer widths
-    /// and three float widths, sized as Java, C, C#, GLSL and every
-    /// GPU API size them (docs/TYPES.md).
-    ///
-    /// **`byte`, `short` and `half` are storage, not arithmetic**
-    /// (D5): an operator widens them to `int` and `float` before it
-    /// does anything, so no expression ever *has* one of these types
-    /// and there is no checked arithmetic at 8 or 16 bits.  They are
-    /// what an annotation, a parameter, a struct field and above all
-    /// an array element may say — `array(byte, _)`, with its extent
-    /// supplied at construction, is one byte an element and is what the
-    /// three are for (§10).
-    byte,
-    short,
-    int,
-    long,
-    half,
-    float,
-    double,
-    string,
+    /// Fixed-width numbers. Every integer is a checked arithmetic type;
+    /// no width is merely storage and no operator silently promotes it.
+    u8,
+    u16,
+    u32,
+    u64,
+    i8,
+    i16,
+    i32,
+    i64,
+    f16,
+    f32,
+    f64,
+    str,
     strukt: u32,
     heap: u32,
     /// A set of named constants at one integer width (docs/ENUMS.md).
@@ -146,33 +140,34 @@ pub const Type = union(enum) {
         index: u32,
         backing: Backing,
 
-        /// The four rungs of the integer ladder a member may be stored
-        /// at.  A narrower type than `Type` because these are the only
-        /// four an enum can name, and a set that cannot spell `double`
-        /// needs no diagnostic saying so.
+        /// The eight integer widths an enum may use as its backing.
         pub const Backing = enum {
-            byte,
-            short,
-            int,
-            long,
+            u8,
+            u16,
+            u32,
+            u64,
+            i8,
+            i16,
+            i32,
+            i64,
 
             pub fn asType(self: Backing) Type {
                 return switch (self) {
-                    .byte => .byte,
-                    .short => .short,
-                    .int => .int,
-                    .long => .long,
+                    inline else => |tag| @unionInit(Type, @tagName(tag), {}),
                 };
             }
 
-            /// The rung a written width names, or null when the name is
-            /// not one of the four.
+            /// The integer width a written type names.
             pub fn of(written: Type) ?Backing {
                 return switch (written) {
-                    .byte => .byte,
-                    .short => .short,
-                    .int => .int,
-                    .long => .long,
+                    .u8 => .u8,
+                    .u16 => .u16,
+                    .u32 => .u32,
+                    .u64 => .u64,
+                    .i8 => .i8,
+                    .i16 => .i16,
+                    .i32 => .i32,
+                    .i64 => .i64,
                     else => null,
                 };
             }
@@ -185,14 +180,18 @@ pub const Type = union(enum) {
     /// write a second.
     pub const Payload = union(enum) {
         boolean,
-        byte,
-        short,
-        int,
-        long,
-        half,
-        float,
-        double,
-        string,
+        u8,
+        u16,
+        u32,
+        u64,
+        i8,
+        i16,
+        i32,
+        i64,
+        f16,
+        f32,
+        f64,
+        str,
         strukt: u32,
         heap: u32,
         enumeration: EnumRef,
@@ -219,14 +218,18 @@ pub const Type = union(enum) {
         pub fn asType(self: Payload) Type {
             return switch (self) {
                 .boolean => .boolean,
-                .byte => .byte,
-                .short => .short,
-                .int => .int,
-                .long => .long,
-                .half => .half,
-                .float => .float,
-                .double => .double,
-                .string => .string,
+                .u8 => .u8,
+                .u16 => .u16,
+                .u32 => .u32,
+                .u64 => .u64,
+                .i8 => .i8,
+                .i16 => .i16,
+                .i32 => .i32,
+                .i64 => .i64,
+                .f16 => .f16,
+                .f32 => .f32,
+                .f64 => .f64,
+                .str => .str,
                 .strukt => |index| .{ .strukt = index },
                 .heap => |index| .{ .heap = index },
                 .enumeration => |reference| .{ .enumeration = reference },
@@ -289,23 +292,20 @@ pub const Type = union(enum) {
         return self.isInteger() or self.isFloating();
     }
 
-    /// The integers, and nothing else — `bool` is not a small integer
-    /// here and never has been.  Three are signed; `byte` is the one
-    /// unsigned type there is and the only one there will be (D4).
+    /// The integers, and nothing else — `bool` is never numeric.
     pub fn isInteger(self: Type) bool {
-        return self == .byte or self == .short or self == .int or self == .long;
+        return switch (self) {
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => true,
+            else => false,
+        };
     }
 
     pub fn isFloating(self: Type) bool {
-        return self == .half or self == .float or self == .double;
+        return self == .f16 or self == .f32 or self == .f64;
     }
 
-    /// Whether the bits of an integer type are read as a magnitude.
-    /// Only `byte` is, which is what "unsigned" means about it and the
-    /// whole of what is numeric about it (D4): widening a `byte` is a
-    /// `zext`, widening a `short` a `sext`.
     pub fn isUnsigned(self: Type) bool {
-        return self == .byte;
+        return self == .u8 or self == .u16 or self == .u32 or self == .u64;
     }
 
     /// How wide a numeric type is, in bits.  Asked only of one:
@@ -314,13 +314,11 @@ pub const Type = union(enum) {
     /// being stopped by it.
     pub fn numericBits(self: Type) u16 {
         return switch (self) {
-            .byte => 8,
-            .short, .half => 16,
-            .int, .float => 32,
-            .long, .double => 64,
-            // An enum is not a number (D6): asking how wide one is is
-            // asking about `int(m)`, which is a different type.
-            .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
+            .u8, .i8 => 8,
+            .u16, .i16, .f16 => 16,
+            .u32, .i32, .f32 => 32,
+            .u64, .i64, .f64 => 64,
+            .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
         };
     }
 
@@ -332,88 +330,44 @@ pub const Type = union(enum) {
     /// Asked only of an integer; the caller has tested `isInteger`.
     pub fn integerRange(self: Type) struct { low: i128, high: i128 } {
         return switch (self) {
-            .byte => .{ .low = 0, .high = 255 },
-            .short => .{ .low = -32768, .high = 32767 },
-            .int => .{ .low = -2147483648, .high = 2147483647 },
-            .long => .{
-                .low = std.math.minInt(i64),
-                .high = std.math.maxInt(i64),
-            },
-            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
+            .u8 => .{ .low = 0, .high = std.math.maxInt(u8) },
+            .u16 => .{ .low = 0, .high = std.math.maxInt(u16) },
+            .u32 => .{ .low = 0, .high = std.math.maxInt(u32) },
+            .u64 => .{ .low = 0, .high = std.math.maxInt(u64) },
+            .i8 => .{ .low = std.math.minInt(i8), .high = std.math.maxInt(i8) },
+            .i16 => .{ .low = std.math.minInt(i16), .high = std.math.maxInt(i16) },
+            .i32 => .{ .low = std.math.minInt(i32), .high = std.math.maxInt(i32) },
+            .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
+            .none, .boolean, .f16, .f32, .f64, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
         };
     }
 
-    /// The type an operator computes this one at — D5's collapse from
-    /// a seven-by-seven promotion table to four arithmetic types.
-    /// `byte` and `short` compute at `int`, `half` at `float`, and the
-    /// four arithmetic types compute at themselves.  Null for
-    /// everything that is not a number.
-    ///
-    /// This is why there is no checked arithmetic at 8 or 16 bits and
-    /// no binary16 arithmetic on any target: no expression ever has
-    /// one of the three storage types, so there is nothing for either
-    /// to be defined on.
+    /// Every numeric type computes at its own width.
     pub fn arithmeticType(self: Type) ?Type {
-        return switch (self) {
-            .byte, .short, .int => .int,
-            .long => .long,
-            .half, .float => .float,
-            .double => .double,
-            .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => null,
-        };
+        return if (self.isNumeric()) self else null;
     }
 
     /// Whether a value of `self` reaches a `to` place with **nothing
     /// written down** — the whole of the language's implicit
     /// conversion, stated once (docs/TYPES.md §2).
     ///
-    /// Along a ladder, every rung reaches every rung above it and
-    /// exactly: `byte` into `short`, `int` and `long`, `short` into
-    /// `int` and `long`, `int` into `long`; `half` into `float`.
-    /// Across the ladders the answer is always `double`:
-    /// `int` is exact in it and `long` is exact below 2^53, which is
-    /// the one lossy implicit conversion the language has and the one
-    /// `docs/NUMERICS.md` §6 ratified.  What is *not* here is Java's
-    /// `int → float` and `long → float`, which lose everything above
-    /// 2^24 from sources that reach it routinely; a program that wants
-    /// a narrow float writes `float(x)` and says so.
-    ///
-    /// Narrowing is in no direction and no context: not `long` into
-    /// `int`, not `double` into `float`, not at a store, an argument
-    /// or a return.
+    /// Numeric values never convert implicitly. Contextual literals are
+    /// resolved before they become concrete values and therefore do not
+    /// use this relation.
     pub fn widensTo(self: Type, to: Type) bool {
-        return switch (self) {
-            .byte => to == .short or to == .int or to == .long or to == .double,
-            .short => to == .int or to == .long or to == .double,
-            .int => to == .long or to == .double,
-            .long => to == .double,
-            .half => to == .float or to == .double,
-            .float => to == .double,
-            // An enum reaches no number with nothing written down (D4):
-            // it is a set of names, and `int(m)` is how a program says
-            // it means the number.
-            .double, .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
-        };
+        _ = self;
+        _ = to;
+        return false;
     }
 
     /// The type two numeric operands meet at, or null when either is
     /// not a number.
     ///
-    /// **Each operand goes to its arithmetic type first** (D5), so a
-    /// storage type never survives an operator: `byte + byte` is an
-    /// `int`, `half * half` a `float`, and neither 8-bit arithmetic
-    /// nor binary16 arithmetic is ever asked for.  After that the
-    /// rule is the four-type one it always was — same type, same
-    /// answer; two integers meet at the wider; two floats meet at the
-    /// wider; a mixed pair meets at `double`, whichever way round it
-    /// was written.
+    /// Concrete numeric operands meet only when their types already
+    /// match. A literal is contextualized before this question is asked.
     pub fn unified(left: Type, right: Type) ?Type {
-        const wide_left = left.arithmeticType() orelse return null;
-        const wide_right = right.arithmeticType() orelse return null;
-        if (wide_left.eql(wide_right)) return wide_left;
-        if (wide_left.isInteger() and wide_right.isInteger()) return .long;
-        if (wide_left.isFloating() and wide_right.isFloating()) return .double;
-        return .double;
+        if (!left.isNumeric() or !right.isNumeric()) return null;
+        return if (left.eql(right)) left else null;
     }
 
     /// Whether the conversion `to(x)` can stop the program.
@@ -463,14 +417,18 @@ pub const Type = union(enum) {
             // written spelling's business; here it is one more payload.
             .function => |index| .{ .optional = .{ .function = index } },
             .boolean => .{ .optional = .boolean },
-            .byte => .{ .optional = .byte },
-            .short => .{ .optional = .short },
-            .int => .{ .optional = .int },
-            .long => .{ .optional = .long },
-            .half => .{ .optional = .half },
-            .float => .{ .optional = .float },
-            .double => .{ .optional = .double },
-            .string => .{ .optional = .string },
+            .u8 => .{ .optional = .u8 },
+            .u16 => .{ .optional = .u16 },
+            .u32 => .{ .optional = .u32 },
+            .u64 => .{ .optional = .u64 },
+            .i8 => .{ .optional = .i8 },
+            .i16 => .{ .optional = .i16 },
+            .i32 => .{ .optional = .i32 },
+            .i64 => .{ .optional = .i64 },
+            .f16 => .{ .optional = .f16 },
+            .f32 => .{ .optional = .f32 },
+            .f64 => .{ .optional = .f64 },
+            .str => .{ .optional = .str },
             .strukt => |index| .{ .optional = .{ .strukt = index } },
             .heap => |index| .{ .optional = .{ .heap = index } },
             // `Shape?` is D14's converse: the cheap half of keeping
@@ -578,7 +536,7 @@ pub const Signature = struct {
 /// D1, D5).
 pub const EnumMember = struct {
     name: []const u8, // arena-owned by the program
-    value: i64,
+    value: i128,
 };
 
 /// One declared enum: its name, the width its members are stored at,
@@ -603,7 +561,7 @@ pub const EnumType = struct {
 
     /// The member holding `value`, or null when no member does — which
     /// is exactly the question `Method(n)` asks (R2).
-    pub fn memberOfValue(self: EnumType, value: i64) ?u32 {
+    pub fn memberOfValue(self: EnumType, value: i128) ?u32 {
         for (self.members, 0..) |member, index| {
             if (member.value == value) return @intCast(index);
         }
@@ -704,6 +662,10 @@ pub const StructLayout = struct {
 pub const Builtin = enum {
     boolean,
     u8,
+    u16,
+    u32,
+    u64,
+    i8,
     i16,
     i32,
     i64,
@@ -750,6 +712,10 @@ pub fn builtinNamed(text: []const u8) ?Builtin {
 const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "bool", .is = .boolean },
     .{ .name = "u8", .is = .u8 },
+    .{ .name = "u16", .is = .u16 },
+    .{ .name = "u32", .is = .u32 },
+    .{ .name = "u64", .is = .u64 },
+    .{ .name = "i8", .is = .i8 },
     .{ .name = "i16", .is = .i16 },
     .{ .name = "i32", .is = .i32 },
     .{ .name = "i64", .is = .i64 },
@@ -814,7 +780,7 @@ pub fn retiredSpelling(text: []const u8) ?[]const u8 {
 pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
-        .u8, .i16, .i32, .i64, .f16, .f32, .f64, .str => builtin,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => builtin,
         .boolean, .list, .map, .array, .builder, .file, .task => null,
     };
 }
@@ -862,14 +828,18 @@ fn writeTypeName(
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
         .boolean => try written.appendSlice(allocator, "bool"),
-        .byte => try written.appendSlice(allocator, "u8"),
-        .short => try written.appendSlice(allocator, "i16"),
-        .int => try written.appendSlice(allocator, "i32"),
-        .long => try written.appendSlice(allocator, "i64"),
-        .half => try written.appendSlice(allocator, "f16"),
-        .float => try written.appendSlice(allocator, "f32"),
-        .double => try written.appendSlice(allocator, "f64"),
-        .string => try written.appendSlice(allocator, "str"),
+        .u8 => try written.appendSlice(allocator, "u8"),
+        .u16 => try written.appendSlice(allocator, "u16"),
+        .u32 => try written.appendSlice(allocator, "u32"),
+        .u64 => try written.appendSlice(allocator, "u64"),
+        .i8 => try written.appendSlice(allocator, "i8"),
+        .i16 => try written.appendSlice(allocator, "i16"),
+        .i32 => try written.appendSlice(allocator, "i32"),
+        .i64 => try written.appendSlice(allocator, "i64"),
+        .f16 => try written.appendSlice(allocator, "f16"),
+        .f32 => try written.appendSlice(allocator, "f32"),
+        .f64 => try written.appendSlice(allocator, "f64"),
+        .str => try written.appendSlice(allocator, "str"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
         .variant => |index| try written.appendSlice(allocator, variants[index].name),
@@ -934,19 +904,19 @@ fn writeTypeName(
 }
 
 test "type equality distinguishes struct indices" {
-    try std.testing.expect(Type.eql(.long, .long));
-    try std.testing.expect(!Type.eql(.long, .double));
+    try std.testing.expect(Type.eql(.i64, .i64));
+    try std.testing.expect(!Type.eql(.i64, .f64));
     try std.testing.expect(Type.eql(.{ .strukt = 2 }, .{ .strukt = 2 }));
     try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .{ .strukt = 3 }));
-    try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .long));
+    try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .i64));
 }
 
 test "an optional is its payload plus one level, and never two" {
-    const maybe_int = Type.optionalOf(.long).?;
-    try std.testing.expect(maybe_int.eql(.{ .optional = .long }));
-    try std.testing.expect(!maybe_int.eql(.long));
-    try std.testing.expect(maybe_int.held().?.eql(.long));
-    try std.testing.expectEqual(@as(?Type, null), (Type{ .long = {} }).held());
+    const maybe_int = Type.optionalOf(.i64).?;
+    try std.testing.expect(maybe_int.eql(.{ .optional = .i64 }));
+    try std.testing.expect(!maybe_int.eql(.i64));
+    try std.testing.expect(maybe_int.held().?.eql(.i64));
+    try std.testing.expectEqual(@as(?Type, null), (Type{ .i64 = {} }).held());
 
     // `T??` and `None?` have no representation to reach.
     try std.testing.expectEqual(@as(?Type, null), Type.optionalOf(maybe_int));
@@ -962,42 +932,42 @@ test "an optional is its payload plus one level, and never two" {
 }
 
 test "an optional type writes the ? it was written with" {
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, &.{}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .i64 }}, &.{}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list[i64]?", written);
 }
 
 test "an enum is its own type, its own name, and its backing width underneath" {
-    const method: Type = .{ .enumeration = .{ .index = 0, .backing = .byte } };
-    const kind: Type = .{ .enumeration = .{ .index = 1, .backing = .byte } };
+    const method: Type = .{ .enumeration = .{ .index = 0, .backing = .u8 } };
+    const kind: Type = .{ .enumeration = .{ .index = 1, .backing = .u8 } };
 
     // Identity is the index: two enums of one width are two types.
-    try std.testing.expect(method.eql(.{ .enumeration = .{ .index = 0, .backing = .byte } }));
+    try std.testing.expect(method.eql(.{ .enumeration = .{ .index = 0, .backing = .u8 } }));
     try std.testing.expect(!method.eql(kind));
-    try std.testing.expect(!method.eql(.byte));
+    try std.testing.expect(!method.eql(.u8));
 
     // Not a number to a program: no arithmetic, no ordering, no
     // implicit reach into a width that would hold it (D4, D6).
     try std.testing.expect(!method.isNumeric());
     try std.testing.expect(!method.isInteger());
     try std.testing.expectEqual(@as(?Type, null), method.arithmeticType());
-    try std.testing.expect(!method.widensTo(.int));
-    try std.testing.expect(!method.widensTo(.long));
-    try std.testing.expect(!(Type{ .byte = {} }).widensTo(method));
+    try std.testing.expect(!method.widensTo(.i32));
+    try std.testing.expect(!method.widensTo(.i64));
+    try std.testing.expect(!(Type{ .u8 = {} }).widensTo(method));
 
     // A number underneath, everywhere a machine asks (D10).
-    try std.testing.expect(method.storage().eql(.byte));
-    try std.testing.expect((Type{ .long = {} }).storage().eql(.long));
+    try std.testing.expect(method.storage().eql(.u8));
+    try std.testing.expect((Type{ .i64 = {} }).storage().eql(.i64));
 
     // `Method?` exists, holds a `Method`, and is not a `byte?`.
     const maybe = Type.optionalOf(method).?;
     try std.testing.expect(maybe.held().?.eql(method));
-    try std.testing.expect(!maybe.eql(Type.optionalOf(.byte).?));
+    try std.testing.expect(!maybe.eql(Type.optionalOf(.u8).?));
     try std.testing.expect(!maybe.eql(Type.optionalOf(kind).?));
 
     const enums = [_]EnumType{
-        .{ .name = "Method", .backing = .byte, .members = &.{} },
-        .{ .name = "Kind", .backing = .byte, .members = &.{} },
+        .{ .name = "Method", .backing = .u8, .members = &.{} },
+        .{ .name = "Kind", .backing = .u8, .members = &.{} },
     };
     const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, &.{}, &.{}, .{ .heap = 0 });
     defer std.testing.allocator.free(written);

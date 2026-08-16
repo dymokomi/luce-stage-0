@@ -71,14 +71,15 @@ pub const double_range_message =
 /// at the top of their ladders name no rung because there is none.
 pub fn rangeMessage(landed: Type) []const u8 {
     return switch (landed) {
-        .byte => byte_range_message,
-        .short => short_range_message,
-        .int => int_range_message,
-        .long => long_range_message,
-        .half => half_range_message,
-        .float => float_range_message,
-        .double => double_range_message,
-        .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
+        .u8 => byte_range_message,
+        .u16, .u32, .u64, .i8 => long_range_message,
+        .i16 => short_range_message,
+        .i32 => int_range_message,
+        .i64 => long_range_message,
+        .f16 => half_range_message,
+        .f32 => float_range_message,
+        .f64 => double_range_message,
+        .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
     };
 }
 
@@ -88,20 +89,24 @@ pub fn rangeMessage(landed: Type) []const u8 {
 /// `byte?` and `half?` look through their optional layer identically.
 pub fn literalLandingType(expected: Type) ?Type {
     return switch (expected) {
-        .byte, .short, .int, .long, .half, .float, .double => expected,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => expected,
         .optional => |payload| switch (payload) {
-            .byte => .byte,
-            .short => .short,
-            .int => .int,
-            .long => .long,
-            .half => .half,
-            .float => .float,
-            .double => .double,
+            .u8 => .u8,
+            .u16 => .u16,
+            .u32 => .u32,
+            .u64 => .u64,
+            .i8 => .i8,
+            .i16 => .i16,
+            .i32 => .i32,
+            .i64 => .i64,
+            .f16 => .f16,
+            .f32 => .f32,
+            .f64 => .f64,
             // A number never lands on an enum: `Method` is a set of
             // names and `Method(8)` is the only way in (D4, R2).
-            .boolean, .string, .strukt, .heap, .enumeration, .variant, .function => null,
+            .boolean, .str, .strukt, .heap, .enumeration, .variant, .function => null,
         },
-        .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function => null,
+        .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function => null,
     };
 }
 
@@ -483,8 +488,8 @@ pub const InterfaceConformance = struct {
 pub const FieldDefault = struct {
     expression: ?*const ast.Expression = null,
     state: enum { pending, evaluating, ready, failed } = .pending,
-    value: ConstantValue = .{ .long = 0 },
-    value_type: Type = .long,
+    value: ConstantValue = .{ .integer = 0 },
+    value_type: Type = .i64,
 };
 
 /// What a struct layout costs and carries, computed once for all.
@@ -505,10 +510,10 @@ pub const StructShape = struct {
 /// (docs/CONSTANTS.md R-C).  The row, and every slice below, is
 /// arena-owned by the analyzed program.
 pub const ConstantValue = union(enum) {
-    long: i64,
-    double: f64,
+    integer: i128,
+    float: f64,
     boolean: bool,
-    string: []const u8, // arena-owned
+    str: []const u8, // arena-owned
     strukt: struct { layout: u32, fields: []ConstantValue },
     container: u32,
     /// `none`, folded where something said what it is absent *of* — a
@@ -529,8 +534,8 @@ pub const ConstantInfo = struct {
     /// Lazy evaluation with cycle detection: constants may reference
     /// each other across modules in any order, but never in a loop.
     state: enum { pending, evaluating, ready, failed } = .pending,
-    value: ConstantValue = .{ .long = 0 },
-    value_type: Type = .long,
+    value: ConstantValue = .{ .integer = 0 },
+    value_type: Type = .i64,
 };
 
 // ---------------------------------------------------------------------------

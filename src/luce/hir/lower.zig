@@ -206,7 +206,7 @@ const Replay = struct {
 
     fn ownsStorage(self: *const Replay, of: Type) bool {
         return switch (of) {
-            .string, .strukt, .variant, .function => true,
+            .str, .strukt, .variant, .function => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
@@ -214,7 +214,7 @@ const Replay = struct {
 
     fn carriesText(of: Type) bool {
         return switch (of) {
-            .string => true,
+            .str => true,
             .optional => |payload| carriesText(payload.asType()),
             else => false,
         };
@@ -562,10 +562,10 @@ const Replay = struct {
 
     fn replayCore(self: *Replay, node: nodes.NodeRef) Error!Register {
         return switch (node.*) {
-            .const_long => |literal| try self.code.emit(.{ .const_long = literal.value }, literal.result),
-            .const_double => |literal| try self.code.emit(.{ .const_double = literal.value }, literal.result),
+            .const_integer => |literal| try self.code.emit(.{ .const_integer = literal.value }, literal.result),
+            .const_float => |literal| try self.code.emit(.{ .const_float = literal.value }, literal.result),
             .const_boolean => |literal| try self.code.emit(.{ .const_boolean = literal.value }, literal.result),
-            .const_string => |literal| try self.code.emit(.{ .const_string = literal.constant }, literal.result),
+            .const_str => |literal| try self.code.emit(.{ .const_str = literal.constant }, literal.result),
             .absent => |absent| try self.code.zeroOf(absent.result),
             .local_get => |read| try self.code.load(read.local),
             .narrowed_get => |read| narrowed: {
@@ -866,6 +866,7 @@ const Replay = struct {
     fn replayWrittenOperands(self: *Replay, batch: nodes.OperandBatch) Error![]BatchEntry {
         const written = batch.written;
         const entries = try self.scratch().alloc(BatchEntry, batch.operands.len);
+        errdefer self.scratch().free(entries);
         for (batch.operands[0..written], 0..) |operand, index| {
             entries[index] = try self.peel(operand);
         }
@@ -883,6 +884,7 @@ const Replay = struct {
     /// with rewrites, reloads — wrappers stay the caller's.
     fn replayOperandRun(self: *Replay, operands: []const nodes.Operand) Error![]BatchEntry {
         const entries = try self.scratch().alloc(BatchEntry, operands.len);
+        errdefer self.scratch().free(entries);
         for (operands, entries) |operand, *entry| entry.* = try self.peel(operand.node);
         self.markSpills(entries, &.{});
         for (operands, entries, 0..) |operand, *entry, index| {
@@ -1051,11 +1053,11 @@ const Replay = struct {
             const whole = if (int_first) entries[0].register else entries[1].register;
             const fraction = if (int_first) entries[1].register else entries[0].register;
             const arguments = try self.arena().alloc(Register, 3);
-            arguments[0] = try self.code.emit(.{ .const_long = @intFromEnum(spelled) }, .long);
+            arguments[0] = try self.code.emit(.{ .const_integer = @intFromEnum(spelled) }, .i64);
             arguments[1] = whole;
             arguments[2] = fraction;
             return self.code.emit(
-                .{ .intrinsic = .{ .kind = .compare_long_double, .arguments = arguments } },
+                .{ .intrinsic = .{ .kind = .compare_i64_f64, .arguments = arguments } },
                 .boolean,
             );
         }
@@ -1317,12 +1319,12 @@ const Replay = struct {
 
     fn replayConversion(self: *Replay, called: nodes.Expression.Call, produced: Type) Error!Register {
         const operand = try self.replayValue(called.operands.operands[0]);
-        if (produced == .string) {
+        if (produced == .str) {
             const arguments = try self.arena().alloc(Register, 1);
             arguments[0] = operand;
             return self.code.emit(
                 .{ .intrinsic = .{ .kind = .str_value, .arguments = arguments } },
-                .string,
+                .str,
             );
         }
         return self.code.emit(.{ .convert = operand }, produced);
@@ -1332,13 +1334,13 @@ const Replay = struct {
     /// apart by the result type (nodes.ResolvedCallee).
     fn replayEnumText(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
         const declared = self.code.enums[index];
-        if (called.result == .string) {
+        if (called.result == .str) {
             const operand = try self.replayValue(called.operands.operands[0]);
             const first = try self.code.emit(
-                .{ .const_string = try self.code.pool.intern(declared.members[0].name) },
-                .string,
+                .{ .const_str = try self.code.pool.intern(declared.members[0].name) },
+                .str,
             );
-            const result = self.takeSlot(null, .string, false);
+            const result = self.takeSlot(null, .str, false);
             try self.code.store(result, first);
             if (declared.members.len == 1) return self.code.load(result);
             const enum_type = coreTypeOf(called.operands.operands[0]);
@@ -1347,7 +1349,7 @@ const Replay = struct {
             var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
             defer frames.deinit(self.scratch());
             for (declared.members[1..]) |member| {
-                const number = try self.code.emit(.{ .const_long = member.value }, enum_type);
+                const number = try self.code.emit(.{ .const_integer = member.value }, enum_type);
                 const same = try self.code.emit(.{ .binary = .{
                     .op = .equal,
                     .operand_type = enum_type,
@@ -1356,8 +1358,8 @@ const Replay = struct {
                 } }, .boolean);
                 const arms = try self.code.openIf(same, true);
                 try self.code.store(result, try self.code.emit(
-                    .{ .const_string = try self.code.pool.intern(member.name) },
-                    .string,
+                    .{ .const_str = try self.code.pool.intern(member.name) },
+                    .str,
                 ));
                 try self.code.elseArm(arms);
                 try frames.append(self.scratch(), arms);
@@ -1369,7 +1371,8 @@ const Replay = struct {
         const operand = try self.replayValue(called.operands.operands[0]);
         const answer = called.result;
         const of = answer.held().?;
-        const held = self.takeSlot(null, .long, false);
+        const backing = of.enumeration.backing.asType();
+        const held = self.takeSlot(null, backing, false);
         try self.code.store(held, operand);
         const absent = try self.code.emit(
             .{ .intrinsic = .{ .kind = .none_value, .arguments = &.{} } },
@@ -1380,15 +1383,15 @@ const Replay = struct {
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.scratch());
         for (declared.members) |member| {
-            const number = try self.code.emit(.{ .const_long = member.value }, .long);
+            const number = try self.code.emit(.{ .const_integer = member.value }, backing);
             const same = try self.code.emit(.{ .binary = .{
                 .op = .equal,
-                .operand_type = .long,
+                .operand_type = backing,
                 .left = try self.code.load(held),
                 .right = number,
             } }, .boolean);
             const arms = try self.code.openIf(same, true);
-            const found = try self.code.emit(.{ .const_long = member.value }, of);
+            const found = try self.code.emit(.{ .const_integer = member.value }, of);
             const wrapped = try self.arena().alloc(Register, 1);
             wrapped[0] = found;
             try self.code.store(result, try self.code.emit(
@@ -1406,10 +1409,10 @@ const Replay = struct {
         const declared = self.code.variants[index];
         const operand = try self.replayValue(called.operands.operands[0]);
         const first = try self.code.emit(
-            .{ .const_string = try self.code.pool.intern(declared.members[0].name) },
-            .string,
+            .{ .const_str = try self.code.pool.intern(declared.members[0].name) },
+            .str,
         );
-        const result = self.takeSlot(null, .string, false);
+        const result = self.takeSlot(null, .str, false);
         try self.code.store(result, first);
         if (declared.members.len == 1) return self.code.load(result);
         const value_type = coreTypeOf(called.operands.operands[0]);
@@ -1420,19 +1423,19 @@ const Replay = struct {
         for (declared.members[1..], 1..) |member, member_index| {
             const tag = try self.code.emit(
                 .{ .variant_tag = .{ .target = try self.code.load(held) } },
-                .long,
+                .i64,
             );
-            const number = try self.code.emit(.{ .const_long = @intCast(member_index) }, .long);
+            const number = try self.code.emit(.{ .const_integer = @intCast(member_index) }, .i64);
             const same = try self.code.emit(.{ .binary = .{
                 .op = .equal,
-                .operand_type = .long,
+                .operand_type = .i64,
                 .left = tag,
                 .right = number,
             } }, .boolean);
             const arms = try self.code.openIf(same, true);
             try self.code.store(result, try self.code.emit(
-                .{ .const_string = try self.code.pool.intern(member.name) },
-                .string,
+                .{ .const_str = try self.code.pool.intern(member.name) },
+                .str,
             ));
             try self.code.elseArm(arms);
             try frames.append(self.scratch(), arms);
@@ -1613,7 +1616,7 @@ const Replay = struct {
         var dims: []Register = &.{};
         if (builds_array) {
             dims = try self.arena().alloc(Register, 1);
-            dims[0] = try self.code.emit(.{ .const_long = @intCast(literal.elements.len) }, .long);
+            dims[0] = try self.code.emit(.{ .const_integer = @intCast(literal.elements.len) }, .i64);
         }
         const object = try self.code.emit(
             .{ .heap_new = .{ .heap = literal.result.heap, .dims = dims } },
@@ -1628,7 +1631,7 @@ const Replay = struct {
             if (builds_array) {
                 const arguments = try self.arena().alloc(Register, 3);
                 arguments[0] = object;
-                arguments[1] = try self.code.emit(.{ .const_long = @intCast(index) }, .long);
+                arguments[1] = try self.code.emit(.{ .const_integer = @intCast(index) }, .i64);
                 arguments[2] = (try self.ownedForStore(
                     entry.register,
                     element_type,
@@ -1702,7 +1705,7 @@ const Replay = struct {
             start = entries[next].register;
             next += 1;
         } else {
-            start = try self.code.emit(.{ .const_long = 0 }, .long);
+            start = try self.code.emit(.{ .const_integer = 0 }, .i64);
         }
         var stop: Register = undefined;
         if (sliced.stop != null) {
@@ -1710,13 +1713,13 @@ const Replay = struct {
         } else {
             const whole = try self.arena().alloc(Register, 1);
             whole[0] = entries[0].register;
-            stop = try self.code.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .long);
+            stop = try self.code.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .i64);
         }
         const arguments = try self.arena().alloc(Register, 3);
         arguments[0] = entries[0].register;
         arguments[1] = start;
         arguments[2] = stop;
-        const kind: mir.Intrinsic = if (sliced.result == .string) .string_slice else .list_slice;
+        const kind: mir.Intrinsic = if (sliced.result == .str) .string_slice else .list_slice;
         return self.code.emit(
             .{ .intrinsic = .{ .kind = kind, .arguments = arguments } },
             sliced.result,
@@ -1790,22 +1793,22 @@ const Replay = struct {
             };
         }
         return switch (value) {
-            .long => |folded| .{
-                .register = try self.code.emit(.{ .const_long = folded }, value_type),
+            .integer => |folded| .{
+                .register = try self.code.emit(.{ .const_integer = folded }, value_type),
                 .provenance = .plain,
             },
-            .double => |folded| .{
-                .register = try self.code.emit(.{ .const_double = folded }, value_type),
+            .float => |folded| .{
+                .register = try self.code.emit(.{ .const_float = folded }, value_type),
                 .provenance = .plain,
             },
             .boolean => |folded| .{
                 .register = try self.code.emit(.{ .const_boolean = folded }, .boolean),
                 .provenance = .plain,
             },
-            .string => |folded| .{
+            .str => |folded| .{
                 .register = try self.code.emit(
-                    .{ .const_string = try self.code.pool.intern(folded) },
-                    .string,
+                    .{ .const_str = try self.code.pool.intern(folded) },
+                    .str,
                 ),
                 .provenance = .plain,
             },
@@ -2082,7 +2085,7 @@ const Replay = struct {
             .left = left,
             .right = right,
         } }, at);
-        const string_concat = op == .add and place_type == .string;
+        const string_concat = op == .add and place_type == .str;
         const narrowed = if (at.eql(place_type))
             combined
         else
@@ -2384,7 +2387,7 @@ const Replay = struct {
         const counter = self.takeRecordedSlot(loop.counter);
         // The hidden limit slot — the bound is evaluated once —
         // through the recorded local table.
-        const limit = self.takeSlot(null, .long, false);
+        const limit = self.takeSlot(null, .i64, false);
         try self.code.store(counter, entries[0].register);
         try self.code.store(limit, entries[1].register);
         const header = try self.code.reserveBlock();
@@ -2397,7 +2400,7 @@ const Replay = struct {
         const bound = try self.code.load(limit);
         const keep_going = try self.code.emit(.{ .binary = .{
             .op = .less,
-            .operand_type = .long,
+            .operand_type = .i64,
             .left = at,
             .right = bound,
         } }, .boolean);
@@ -2441,7 +2444,7 @@ const Replay = struct {
         // position within it — taken through the recorded local table.
         var shape: mir.build.Lowering.Iteration = .{
             .object = self.takeSlot(null, sequence_type, false),
-            .position = self.takeSlot(null, .long, false),
+            .position = self.takeSlot(null, .i64, false),
         };
         const first = self.takeRecordedSlot(loop.first);
         try self.noteLoopName(first);
@@ -2568,7 +2571,7 @@ const Replay = struct {
             try self.pushScope();
             const words = try self.code.errorMessage();
             const local = self.takeRecordedSlot(expected);
-            try self.storeOwned(local, words, .string, .plain, null);
+            try self.storeOwned(local, words, .str, .plain, null);
             try self.noteOwned(local);
             _ = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .forget, .arguments = &.{} } },
@@ -2605,19 +2608,19 @@ const Replay = struct {
             const same = if (scrutinee_type == .variant) variant_test: {
                 const tag = try self.code.emit(
                     .{ .variant_tag = .{ .target = try self.code.load(held) } },
-                    .long,
+                    .i64,
                 );
-                const number = try self.code.emit(.{ .const_long = @intCast(arm.member) }, .long);
+                const number = try self.code.emit(.{ .const_integer = @intCast(arm.member) }, .i64);
                 break :variant_test try self.code.emit(.{ .binary = .{
                     .op = .equal,
-                    .operand_type = .long,
+                    .operand_type = .i64,
                     .left = tag,
                     .right = number,
                 } }, .boolean);
             } else enum_test: {
                 const declared = self.code.enums[scrutinee_type.enumeration.index];
                 const number = try self.code.emit(
-                    .{ .const_long = declared.members[arm.member].value },
+                    .{ .const_integer = declared.members[arm.member].value },
                     scrutinee_type,
                 );
                 break :enum_test try self.code.emit(.{ .binary = .{

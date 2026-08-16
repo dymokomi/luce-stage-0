@@ -214,7 +214,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     // neither allocates: the pointer stays good across the pair.
     const into_object = try runtime.resolveMutable(buffer);
     const into = switch (into_object.data) {
-        .array => if (into_object.elements.kind == .byte)
+        .array => if (into_object.elements.kind == .u8)
             into_object.elements
         else
             return runtime.fail(.not_owned),
@@ -233,7 +233,7 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
     const handle = try handleOf(runtime, held);
     const from_object = try runtime.resolve(buffer);
     const from = switch (from_object.data) {
-        .array => if (from_object.elements.kind == .byte)
+        .array => if (from_object.elements.kind == .u8)
             from_object.elements
         else
             return runtime.fail(.not_owned),
@@ -340,7 +340,7 @@ pub fn isText(bytes: []const u8) bool {
 pub fn parseString(runtime: *Runtime, held: Value) Error!Value {
     const object = try runtime.resolve(held);
     const stored = switch (object.data) {
-        .list => if (object.elements.kind == .byte)
+        .list => if (object.elements.kind == .u8)
             object.elements
         else
             return runtime.fail(.not_owned),
@@ -351,7 +351,7 @@ pub fn parseString(runtime: *Runtime, held: Value) Error!Value {
     // gathered first.  The verifier admits nothing else here.
     const bytes = stored.cells(u8);
     if (!isText(bytes)) return Value.none;
-    return runtime.ownValue(Value.ofString(bytes));
+    return runtime.ownValue(Value.ofStr(bytes));
 }
 
 /// `file_read(path)` — the whole file as a `string`, or null when it
@@ -406,7 +406,7 @@ fn readTextLimited(runtime: *Runtime, path: []const u8, limit: usize) Error!?Val
     }
     if (loaded.items.len > limit) return null;
     if (!isText(loaded.items)) return null;
-    return try runtime.ownValue(Value.ofString(loaded.items));
+    return try runtime.ownValue(Value.ofStr(loaded.items));
 }
 
 /// `file_write(path, text)` and `file_append(path, text)` — the whole
@@ -505,7 +505,7 @@ test "whole-file reads stay within their content limit" {
             try std.testing.expect(answer == null);
         } else {
             const held = answer orelse return error.TestExpected;
-            try std.testing.expectEqualStrings("aaaaa", held.asString());
+            try std.testing.expectEqualStrings("aaaaa", held.asStr());
             runtime.dropStorage(held);
         }
         try std.testing.expectEqual(@as(usize, 1), host.opened);

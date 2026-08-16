@@ -1709,7 +1709,7 @@ test "ord of a literal is a compile-time constant" {
             // `(` is 40, and the fold has to have left it somewhere: a
             // scan that only looks for what must be absent passes on an
             // empty program, which proves nothing.
-            if (instruction == .const_long and instruction.const_long == 40) folded = true;
+            if (instruction == .const_integer and instruction.const_integer == 40) folded = true;
         }
     }
     try testing.expect(folded);

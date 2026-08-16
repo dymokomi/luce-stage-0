@@ -279,7 +279,7 @@ fn handBuilt(
     const arena = program.arena.allocator();
 
     const heap_types = try arena.alloc(types.HeapType, 1);
-    heap_types[0] = .{ .list = .long };
+    heap_types[0] = .{ .list = .i64 };
     program.heap_types = heap_types;
     program.signatures = try arena.dupe(types.Signature, signatures);
 
@@ -495,8 +495,8 @@ test "dead keeps an unread function-name lookup that can trap" {
     };
     entry.locals = locals;
     entry.instructions[function_value.?] = .{ .local_get = @intCast(original_locals.len) };
-    entry.instructions[print_value.?] = .{ .const_long = 0 };
-    entry.result_types[print_value.?] = .long;
+    entry.instructions[print_value.?] = .{ .const_integer = 0 };
+    entry.result_types[print_value.?] = .i64;
 
     try mir.verify(testing.allocator, &program);
     try testing.expectEqual(

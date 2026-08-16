@@ -683,10 +683,10 @@ test "worker leak folding excludes the child runtime's program roots" {
     });
 
     try child.beginConstants(1);
-    const rooted = try child.newList(Value.ofLong(0));
+    const rooted = try child.newList(Value.ofI64(0));
     try child.publishConstant(0, rooted);
     child.finishConstants();
-    _ = try child.newList(Value.ofLong(0));
+    _ = try child.newList(Value.ofI64(0));
     try std.testing.expectEqual(@as(i64, 1), child.leaked());
 
     const arguments = try child.objects.alloc(Value, 1);

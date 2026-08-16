@@ -227,7 +227,14 @@ const trace = @import("../runtime/trace.zig");
 /// native-resource close.  Nothing before them moved.  The callbacks carry
 /// native handles as opaque `i64`s; the language owns them through the same
 /// resource walk as files, while Metal/Vulkan policy remains in the host.
-pub const version: u32 = 19;
+///
+/// 20 — explicit numeric widths complete the value channel. Four runtime
+/// tags (`i8`, `u16`, `u32`, `u64`) and four packed container element kinds
+/// are appended; every existing numeric tag retains its value. Generated
+/// code now boxes, unboxes, compares, hashes, and stores each of the eight
+/// integer widths without the retired promotion ladder, so artifacts built
+/// against the old reading must be rebuilt.
+pub const version: u32 = 20;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the

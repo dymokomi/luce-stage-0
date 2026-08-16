@@ -1088,7 +1088,7 @@ fn lowerAliasCall(
             reference.index,
         ),
         .variant => |index| construct.failVariantAsCallee(self, call.callee, index, call.span),
-        .byte, .short, .int, .long, .half, .float, .double, .string => construct.lowerAliasConvert(self, call, target),
+        .u8, .i16, .i32, .i64, .f16, .f32, .f64, .str => construct.lowerAliasConvert(self, call, target),
         else => {
             const declaration = self.analyzer.alias_decls.items[alias_index].declaration;
             if (target == .heap) {
@@ -1297,7 +1297,7 @@ fn lowerValueMethod(
     }
 
     const found: MethodFound = blk: {
-        if (receiver.value_type == .string) {
+        if (receiver.value_type == .str) {
             // The primitives above, and nothing else: every other
             // string method is library code — s.find(x) is
             // strings.find(s, x) (docs/STD.md).
@@ -1312,7 +1312,7 @@ fn lowerValueMethod(
         if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
             // join belongs to the strings module too: it makes a
             // string, from list(string).
-            if (descriptor == .list and descriptor.list == .string and
+            if (descriptor == .list and descriptor.list == .str and
                 std.mem.eql(u8, method.name, "join"))
             {
                 return stringsCall(self, method, run, as_statement);
@@ -2007,7 +2007,7 @@ fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []co
 /// signature of its own, and the ordinary call path lands its
 /// arguments.
 pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8) Error!?[]const Type {
-    if (receiver == .string) {
+    if (receiver == .str) {
         for (string_methods) |primitive| {
             if (std.mem.eql(u8, name, primitive.name)) return primitive.takes;
         }
@@ -2025,7 +2025,7 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
     return switch (descriptor) {
         .list => |element| sequenceParameters(self, name, element, true),
         .array => |shape| blk: {
-            if (std.mem.eql(u8, name, "dim")) break :blk try typeList(self, &.{.long});
+            if (std.mem.eql(u8, name, "dim")) break :blk try typeList(self, &.{.i64});
             if (std.mem.eql(u8, name, "fill")) break :blk try typeList(self, &.{shape.element});
             break :blk sequenceParameters(self, name, shape.element, false);
         },
@@ -2039,8 +2039,8 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             break :blk null;
         },
         .builder => blk: {
-            if (std.mem.eql(u8, name, "append")) break :blk try typeList(self, &.{.string});
-            if (std.mem.eql(u8, name, "append_ascii")) break :blk try typeList(self, &.{.long});
+            if (std.mem.eql(u8, name, "append")) break :blk try typeList(self, &.{.str});
+            if (std.mem.eql(u8, name, "append_ascii")) break :blk try typeList(self, &.{.i64});
             if (std.mem.eql(u8, name, "build") or
                 std.mem.eql(u8, name, "clear")) break :blk &.{};
             break :blk null;
@@ -2050,11 +2050,11 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             // count a write takes is a `long`.  Neither landing
             // depends on the receiver, so both are written out.
             if (std.mem.eql(u8, name, "read")) break :blk try typeList(self, &.{
-                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .byte, .rank = 1 } }),
+                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } }),
             });
             if (std.mem.eql(u8, name, "write")) break :blk try typeList(self, &.{
-                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .byte, .rank = 1 } }),
-                .long,
+                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } }),
+                .i64,
             });
             if (std.mem.eql(u8, name, "flush")) break :blk &.{};
             break :blk null;
@@ -2076,8 +2076,8 @@ fn sequenceParameters(
 ) Error!?[]const Type {
     if (growable) {
         if (std.mem.eql(u8, name, "append")) return try typeList(self, &.{element});
-        if (std.mem.eql(u8, name, "insert")) return try typeList(self, &.{ .long, element });
-        if (std.mem.eql(u8, name, "remove")) return try typeList(self, &.{.long});
+        if (std.mem.eql(u8, name, "insert")) return try typeList(self, &.{ .i64, element });
+        if (std.mem.eql(u8, name, "remove")) return try typeList(self, &.{.i64});
         if (std.mem.eql(u8, name, "pop")) return &.{};
         if (std.mem.eql(u8, name, "sort_by")) {
             const parameters = try self.arena().alloc(types.Signature.Parameter, 2);
@@ -2518,9 +2518,9 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
 /// `sort_by` is a `lists` function, and it is in `methodParameters`,
 /// so this is never asked about it.
 pub fn failAbsentMethod(self: *FunctionBuilder, receiver: Type, method: ast.Method) Error!bool {
-    if (receiver == .string) return false;
+    if (receiver == .str) return false;
     const descriptor = self.analyzer.heapOf(receiver) orelse return false;
-    if (descriptor == .list and descriptor.list == .string and
+    if (descriptor == .list and descriptor.list == .str and
         std.mem.eql(u8, method.name, "join")) return false;
     try failNoObjectMethod(self, method, descriptor);
     return true;
@@ -2568,7 +2568,7 @@ fn objectMethod(
         .array => |shape| {
             if (std.mem.eql(u8, name, "dim")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .dim_size, .result = .long };
+                return .{ .kind = .dim_size, .result = .i64 };
             }
             if (std.mem.eql(u8, name, "fill")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
@@ -2644,7 +2644,7 @@ fn objectMethod(
             // `string` (docs/NUMERICS.md §7).
             if (std.mem.eql(u8, name, "build")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .str_value, .result = .string };
+                return .{ .kind = .str_value, .result = .str };
             }
             if (std.mem.eql(u8, name, "append")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
@@ -2671,11 +2671,11 @@ fn objectMethod(
         .file => {
             if (std.mem.eql(u8, name, "read")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .handle_read, .result = .long };
+                return .{ .kind = .handle_read, .result = .i64 };
             }
             if (std.mem.eql(u8, name, "write")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .handle_write, .result = .long };
+                return .{ .kind = .handle_write, .result = .i64 };
             }
             if (std.mem.eql(u8, name, "flush")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
@@ -2746,7 +2746,7 @@ fn sequenceMethod(
     }
     if (std.mem.eql(u8, name, "sort")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;
-        const ordered = element.isNumeric() or element == .string;
+        const ordered = element.isNumeric() or element == .str;
         if (!ordered) return methodFail(self, method, "sort orders numbers or str elements");
         return .{ .kind = .list_sort, .result = .none };
     }
@@ -2774,7 +2774,7 @@ fn sequenceMethod(
         // `xs.find(v)` answers `long?`, not a -1 sentinel: the
         // same absence rule `m.get` and `strings.find` follow, so
         // a package corpus never bakes the sentinel in.
-        return .{ .kind = .list_find, .result = .{ .optional = .long } };
+        return .{ .kind = .list_find, .result = .{ .optional = .i64 } };
     }
     if (std.mem.eql(u8, name, "contains")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;

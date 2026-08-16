@@ -31,9 +31,9 @@ pub fn mapOperands(
 ) std.mem.Allocator.Error!void {
     switch (instruction.*) {
         .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
+        .const_integer,
+        .const_float,
+        .const_str,
         .const_container,
         .local_get,
         .jump,
@@ -90,9 +90,9 @@ fn mapSlice(
 pub fn markOperands(instruction: Instruction, used: []bool) void {
     switch (instruction) {
         .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
+        .const_integer,
+        .const_float,
+        .const_str,
         .const_container,
         .local_get,
         .jump,
@@ -167,9 +167,9 @@ pub fn localUse(instruction: Instruction) LocalUse {
         // added later that names a local would otherwise answer "no
         // local" here and have the stores to that slot deleted.
         .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
+        .const_integer,
+        .const_float,
+        .const_str,
         .const_container,
         .const_function,
         .binary,
@@ -212,7 +212,7 @@ test "every operand of every instruction shape is rewritten" {
     var dims = [_]Register{4};
     var shapes = [_]Instruction{
         .{ .local_set = .{ .local = 0, .value = 0 } },
-        .{ .binary = .{ .op = .add, .operand_type = .long, .left = 2, .right = 3 } },
+        .{ .binary = .{ .op = .add, .operand_type = .i64, .left = 2, .right = 3 } },
         .{ .unary = .{ .op = .negate, .operand = 4 } },
         .{ .convert = 5 },
         .{ .struct_make = .{ .layout = 0, .fields = &fields } },

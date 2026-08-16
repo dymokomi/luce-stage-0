@@ -1636,7 +1636,7 @@ test "a truncated string literal is stage 2's error, and only stage 2's" {
             dump(&parsed);
         }
         try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
-        try testing.expectEqualStrings("luce.lex.string", parsed.diagnostics.at(0).?.code);
+        try testing.expectEqualStrings("luce.lex.str", parsed.diagnostics.at(0).?.code);
     }
 }
 

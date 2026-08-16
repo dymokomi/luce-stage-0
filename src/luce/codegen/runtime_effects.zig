@@ -231,7 +231,7 @@ pub const Service = enum {
 
     // -- operators ----------------------------------------------------
     luce_rt_compare,
-    luce_rt_compare_long_double,
+    luce_rt_compare_i64_f64,
     luce_rt_float_mod,
     luce_rt_float32_mod,
 
@@ -949,7 +949,7 @@ pub fn describe(service: Service) Effect {
         // Three scalars in, an answer out: it reads nothing at all,
         // which is the strongest summary in this file and the only
         // service that earns it.
-        .luce_rt_compare_long_double => .{
+        .luce_rt_compare_i64_f64 => .{
             .memory = reads_nothing,
             .parameters = &.{ .plain, .plain, .plain },
         },

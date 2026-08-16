@@ -669,7 +669,7 @@ pub const Machine = struct {
                     try containers.indexSet(
                         &self.runtime,
                         current.*,
-                        &.{RuntimeValue.ofLong(@intCast(index))},
+                        &.{RuntimeValue.ofI64(@intCast(index))},
                         held,
                     );
                 }
@@ -708,19 +708,24 @@ pub const Machine = struct {
         const landed = if (wanted == .optional) wanted.optional.asType() else wanted;
         return switch (encoded) {
             .boolean => |held| .ofBoolean(held),
-            .long => |held| switch (landed.storage()) {
-                .byte => .ofByte(@intCast(held)),
-                .short => .ofShort(@intCast(held)),
-                .int => .ofInt(@intCast(held)),
-                else => .ofLong(held),
+            .integer => |held| switch (landed.storage()) {
+                .u8 => .ofU8(@intCast(held)),
+                .u16 => .ofU16(@intCast(held)),
+                .u32 => .ofU32(@intCast(held)),
+                .u64 => .ofU64(@intCast(held)),
+                .i8 => .ofI8(@intCast(held)),
+                .i16 => .ofI16(@intCast(held)),
+                .i32 => .ofI32(@intCast(held)),
+                .i64 => .ofI64(@intCast(held)),
+                else => unreachable,
             },
-            .double => |held| switch (landed) {
-                .half => .ofHalf(@floatCast(held)),
-                .float => .ofFloat(@floatCast(held)),
-                else => .ofDouble(held),
+            .float => |held| switch (landed) {
+                .f16 => .ofF16(@floatCast(held)),
+                .f32 => .ofF32(@floatCast(held)),
+                else => .ofF64(held),
             },
-            .string => |index| self.runtime.ownValue(
-                .ofString(self.program.constants[index]),
+            .str => |index| self.runtime.ownValue(
+                .ofStr(self.program.constants[index]),
             ),
             .strukt => |held| self.constantStruct(held),
             .absent => .none,
@@ -756,8 +761,8 @@ pub const Machine = struct {
     /// will hash.
     fn constantKey(self: *const Machine, encoded: mir.ConstantValue) RuntimeValue {
         return switch (encoded) {
-            .long => |held| .ofLong(held),
-            .string => |index| .ofString(self.program.constants[index]),
+            .integer => |held| .ofI64(@intCast(held)),
+            .str => |index| .ofStr(self.program.constants[index]),
             else => unreachable,
         };
     }
@@ -904,19 +909,24 @@ pub const Machine = struct {
                     // An enum member is a constant at its backing width
                     // (docs/ENUMS.md D10), so `storage()` answers for
                     // it here exactly as it does on the compiled path.
-                    .const_long => |value| registers[item] = switch (function.result_types[item].storage()) {
-                        .byte => .ofByte(@intCast(value)),
-                        .short => .ofShort(@intCast(value)),
-                        .int => .ofInt(@intCast(value)),
-                        else => .ofLong(value),
+                    .const_integer => |value| registers[item] = switch (function.result_types[item].storage()) {
+                        .u8 => .ofU8(@intCast(value)),
+                        .u16 => .ofU16(@intCast(value)),
+                        .u32 => .ofU32(@intCast(value)),
+                        .u64 => .ofU64(@intCast(value)),
+                        .i8 => .ofI8(@intCast(value)),
+                        .i16 => .ofI16(@intCast(value)),
+                        .i32 => .ofI32(@intCast(value)),
+                        .i64 => .ofI64(@intCast(value)),
+                        else => unreachable,
                     },
-                    .const_double => |value| registers[item] = switch (function.result_types[item]) {
-                        .half => .ofHalf(@floatCast(value)),
-                        .float => .ofFloat(@floatCast(value)),
-                        else => .ofDouble(value),
+                    .const_float => |value| registers[item] = switch (function.result_types[item]) {
+                        .f16 => .ofF16(@floatCast(value)),
+                        .f32 => .ofF32(@floatCast(value)),
+                        else => .ofF64(value),
                     },
-                    .const_string => |constant| {
-                        registers[item] = .ofString(self.program.constants[constant]);
+                    .const_str => |constant| {
+                        registers[item] = .ofStr(self.program.constants[constant]);
                     },
                     .const_container => |constant| {
                         registers[item] = self.runtime.constant(constant);
@@ -936,7 +946,7 @@ pub const Machine = struct {
                             self.arena,
                             mir.function_run_length,
                         );
-                        self.field_scratch.appendAssumeCapacity(.ofInt(@intCast(named.function)));
+                        self.field_scratch.appendAssumeCapacity(.ofI32(@intCast(named.function)));
                         self.field_scratch.appendAssumeCapacity(
                             if (named.receiver) |receiver| registers[receiver] else .none,
                         );
@@ -999,7 +1009,7 @@ pub const Machine = struct {
                         const span = declared.runLength();
                         self.field_scratch.clearRetainingCapacity();
                         try self.field_scratch.ensureTotalCapacity(self.arena, span);
-                        self.field_scratch.appendAssumeCapacity(.ofLong(make.member));
+                        self.field_scratch.appendAssumeCapacity(.ofI64(make.member));
                         for (make.fields) |field_register| {
                             self.field_scratch.appendAssumeCapacity(registers[field_register]);
                         }
@@ -1217,7 +1227,7 @@ pub const Machine = struct {
                 self.dims_scratch.clearRetainingCapacity();
                 try self.dims_scratch.ensureTotalCapacity(self.arena, new.dims.len);
                 for (new.dims) |register| {
-                    self.dims_scratch.appendAssumeCapacity(registers[register].asLong());
+                    self.dims_scratch.appendAssumeCapacity(registers[register].asI64());
                 }
                 return self.runtime.newArray(
                     self.dims_scratch.items,
@@ -1241,13 +1251,8 @@ pub const Machine = struct {
     /// indexing door can go through it without asking what it indexes.
     fn storedKey(self: *const Machine, site: Site, held: RuntimeValue, register: Register) RuntimeValue {
         const written = self.program.functions[site.function].result_types[register];
-        if (written != .enumeration) return held;
-        return .ofLong(switch (written.enumeration.backing) {
-            .byte => held.asByte(),
-            .short => held.asShort(),
-            .int => held.asInt(),
-            .long => held.asLong(),
-        });
+        _ = written;
+        return held;
     }
 
     /// A key read back out of a map, at the type the program keys by:
@@ -1256,13 +1261,8 @@ pub const Machine = struct {
     /// the answer at the register's own width.
     fn keyOfStored(self: *const Machine, site: Site, held: RuntimeValue) RuntimeValue {
         const written = self.program.functions[site.function].result_types[site.instruction];
-        if (written != .enumeration) return held;
-        return switch (written.enumeration.backing) {
-            .byte => .ofByte(held.asByte()),
-            .short => .ofShort(held.asShort()),
-            .int => .ofInt(held.asInt()),
-            .long => held,
-        };
+        _ = written;
+        return held;
     }
 
     /// The element type of the List an intrinsic answers, read off the
@@ -1299,7 +1299,7 @@ pub const Machine = struct {
         if (held.tag != .function or held.bits == 0) return null;
         const slots = held.asStruct();
         if (slots.len != mir.function_run_length) return null;
-        const named = slots[mir.function_run_named].asInt();
+        const named = slots[mir.function_run_named].asI32();
         if (named < 0 or named >= self.program.functions.len) return null;
         const receiver = slots[mir.function_run_receiver];
         return .{
@@ -1317,24 +1317,32 @@ pub const Machine = struct {
             const declared = self.program.enums[written.enumeration.index];
             const first = declared.members[0].value;
             return switch (declared.backing) {
-                .byte => .ofByte(@intCast(first)),
-                .short => .ofShort(@intCast(first)),
-                .int => .ofInt(@intCast(first)),
-                .long => .ofLong(first),
+                .u8 => .ofU8(@intCast(first)),
+                .u16 => .ofU16(@intCast(first)),
+                .u32 => .ofU32(@intCast(first)),
+                .u64 => .ofU64(@intCast(first)),
+                .i8 => .ofI8(@intCast(first)),
+                .i16 => .ofI16(@intCast(first)),
+                .i32 => .ofI32(@intCast(first)),
+                .i64 => .ofI64(@intCast(first)),
             };
         }
         const of = written;
         return switch (of) {
             .none => .none,
             .boolean => .ofBoolean(false),
-            .byte => .ofByte(0),
-            .short => .ofShort(0),
-            .int => .ofInt(0),
-            .long => .ofLong(0),
-            .half => .ofHalf(0.0),
-            .float => .ofFloat(0.0),
-            .double => .ofDouble(0.0),
-            .string => .ofString(""),
+            .u8 => .ofU8(0),
+            .u16 => .ofU16(0),
+            .u32 => .ofU32(0),
+            .u64 => .ofU64(0),
+            .i8 => .ofI8(0),
+            .i16 => .ofI16(0),
+            .i32 => .ofI32(0),
+            .i64 => .ofI64(0),
+            .f16 => .ofF16(0.0),
+            .f32 => .ofF32(0.0),
+            .f64 => .ofF64(0.0),
+            .str => .ofStr(""),
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
@@ -1388,7 +1396,7 @@ pub const Machine = struct {
                 const declared = self.program.variants[index];
                 const member = declared.members[0];
                 const slots = try self.arena.alloc(RuntimeValue, declared.runLength());
-                slots[0] = .ofLong(0);
+                slots[0] = .ofI64(0);
                 for (member.fields, slots[1..][0..member.fields.len]) |field, *slot| {
                     slot.* = try self.zeroValue(field.field_type);
                 }
@@ -1434,7 +1442,7 @@ pub const Machine = struct {
     /// thing a program must never be handed is a number nobody
     /// measured.
     fn machineFact(self: *Machine, told: ?i64) EvalError!RuntimeValue {
-        return .ofLong(told orelse return self.runtime.fail(.host_unavailable));
+        return .ofI64(told orelse return self.runtime.fail(.host_unavailable));
     }
 
     pub fn intrinsic(
@@ -1480,10 +1488,10 @@ pub const Machine = struct {
             .floor => return operators.floor(registers[arguments[0]]),
             .ceil => return operators.ceil(registers[arguments[0]]),
             .trunc => return operators.truncate(registers[arguments[0]]),
-            .compare_long_double => return .ofBoolean(operators.compareLongDouble(
-                @enumFromInt(registers[arguments[0]].asLong()),
-                registers[arguments[1]].asLong(),
-                registers[arguments[2]].asDouble(),
+            .compare_i64_f64 => return .ofBoolean(operators.compareI64F64(
+                @enumFromInt(registers[arguments[0]].asI64()),
+                registers[arguments[1]].asI64(),
+                registers[arguments[2]].asF64(),
             )),
             .len => return containers.length(&self.runtime, registers[arguments[0]]),
             .null_object => return .null_object,
@@ -1506,8 +1514,8 @@ pub const Machine = struct {
             // both engines hand `catch NAME:` the same view and the
             // binding's own store is what copies.
             .error_message => {
-                const raised = self.runtime.raised orelse return .ofString("");
-                return .ofString(raised.message);
+                const raised = self.runtime.raised orelse return .ofStr("");
+                return .ofStr(raised.message);
             },
             .forget => {
                 self.runtime.forget();
@@ -1519,7 +1527,7 @@ pub const Machine = struct {
                 // that rule, and both engines reach it.
                 self.runtime.raise(
                     .user_error,
-                    registers[arguments[0]].asString(),
+                    registers[arguments[0]].asStr(),
                     self.placeOf(site),
                 );
                 return .none;
@@ -1557,8 +1565,8 @@ pub const Machine = struct {
             .list_slice => return containers.listSlice(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
-                registers[arguments[2]].asLong(),
+                registers[arguments[1]].asI64(),
+                registers[arguments[2]].asI64(),
             ),
             .append_value => {
                 try containers.append(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
@@ -1568,7 +1576,7 @@ pub const Machine = struct {
                 try containers.appendAscii(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[1]].asI64(),
                 );
                 return .none;
             },
@@ -1577,7 +1585,7 @@ pub const Machine = struct {
                 try containers.insert(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[1]].asI64(),
                     registers[arguments[2]],
                 );
                 return .none;
@@ -1598,17 +1606,17 @@ pub const Machine = struct {
             .key_at => return self.keyOfStored(site, try containers.keyAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
+                registers[arguments[1]].asI64(),
             )),
             .value_at => return containers.valueAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
+                registers[arguments[1]].asI64(),
             ),
             .dim_size => return containers.dimSize(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
+                registers[arguments[1]].asI64(),
             ),
             .copy_object => return containers.copyVerb(&self.runtime, registers[arguments[0]]),
             .list_sort => {
@@ -1670,29 +1678,29 @@ pub const Machine = struct {
             .function_name => {
                 const bound = self.boundValue(registers[arguments[0]]) orelse
                     return self.runtime.fail(.null_object);
-                return .ofString(self.program.functions[bound.named].name);
+                return .ofStr(self.program.functions[bound.named].name);
             },
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
             .parse_string => return files.parseString(&self.runtime, registers[arguments[0]]),
-            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asLong()),
+            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asI64()),
             .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
             .string_slice => return text.slice(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
-                registers[arguments[2]].asLong(),
+                registers[arguments[1]].asI64(),
+                registers[arguments[2]].asI64(),
             ),
             .string_byte => return text.byteAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
+                registers[arguments[1]].asI64(),
             ),
             .string_find_byte => return text.findByte(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asByte(),
-                registers[arguments[2]].asLong(),
+                registers[arguments[1]].asU8(),
+                registers[arguments[2]].asI64(),
             ),
             .assert_true => {
                 if (!registers[arguments[0]].asBoolean()) {
@@ -1701,13 +1709,13 @@ pub const Machine = struct {
                 return .none;
             },
             .trap_message => {
-                // The borrow ends at this call: `asString()` of short
+                // The borrow ends at this call: `asStr()` of short
                 // text points into the register itself, and the frame
                 // holding it is about to unwind.  `failMessage` takes
                 // the copy that outlives it, for both engines at once.
                 return self.runtime.failMessage(
                     .explicit_trap,
-                    registers[arguments[0]].asString(),
+                    registers[arguments[0]].asStr(),
                 );
             },
             .exit_program => {
@@ -1717,8 +1725,8 @@ pub const Machine = struct {
                 // unwind rides the trap edge with nothing pending.
                 const host = try self.service();
                 const callback = host.exited orelse return self.runtime.fail(.host_unavailable);
-                callback(host.context, registers[arguments[0]].asLong());
-                self.runtime.exit_status = registers[arguments[0]].asLong();
+                callback(host.context, registers[arguments[0]].asI64());
+                self.runtime.exit_status = registers[arguments[0]].asI64();
                 return error.Trap;
             },
 
@@ -1727,7 +1735,7 @@ pub const Machine = struct {
             .print => {
                 const host = try self.service();
                 const callback = host.print orelse return self.runtime.fail(.host_unavailable);
-                try callback(host.context, registers[arguments[0]].asString());
+                try callback(host.context, registers[arguments[0]].asStr());
                 return .none;
             },
             // The three whole-file text services, over the byte channel
@@ -1738,22 +1746,22 @@ pub const Machine = struct {
             // would not read is the world deciding, and `file_exists`
             // in front of it is a race — so it is an error, not a trap.
             .file_read => {
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 const found = try files.readText(&self.runtime, path);
                 return found orelse blk: {
                     // A value nothing reads: the `errored` in front of
                     // the branch has already seen the channel.
                     self.runtime.raiseIo(.read, path, self.placeOf(site));
-                    break :blk .ofString("");
+                    break :blk .ofStr("");
                 };
             },
             .file_write, .file_append => {
                 const appending = operation.kind == .file_append;
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 const landed = try files.writeText(
                     &self.runtime,
                     path,
-                    registers[arguments[1]].asString(),
+                    registers[arguments[1]].asStr(),
                     if (appending) .append else .write,
                 );
                 if (!landed) {
@@ -1768,7 +1776,7 @@ pub const Machine = struct {
             .file_delete => {
                 const host = try self.service();
                 const callback = host.file_delete orelse return self.runtime.fail(.host_unavailable);
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 if (!callback(host.context, path)) {
                     self.runtime.raiseIo(.delete, path, self.placeOf(site));
                 }
@@ -1777,8 +1785,8 @@ pub const Machine = struct {
             .file_rename => {
                 const host = try self.service();
                 const callback = host.file_rename orelse return self.runtime.fail(.host_unavailable);
-                const from = registers[arguments[0]].asString();
-                if (!callback(host.context, from, registers[arguments[1]].asString())) {
+                const from = registers[arguments[0]].asStr();
+                if (!callback(host.context, from, registers[arguments[1]].asStr())) {
                     self.runtime.raiseIo(.rename, from, self.placeOf(site));
                 }
                 return .none;
@@ -1787,7 +1795,7 @@ pub const Machine = struct {
                 const host = try self.service();
                 const callback = host.dir_create orelse
                     return self.runtime.fail(.host_unavailable);
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 if (!callback(host.context, path)) {
                     self.runtime.raiseIo(.make, path, self.placeOf(site));
                 }
@@ -1797,7 +1805,7 @@ pub const Machine = struct {
                 const host = try self.service();
                 const callback = host.dir_list orelse
                     return self.runtime.fail(.host_unavailable);
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 const names = (try callback(host.context, self.arena, path)) orelse {
                     // The `errored` in front of the branch has already
                     // seen the channel, so the value nobody reads is
@@ -1810,25 +1818,25 @@ pub const Machine = struct {
             .read_line => {
                 const host = try self.service();
                 const callback = host.read_line orelse return self.runtime.fail(.host_unavailable);
-                const prompt = registers[arguments[0]].asString();
+                const prompt = registers[arguments[0]].asStr();
                 // End of input is absence and not failure: there is
                 // nothing there, and no reason worth carrying
                 // (docs/FAILURE.md).
                 const line = (try callback(host.context, self.arena, prompt)) orelse
                     return .none;
-                return self.runtime.ownValue(.ofString(line));
+                return self.runtime.ownValue(.ofStr(line));
             },
             .print_error => {
                 const host = try self.service();
                 const callback = host.print_error orelse
                     return self.runtime.fail(.host_unavailable);
-                try callback(host.context, registers[arguments[0]].asString());
+                try callback(host.context, registers[arguments[0]].asStr());
                 return .none;
             },
             .clock_ms => {
                 const host = try self.service();
                 const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
-                return .ofLong(callback(host.context));
+                return .ofI64(callback(host.context));
             },
             // A host that cannot tell the time refuses the call, the
             // same way one that cannot measure its machine does —
@@ -1863,40 +1871,40 @@ pub const Machine = struct {
                 // A duration that has already elapsed is not a bug:
                 // `deadline - now` goes negative on a slow frame, and
                 // the answer is "no time left to wait".
-                callback(host.context, registers[arguments[0]].asLong());
+                callback(host.context, registers[arguments[0]].asI64());
                 return .none;
             },
             .env_get => {
                 const host = try self.service();
                 const callback = host.env orelse return self.runtime.fail(.host_unavailable);
-                const name = registers[arguments[0]].asString();
+                const name = registers[arguments[0]].asStr();
                 const found = (try callback(host.context, self.arena, name)) orelse
                     return .none;
-                return self.runtime.ownValue(.ofString(found));
+                return self.runtime.ownValue(.ofStr(found));
             },
             .shell_run => {
                 const host = try self.service();
                 const callback = host.shell_run orelse
                     return self.runtime.fail(.host_unavailable);
-                const command = registers[arguments[0]].asString();
+                const command = registers[arguments[0]].asStr();
                 const output = (try callback(host.context, self.arena, command)) orelse {
                     self.runtime.raiseIo(.run, command, self.placeOf(site));
-                    return .ofString("");
+                    return .ofStr("");
                 };
-                return self.runtime.ownValue(.ofString(output));
+                return self.runtime.ownValue(.ofStr(output));
             },
             .term_event_data => {
                 const screen = try self.terminal();
-                return .ofLong(screen.event_data(
+                return .ofI64(screen.event_data(
                     screen.context,
-                    registers[arguments[0]].asLong(),
+                    registers[arguments[0]].asI64(),
                 ));
             },
             .path_kind => {
                 const host = try self.service();
                 const callback = host.path_kind orelse
                     return self.runtime.fail(.host_unavailable);
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 // Null is the world refusing to say, which is a
                 // different fact from "nothing is there" and travels
                 // in the other channel (docs/FAILURE.md).  The zero
@@ -1904,9 +1912,9 @@ pub const Machine = struct {
                 // call has already seen the error.
                 const code = callback(host.context, path) orelse {
                     self.runtime.raiseIo(.inspect, path, self.placeOf(site));
-                    return .ofLong(0);
+                    return .ofI64(0);
                 };
-                return .ofLong(code);
+                return .ofI64(code);
             },
             // -- backend-neutral window/GPU channel ------------------
             //
@@ -1914,14 +1922,14 @@ pub const Machine = struct {
             // interpreter only supplies the source site for an ordinary
             // refused operation, keeping the result and error shape equal to
             // the compiled runtime exports.
-            .gpu_backend => return .ofLong(try graphics.backend(&self.runtime)),
+            .gpu_backend => return .ofI64(try graphics.backend(&self.runtime)),
             .ui_window_open => {
-                const title = registers[arguments[0]].asString();
+                const title = registers[arguments[0]].asStr();
                 const answer = try graphics.openWindow(
                     &self.runtime,
                     title,
-                    registers[arguments[1]].asLong(),
-                    registers[arguments[2]].asLong(),
+                    registers[arguments[1]].asI64(),
+                    registers[arguments[2]].asI64(),
                 );
                 return answer orelse blk: {
                     self.runtime.raiseIo(.open, title, self.placeOf(site));
@@ -1942,9 +1950,9 @@ pub const Machine = struct {
                 const answer = try graphics.size(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[1]].asI64(),
                 );
-                return .ofLong(answer orelse blk: {
+                return .ofI64(answer orelse blk: {
                     self.runtime.raiseIo(.inspect, "gpu.surface", self.placeOf(site));
                     break :blk 0;
                 });
@@ -1953,10 +1961,10 @@ pub const Machine = struct {
                 const answered = try graphics.clear(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asLong(),
-                    registers[arguments[2]].asLong(),
-                    registers[arguments[3]].asLong(),
-                    registers[arguments[4]].asLong(),
+                    registers[arguments[1]].asI64(),
+                    registers[arguments[2]].asI64(),
+                    registers[arguments[3]].asI64(),
+                    registers[arguments[4]].asI64(),
                 );
                 if (!answered) self.runtime.raiseIo(.write, "gpu.surface", self.placeOf(site));
                 return .none;
@@ -1965,14 +1973,14 @@ pub const Machine = struct {
                 const answered = try graphics.fillRect(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asLong(),
-                    registers[arguments[2]].asLong(),
-                    registers[arguments[3]].asLong(),
-                    registers[arguments[4]].asLong(),
-                    registers[arguments[5]].asLong(),
-                    registers[arguments[6]].asLong(),
-                    registers[arguments[7]].asLong(),
-                    registers[arguments[8]].asLong(),
+                    registers[arguments[1]].asI64(),
+                    registers[arguments[2]].asI64(),
+                    registers[arguments[3]].asI64(),
+                    registers[arguments[4]].asI64(),
+                    registers[arguments[5]].asI64(),
+                    registers[arguments[6]].asI64(),
+                    registers[arguments[7]].asI64(),
+                    registers[arguments[8]].asI64(),
                 );
                 if (!answered) self.runtime.raiseIo(.write, "gpu.surface", self.placeOf(site));
                 return .none;
@@ -1984,11 +1992,11 @@ pub const Machine = struct {
             },
             .term_rows => {
                 const screen = try self.terminal();
-                return .ofLong(screen.term_rows(screen.context));
+                return .ofI64(screen.term_rows(screen.context));
             },
             .term_cols => {
                 const screen = try self.terminal();
-                return .ofLong(screen.term_cols(screen.context));
+                return .ofI64(screen.term_cols(screen.context));
             },
             .term_clear => {
                 const screen = try self.terminal();
@@ -1999,8 +2007,8 @@ pub const Machine = struct {
                 const screen = try self.terminal();
                 try screen.term_move(
                     screen.context,
-                    registers[arguments[0]].asLong(),
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[0]].asI64(),
+                    registers[arguments[1]].asI64(),
                 );
                 return .none;
             },
@@ -2008,15 +2016,15 @@ pub const Machine = struct {
                 const screen = try self.terminal();
                 try screen.term_style(
                     screen.context,
-                    registers[arguments[0]].asLong(),
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[0]].asI64(),
+                    registers[arguments[1]].asI64(),
                     registers[arguments[2]].asBoolean(),
                 );
                 return .none;
             },
             .term_write => {
                 const screen = try self.terminal();
-                try screen.term_write(screen.context, registers[arguments[0]].asString());
+                try screen.term_write(screen.context, registers[arguments[0]].asStr());
                 return .none;
             },
             .term_flush => {
@@ -2036,9 +2044,9 @@ pub const Machine = struct {
                     return .none;
                 };
                 try self.runtime.setKeyText(event.text);
-                return self.runtime.ownValue(.ofString(event.name));
+                return self.runtime.ownValue(.ofStr(event.name));
             },
-            .key_text => return .ofString(self.runtime.last_key_text),
+            .key_text => return .ofStr(self.runtime.last_key_text),
 
             // -- the byte channel (docs/BYTES.md) ---------------------
             //
@@ -2049,11 +2057,11 @@ pub const Machine = struct {
             // calls.  All four raise `io_failed` where the world said
             // no, with the path the handle remembers.
             .file_open => {
-                const path = registers[arguments[0]].asString();
+                const path = registers[arguments[0]].asStr();
                 const opened = try files.open(
                     &self.runtime,
                     path,
-                    registers[arguments[1]].asLong(),
+                    registers[arguments[1]].asI64(),
                 );
                 return opened orelse blk: {
                     self.runtime.raiseIo(.open, path, self.placeOf(site));
@@ -2063,7 +2071,7 @@ pub const Machine = struct {
             .handle_read => {
                 const held = registers[arguments[0]];
                 const filled = try files.read(&self.runtime, held, registers[arguments[1]]);
-                return .ofLong(filled orelse blk: {
+                return .ofI64(filled orelse blk: {
                     self.runtime.raiseIo(
                         .read,
                         files.pathOf(&self.runtime, held),
@@ -2078,9 +2086,9 @@ pub const Machine = struct {
                     &self.runtime,
                     held,
                     registers[arguments[1]],
-                    registers[arguments[2]].asLong(),
+                    registers[arguments[2]].asI64(),
                 );
-                return .ofLong(written orelse blk: {
+                return .ofI64(written orelse blk: {
                     self.runtime.raiseIo(
                         .write,
                         files.pathOf(&self.runtime, held),
@@ -2145,7 +2153,7 @@ pub const Machine = struct {
 /// one template shared by every slot of that layout.
 fn emptyValue(of: types.Type) RuntimeValue {
     return switch (of) {
-        .string => .ofString(""),
+        .str => .ofStr(""),
         // A union value's run empties exactly as a struct's does
         // (docs/UNION.md D8): the same tag and no run, which a
         // release walks past.
@@ -2162,33 +2170,33 @@ test "the constant prologue materializes every flat shape with declaration ident
 
     var fields = [_]types.StructField{
         .{ .name = "enabled", .field_type = .boolean },
-        .{ .name = "count", .field_type = .int },
-        .{ .name = "ratio", .field_type = .float },
-        .{ .name = "label", .field_type = .string },
-        .{ .name = "missing", .field_type = .{ .optional = .string } },
+        .{ .name = "count", .field_type = .i32 },
+        .{ .name = "ratio", .field_type = .f32 },
+        .{ .name = "label", .field_type = .str },
+        .{ .name = "missing", .field_type = .{ .optional = .str } },
     };
     var layouts = [_]types.StructLayout{.{ .name = "Entry", .fields = &fields }};
     var heaps = [_]types.HeapType{
         .{ .list = .{ .strukt = 0 } },
-        .{ .array = .{ .element = .byte, .rank = 1 } },
-        .{ .map = .{ .key = .string, .value = .double } },
+        .{ .array = .{ .element = .u8, .rank = 1 } },
+        .{ .map = .{ .key = .str, .value = .f64 } },
     };
     const strings = [_][]const u8{ long_label, long_key };
     var encoded_fields = [_]mir.ConstantValue{
         .{ .boolean = true },
-        .{ .long = 7 },
-        .{ .double = 1.5 },
-        .{ .string = 0 },
+        .{ .integer = 7 },
+        .{ .float = 1.5 },
+        .{ .str = 0 },
         .absent,
     };
     var list_values = [_]mir.ConstantValue{.{ .strukt = .{
         .layout = 0,
         .fields = &encoded_fields,
     } }};
-    var byte_values = [_]mir.ConstantValue{ .{ .long = 1 }, .{ .long = 255 } };
+    var byte_values = [_]mir.ConstantValue{ .{ .integer = 1 }, .{ .integer = 255 } };
     var map_entries = [_]mir.ContainerConstant.MapEntry{.{
-        .key = .{ .string = 1 },
-        .value = .{ .double = 2.5 },
+        .key = .{ .str = 1 },
+        .value = .{ .float = 2.5 },
     }};
     var constants = [_]mir.ContainerConstant{
         .{
@@ -2243,25 +2251,25 @@ test "the constant prologue materializes every flat shape with declaration ident
     try testing.expectEqual(@as(i64, 0), machine.runtime.leaked());
 
     const entries = machine.runtime.constant(0);
-    const record = try containers.indexGet(&machine.runtime, entries, &.{RuntimeValue.ofLong(0)});
+    const record = try containers.indexGet(&machine.runtime, entries, &.{RuntimeValue.ofI64(0)});
     const stored = record.asStruct();
     try testing.expect(stored[0].asBoolean());
-    try testing.expectEqual(@as(i32, 7), stored[1].asInt());
-    try testing.expectEqual(@as(f32, 1.5), stored[2].asFloat());
-    try testing.expectEqualStrings(long_label, stored[3].asString());
+    try testing.expectEqual(@as(i32, 7), stored[1].asI32());
+    try testing.expectEqual(@as(f32, 1.5), stored[2].asF32());
+    try testing.expectEqualStrings(long_label, stored[3].asStr());
     try testing.expect(stored[4].isNone());
 
     const bytes = machine.runtime.constant(1);
-    const last = try containers.indexGet(&machine.runtime, bytes, &.{RuntimeValue.ofLong(1)});
-    try testing.expectEqual(@as(u8, 255), last.asByte());
+    const last = try containers.indexGet(&machine.runtime, bytes, &.{RuntimeValue.ofI64(1)});
+    try testing.expectEqual(@as(u8, 255), last.asU8());
 
     const weights = machine.runtime.constant(2);
     const weight = try containers.indexGet(
         &machine.runtime,
         weights,
-        &.{RuntimeValue.ofString(long_key)},
+        &.{RuntimeValue.ofStr(long_key)},
     );
-    try testing.expectEqual(@as(f64, 2.5), weight.asDouble());
+    try testing.expectEqual(@as(f64, 2.5), weight.asF64());
 
     const same_entries = machine.runtime.constant(3);
     try testing.expect(!entries.asObject().same(same_entries.asObject()));
@@ -2272,7 +2280,7 @@ test "the constant prologue materializes every flat shape with declaration ident
 
 test "const_container loads the runtime root and mutation reaches the immutable backstop" {
     const testing = std.testing;
-    var values = [_]mir.ConstantValue{.{ .long = 1 }};
+    var values = [_]mir.ConstantValue{.{ .integer = 1 }};
     var constants = [_]mir.ContainerConstant{.{
         .name = "numbers",
         .heap = 0,
@@ -2280,15 +2288,15 @@ test "const_container loads the runtime root and mutation reaches the immutable 
         .source = "numbers.luc",
         .origin = .{ .line = 1, .column = 1 },
     }};
-    var heaps = [_]types.HeapType{.{ .list = .long }};
+    var heaps = [_]types.HeapType{.{ .list = .i64 }};
     var append_arguments = [_]Register{ 0, 1 };
     var instructions = [_]mir.Instruction{
         .{ .const_container = 0 },
-        .{ .const_long = 2 },
+        .{ .const_integer = 2 },
         .{ .intrinsic = .{ .kind = .append_value, .arguments = &append_arguments } },
         .{ .ret = null },
     };
-    var result_types = [_]types.Type{ .{ .heap = 0 }, .long, .none, .none };
+    var result_types = [_]types.Type{ .{ .heap = 0 }, .i64, .none, .none };
     var items = [_]Register{ 0, 1, 2, 3 };
     var blocks = [_]mir.Block{.{ .items = &items }};
     var functions = [_]mir.Function{.{
@@ -2323,13 +2331,13 @@ test "const_container loads the runtime root and mutation reaches the immutable 
     try testing.expectEqual(@as(i64, 1), (try containers.length(
         &machine.runtime,
         machine.runtime.constant(0),
-    )).asLong());
+    )).asI64());
     try testing.expectEqual(@as(i64, 0), machine.runtime.leaked());
 }
 
 test "each interpreter worker materializes constants in its own runtime" {
     const testing = std.testing;
-    var values = [_]mir.ConstantValue{ .{ .long = 4 }, .{ .long = 8 } };
+    var values = [_]mir.ConstantValue{ .{ .integer = 4 }, .{ .integer = 8 } };
     var constants = [_]mir.ContainerConstant{.{
         .name = "numbers",
         .heap = 0,
@@ -2337,20 +2345,20 @@ test "each interpreter worker materializes constants in its own runtime" {
         .source = "worker.luc",
         .origin = .{ .line = 2, .column = 1 },
     }};
-    var heaps = [_]types.HeapType{.{ .list = .long }};
+    var heaps = [_]types.HeapType{.{ .list = .i64 }};
     var len_arguments = [_]Register{0};
     var instructions = [_]mir.Instruction{
         .{ .const_container = 0 },
         .{ .intrinsic = .{ .kind = .len, .arguments = &len_arguments } },
         .{ .ret = 1 },
     };
-    var result_types = [_]types.Type{ .{ .heap = 0 }, .long, .none };
+    var result_types = [_]types.Type{ .{ .heap = 0 }, .i64, .none };
     var items = [_]Register{ 0, 1, 2 };
     var blocks = [_]mir.Block{.{ .items = &items }};
     var functions = [_]mir.Function{.{
         .name = "measure",
         .parameter_count = 0,
-        .return_type = .long,
+        .return_type = .i64,
         .locals = &.{},
         .instructions = &instructions,
         .result_types = &result_types,
@@ -2379,8 +2387,8 @@ test "each interpreter worker materializes constants in its own runtime" {
         runtime.workers.survived,
         Nursery.runWorker(&nursery, second, 0, &no_arguments, 0, &second_answer, 8),
     );
-    try testing.expectEqual(@as(i64, 2), first_answer.asLong());
-    try testing.expectEqual(@as(i64, 2), second_answer.asLong());
+    try testing.expectEqual(@as(i64, 2), first_answer.asI64());
+    try testing.expectEqual(@as(i64, 2), second_answer.asI64());
     try testing.expectEqual(@as(i64, 0), first.leaked());
     try testing.expectEqual(@as(i64, 0), second.leaked());
     try testing.expect(
@@ -2391,16 +2399,16 @@ test "each interpreter worker materializes constants in its own runtime" {
 test "an interpreter worker marks arena exhaustion before it returns" {
     const testing = std.testing;
     var instructions = [_]mir.Instruction{
-        .{ .const_long = 7 },
+        .{ .const_integer = 7 },
         .{ .ret = 0 },
     };
-    var result_types = [_]types.Type{ .long, .long };
+    var result_types = [_]types.Type{ .i64, .i64 };
     var items = [_]Register{ 0, 1 };
     var blocks = [_]mir.Block{.{ .items = &items }};
     var functions = [_]mir.Function{.{
         .name = "worker",
         .parameter_count = 0,
-        .return_type = .long,
+        .return_type = .i64,
         .locals = &.{},
         .instructions = &instructions,
         .result_types = &result_types,
@@ -2427,16 +2435,16 @@ test "an interpreter worker marks arena exhaustion before it returns" {
 test "an interpreter worker rejects malformed entry inputs" {
     const testing = std.testing;
     var instructions = [_]mir.Instruction{
-        .{ .const_long = 7 },
+        .{ .const_integer = 7 },
         .{ .ret = 0 },
     };
-    var result_types = [_]types.Type{ .long, .long };
+    var result_types = [_]types.Type{ .i64, .i64 };
     var items = [_]Register{ 0, 1 };
     var blocks = [_]mir.Block{.{ .items = &items }};
     var functions = [_]mir.Function{.{
         .name = "worker",
         .parameter_count = 0,
-        .return_type = .long,
+        .return_type = .i64,
         .locals = &.{},
         .instructions = &instructions,
         .result_types = &result_types,
@@ -2483,7 +2491,7 @@ test "a failed constant prologue cleans partial roots and reports the declaratio
     const testing = std.testing;
     const long_text = "materialization owns these bytes, and cleanup must return every one";
     const strings = [_][]const u8{long_text};
-    var values = [_]mir.ConstantValue{.{ .string = 0 }};
+    var values = [_]mir.ConstantValue{.{ .str = 0 }};
     var constants = [_]mir.ContainerConstant{
         .{
             .name = "first",
@@ -2500,7 +2508,7 @@ test "a failed constant prologue cleans partial roots and reports the declaratio
             .origin = .{ .line = 9, .column = 1 },
         },
     };
-    var heaps = [_]types.HeapType{.{ .list = .string }};
+    var heaps = [_]types.HeapType{.{ .list = .str }};
     var program: mir.Program = .{ .arena = .init(testing.allocator) };
     defer program.deinit();
     program.heap_types = &heaps;

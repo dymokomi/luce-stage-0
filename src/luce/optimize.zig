@@ -47,7 +47,7 @@
 //!                   instruction pool.
 //!   prune.zig     — drop functions the entry cannot reach after dead
 //!                   compaction, then compact constant-container rows and
-//!                   the shared strings they and `const_string` retain.
+//!                   the shared strings they and `const_str` retain.
 //!
 //! Over the nine bundled programs and six benchmarks, the raw lowering
 //! against what the stage leaves (`luce ir --full` against `luce ir`):

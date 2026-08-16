@@ -322,13 +322,17 @@ pub const Object = struct {
         pub fn at(self: Elements, index: usize) Value {
             return switch (self.kind) {
                 .value => self.cells(Value)[index],
-                .double => Value.ofDouble(self.cells(f64)[index]),
-                .long => Value.ofLong(self.cells(i64)[index]),
-                .float => Value.ofFloat(self.cells(f32)[index]),
-                .int => Value.ofInt(self.cells(i32)[index]),
-                .half => Value.ofHalf(self.cells(f16)[index]),
-                .short => Value.ofShort(self.cells(i16)[index]),
-                .byte => Value.ofByte(self.cells(u8)[index]),
+                .f64 => Value.ofF64(self.cells(f64)[index]),
+                .i64 => Value.ofI64(self.cells(i64)[index]),
+                .u64 => Value.ofU64(self.cells(u64)[index]),
+                .f32 => Value.ofF32(self.cells(f32)[index]),
+                .i32 => Value.ofI32(self.cells(i32)[index]),
+                .u32 => Value.ofU32(self.cells(u32)[index]),
+                .f16 => Value.ofF16(self.cells(f16)[index]),
+                .u16 => Value.ofU16(self.cells(u16)[index]),
+                .i16 => Value.ofI16(self.cells(i16)[index]),
+                .u8 => Value.ofU8(self.cells(u8)[index]),
+                .i8 => Value.ofI8(self.cells(i8)[index]),
                 .boolean => Value.ofBoolean(self.cells(u8)[index] != 0),
             };
         }
@@ -339,13 +343,17 @@ pub const Object = struct {
         pub fn put(self: Elements, index: usize, held: Value) void {
             switch (self.kind) {
                 .value => self.cells(Value)[index] = held,
-                .double => self.cells(f64)[index] = held.asDouble(),
-                .long => self.cells(i64)[index] = held.asLong(),
-                .float => self.cells(f32)[index] = held.asFloat(),
-                .int => self.cells(i32)[index] = held.asInt(),
-                .half => self.cells(f16)[index] = held.asHalf(),
-                .short => self.cells(i16)[index] = held.asShort(),
-                .byte => self.cells(u8)[index] = held.asByte(),
+                .f64 => self.cells(f64)[index] = held.asF64(),
+                .i64 => self.cells(i64)[index] = held.asI64(),
+                .u64 => self.cells(u64)[index] = held.asU64(),
+                .f32 => self.cells(f32)[index] = held.asF32(),
+                .i32 => self.cells(i32)[index] = held.asI32(),
+                .u32 => self.cells(u32)[index] = held.asU32(),
+                .f16 => self.cells(f16)[index] = held.asF16(),
+                .u16 => self.cells(u16)[index] = held.asU16(),
+                .i16 => self.cells(i16)[index] = held.asI16(),
+                .u8 => self.cells(u8)[index] = held.asU8(),
+                .i8 => self.cells(i8)[index] = held.asI8(),
                 .boolean => self.cells(u8)[index] = @intFromBool(held.asBoolean()),
             }
         }
@@ -355,13 +363,17 @@ pub const Object = struct {
         pub fn fill(self: Elements, held: Value) void {
             switch (self.kind) {
                 .value => @memset(self.cells(Value), held),
-                .double => @memset(self.cells(f64), held.asDouble()),
-                .long => @memset(self.cells(i64), held.asLong()),
-                .float => @memset(self.cells(f32), held.asFloat()),
-                .int => @memset(self.cells(i32), held.asInt()),
-                .half => @memset(self.cells(f16), held.asHalf()),
-                .short => @memset(self.cells(i16), held.asShort()),
-                .byte => @memset(self.cells(u8), held.asByte()),
+                .f64 => @memset(self.cells(f64), held.asF64()),
+                .i64 => @memset(self.cells(i64), held.asI64()),
+                .u64 => @memset(self.cells(u64), held.asU64()),
+                .f32 => @memset(self.cells(f32), held.asF32()),
+                .i32 => @memset(self.cells(i32), held.asI32()),
+                .u32 => @memset(self.cells(u32), held.asU32()),
+                .f16 => @memset(self.cells(f16), held.asF16()),
+                .u16 => @memset(self.cells(u16), held.asU16()),
+                .i16 => @memset(self.cells(i16), held.asI16()),
+                .u8 => @memset(self.cells(u8), held.asU8()),
+                .i8 => @memset(self.cells(i8), held.asI8()),
                 .boolean => @memset(self.cells(u8), @intFromBool(held.asBoolean())),
             }
         }
@@ -497,36 +509,44 @@ pub const Object = struct {
         /// — anything the element type does not settle to one machine
         /// word.  The only kind that can own something.
         value,
-        double,
-        long,
+        f64 = 1,
+        i64 = 2,
         boolean,
         /// The narrow widths, **appended**: an `array(int, n)` is
         /// `i32` cells and an `array(float, n)` is `f32` cells, which
         /// is half the memory and twice the lanes in the same vector
         /// register (docs/TYPES.md §6).
-        float,
-        int,
+        f32 = 4,
+        i32 = 5,
         /// The storage widths, appended in their turn.  These are what
         /// the narrow types are *for* (§10): an `array(byte, n)` is one
         /// byte an element, an eighth of what the same array of `long`
         /// costs, and the same vector register that holds two `double`s
         /// holds eight `half`s.
-        half,
-        short,
-        byte,
+        f16 = 6,
+        i16 = 7,
+        u8 = 8,
+        i8 = 9,
+        u16 = 10,
+        u32 = 11,
+        u64 = 12,
 
         /// The cell type `Array.cells` reads, so a switch with an
         /// `inline else` gets the storage type for free.
         pub fn Cell(comptime self: ElementKind) type {
             return switch (self) {
                 .value => Value,
-                .double => f64,
-                .long => i64,
-                .float => f32,
-                .int => i32,
-                .half => f16,
-                .short => i16,
-                .byte => u8,
+                .f64 => f64,
+                .i64 => i64,
+                .f32 => f32,
+                .i32 => i32,
+                .f16 => f16,
+                .i16 => i16,
+                .u8 => u8,
+                .i8 => i8,
+                .u16 => u16,
+                .u32 => u32,
+                .u64 => u64,
                 .boolean => u8,
             };
         }
@@ -534,13 +554,17 @@ pub const Object = struct {
         pub fn width(self: ElementKind) usize {
             return switch (self) {
                 .value => @sizeOf(Value),
-                .double => @sizeOf(f64),
-                .long => @sizeOf(i64),
-                .float => @sizeOf(f32),
-                .int => @sizeOf(i32),
-                .half => @sizeOf(f16),
-                .short => @sizeOf(i16),
-                .byte => 1,
+                .f64 => @sizeOf(f64),
+                .i64 => @sizeOf(i64),
+                .f32 => @sizeOf(f32),
+                .i32 => @sizeOf(i32),
+                .f16 => @sizeOf(f16),
+                .i16 => @sizeOf(i16),
+                .u8 => 1,
+                .i8 => 1,
+                .u16 => @sizeOf(u16),
+                .u32 => @sizeOf(u32),
+                .u64 => @sizeOf(u64),
                 .boolean => 1,
             };
         }
@@ -554,17 +578,21 @@ pub const Object = struct {
         /// and nothing new crosses the boundary.
         pub fn of(zero: Value) ElementKind {
             return switch (zero.tag) {
-                .double => .double,
-                .long => .long,
-                .float => .float,
-                .int => .int,
-                .half => .half,
-                .short => .short,
-                .byte => .byte,
+                .f64 => .f64,
+                .i64 => .i64,
+                .f32 => .f32,
+                .i32 => .i32,
+                .f16 => .f16,
+                .i16 => .i16,
+                .u8 => .u8,
+                .i8 => .i8,
+                .u16 => .u16,
+                .u32 => .u32,
+                .u64 => .u64,
                 .boolean => .boolean,
                 // A function value is a boxed run like a struct's, so
                 // its cell is the 24-byte slot (docs/BINDING.md D12).
-                .none, .string, .strukt, .function, .object => .value,
+                .none, .str, .strukt, .function, .object => .value,
             };
         }
     };
@@ -633,10 +661,8 @@ pub const Object = struct {
 ///
 /// `hashOf` and `value.keyEquals` must agree exactly: equal keys hash
 /// equally, or a lookup walks past its own entry.  They are written
-/// against the same two payloads (long and String) for that reason — and
-/// two is still all there are now that a program may key by an enum,
-/// because an enum key arrives widened to the integer a `long` key would
-/// be and leaves narrowed back (`mir.mapKeyStorage`, docs/ENUMS.md).
+/// against the same integer-width and text payloads for that reason.
+/// An enum key arrives at its backing width (`mir.mapKeyStorage`).
 // ---------------------------------------------------------------------------
 // The map behind a Map
 // ---------------------------------------------------------------------------
@@ -731,17 +757,23 @@ pub const Map = struct {
         self.slots[at] = position;
     }
 
-    /// The hash `find` probes with.  Keys are long or String — the
-    /// analyzer admits nothing else — and this reads exactly the two
-    /// payloads `value.keyEquals` compares, so equal keys always hash
+    /// The hash `find` probes with. This reads exactly the payloads
+    /// `value.keyEquals` compares, so equal keys always hash
     /// equally.  Ints go through a bit mixer rather than being used
     /// raw: sequential keys are the common case and linear probing
     /// wants their low bits spread.
     fn hashOf(key: *const Value) usize {
         return switch (key.view()) {
-            .long => |held| @truncate(std.hash.int(@as(u64, @bitCast(held)))),
-            .string => |held| @truncate(std.hash.Wyhash.hash(0, held)),
-            else => unreachable, // the analyzer keys maps by long or String
+            .u8 => |held| @truncate(std.hash.int(@as(u64, held))),
+            .u16 => |held| @truncate(std.hash.int(@as(u64, held))),
+            .u32 => |held| @truncate(std.hash.int(@as(u64, held))),
+            .u64 => |held| @truncate(std.hash.int(held)),
+            .i8 => |held| @truncate(std.hash.int(@as(u64, @as(u8, @bitCast(held))))),
+            .i16 => |held| @truncate(std.hash.int(@as(u64, @as(u16, @bitCast(held))))),
+            .i32 => |held| @truncate(std.hash.int(@as(u64, @as(u32, @bitCast(held))))),
+            .i64 => |held| @truncate(std.hash.int(@as(u64, @bitCast(held)))),
+            .str => |held| @truncate(std.hash.Wyhash.hash(0, held)),
+            else => unreachable, // the analyzer keys maps by integer, enum or str
         };
     }
 };
@@ -779,12 +811,15 @@ pub fn maxElements(kind: Object.ElementKind) usize {
     return switch (kind) {
         // `byte × short`, the widest provable term a `byte` element
         // takes part in (VECTOR.md's multiply-accumulate table).
-        .byte => proofCeiling(255 * 32768),
+        .u8 => proofCeiling(255 * 32768),
+        .i8 => proofCeiling(128 * 128),
+        .u16 => proofCeiling(@as(i128, std.math.maxInt(u16)) * std.math.maxInt(u16)),
         // `short × short`, evaluated at `int`.
-        .short => proofCeiling(1 << 30),
+        .i16 => proofCeiling(1 << 30),
+        .u32 => proofCeiling(std.math.maxInt(u32)),
         // A plain `int` sum; no `int` product qualifies at any width.
-        .int => proofCeiling(1 << 31),
-        .value, .double, .long, .float, .half, .boolean => std.math.maxInt(usize) /
+        .i32 => proofCeiling(1 << 31),
+        .value, .f64, .u64, .i64, .f32, .f16, .boolean => std.math.maxInt(usize) /
             kind.width(),
     };
 }
@@ -1604,8 +1639,8 @@ pub const Runtime = struct {
     pub fn ownValue(self: *Runtime, held: Value) Error!Value {
         if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         switch (held.tag) {
-            .string => {
-                const text = held.asString();
+            .str => {
+                const text = held.asStr();
                 // Short text is the value: copying the slot copies the
                 // bytes, so there is nothing to allocate and nothing to
                 // give back.  This is where the allocation copy-on-store
@@ -1646,7 +1681,7 @@ pub const Runtime = struct {
     pub fn dropStorage(self: *Runtime, held: Value) void {
         if (!held.hasValidRepresentation()) return;
         switch (held.tag) {
-            .string => {
+            .str => {
                 // Inline text is the value, and a value is not an
                 // allocation: there is nothing here to give back.
                 if (!held.ownsStorage()) return;
@@ -1671,7 +1706,7 @@ pub const Runtime = struct {
             // An emptied String is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
-            .string, .strukt, .function => .{ .tag = held.tag },
+            .str, .strukt, .function => .{ .tag = held.tag },
             else => held,
         };
     }
@@ -1692,9 +1727,9 @@ pub const Runtime = struct {
     /// before short text lived in the value at all.
     pub fn exportValue(self: *Runtime, held: Value) Error!Value {
         switch (held.tag) {
-            .string => {
+            .str => {
                 if (!held.textIsInline()) return held;
-                const text = held.asString();
+                const text = held.asStr();
                 // Empty text has nothing to allocate and no address
                 // worth handing out, so it leaves as the static one.
                 if (text.len == 0) return .ofOutside(held.tag, "");
@@ -2395,8 +2430,8 @@ pub fn flattenIndex(dims: []const i64, indices: []const Value) ?usize {
     if (dims.len != indices.len) return null;
     var flat: usize = 0;
     for (dims, indices) |size, held| {
-        if (held.tag != .long or size < 0) return null;
-        const index = held.asLong();
+        if (held.tag != .i64 or size < 0) return null;
+        const index = held.asI64();
         if (index < 0 or index >= size) return null;
         const scaled = std.math.mul(usize, flat, @intCast(size)) catch return null;
         flat = std.math.add(usize, scaled, @intCast(index)) catch return null;

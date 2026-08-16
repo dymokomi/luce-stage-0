@@ -169,14 +169,14 @@ test "inout stores and the receiver value reaching a call survive dead-code elim
         .name = "caller",
         .parameter_count = 0,
         .return_type = .none,
-        .locals = try arena.dupe(defs.Local, &.{.{ .name = "receiver", .local_type = .long }}),
+        .locals = try arena.dupe(defs.Local, &.{.{ .name = "receiver", .local_type = .i64 }}),
         .instructions = try arena.dupe(Instruction, &.{
-            .{ .const_long = 4 },
+            .{ .const_integer = 4 },
             .{ .local_set = .{ .local = 0, .value = 0 } },
             .{ .call_inout = .{ .function = 1, .receiver = 0, .arguments = &.{} } },
             .{ .ret = null },
         }),
-        .result_types = try arena.dupe(types.Type, &.{ .long, .none, .none, .none }),
+        .result_types = try arena.dupe(types.Type, &.{ .i64, .none, .none, .none }),
         .blocks = try arena.dupe(defs.Block, &.{.{
             .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }),
         }}),
@@ -187,15 +187,15 @@ test "inout stores and the receiver value reaching a call survive dead-code elim
         .return_type = .none,
         .locals = try arena.dupe(defs.Local, &.{.{
             .name = "self",
-            .local_type = .long,
+            .local_type = .i64,
             .inout = true,
         }}),
         .instructions = try arena.dupe(Instruction, &.{
-            .{ .const_long = 9 },
+            .{ .const_integer = 9 },
             .{ .local_set = .{ .local = 0, .value = 0 } },
             .{ .ret = null },
         }),
-        .result_types = try arena.dupe(types.Type, &.{ .long, .none, .none }),
+        .result_types = try arena.dupe(types.Type, &.{ .i64, .none, .none }),
         .blocks = try arena.dupe(defs.Block, &.{.{
             .items = try arena.dupe(Register, &.{ 0, 1, 2 }),
         }}),

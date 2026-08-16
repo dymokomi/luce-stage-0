@@ -170,7 +170,7 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 ///
 /// The answer is carried as an `i64` whatever the landing width,
 /// because that is how the IR carries an integer constant
-/// (`mir.Instruction.const_long`); what `lands` decides is the
+/// (`mir.Instruction.const_integer`); what `lands` decides is the
 /// range, not the carrier.  Null means out of that range.
 pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
     // Base 0 reads the `0x`/`0b` prefixes and steps over `_`
@@ -182,7 +182,7 @@ pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
     // `i128` so that `long`'s own extremes are ordinary numbers here.
     // One statement covers all four widths and both signs, including
     // `-9223372036854775808`, whose magnitude is not itself an `i64`.
-    const bounds = if (lands.isInteger()) lands.integerRange() else Type.integerRange(.long);
+    const bounds = if (lands.isInteger()) lands.integerRange() else Type.integerRange(.i64);
     const signed: i128 = if (negated) -@as(i128, magnitude) else @as(i128, magnitude);
     if (signed < bounds.low or signed > bounds.high) return null;
     return @intCast(signed);
@@ -207,8 +207,8 @@ pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
     // whole ulp.  Keeping literals as text is what makes this one
     // line per width instead of a correction (docs/TYPES.md §1).
     const parsed: f64 = switch (lands) {
-        .half => std.fmt.parseFloat(f16, text) catch return null,
-        .float => std.fmt.parseFloat(f32, text) catch return null,
+        .f16 => std.fmt.parseFloat(f16, text) catch return null,
+        .f32 => std.fmt.parseFloat(f32, text) catch return null,
         else => std.fmt.parseFloat(f64, text) catch return null,
     };
     if (!std.math.isFinite(parsed)) return null;
@@ -225,8 +225,8 @@ pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
 /// spelling.  Null means malformed or not finite.
 pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool, lands: Type) ?f64 {
     const magnitude: f64 = switch (lands) {
-        .half => std.fmt.parseFloat(f16, text) catch return null,
-        .float => std.fmt.parseFloat(f32, text) catch return null,
+        .f16 => std.fmt.parseFloat(f16, text) catch return null,
+        .f32 => std.fmt.parseFloat(f32, text) catch return null,
         else => std.fmt.parseFloat(f64, text) catch return null,
     };
     if (!std.math.isFinite(magnitude)) return null;
@@ -529,35 +529,35 @@ const testing = std.testing;
 test "long's minimum parses only when the sign folds into the literal" {
     // The magnitude alone is one past the largest positive long, so
     // checking it before applying the sign makes long.min unwritable.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false, .long));
-    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true, .long));
-    try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false, .long));
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775809", true, .long));
-    try testing.expectEqual(@as(?i64, -1), parseIntLiteral("1", true, .long));
-    try testing.expectEqual(@as(?i64, 0), parseIntLiteral("0", true, .long));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false, .i64));
+    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true, .i64));
+    try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false, .i64));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775809", true, .i64));
+    try testing.expectEqual(@as(?i64, -1), parseIntLiteral("1", true, .i64));
+    try testing.expectEqual(@as(?i64, 0), parseIntLiteral("0", true, .i64));
 }
 
 test "a float literal that is not finite is refused, and underflow is not" {
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("1e400", .double));
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("-1e400", .double));
-    try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400", .double));
-    try testing.expectEqual(@as(?f64, 1.5), parseFloatLiteral("1.5", .double));
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense", .double));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("1e400", .f64));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("-1e400", .f64));
+    try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400", .f64));
+    try testing.expectEqual(@as(?f64, 1.5), parseFloatLiteral("1.5", .f64));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense", .f64));
 }
 
 test "an integer literal landing on a float reads its digits, not a long" {
     // The ordinary cases agree with parseIntLiteral, sign and all.
-    try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false, .double));
-    try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true, .double));
-    try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true, .double));
+    try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false, .f64));
+    try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true, .f64));
+    try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true, .f64));
     // And the case that is the whole reason it reads the digits: a
     // magnitude past long's range is not a long, but it is a perfectly
     // ordinary float, and the type it landed on is the float.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false, .long));
-    try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false, .double));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false, .i64));
+    try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false, .f64));
     // Past every float as well is still refused, and so is nonsense.
-    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false, .double));
-    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false, .double));
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false, .f64));
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false, .f64));
 }
 
 test "ord reads the first codepoint of a literal, and nothing from an empty one" {

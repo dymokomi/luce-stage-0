@@ -31,7 +31,6 @@ const types = @import("../support/types.zig");
 // one implementation in `libluce_rt` this calls it rather than keeping
 // a second copy that could drift (docs/NUMERICS.md §5).
 const operators = @import("../runtime/operators.zig");
-const runtime_value = @import("../runtime/value.zig");
 
 const Analyzer = @import("declarations.zig").Analyzer;
 const defaults = @import("defaults.zig");
@@ -191,29 +190,29 @@ fn foldIntLiteral(
     // badly, it is a mismatch, and it has to reach the mismatch
     // message rather than be folded into a bool-typed 3.
     const lands: Type = if (wanted) |place|
-        (context.literalLandingType(place) orelse .int)
+        (context.literalLandingType(place) orelse .i64)
     else
-        .int;
+        .i64;
     if (lands.isFloating()) {
         const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated, lands) orelse {
             return constantError(analyzer, span, "{s}", .{context.rangeMessage(lands)});
         };
-        return .{ .value = .{ .double = parsed }, .value_type = lands };
+        return .{ .value = .{ .float = parsed }, .value_type = lands };
     }
     const parsed = helpers.parseIntLiteral(literal.text, negated, lands) orelse {
         return constantError(analyzer, span, "{s}", .{context.rangeMessage(lands)});
     };
-    return .{ .value = .{ .long = parsed }, .value_type = lands };
+    return .{ .value = .{ .integer = parsed }, .value_type = lands };
 }
 
 /// A folded number's value as an `f64`, whichever family it came
 /// from.  A constant carries its value at the widest member of its
-/// family (`ConstantValue`), so an `int` arrives in `.long` and a
-/// `float` in `.double`.
-fn asDouble(held: TypedConstant) f64 {
+/// family (`ConstantValue`), so an `int` arrives in `.i64` and a
+/// `float` in `.f64`.
+fn asF64(held: TypedConstant) f64 {
     return switch (held.value) {
-        .long => |whole| @floatFromInt(whole),
-        .double => |fraction| fraction,
+        .integer => |whole| @floatFromInt(whole),
+        .float => |fraction| fraction,
         else => unreachable, // asked only of a number
     };
 }
@@ -224,7 +223,7 @@ fn asDouble(held: TypedConstant) f64 {
 pub fn widen(held: TypedConstant, to: Type) TypedConstant {
     if (held.value_type.eql(to)) return held;
     if (to.isInteger()) return .{ .value = held.value, .value_type = to };
-    return .{ .value = .{ .double = asDouble(held) }, .value_type = to };
+    return .{ .value = .{ .float = asF64(held) }, .value_type = to };
 }
 
 /// Make one folded value fit the type of its landing place.  This is
@@ -259,6 +258,96 @@ fn foldFloat(comptime T: type, op: ast.BinaryOp, a: T, b: T) f64 {
     };
 }
 
+const IntegerFoldError = error{
+    arithmetic_overflow,
+    division_by_zero,
+    shift_out_of_range,
+};
+
+/// Fold one integer operation at the width the program wrote. The i128
+/// constant carrier is only transport; every calculation narrows before it
+/// runs so compile-time arithmetic has exactly the runtime's overflow rules.
+fn foldIntegerAt(comptime T: type, op: ast.BinaryOp, a: i128, b: i128) IntegerFoldError!i128 {
+    const left: T = @intCast(a);
+    const right: T = @intCast(b);
+    const result: T = switch (op) {
+        .add => result: {
+            const added = @addWithOverflow(left, right);
+            if (added[1] != 0) return error.arithmetic_overflow;
+            break :result added[0];
+        },
+        .subtract => result: {
+            const subtracted = @subWithOverflow(left, right);
+            if (subtracted[1] != 0) return error.arithmetic_overflow;
+            break :result subtracted[0];
+        },
+        .multiply => result: {
+            const multiplied = @mulWithOverflow(left, right);
+            if (multiplied[1] != 0) return error.arithmetic_overflow;
+            break :result multiplied[0];
+        },
+        .floor_divide, .modulo => result: {
+            if (right == 0) return error.division_by_zero;
+            if (comptime @typeInfo(T).int.signedness == .signed) {
+                if (left == std.math.minInt(T) and right == -1) {
+                    return error.arithmetic_overflow;
+                }
+            }
+            break :result if (op == .floor_divide)
+                @divFloor(left, right)
+            else
+                @mod(left, right);
+        },
+        .bit_and => left & right,
+        .bit_or => left | right,
+        .bit_xor => left ^ right,
+        .shift_left, .shift_right => result: {
+            if (comptime @typeInfo(T).int.signedness == .signed) {
+                if (right < 0) return error.shift_out_of_range;
+            }
+            if (right >= @bitSizeOf(T)) return error.shift_out_of_range;
+            const count: std.math.Log2Int(T) = @intCast(right);
+            if (op == .shift_left) {
+                const shifted = @shlWithOverflow(left, count);
+                if (shifted[1] != 0) return error.arithmetic_overflow;
+                break :result shifted[0];
+            }
+            break :result left >> count;
+        },
+        .divide => unreachable, // integer `/` is converted to f64 first
+        else => unreachable,
+    };
+    return @intCast(result);
+}
+
+fn foldIntegerForType(of: Type, op: ast.BinaryOp, a: i128, b: i128) IntegerFoldError!i128 {
+    return switch (of) {
+        .u8 => foldIntegerAt(u8, op, a, b),
+        .u16 => foldIntegerAt(u16, op, a, b),
+        .u32 => foldIntegerAt(u32, op, a, b),
+        .u64 => foldIntegerAt(u64, op, a, b),
+        .i8 => foldIntegerAt(i8, op, a, b),
+        .i16 => foldIntegerAt(i16, op, a, b),
+        .i32 => foldIntegerAt(i32, op, a, b),
+        .i64 => foldIntegerAt(i64, op, a, b),
+        else => unreachable,
+    };
+}
+
+fn foldBitNot(of: Type, held: i128) i128 {
+    return switch (of) {
+        .u8 => @intCast(~@as(u8, @intCast(held))),
+        .u16 => @intCast(~@as(u16, @intCast(held))),
+        .u32 => @intCast(~@as(u32, @intCast(held))),
+        .u64 => @intCast(~@as(u64, @intCast(held))),
+        .i8 => @intCast(~@as(i8, @intCast(held))),
+        .i16 => @intCast(~@as(i16, @intCast(held))),
+        .i32 => @intCast(~@as(i32, @intCast(held))),
+        .i64 => @intCast(~@as(i64, @intCast(held))),
+        else => unreachable,
+    };
+}
+
 fn constantError(analyzer: *Analyzer, span: Span, comptime format: []const u8, arguments: anytype) Error!?TypedConstant {
     try analyzer.fail("luce.sema.const", span, format, arguments);
     return null;
@@ -272,10 +361,10 @@ fn encodeValue(
     value: ConstantValue,
 ) Error!mir.ConstantValue {
     return switch (value) {
-        .long => |held| .{ .long = held },
-        .double => |held| .{ .double = held },
+        .integer => |held| .{ .integer = held },
+        .float => |held| .{ .float = held },
         .boolean => |held| .{ .boolean = held },
-        .string => |held| .{ .string = try analyzer.pool.intern(held) },
+        .str => |held| .{ .str = try analyzer.pool.intern(held) },
         .strukt => |held| blk: {
             const fields = try analyzer.arena.alloc(mir.ConstantValue, held.fields.len);
             for (held.fields, fields) |field, *encoded| {
@@ -428,26 +517,20 @@ fn foldSequence(
 
 fn sameMapKey(left: TypedConstant, right: TypedConstant) bool {
     if (!left.value_type.eql(right.value_type)) return false;
-    const left_value = switch (left.value) {
-        .long => |held| runtime_value.Value.ofLong(held),
-        .string => |held| runtime_value.Value.ofString(held),
-        else => return false,
+    return switch (left.value) {
+        .integer => |held| right.value == .integer and right.value.integer == held,
+        .str => |held| right.value == .str and std.mem.eql(u8, held, right.value.str),
+        else => false,
     };
-    const right_value = switch (right.value) {
-        .long => |held| runtime_value.Value.ofLong(held),
-        .string => |held| runtime_value.Value.ofString(held),
-        else => return false,
-    };
-    return runtime_value.keyEquals(&left_value, &right_value);
 }
 
 fn mapKeyName(analyzer: *Analyzer, key: TypedConstant) Error![]const u8 {
     // An enum key is a number underneath, but nobody wrote the number:
     // the duplicate the reader has to find is spelled `Key.left`
     // (docs/ENUMS.md, As built 2026-08-12).
-    if (key.value_type == .enumeration and key.value == .long) {
+    if (key.value_type == .enumeration and key.value == .integer) {
         const declared = analyzer.enums.items[key.value_type.enumeration.index];
-        if (declared.memberOfValue(key.value.long)) |member| {
+        if (declared.memberOfValue(key.value.integer)) |member| {
             return std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{
                 declared.name,
                 declared.members[member].name,
@@ -455,8 +538,8 @@ fn mapKeyName(analyzer: *Analyzer, key: TypedConstant) Error![]const u8 {
         }
     }
     return switch (key.value) {
-        .long => |held| std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
-        .string => |held| std.fmt.allocPrint(analyzer.arena, "\"{s}\"", .{held}),
+        .integer => |held| std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
+        .str => |held| std.fmt.allocPrint(analyzer.arena, "\"{s}\"", .{held}),
         else => "this key",
     };
 }
@@ -491,14 +574,14 @@ fn foldMap(
     const values = try analyzer.temporary.alloc(TypedConstant, literal.entries.len);
     defer analyzer.temporary.free(values);
     for (literal.entries, 0..) |entry, index| {
-        // An unannotated integer key lands directly on long, because
-        // map(int, V) is not a type Luce admits (C3).
-        const key_place = wanted_key orelse if (index == 0) Type.long else keys[0].value_type;
+        // An unannotated integer key lands directly on the default
+        // `i64`; an annotation may contextualize it to any width.
+        const key_place = wanted_key orelse if (index == 0) Type.i64 else keys[0].value_type;
         var key = (try fold(analyzer, module, entry.key, key_place)) orelse return null;
         if (key.value_type.widensTo(key_place)) key = widen(key, key_place);
         if (index == 0 and wanted_key == null) {
-            if (key.value_type == .string) {
-                wanted_key = .string;
+            if (key.value_type == .str) {
+                wanted_key = .str;
             } else if (key.value_type == .enumeration) {
                 // An enum member is a constant by construction (D8), so
                 // a keymap folds into the program root like any other
@@ -506,14 +589,13 @@ fn foldMap(
                 // (docs/ENUMS.md, As built 2026-08-12).
                 wanted_key = key.value_type;
             } else if (key.value_type.isInteger()) {
-                key = fitElement(key, .long);
-                wanted_key = .long;
+                wanted_key = key.value_type;
             }
         }
         const key_type = wanted_key orelse key.value_type;
         key = fitElement(key, key_type);
-        if (key_type != .long and key_type != .string and key_type != .enumeration) {
-            return constantError(analyzer, entry.key.span(), "map keys are i64, str or an enum, got {s}", .{
+        if (!key_type.isInteger() and key_type != .str and key_type != .enumeration) {
+            return constantError(analyzer, entry.key.span(), "map keys are an integer, str or an enum, got {s}", .{
                 try analyzer.typeName(key_type),
             });
         }
@@ -610,19 +692,19 @@ pub fn fold(
         .int_literal => |literal| return foldIntLiteral(analyzer, literal, literal.span, false, wanted),
         .float_literal => |literal| {
             const lands: Type = if (wanted) |place| blk: {
-                const landed = context.literalLandingType(place) orelse break :blk .float;
-                break :blk if (landed.isFloating()) landed else .float;
-            } else .float;
+                const landed = context.literalLandingType(place) orelse break :blk .f64;
+                break :blk if (landed.isFloating()) landed else .f64;
+            } else .f64;
             const parsed = helpers.parseFloatLiteral(literal.text, lands) orelse {
                 return constantError(analyzer, literal.span, "{s}", .{context.rangeMessage(lands)});
             };
-            return .{ .value = .{ .double = parsed }, .value_type = lands };
+            return .{ .value = .{ .float = parsed }, .value_type = lands };
         },
         .bool_literal => |literal| {
             return .{ .value = .{ .boolean = literal.value }, .value_type = .boolean };
         },
         .string_literal => |literal| {
-            return .{ .value = .{ .string = literal.decoded }, .value_type = .string };
+            return .{ .value = .{ .str = literal.decoded }, .value_type = .str };
         },
         // `none` has no type of its own — the place it is written
         // into supplies one.  An annotation is such a place, so
@@ -712,26 +794,27 @@ pub fn fold(
             const operand = (try fold(analyzer, module, unary.operand, inner_wanted)) orelse return null;
             switch (unary.op) {
                 .negate => switch (operand.value) {
-                    .long => |value| {
+                    .integer => |value| {
                         const arithmetic = operand.value_type.arithmeticType() orelse
                             return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)});
-                        const smallest: i64 = if (arithmetic == .int)
-                            std.math.minInt(i32)
-                        else
-                            std.math.minInt(i64);
-                        if (value == smallest) {
+                        if (arithmetic.isUnsigned()) {
+                            return constantError(analyzer, unary.span, "cannot negate {s}; unsigned integers have no negative values", .{try analyzer.typeName(operand.value_type)});
+                        }
+                        if (value == arithmetic.integerRange().low) {
                             return constantError(analyzer, unary.span, "constant arithmetic overflows", .{});
                         }
-                        return .{ .value = .{ .long = -value }, .value_type = arithmetic };
+                        return .{ .value = .{ .integer = -value }, .value_type = arithmetic };
                     },
-                    .double => |value| {
+                    .float => |value| {
                         const arithmetic = operand.value_type.arithmeticType() orelse
                             return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)});
-                        const folded: f64 = if (arithmetic == .float)
-                            @as(f32, @floatCast(-@as(f32, @floatCast(value))))
-                        else
-                            -value;
-                        return .{ .value = .{ .double = folded }, .value_type = arithmetic };
+                        const folded: f64 = switch (arithmetic) {
+                            .f16 => @as(f16, @floatCast(-@as(f16, @floatCast(value)))),
+                            .f32 => @as(f32, @floatCast(-@as(f32, @floatCast(value)))),
+                            .f64 => -value,
+                            else => unreachable,
+                        };
+                        return .{ .value = .{ .float = folded }, .value_type = arithmetic };
                     },
                     else => return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)}),
                 },
@@ -740,13 +823,13 @@ pub fn fold(
                     else => return constantError(analyzer, unary.span, "not needs a bool", .{}),
                 },
                 .bit_not => switch (operand.value) {
-                    .long => |value| {
+                    .integer => |value| {
                         const arithmetic = operand.value_type.arithmeticType() orelse
                             return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
                         if (arithmetic.isFloating()) {
                             return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
                         }
-                        return .{ .value = .{ .long = ~value }, .value_type = arithmetic };
+                        return .{ .value = .{ .integer = foldBitNot(arithmetic, value) }, .value_type = arithmetic };
                     },
                     else => return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)}),
                 },
@@ -771,15 +854,15 @@ pub fn fold(
                     return constantError(analyzer, call.span, "ord(text) takes one argument", .{});
                 }
                 const operand = (try fold(analyzer, module, call.arguments[0].value, null)) orelse return null;
-                if (operand.value != .string) {
+                if (operand.value != .str) {
                     return constantError(analyzer, call.span, "ord takes a str, not {s}", .{
                         try analyzer.typeName(operand.value_type),
                     });
                 }
-                const codepoint = helpers.ordOfLiteral(operand.value.string) orelse {
+                const codepoint = helpers.ordOfLiteral(operand.value.str) orelse {
                     return constantError(analyzer, call.span, "ord has no codepoint to read from an empty str", .{});
                 };
-                return .{ .value = .{ .long = codepoint }, .value_type = .long };
+                return .{ .value = .{ .integer = codepoint }, .value_type = .i64 };
             }
             const qualified = try naming.qualify(analyzer, analyzer.modules[module].prefix, call.callee);
             if (analyzer.alias_names.get(qualified)) |alias_index| {
@@ -795,7 +878,7 @@ pub fn fold(
                             .{ call.callee, analyzer.enums.items[reference.index].name, call.callee },
                         );
                     },
-                    .byte, .short, .int, .long, .half, .float, .double, .string => {
+                    .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
                         if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
                             return constantError(analyzer, call.span, "{s}(value) takes one argument", .{call.callee});
                         }
@@ -846,7 +929,7 @@ pub fn fold(
                             return null;
                         switch (target) {
                             .strukt => |layout_index| return foldConstruct(analyzer, module, method.arguments, method.span, layout_index),
-                            .byte, .short, .int, .long, .half, .float, .double, .string => {
+                            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
                                 if (method.arguments.len != 1 or !helpers.argumentMayName(method.arguments[0], "value")) {
                                     return constantError(analyzer, method.span, "{s}(value) takes one argument", .{method.name});
                                 }
@@ -968,7 +1051,7 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
         return constantError(analyzer, field.span, "{s} is not a member of {s}", .{ field.name, declared.name });
     };
     return .{
-        .value = .{ .long = declared.members[member].value },
+        .value = .{ .integer = declared.members[member].value },
         .value_type = analyzer.enumType(index),
     };
 }
@@ -990,8 +1073,8 @@ fn foldConvertAs(
     if (operand.value_type == .enumeration) {
         const declared = analyzer.enums.items[operand.value_type.enumeration.index];
         if (produces == .str) {
-            const member = declared.memberOfValue(operand.value.long).?;
-            return .{ .value = .{ .string = declared.members[member].name }, .value_type = .string };
+            const member = declared.memberOfValue(operand.value.integer).?;
+            return .{ .value = .{ .str = declared.members[member].name }, .value_type = .str };
         }
         return foldConvertAs(analyzer, call, .{
             .value = operand.value,
@@ -1007,25 +1090,29 @@ fn foldConvertAs(
         // representation that round-trips, and a folded constant
         // has to be the same bytes a run would produce.
         const printed: []const u8 = switch (operand.value) {
-            .long => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
-            .double => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
+            .integer => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
+            .float => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
             .boolean => |held| if (held) "true" else "false",
-            .string => |held| held,
+            .str => |held| held,
             else => return constantError(analyzer, call.span, "str() converts a number, a bool, a str, or an enum", .{}),
         };
-        return .{ .value = .{ .string = printed }, .value_type = .string };
+        return .{ .value = .{ .str = printed }, .value_type = .str };
     }
     // Every other constructor is named for a numeric type and
     // takes any number (docs/TYPES.md §3): four destinations and
     // one rule, not sixteen pairs.
     const target: Type = switch (produces) {
-        .u8 => .byte,
-        .i16 => .short,
-        .i32 => .int,
-        .i64 => .long,
-        .f16 => .half,
-        .f32 => .float,
-        .f64 => .double,
+        .u8 => .u8,
+        .u16 => .u16,
+        .u32 => .u32,
+        .u64 => .u64,
+        .i8 => .i8,
+        .i16 => .i16,
+        .i32 => .i32,
+        .i64 => .i64,
+        .f16 => .f16,
+        .f32 => .f32,
+        .f64 => .f64,
         .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
     if (!operand.value_type.isNumeric()) {
@@ -1034,7 +1121,7 @@ fn foldConvertAs(
     if (operand.value_type.eql(target)) return operand;
 
     if (target.isFloating()) {
-        const held = asDouble(operand);
+        const held = asF64(operand);
         // Float to narrower float rounds to nearest, ties to even,
         // and reaches `inf` rather than trapping — the same
         // `@floatCast` `runtime/operators.zig` performs, so the
@@ -1042,12 +1129,12 @@ fn foldConvertAs(
         // is carried in the wide slot at its own precision,
         // exactly as its literal is.
         const narrowed: f64 = switch (target) {
-            .half => @as(f16, @floatCast(held)),
-            .float => @as(f32, @floatCast(held)),
-            .double => held,
+            .f16 => @as(f16, @floatCast(held)),
+            .f32 => @as(f32, @floatCast(held)),
+            .f64 => held,
             else => unreachable, // isFloating names three
         };
-        return .{ .value = .{ .double = narrowed }, .value_type = target };
+        return .{ .value = .{ .float = narrowed }, .value_type = target };
     }
 
     // An integer destination.  The two sources fail differently
@@ -1055,11 +1142,11 @@ fn foldConvertAs(
     // `long` past 2^53 does not survive a detour through f64.
     const bounds = target.integerRange();
     if (operand.value_type.isInteger()) {
-        const whole = operand.value.long;
+        const whole = operand.value.integer;
         if (whole < bounds.low or whole > bounds.high) {
             return constantError(analyzer, call.span, "constant conversion out of range", .{});
         }
-        return .{ .value = .{ .long = whole }, .value_type = target };
+        return .{ .value = .{ .integer = whole }, .value_type = target };
     }
     // The same guard as `runtime/operators.zig` and
     // `codegen/lower.zig`, value for value: a conversion that
@@ -1067,7 +1154,7 @@ fn foldConvertAs(
     // same rounding — half away from zero (docs/NUMERICS.md §7),
     // through the runtime's own function so there is one of it,
     // with the range checked *after* it.
-    const rounded = operators.roundHalfAway(f64, operand.value.double);
+    const rounded = @trunc(operand.value.float);
     // One past the top, tested with `>=`: every bound here is a
     // small integer or a power of two and so exact in binary64,
     // where `maxInt` itself stops being once the width reaches 64.
@@ -1076,19 +1163,23 @@ fn foldConvertAs(
     if (std.math.isNan(rounded) or rounded < lowest or rounded >= past_top) {
         return constantError(analyzer, call.span, "constant conversion out of range", .{});
     }
-    return .{ .value = .{ .long = @intFromFloat(rounded) }, .value_type = target };
+    return .{ .value = .{ .integer = @intFromFloat(rounded) }, .value_type = target };
 }
 
 fn builtinForScalar(target: Type) types.Builtin {
     return switch (target) {
-        .byte => .u8,
-        .short => .i16,
-        .int => .i32,
-        .long => .i64,
-        .half => .f16,
-        .float => .f32,
-        .double => .f64,
-        .string => .str,
+        .u8 => .u8,
+        .u16 => .u16,
+        .u32 => .u32,
+        .u64 => .u64,
+        .i8 => .i8,
+        .i16 => .i16,
+        .i32 => .i32,
+        .i64 => .i64,
+        .f16 => .f16,
+        .f32 => .f32,
+        .f64 => .f64,
+        .str => .str,
         else => unreachable,
     };
 }
@@ -1237,49 +1328,17 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
         right = (try fold(analyzer, module, binary.right, wanted)) orelse return null;
     }
 
-    // Numbers that mix, folded (docs/TYPES.md §2).  A constant has
-    // to reach the same answer a run would, so arithmetic widens
-    // to the type the two meet at and comparison across the
-    // ladders stays exact — the comparison calls the runtime's own
-    // function rather than a second copy of it, because two
-    // implementations of one judgment is how they come to
-    // disagree.
-    if (left.value_type.isNumeric() and right.value_type.isNumeric() and
-        !left.value_type.eql(right.value_type))
-    {
-        // Across the ladders, a comparison compares the numbers
-        // and not a conversion of them.  Both sides widen into
-        // the pair the intrinsic speaks — `int` into `i64` and
-        // `float` into `f64`, both lossless by construction — so
-        // four pairs need one function (docs/TYPES.md §5).
-        const crosses = left.value_type.isInteger() != right.value_type.isInteger();
-        if (crosses) {
-            if (helpers.comparisonOf(binary.op)) |written| {
-                const int_first = left.value_type.isInteger();
-                const whole = if (int_first) left else right;
-                const fraction = if (int_first) right else left;
-                return .{
-                    .value = .{ .boolean = operators.compareLongDouble(
-                        if (int_first) written else written.mirrored(),
-                        whole.value.long,
-                        asDouble(fraction),
-                    ) },
-                    .value_type = .boolean,
-                };
-            }
-        }
-        const meeting = Type.unified(left.value_type, right.value_type).?;
-        left = widen(left, meeting);
-        right = widen(right, meeting);
-    }
+    // Concrete numeric values never meet through an implicit conversion.
+    // Literal contextualization happens while each operand is folded; once
+    // both values are concrete, differing widths are a source error.
 
     // `/` is real division and answers a float whatever it
     // divides, so two integer constants widen here too — and
     // `1 / 0` folds to `inf` rather than refusing
     // (docs/NUMERICS.md §2).
     if (binary.op == .divide and left.value_type.isInteger() and right.value_type.isInteger()) {
-        left = widen(left, .double);
-        right = widen(right, .double);
+        left = widen(left, .f64);
+        right = widen(right, .f64);
     }
 
     if (!left.value_type.eql(right.value_type)) {
@@ -1303,117 +1362,51 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
         // the count as the one refusal — a constant shift with a
         // bad count is the compile-time face of the trap.
         .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
-            if (left.value != .long or
-                (left.value_type != .int and left.value_type != .long))
-            {
+            if (left.value != .integer or !left.value_type.isInteger()) {
                 return constantError(analyzer, binary.span, "{s} works on integers; {s} has no bits a program may see", .{
                     context.operatorText(binary.op),
                     try analyzer.typeName(left.value_type),
                 });
             }
-            const a = left.value.long;
-            const b = right.value.long;
-            const narrow = left.value_type == .int;
-            const folded: i64 = switch (binary.op) {
-                .bit_and => a & b,
-                .bit_or => a | b,
-                .bit_xor => a ^ b,
-                .shift_left, .shift_right => blk: {
-                    const width: i64 = if (narrow) 32 else 64;
-                    if (b < 0 or b >= width) {
-                        return constantError(analyzer, binary.span, "constant shift count out of range", .{});
-                    }
-                    if (narrow) {
-                        const held: i32 = @intCast(a);
-                        const count: u5 = @intCast(b);
-                        break :blk if (binary.op == .shift_left)
-                            held << count
-                        else
-                            held >> count;
-                    }
-                    const count: u6 = @intCast(b);
-                    break :blk if (binary.op == .shift_left)
-                        a << count
-                    else
-                        a >> count;
-                },
-                else => unreachable,
+            const a = left.value.integer;
+            const b = right.value.integer;
+            const folded = foldIntegerForType(left.value_type, binary.op, a, b) catch |mistake| switch (mistake) {
+                error.shift_out_of_range => return constantError(analyzer, binary.span, "constant shift count out of range", .{}),
+                error.arithmetic_overflow => return constantError(analyzer, binary.span, "constant arithmetic overflows", .{}),
+                error.division_by_zero => unreachable,
             };
-            return .{ .value = .{ .long = folded }, .value_type = left.value_type };
+            return .{ .value = .{ .integer = folded }, .value_type = left.value_type };
         },
         .add, .subtract, .multiply, .divide, .floor_divide, .modulo => switch (left.value) {
-            .long => |a| {
-                const b = right.value.long;
-                const narrow = left.value_type == .int;
-                const smallest: i64 = if (narrow) std.math.minInt(i32) else std.math.minInt(i64);
-                const folded: i64 = switch (binary.op) {
-                    .add => blk: {
-                        const result = @addWithOverflow(a, b);
-                        if (result[1] != 0) return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                        break :blk result[0];
-                    },
-                    .subtract => blk: {
-                        const result = @subWithOverflow(a, b);
-                        if (result[1] != 0) return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                        break :blk result[0];
-                    },
-                    .multiply => blk: {
-                        const result = @mulWithOverflow(a, b);
-                        if (result[1] != 0) return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                        break :blk result[0];
-                    },
-                    // `/` widened both sides before this switch,
-                    // so an integer one cannot arrive here
-                    // (docs/NUMERICS.md §2).
-                    .divide => unreachable,
-                    // `//` and `%` floor together
-                    // (docs/NUMERICS.md §3); the folder answers
-                    // what a run answers.
-                    .floor_divide => blk: {
-                        if (b == 0) return constantError(analyzer, binary.span, "constant division by zero", .{});
-                        if (a == smallest and b == -1) {
-                            return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                        }
-                        break :blk @divFloor(a, b);
-                    },
-                    .modulo => blk: {
-                        if (b == 0) return constantError(analyzer, binary.span, "constant division by zero", .{});
-                        if (a == smallest and b == -1) {
-                            return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                        }
-                        break :blk @mod(a, b);
-                    },
-                    else => unreachable,
+            .integer => |a| {
+                const b = right.value.integer;
+                const folded = foldIntegerForType(left.value_type, binary.op, a, b) catch |mistake| switch (mistake) {
+                    error.division_by_zero => return constantError(analyzer, binary.span, "constant division by zero", .{}),
+                    error.arithmetic_overflow => return constantError(analyzer, binary.span, "constant arithmetic overflows", .{}),
+                    error.shift_out_of_range => unreachable,
                 };
-                // At `int` the i64 arithmetic above cannot itself
-                // overflow, so the width's own range is checked
-                // here — and it is checked, because `int` traps at
-                // 2^31 when a program runs and a constant must not
-                // quietly say otherwise (docs/TYPES.md §4).
-                if (narrow and (folded < std.math.minInt(i32) or folded > std.math.maxInt(i32))) {
-                    return constantError(analyzer, binary.span, "constant arithmetic overflows", .{});
-                }
-                return .{ .value = .{ .long = folded }, .value_type = left.value_type };
+                return .{ .value = .{ .integer = folded }, .value_type = left.value_type };
             },
-            .double => |a| {
-                const b = right.value.double;
+            .float => |a| {
+                const b = right.value.float;
                 // At `float` every operand and every answer is
                 // rounded to binary32, because that is what a run
                 // would compute; folding at binary64 and narrowing
                 // afterwards is a double rounding.
-                const narrow = left.value_type == .float;
-                const folded: f64 = if (narrow)
-                    foldFloat(f32, binary.op, @floatCast(a), @floatCast(b))
-                else
-                    foldFloat(f64, binary.op, a, b);
-                return .{ .value = .{ .double = folded }, .value_type = left.value_type };
+                const folded: f64 = switch (left.value_type) {
+                    .f16 => foldFloat(f16, binary.op, @floatCast(a), @floatCast(b)),
+                    .f32 => foldFloat(f32, binary.op, @floatCast(a), @floatCast(b)),
+                    .f64 => foldFloat(f64, binary.op, a, b),
+                    else => unreachable,
+                };
+                return .{ .value = .{ .float = folded }, .value_type = left.value_type };
             },
-            .string => |a| {
+            .str => |a| {
                 if (binary.op != .add) {
                     return constantError(analyzer, binary.span, "str supports + only", .{});
                 }
-                const joined = try std.mem.concat(analyzer.arena, u8, &.{ a, right.value.string });
-                return .{ .value = .{ .string = joined }, .value_type = .string };
+                const joined = try std.mem.concat(analyzer.arena, u8, &.{ a, right.value.str });
+                return .{ .value = .{ .str = joined }, .value_type = .str };
             },
             else => return constantError(analyzer, binary.span, "{s} does not support this operator", .{
                 try analyzer.typeName(left.value_type),
@@ -1431,10 +1424,10 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
                 );
             }
             const folded: bool = switch (left.value) {
-                .long => |a| helpers.compareOrder(binary.op, a, right.value.long),
-                .double => |a| helpers.compareOrder(binary.op, a, right.value.double),
-                .string => |a| blk: {
-                    const order = std.mem.order(u8, a, right.value.string);
+                .integer => |a| helpers.compareOrder(binary.op, a, right.value.integer),
+                .float => |a| helpers.compareOrder(binary.op, a, right.value.float),
+                .str => |a| blk: {
+                    const order = std.mem.order(u8, a, right.value.str);
                     break :blk switch (binary.op) {
                         .equal => order == .eq,
                         .not_equal => order != .eq,

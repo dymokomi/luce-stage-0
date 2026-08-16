@@ -160,13 +160,13 @@ fn printConstantValue(
     const expected = if (wanted == .optional) wanted.optional.asType() else wanted;
     switch (constant) {
         .boolean => |value| try appendPrint(text, allocator, "{}", .{value}),
-        .long => |value| if (expected == .enumeration) {
+        .integer => |value| if (expected == .enumeration) {
             const declared = program.enums[expected.enumeration.index];
             const member = declared.members[declared.memberOfValue(value).?];
             try appendPrint(text, allocator, "{s}.{s}", .{ declared.name, member.name });
         } else try appendPrint(text, allocator, "{d}", .{value}),
-        .double => |value| try appendPrint(text, allocator, "{d}", .{value}),
-        .string => |index| try appendPrint(text, allocator, "data#{d}", .{index}),
+        .float => |value| try appendPrint(text, allocator, "{d}", .{value}),
+        .str => |index| try appendPrint(text, allocator, "data#{d}", .{index}),
         .strukt => |value| {
             const layout = program.structs[value.layout];
             try appendPrint(text, allocator, "{s}(", .{layout.name});
@@ -197,9 +197,9 @@ fn printInstruction(
     }
     switch (instruction) {
         .const_boolean => |value| try appendPrint(text, allocator, "const {}", .{value}),
-        .const_long => |value| try appendPrint(text, allocator, "const {d}", .{value}),
-        .const_double => |value| try appendPrint(text, allocator, "const {d}", .{value}),
-        .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
+        .const_integer => |value| try appendPrint(text, allocator, "const {d}", .{value}),
+        .const_float => |value| try appendPrint(text, allocator, "const {d}", .{value}),
+        .const_str => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
         .const_container => |constant| try appendPrint(text, allocator, "const_container container#{d}", .{constant}),
         .const_function => |named| if (named.receiver) |receiver|
             try appendPrint(text, allocator, "const_function {s} bound r{d}", .{

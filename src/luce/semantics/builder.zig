@@ -767,6 +767,14 @@ pub const FunctionBuilder = struct {
     /// than re-deciding it, so there is one statement of the lattice.
     pub fn widenNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
         std.debug.assert(value.value_type.widensTo(to));
+        return self.convertNumeric(value, to);
+    }
+
+    /// Record a numeric conversion required by a language construct rather
+    /// than by implicit assignment. Integer `/` uses this to produce its
+    /// specified f64 result; source-level conversions use the same node.
+    pub fn convertNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
+        std.debug.assert(value.value_type.isNumeric() and to.isNumeric());
         // The widening is a node of its own (`convert`), so an operand
         // tree says where every conversion stands — and recording it
         // here covers every site that widens, because this is the one
@@ -851,9 +859,8 @@ pub const FunctionBuilder = struct {
     /// promotion is spelled for a *single* operand; `unifyNumeric` is
     /// the same rule for a pair.
     pub fn promoted(self: *FunctionBuilder, value: Typed) Error!Typed {
-        const at = value.value_type.arithmeticType() orelse return value;
-        if (value.value_type.eql(at)) return value;
-        return self.widenNumeric(value, at);
+        _ = self;
+        return value;
     }
 
     /// Bring two numeric operands to the type they meet at
@@ -1452,10 +1459,10 @@ pub const FunctionBuilder = struct {
     /// type, and everything a position can address — a list, an array,
     /// a string being sliced — takes a `long`.
     fn subscriptType(self: *FunctionBuilder, container: Type) ?Type {
-        if (container == .string) return .long;
+        if (container == .str) return .i64;
         const descriptor = self.analyzer.heapOf(container) orelse return null;
         return switch (descriptor) {
-            .list, .array => .long,
+            .list, .array => .i64,
             .map => |pair| pair.key,
             .builder, .file, .task => null,
         };
@@ -1639,7 +1646,7 @@ pub const FunctionBuilder = struct {
     /// (docs/TYPES.md D3).  `negated` folds the minus in first, so
     /// `long`'s minimum stays writable; `wanted` is the landing type
     /// the context asked for, and null means there is no context and
-    /// the literal takes the default, which is `int`.
+    /// the literal takes the default, which is `i64`.
     ///
     /// **The text is read at the width it lands on**, never at the
     /// widest and then narrowed: a float landing reads the *digits*
@@ -1653,14 +1660,14 @@ pub const FunctionBuilder = struct {
         negated: bool,
         wanted: ?Type,
     ) Error!?Typed {
-        const lands: Type = wanted orelse .int;
+        const lands: Type = wanted orelse .i64;
         if (lands.isFloating()) {
             const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated, lands) orelse {
                 try self.fail("luce.sema.literal", span, "{s}", .{context.rangeMessage(lands)});
                 return null;
             };
             return .{
-                .node = try recorder.recordNode(self, .{ .const_double = .{ .value = parsed, .result = lands, .span = span } }),
+                .node = try recorder.recordNode(self, .{ .const_float = .{ .value = parsed, .result = lands, .span = span } }),
                 .value_type = lands,
             };
         }
@@ -1669,7 +1676,7 @@ pub const FunctionBuilder = struct {
             return null;
         };
         return .{
-            .node = try recorder.recordNode(self, .{ .const_long = .{ .value = parsed, .result = lands, .span = span } }),
+            .node = try recorder.recordNode(self, .{ .const_integer = .{ .value = parsed, .result = lands, .span = span } }),
             .value_type = lands,
         };
     }
@@ -1691,19 +1698,17 @@ pub const FunctionBuilder = struct {
         switch (expression.*) {
             .int_literal => |literal| return self.lowerIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
-                // A float literal lands on `float` with no context —
-                // the owner's ruling, and the one place the language
-                // differs from every precedent (docs/TYPES.md D2).
+                // A float literal lands on `f64` with no context.
                 const lands: Type = if (wanted) |place|
-                    (if (place.isFloating()) place else .float)
+                    (if (place.isFloating()) place else .f64)
                 else
-                    .float;
+                    .f64;
                 const parsed = helpers.parseFloatLiteral(literal.text, lands) orelse {
                     try self.fail("luce.sema.literal", literal.span, "{s}", .{context.rangeMessage(lands)});
                     return null;
                 };
                 return .{
-                    .node = try recorder.recordNode(self, .{ .const_double = .{ .value = parsed, .result = lands, .span = literal.span } }),
+                    .node = try recorder.recordNode(self, .{ .const_float = .{ .value = parsed, .result = lands, .span = literal.span } }),
                     .value_type = lands,
                 };
             },
@@ -1716,8 +1721,8 @@ pub const FunctionBuilder = struct {
             .string_literal => |literal| {
                 const constant = try self.analyzer.pool.intern(literal.decoded);
                 return .{
-                    .node = try recorder.recordNode(self, .{ .const_string = .{ .constant = constant, .result = .string, .span = literal.span } }),
-                    .value_type = .string,
+                    .node = try recorder.recordNode(self, .{ .const_str = .{ .constant = constant, .result = .str, .span = literal.span } }),
+                    .value_type = .str,
                 };
             },
             .name => |name| {

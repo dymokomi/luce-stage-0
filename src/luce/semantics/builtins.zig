@@ -71,7 +71,7 @@ pub const Builtin = struct {
 /// `-1` and `false`, as `term_style`'s table row spells them — the
 /// two defaults the shipped corpus asked for (docs/ARGS.md §3), and
 /// today the only ones any builtin has.
-const default_background: context.TypedConstant = .{ .value = .{ .long = -1 }, .value_type = .long };
+const default_background: context.TypedConstant = .{ .value = .{ .integer = -1 }, .value_type = .i64 };
 const default_not_bold: context.TypedConstant = .{ .value = .{ .boolean = false }, .value_type = .boolean };
 
 /// **The one table.**  `builder.zig`'s `lowerIntrinsic` resolves a call
@@ -215,11 +215,11 @@ pub const string_methods = [_]struct {
     // the one place an `array(byte, _)` gets filled from.  It
     // costs nothing at a call site, because a `byte` reaches a
     // `long` parameter and a comparison with nothing written down.
-    .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.long}, .result = .byte },
+    .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.i64}, .result = .u8 },
     // The scanning primitive that `byte_at` is the access
     // primitive: std strings builds substring search on it, and it
     // is the seam SIMD would enter through (docs/STD.md).
-    .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .byte, .long }, .result = .long },
+    .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .u8, .i64 }, .result = .i64 },
 };
 
 /// The method names each receiver kind answers to — `builder.zig`'s

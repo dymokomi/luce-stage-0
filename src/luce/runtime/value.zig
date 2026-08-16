@@ -27,7 +27,7 @@
 //! reaches in the same twenty-four.  `inline_length` says which form
 //! the text is in: a count from 0 to `inline_capacity` when the bytes
 //! are here, `text_outside` when `bits` and `length` address them.
-//! Reading either form goes through `asString`, which is why it takes
+//! Reading either form goes through `asStr`, which is why it takes
 //! a pointer — the slice it answers for inline text points *into the
 //! value*, so the value must be somewhere, not a temporary
 //! (docs/STRINGS.md).
@@ -51,9 +51,9 @@ pub const Tag = enum(u8) {
     /// No value: a statement's result, an unset frame slot.
     none = 0,
     boolean = 1,
-    long = 2,
-    double = 3,
-    string = 4,
+    i64 = 2,
+    f64 = 3,
+    str = 4,
     /// A struct value: `bits` addresses `length` fields.  Struct
     /// storage is never mutated in place — `struct_set` allocates a
     /// fresh array — so sharing one array between copies is safe.
@@ -68,16 +68,16 @@ pub const Tag = enum(u8) {
     /// the zero element's tag — the runtime is handed a zero and never
     /// the program's type table — and a `float` whose zero boxed as
     /// `double` would silently allocate eight-byte cells.
-    int = 7,
-    float = 8,
+    i32 = 7,
+    f32 = 8,
     /// The three storage widths (docs/TYPES.md D5), appended in their
     /// turn.  No expression ever has one of these types — an operator
     /// widens them first — so a `Value` wears one only where storage
     /// does: an `array(byte, n)`'s zero, a boxed field, a boxed
     /// element crossing into a caller.
-    byte = 9,
-    short = 10,
-    half = 11,
+    u8 = 9,
+    i16 = 10,
+    f16 = 11,
     /// A **function value**: `bits` addresses `length` slots, exactly
     /// as `strukt` does, and the two slots are the function it names
     /// and the receiver it carries (docs/BINDING.md D12).
@@ -96,6 +96,11 @@ pub const Tag = enum(u8) {
     /// Appended, like every tag since `strukt`: no number above ever
     /// changes what it means.
     function = 12,
+    // Additional explicit integer widths append to the stable ABI.
+    i8 = 13,
+    u16 = 14,
+    u32 = 15,
+    u64 = 16,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -177,12 +182,12 @@ pub const Value = extern struct {
         return .{ .tag = .boolean, .bits = @intFromBool(held) };
     }
 
-    pub fn ofLong(held: i64) Value {
-        return .{ .tag = .long, .bits = @bitCast(held) };
+    pub fn ofI64(held: i64) Value {
+        return .{ .tag = .i64, .bits = @bitCast(held) };
     }
 
-    pub fn ofDouble(held: f64) Value {
-        return .{ .tag = .double, .bits = @bitCast(held) };
+    pub fn ofF64(held: f64) Value {
+        return .{ .tag = .f64, .bits = @bitCast(held) };
     }
 
     /// The narrow widths.  Each sits in the low bits of the same
@@ -190,35 +195,51 @@ pub const Value = extern struct {
     /// wide, so a boxed value is the same twenty-four bytes whatever
     /// it holds and only its tag says how much of `bits` is the
     /// number (docs/TYPES.md §6).
-    pub fn ofInt(held: i32) Value {
-        return .{ .tag = .int, .bits = @as(u32, @bitCast(held)) };
+    pub fn ofI32(held: i32) Value {
+        return .{ .tag = .i32, .bits = @as(u32, @bitCast(held)) };
     }
 
-    pub fn ofFloat(held: f32) Value {
-        return .{ .tag = .float, .bits = @as(u32, @bitCast(held)) };
+    pub fn ofF32(held: f32) Value {
+        return .{ .tag = .f32, .bits = @as(u32, @bitCast(held)) };
     }
 
     /// The storage widths.  A `byte` is the one whose bits are read
     /// back as a magnitude (D4); a `short` sign-extends, and a `half`
     /// keeps its sixteen binary16 bits and is widened by whoever
     /// reads it.
-    pub fn ofByte(held: u8) Value {
-        return .{ .tag = .byte, .bits = held };
+    pub fn ofU8(held: u8) Value {
+        return .{ .tag = .u8, .bits = held };
     }
 
-    pub fn ofShort(held: i16) Value {
-        return .{ .tag = .short, .bits = @as(u16, @bitCast(held)) };
+    pub fn ofI16(held: i16) Value {
+        return .{ .tag = .i16, .bits = @as(u16, @bitCast(held)) };
     }
 
-    pub fn ofHalf(held: f16) Value {
-        return .{ .tag = .half, .bits = @as(u16, @bitCast(held)) };
+    pub fn ofF16(held: f16) Value {
+        return .{ .tag = .f16, .bits = @as(u16, @bitCast(held)) };
+    }
+
+    pub fn ofI8(held: i8) Value {
+        return .{ .tag = .i8, .bits = @as(u8, @bitCast(held)) };
+    }
+
+    pub fn ofU16(held: u16) Value {
+        return .{ .tag = .u16, .bits = held };
+    }
+
+    pub fn ofU32(held: u32) Value {
+        return .{ .tag = .u32, .bits = held };
+    }
+
+    pub fn ofU64(held: u64) Value {
+        return .{ .tag = .u64, .bits = held };
     }
 
     /// Text that lives somewhere else — a program constant, an owned
     /// allocation, a borrow of either.  This is the form every *view*
     /// takes, because a view must not copy.
-    pub fn ofString(held: []const u8) Value {
-        return ofOutside(.string, held);
+    pub fn ofStr(held: []const u8) Value {
+        return ofOutside(.str, held);
     }
 
     /// The same, for a caller that already has the tag in hand.
@@ -277,32 +298,48 @@ pub const Value = extern struct {
         return self.bits != 0;
     }
 
-    pub fn asLong(self: Value) i64 {
+    pub fn asI64(self: Value) i64 {
         return @bitCast(self.bits);
     }
 
-    pub fn asDouble(self: Value) f64 {
+    pub fn asF64(self: Value) f64 {
         return @bitCast(self.bits);
     }
 
-    pub fn asInt(self: Value) i32 {
+    pub fn asI32(self: Value) i32 {
         return @bitCast(@as(u32, @truncate(self.bits)));
     }
 
-    pub fn asFloat(self: Value) f32 {
+    pub fn asF32(self: Value) f32 {
         return @bitCast(@as(u32, @truncate(self.bits)));
     }
 
-    pub fn asByte(self: Value) u8 {
+    pub fn asU8(self: Value) u8 {
         return @truncate(self.bits);
     }
 
-    pub fn asShort(self: Value) i16 {
+    pub fn asI16(self: Value) i16 {
         return @bitCast(@as(u16, @truncate(self.bits)));
     }
 
-    pub fn asHalf(self: Value) f16 {
+    pub fn asF16(self: Value) f16 {
         return @bitCast(@as(u16, @truncate(self.bits)));
+    }
+
+    pub fn asI8(self: Value) i8 {
+        return @bitCast(@as(u8, @truncate(self.bits)));
+    }
+
+    pub fn asU16(self: Value) u16 {
+        return @truncate(self.bits);
+    }
+
+    pub fn asU32(self: Value) u32 {
+        return @truncate(self.bits);
+    }
+
+    pub fn asU64(self: Value) u64 {
+        return self.bits;
     }
 
     /// The text this value holds.
@@ -313,7 +350,7 @@ pub const Value = extern struct {
     /// cell or a named local, never from a temporary, and never keep it
     /// across anything that could move or overwrite that place
     /// (docs/STRINGS.md).
-    pub fn asString(self: *const Value) []const u8 {
+    pub fn asStr(self: *const Value) []const u8 {
         return self.textOf();
     }
 
@@ -333,7 +370,7 @@ pub const Value = extern struct {
     /// a native memory fault.
     pub fn hasValidStringRepresentation(self: Value) bool {
         const tag = self.validTag() orelse return false;
-        if (tag != .string) return false;
+        if (tag != .str) return false;
         if (self.inline_length == text_outside) {
             return self.hasValidByteRun();
         }
@@ -359,7 +396,7 @@ pub const Value = extern struct {
     pub fn hasValidRepresentation(self: Value) bool {
         const tag = self.validTag() orelse return false;
         return switch (tag) {
-            .string => self.hasValidStringRepresentation(),
+            .str => self.hasValidStringRepresentation(),
             .strukt => self.hasValidFieldRun(),
             // An unwritten function slot is a valid null function: its
             // ABI shape is still the two-slot run, but there is no
@@ -393,7 +430,7 @@ pub const Value = extern struct {
     pub fn ownsStorage(self: Value) bool {
         const tag = self.validTag() orelse return false;
         return switch (tag) {
-            .string => !self.textIsInline() and self.bits != 0 and self.length != 0,
+            .str => !self.textIsInline() and self.bits != 0 and self.length != 0,
             .strukt, .function => self.bits != 0 and self.length != 0,
             else => false,
         };
@@ -461,20 +498,24 @@ pub const Value = extern struct {
     // -- switching --------------------------------------------------------
 
     /// The same 24 bytes as a tagged union, for Zig callers that want to
-    /// switch on the payload.  A pointer receiver for `asString`'s
-    /// reason: a `.string` arm borrows the value's own bytes.
+    /// switch on the payload.  A pointer receiver for `asStr`'s
+    /// reason: a `.str` arm borrows the value's own bytes.
     pub fn view(self: *const Value) View {
         return switch (self.tag) {
             .none => .none,
             .boolean => .{ .boolean = self.asBoolean() },
-            .byte => .{ .byte = self.asByte() },
-            .short => .{ .short = self.asShort() },
-            .int => .{ .int = self.asInt() },
-            .long => .{ .long = self.asLong() },
-            .half => .{ .half = self.asHalf() },
-            .float => .{ .float = self.asFloat() },
-            .double => .{ .double = self.asDouble() },
-            .string => .{ .string = self.asString() },
+            .u8 => .{ .u8 = self.asU8() },
+            .u16 => .{ .u16 = self.asU16() },
+            .u32 => .{ .u32 = self.asU32() },
+            .u64 => .{ .u64 = self.asU64() },
+            .i8 => .{ .i8 = self.asI8() },
+            .i16 => .{ .i16 = self.asI16() },
+            .i32 => .{ .i32 = self.asI32() },
+            .i64 => .{ .i64 = self.asI64() },
+            .f16 => .{ .f16 = self.asF16() },
+            .f32 => .{ .f32 = self.asF32() },
+            .f64 => .{ .f64 = self.asF64() },
+            .str => .{ .str = self.asStr() },
             .strukt => .{ .strukt = self.asStruct() },
             .function => .{ .function = self.asStruct() },
             .object => .{ .object = self.asObject() },
@@ -487,14 +528,18 @@ pub const Value = extern struct {
 pub const View = union(enum) {
     none,
     boolean: bool,
-    byte: u8,
-    short: i16,
-    int: i32,
-    long: i64,
-    half: f16,
-    float: f32,
-    double: f64,
-    string: []const u8,
+    u8: u8,
+    u16: u16,
+    u32: u32,
+    u64: u64,
+    i8: i8,
+    i16: i16,
+    i32: i32,
+    i64: i64,
+    f16: f16,
+    f32: f32,
+    f64: f64,
+    str: []const u8,
     strukt: []Value,
     /// A function value's run: the same shape a struct's run has, and a
     /// separate arm because the objects inside one are **borrowed**, so
@@ -503,24 +548,23 @@ pub const View = union(enum) {
     object: Handle,
 };
 
-/// Map keys compare by content, and a key is one of exactly two
-/// payloads here: a long or a String.
-///
-/// **An enum key is a long.**  A program may key a map by an enum
-/// (docs/ENUMS.md), and an enum is an integer at a chosen width whose
-/// whole comparison surface is equality — so both engines widen one into
-/// the integer a `long` key would be before it ever reaches this side
-/// (`mir.mapKeyStorage`) and narrow it back where a key comes out.  That
-/// is why the runtime learned nothing when enums became keys, and why
-/// this switch has two arms rather than five.
+/// Map keys compare by content. Integer keys retain their exact width,
+/// enum keys use their exact backing width, and text compares by bytes.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
     const left_tag = left.validTag() orelse return false;
     const right_tag = right.validTag() orelse return false;
     if (left_tag != right_tag) return false;
     return switch (left_tag) {
-        .long => left.asLong() == right.asLong(),
-        .string => if (left.hasValidStringRepresentation() and right.hasValidStringRepresentation())
-            std.mem.eql(u8, left.asString(), right.asString())
+        .u8 => left.asU8() == right.asU8(),
+        .u16 => left.asU16() == right.asU16(),
+        .u32 => left.asU32() == right.asU32(),
+        .u64 => left.asU64() == right.asU64(),
+        .i8 => left.asI8() == right.asI8(),
+        .i16 => left.asI16() == right.asI16(),
+        .i32 => left.asI32() == right.asI32(),
+        .i64 => left.asI64() == right.asI64(),
+        .str => if (left.hasValidStringRepresentation() and right.hasValidStringRepresentation())
+            std.mem.eql(u8, left.asStr(), right.asStr())
         else
             false,
         else => false,
@@ -551,19 +595,19 @@ test "an unknown ABI tag is invalid data, not a native enum panic" {
 }
 
 test "every payload survives a round trip" {
-    try std.testing.expectEqual(@as(i64, -9), Value.ofLong(-9).asLong());
-    try std.testing.expectEqual(@as(f64, 1.5), Value.ofDouble(1.5).asDouble());
+    try std.testing.expectEqual(@as(i64, -9), Value.ofI64(-9).asI64());
+    try std.testing.expectEqual(@as(f64, 1.5), Value.ofF64(1.5).asF64());
     try std.testing.expect(Value.ofBoolean(true).asBoolean());
     try std.testing.expect(!Value.ofBoolean(false).asBoolean());
-    const hi = Value.ofString("hi");
-    try std.testing.expectEqualStrings("hi", hi.asString());
-    const empty = Value.ofString("");
-    try std.testing.expectEqualStrings("", empty.asString());
+    const hi = Value.ofStr("hi");
+    try std.testing.expectEqualStrings("hi", hi.asStr());
+    const empty = Value.ofStr("");
+    try std.testing.expectEqualStrings("", empty.asStr());
 
-    var fields = [_]Value{ Value.ofLong(1), Value.ofString("two") };
+    var fields = [_]Value{ Value.ofI64(1), Value.ofStr("two") };
     const held = Value.ofStruct(&fields);
     try std.testing.expectEqual(@as(usize, 2), held.asStruct().len);
-    try std.testing.expectEqualStrings("two", held.asStruct()[1].asString());
+    try std.testing.expectEqualStrings("two", held.asStruct()[1].asStr());
 }
 
 test "text reads the same whichever form it is in" {
@@ -574,20 +618,20 @@ test "text reads the same whichever form it is in" {
 
     for (lengths) |length| {
         const wanted = words[0..length];
-        const outside = Value.ofString(wanted);
+        const outside = Value.ofStr(wanted);
         try std.testing.expect(!outside.textIsInline());
-        try std.testing.expectEqualStrings(wanted, outside.asString());
+        try std.testing.expectEqualStrings(wanted, outside.asStr());
 
         if (!Value.fitsInline(length)) continue;
-        const held = Value.ofInlineText(.string, wanted);
+        const held = Value.ofInlineText(.str, wanted);
         try std.testing.expect(held.textIsInline());
-        try std.testing.expectEqualStrings(wanted, held.asString());
+        try std.testing.expectEqualStrings(wanted, held.asStr());
         // The bytes are the value: copying it copies them, and the
         // copy is not looking at the original.
         var copied = held;
-        try std.testing.expectEqualStrings(wanted, copied.asString());
+        try std.testing.expectEqualStrings(wanted, copied.asStr());
         if (length > 0) {
-            try std.testing.expect(copied.asString().ptr != held.asString().ptr);
+            try std.testing.expect(copied.asStr().ptr != held.asStr().ptr);
         }
         // Nothing to give back, on either engine's release path.
         try std.testing.expect(!held.ownsStorage());
@@ -597,10 +641,10 @@ test "text reads the same whichever form it is in" {
 
 test "an inline value owns no allocation and an outside one does" {
     var words = "borrowed".*;
-    try std.testing.expect(Value.ofString(&words).ownsStorage());
-    try std.testing.expect(!Value.ofString("").ownsStorage());
-    try std.testing.expect(!Value.ofInlineText(.string, "borrowed").ownsStorage());
-    try std.testing.expect(!Value.ofLong(7).ownsStorage());
+    try std.testing.expect(Value.ofStr(&words).ownsStorage());
+    try std.testing.expect(!Value.ofStr("").ownsStorage());
+    try std.testing.expect(!Value.ofInlineText(.str, "borrowed").ownsStorage());
+    try std.testing.expect(!Value.ofI64(7).ownsStorage());
     try std.testing.expect(!Value.null_object.ownsStorage());
 }
 
@@ -627,8 +671,8 @@ test "a handle keeps its row and its occupant apart" {
 }
 
 test "a view carries the same payload as the accessors" {
-    switch (Value.ofDouble(-0.0).view()) {
-        .double => |held| try std.testing.expect(std.math.signbit(held)),
+    switch (Value.ofF64(-0.0).view()) {
+        .f64 => |held| try std.testing.expect(std.math.signbit(held)),
         else => return error.WrongTag,
     }
     switch (Value.none.view()) {

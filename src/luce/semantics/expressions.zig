@@ -67,14 +67,14 @@ fn preinternConstant(
         return preinternConstant(self, value, value_type.optional.asType());
     }
     switch (value) {
-        .string => |folded| _ = try self.analyzer.pool.intern(folded),
+        .str => |folded| _ = try self.analyzer.pool.intern(folded),
         .strukt => |folded| {
             const layout = self.analyzer.structs.items[folded.layout];
             for (folded.fields, layout.fields) |field, field_layout| {
                 try preinternConstant(self, field, field_layout.field_type);
             }
         },
-        .long, .double, .boolean, .container, .absent => {},
+        .integer, .float, .boolean, .container, .absent => {},
     }
 }
 
@@ -123,16 +123,16 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
         // family: a folded constant carries its value at the
         // family's widest member and its `value_type` says where
         // that value landed (docs/TYPES.md §1).
-        .long => |folded| .{
-            .node = try recorder.recordNode(self, .{ .const_long = .{
+        .integer => |folded| .{
+            .node = try recorder.recordNode(self, .{ .const_integer = .{
                 .value = folded,
                 .result = value_type,
                 .span = span,
             } }),
             .value_type = value_type,
         },
-        .double => |folded| .{
-            .node = try recorder.recordNode(self, .{ .const_double = .{
+        .float => |folded| .{
+            .node = try recorder.recordNode(self, .{ .const_float = .{
                 .value = folded,
                 .result = value_type,
                 .span = span,
@@ -147,13 +147,13 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
             } }),
             .value_type = value_type,
         },
-        .string => |folded| .{
-            .node = try recorder.recordNode(self, .{ .const_string = .{
+        .str => |folded| .{
+            .node = try recorder.recordNode(self, .{ .const_str = .{
                 .constant = try self.analyzer.pool.intern(folded),
-                .result = .string,
+                .result = .str,
                 .span = span,
             } }),
-            .value_type = .string,
+            .value_type = .str,
         },
         .strukt => |folded| blk: {
             const layout = self.analyzer.structs.items[folded.layout];
@@ -313,7 +313,7 @@ fn lowerArrayDimensions(
     const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
     const dimensions = run.values;
     for (dimensions, new.dims) |*dimension, expression| {
-        if (!try self.widensInto(dimension, .long)) {
+        if (!try self.widensInto(dimension, .i64)) {
             try self.fail("luce.sema.container.type", expression.span(), "array dimensions are i64", .{});
             return null;
         }
@@ -418,8 +418,8 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
 
 /// `{key: value, ...}`.  Keys and values are evaluated once in
 /// written order.  An annotation supplies both types; otherwise an
-/// integer key lands on `long` (maps do not admit `int` keys) and
-/// the first value begins the ordinary numeric unification.
+/// an unannotated integer key lands on the default `i64`; an annotated
+/// or already-typed key keeps any explicit integer width.
 pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_container: ?Type) Error!?Typed {
     std.debug.assert(literal.entries.len != 0); // stage 3 refuses `{}`
 
@@ -440,7 +440,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
     for (literal.entries, 0..) |entry, index| {
         expressions[index * 2] = entry.key;
         expressions[index * 2 + 1] = entry.value;
-        places[index * 2] = wanted_key orelse .long;
+        places[index * 2] = wanted_key orelse .i64;
         places[index * 2 + 1] = wanted_value;
     }
     const run = (try self.lowerOperandsIntoTracking(expressions, .{ .maybe_places = places })) orelse return null;
@@ -448,13 +448,13 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
 
     const key_type: Type = wanted_key orelse inferred: {
         const first = lowered[0].value_type;
-        if (first == .string) break :inferred .string;
+        if (first == .str) break :inferred .str;
         // An enum key keys by *itself*, not by its number: the whole
         // point is that `{Key.left: …}` stays a `map(Key, V)` and comes
         // back out as a `Key` (docs/ENUMS.md, As built 2026-08-12).
         if (first == .enumeration) break :inferred first;
-        if (first.isInteger()) break :inferred .long;
-        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are i64, str or an enum, got {s}", .{
+        if (first.isInteger()) break :inferred first;
+        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are an integer, str or an enum, got {s}", .{
             try self.analyzer.typeName(first),
         });
         return null;
@@ -558,7 +558,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     const run = (try self.lowerOperandsIntoTracking(whole_sequence.items, .subscripts)) orelse return null;
     const sequence = run.values;
     const target = sequence[0];
-    const is_string = target.value_type == .string;
+    const is_string = target.value_type == .str;
     const descriptor = self.analyzer.heapOf(target.value_type);
     if (!is_string and (descriptor == null or descriptor.? != .list)) {
         try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list and str", .{
@@ -568,7 +568,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     }
     const lowered_bounds = sequence[1..];
     for (lowered_bounds) |*value| {
-        if (!try self.widensInto(value, .long)) {
+        if (!try self.widensInto(value, .i64)) {
             try self.fail("luce.sema.type", slice.span, "slice bounds are i64", .{});
             return null;
         }
@@ -678,7 +678,7 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
             // — MIR's reading exactly (`Type.storage()`), and the
             // member identity is recoverable from value and type, so
             // the constant node is the whole of it.
-            .node = try recorder.recordNode(self, .{ .const_long = .{
+            .node = try recorder.recordNode(self, .{ .const_integer = .{
                 .value = declared.members[member].value,
                 .result = of,
                 .span = field.span,
@@ -1070,24 +1070,10 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
     };
 
-    // Numbers that mix (docs/TYPES.md §2).  Arithmetic brings them
-    // to the type they meet at; a comparison **across the
-    // ladders** does not widen at all — it is exact, and leaves
-    // through its own instruction.  A comparison along one ladder
-    // is an ordinary widening, because widening within a family
-    // loses nothing.
-    //
-    // **Two numbers unify even when they are already the same
-    // type**, which is what D5 needs and equality alone would
-    // miss: `byte + byte` and `half * half` have equal operands
-    // and must still leave as an `int` and a `float`, because no
-    // expression ever has a storage type.  `unifyNumeric` moves
-    // only what has to move, so a `long + long` is untouched.
+    // A literal may take the other operand's type in
+    // `lowerBinaryOperands`; two already-concrete numeric values never
+    // convert implicitly.
     if (left.value_type.isNumeric() and right.value_type.isNumeric()) {
-        const crosses = left.value_type.isInteger() != right.value_type.isInteger();
-        if (crosses and operation.isComparison()) {
-            return lowerExactCompare(self, operation, left, right, pair.sides, binary.span);
-        }
         _ = try self.unifyNumeric(&left, &right);
     }
 
@@ -1102,8 +1088,8 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     // and a `float` result would lose everything above 2^24 from
     // operands that reach it (docs/TYPES.md §2).
     if (operation == .divide and left.value_type.isInteger() and right.value_type.isInteger()) {
-        left = try self.widenNumeric(left, .double);
-        right = try self.widenNumeric(right, .double);
+        left = try self.convertNumeric(left, .f64);
+        right = try self.convertNumeric(right, .f64);
     }
 
     if (!left.value_type.eql(right.value_type)) {
@@ -1146,7 +1132,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         // see, and the sentence says which fact refused it.
         switch (operation) {
             .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
-                if (operand_type != .int and operand_type != .long) {
+                if (!operand_type.isInteger()) {
                     try self.fail(
                         "luce.sema.type",
                         binary.span,
@@ -1161,8 +1147,8 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             },
             else => {},
         }
-        const string_concat = operation == .add and operand_type == .string;
-        if (operation == .modulo and operand_type == .string) {
+        const string_concat = operation == .add and operand_type == .str;
+        if (operation == .modulo and operand_type == .str) {
             try self.fail(
                 "luce.sema.type",
                 binary.span,
@@ -1193,7 +1179,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     // Comparisons: equality everywhere; ordering for long, double,
     // and string.
     const ordering = operation != .equal and operation != .not_equal;
-    if (ordering and !(operand_type.isNumeric() or operand_type == .string)) {
+    if (ordering and !(operand_type.isNumeric() or operand_type == .str)) {
         // **An enum is a set of names, not a number line**
         // (docs/ENUMS.md D6), and the reader who wanted the numbers
         // is one word away from having them — so the sentence says
@@ -1303,16 +1289,16 @@ fn lowerExactCompare(
     whole = try self.promoted(whole);
     fraction = try self.promoted(fraction);
 
-    if (whole.value_type == .int and fraction.value_type == .double) {
-        const widened = try self.widenNumeric(whole, .double);
+    if (whole.value_type == .i32 and fraction.value_type == .f64) {
+        const widened = try self.widenNumeric(whole, .f64);
         return .{
             .node = try exactCompareNode(self, operation, int_first, widened, fraction, sides, span),
             .value_type = .boolean,
         };
     }
 
-    if (whole.value_type == .int) whole = try self.widenNumeric(whole, .long);
-    if (fraction.value_type == .float) fraction = try self.widenNumeric(fraction, .double);
+    if (whole.value_type == .i32) whole = try self.widenNumeric(whole, .i64);
+    if (fraction.value_type == .f32) fraction = try self.widenNumeric(fraction, .f64);
 
     return .{
         .node = try exactCompareNode(self, operation, int_first, whole, fraction, sides, span),
