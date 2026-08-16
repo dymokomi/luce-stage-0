@@ -75,6 +75,16 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         .const_function => .impure,
         .local_get, .struct_get => .pure,
 
+        // A weak read observes whether an object is still alive and, on
+        // success, acquires one strong reference. A weak write validates
+        // and records a generation-bearing handle. Neither operation may
+        // be deleted or folded even when its result is unread.
+        .weak_local_get,
+        .weak_local_set,
+        .weak_struct_get,
+        .weak_struct_set,
+        => .impure,
+
         .unary => |unary| switch (unary.op) {
             .logic_not => .pure,
             // A complement moves bits and nothing else — no width of
@@ -363,9 +373,13 @@ pub fn viewStable(instruction: Instruction) bool {
         .const_function,
         .local_get,
         .local_set,
+        .weak_local_get,
+        .weak_local_set,
         .struct_get,
         .struct_make,
         .struct_set,
+        .weak_struct_get,
+        .weak_struct_set,
         // Value storage only: a union value is a field run, not the
         // object table (docs/UNION.md D8).
         .variant_make,

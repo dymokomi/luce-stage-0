@@ -976,6 +976,11 @@ pub const Instruction = union(enum) {
     const_function: BoundFunction,
     local_get: LocalId,
     local_set: struct { local: LocalId, value: Register },
+    /// Read a zeroing slot and upgrade its live target to one owned strong
+    /// optional value. Ordinary registers never carry the weak tag.
+    weak_local_get: LocalId,
+    /// Store a strong optional reference as a non-owning weak handle.
+    weak_local_set: struct { local: LocalId, value: Register },
     binary: Binary,
     unary: Unary,
     /// A numeric conversion: from the operand's type to this
@@ -992,6 +997,8 @@ pub const Instruction = union(enum) {
     struct_make: struct { layout: u32, fields: []Register },
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
+    weak_struct_get: struct { target: Register, layout: u32, field: u32 },
+    weak_struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
     /// Build one union value: the member index in slot 0, then the
     /// member's payload fields in declaration order (docs/UNION.md D8).
     /// The struct path with one more register in front — built whole,
@@ -1098,6 +1105,9 @@ pub const Local = struct {
     /// starts *empty* rather than at a shared zero, and that a trap
     /// unwinding past every release can still give the storage back.
     owns_storage: bool = false,
+    /// The slot contains a runtime weak handle while `local_type` remains
+    /// the logical optional type seen by instruction results.
+    weak: bool = false,
     /// Logical parameter zero of a writing method. Reads and writes
     /// alias the caller's receiver slot, and ownership operations use
     /// that binding's identity. This frame neither initializes nor

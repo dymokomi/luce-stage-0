@@ -7931,3 +7931,203 @@ test "luce.sema.call: a multi-value interface call must be destructured" {
         \\
     , "luce.sema.call", "answers 2 values");
 }
+
+// -- zeroing weak storage ---------------------------------------------
+
+test "luce.parse.weak: weak storage is mutable and declares one place" {
+    try expectSaying(
+        \\func main():
+        \\    weak let observed: list[i64]? = none
+        \\
+    , "luce.parse.weak", "write 'weak var', not 'weak let'");
+    try expectSaying(
+        \\func pair() -> (list[i64]?, list[i64]?):
+        \\    return none, none
+        \\
+        \\func main():
+        \\    weak var first, second = pair()
+        \\
+    , "luce.parse.weak", "declare each weak variable separately");
+}
+
+test "luce.sema.weak.target: a weak local states its optional ARC type" {
+    try expectSaying(
+        \\func main():
+        \\    weak var observed = [1]
+        \\
+    , "luce.sema.weak.target", "needs an explicit optional ARC type");
+    try expectSaying(
+        \\func main():
+        \\    weak var observed: list[i64] = [1]
+        \\
+    , "luce.sema.weak.target", "must be an optional list, map, array, builder, or class reference");
+}
+
+test "luce.sema.weak.target: values and resources cannot be weak targets" {
+    const rejected = [_][]const u8{
+        \\func main():
+        \\    weak var value: i64? = none
+        \\
+        ,
+        \\func main():
+        \\    weak var value: str? = none
+        \\
+        ,
+        \\func main():
+        \\    weak var value: bytes? = none
+        \\
+        ,
+        \\struct Point:
+        \\    x: i64
+        \\
+        \\func main():
+        \\    weak var value: Point? = none
+        \\
+        ,
+        \\func main():
+        \\    weak var value: (func(i64) -> i64)? = none
+        \\
+        ,
+        \\func main():
+        \\    weak var value: file? = none
+        \\
+        ,
+        \\func main():
+        \\    weak var value: task[i64]? = none
+        \\
+        ,
+    };
+    for (rejected) |source| {
+        try expectSaying(
+            source,
+            "luce.sema.weak.target",
+            "must be an optional list, map, array, builder, or class reference",
+        );
+    }
+}
+
+test "luce.sema.weak.target: value structs and interfaces reject weak fields and locals" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: i64
+        \\
+        \\struct Bad:
+        \\    weak point: Point? = none
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.weak.target", "cannot target Point?");
+    try expectSaying(
+        \\interface Renderable:
+        \\    func render() -> i64
+        \\
+        \\func main():
+        \\    weak var item: Renderable? = none
+        \\
+    , "luce.sema.weak.target", "must be an optional list, map, array, builder, or class reference");
+}
+
+test "luce.sema.struct: an implicit weak default is trailing" {
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]?
+        \\    marker: i64
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.struct", "target has a default, so marker needs one too — the fields with defaults come last");
+}
+
+test "luce.sema.weak.access: weak places reject read-modify-write and traversal" {
+    try expectSaying(
+        \\func main():
+        \\    weak var observed: list[i64]? = none
+        \\    observed += [1]
+        \\
+    , "luce.sema.weak.access", "cannot use compound assignment");
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func main():
+        \\    var observer = Observer()
+        \\    observer.target += [1]
+        \\
+    , "luce.sema.weak.access", "cannot use compound assignment");
+    try expectSaying(
+        \\struct Cell:
+        \\    value: i64
+        \\
+        \\struct Observer:
+        \\    weak target: list[Cell]? = none
+        \\
+        \\struct Outer:
+        \\    observer: Observer
+        \\
+        \\func main():
+        \\    var outer = Outer(observer = Observer())
+        \\    outer.observer.target[0].value = 1
+        \\
+    , "luce.sema.weak.access", "bind and unwrap it before accessing another place");
+}
+
+test "luce.sema.weak.access: weak reads do not create persistent narrowing" {
+    try expectSaying(
+        \\func main():
+        \\    let source = [1]
+        \\    weak var observed: list[i64]? = source
+        \\    if observed != none:
+        \\        assert(len(observed) > 0)
+        \\
+    , "luce.sema.absent", "supply a fallback");
+}
+
+test "luce.sema.weak.access: values containing weak storage have no hidden-handle equality" {
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func main():
+        \\    assert(Observer() == Observer())
+        \\
+    , "luce.sema.weak.access", "cannot compare hidden weak handles");
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func main():
+        \\    let observers = [Observer()]
+        \\    assert(observers.contains(Observer()))
+        \\
+    , "luce.sema.weak.access", "search a stable key");
+}
+
+test "luce.sema.own: weak handles never cross worker runtime tables" {
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func inspect(observer: Observer) -> i64:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let task = spawn inspect(Observer())
+        \\    assert(task.wait() == 1)
+        \\
+    , "luce.sema.own", "a weak reference cannot cross a worker boundary");
+    try expectSaying(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func make() -> Observer:
+        \\    return Observer()
+        \\
+        \\func main():
+        \\    let task = spawn make()
+        \\    let observer = task.wait()
+        \\    assert(observer.target == none)
+        \\
+    , "luce.sema.own", "cannot cross back through wait");
+}

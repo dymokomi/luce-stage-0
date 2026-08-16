@@ -37,7 +37,7 @@ pub const keywords = [_][]const u8{
     "match", "const",  "let",    "var",       "if",      "elif",     "else",
     "while", "for",    "in",     "return",    "break",   "continue", "and",
     "or",    "not",    "true",   "false",     "import",  "none",     "try",
-    "catch", "self",   "static", "public",    "private",
+    "catch", "self",   "static", "public",    "private", "weak",
 };
 
 /// The words that make a reference — a heap object, or a worker holding

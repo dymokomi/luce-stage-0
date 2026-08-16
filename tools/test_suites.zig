@@ -41,6 +41,7 @@ pub const definitions = [_]Definition{
             "specs.functions_spec.",
             "specs.interfaces_spec.",
             "specs.aliases_spec.",
+            "specs.weak_references_spec.",
             "specs.self_spec.",
             "specs.binding_spec.",
             "specs.constants_spec.",

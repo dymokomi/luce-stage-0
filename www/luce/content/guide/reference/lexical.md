@@ -89,14 +89,15 @@ alias    and      break    catch    class    const    continue elif
 else     enum     false    for      func     if       import   in
 interface let     match    new      none     not
 or       private  public   return   self     spawn    static
-struct   true     try      union    var      while
+struct   true     try      union    var      weak     while
 ```
 
 `private` and `public` mark visibility. Inside a struct they can also be
 region labels (`private:` and `public:`). `self` is the receiver of a
 method. `static` marks a namespace function declared inside a struct,
 enum, or union. `const` declares a file-scope constant; `let` and `var`
-are function-scope bindings. `spawn` starts a worker call.
+are function-scope bindings. `weak` qualifies non-owning storage. `spawn`
+starts a worker call.
 
 `static` belongs immediately before `func`.
 

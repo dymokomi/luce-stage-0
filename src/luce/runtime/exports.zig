@@ -524,6 +524,33 @@ pub export fn luce_rt_release(runtime: *Runtime, held: [*c]const Value) callconv
     runtime.freeObjectsIn(held.*);
 }
 
+/// Convert a strong optional object into non-owning weak storage. The answer
+/// is an internal storage value and must only be written into a verifier-
+/// declared weak field or local.
+pub export fn luce_rt_weak_store(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = runtime.weaken(held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+/// Upgrade one weak storage cell to an owned optional object. A live target
+/// is retained; a dead target answers `none` without trapping.
+pub export fn luce_rt_weak_load(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = runtime.strengthen(held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
 /// The text payload of the most recent `key_read`.
 pub export fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
     if (!requireValueOut(runtime, out)) return;

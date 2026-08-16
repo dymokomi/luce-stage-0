@@ -106,6 +106,11 @@ pub const Tag = enum(u8) {
     /// Immutable binary data using the same inline/outside storage shape
     /// as text, but without a UTF-8 invariant.
     bytes = 18,
+    /// A non-owning object handle. Weak values are storage machinery, not
+    /// source-language values: a weak field/local holds this tag, while a
+    /// read upgrades it to an owned `.object` or answers `.none` after the
+    /// target dies. Appended so every earlier tag keeps its ABI value.
+    weak = 19,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -295,6 +300,17 @@ pub const Value = extern struct {
     pub fn ofObject(handle: Handle) Value {
         return .{
             .tag = .object,
+            .bits = handle.index |
+                @as(u64, handle.generation) << generation_shift,
+        };
+    }
+
+    /// A non-owning handle stored behind the `weak` modifier. It has the
+    /// same payload bits as an object handle but never contributes to the
+    /// object's strong count.
+    pub fn ofWeak(handle: Handle) Value {
+        return .{
+            .tag = .weak,
             .bits = handle.index |
                 @as(u64, handle.generation) << generation_shift,
         };
@@ -505,6 +521,13 @@ pub const Value = extern struct {
         };
     }
 
+    pub fn asWeak(self: Value) Handle {
+        return .{
+            .index = @truncate(self.bits),
+            .generation = @truncate(self.bits >> generation_shift),
+        };
+    }
+
     /// True when this is the absent value of a `T?`.  One tag test for
     /// every payload type: a present `long?` is tagged `int` and a
     /// present `List(T)?` is tagged `object`, so absence needs no
@@ -559,6 +582,7 @@ pub const Value = extern struct {
             .strukt => .{ .strukt = self.asStruct() },
             .function => .{ .function = self.asStruct() },
             .object => .{ .object = self.asObject() },
+            .weak => .{ .weak = self.asWeak() },
         };
     }
 };
@@ -588,6 +612,10 @@ pub const View = union(enum) {
     /// every ownership walk stops here (`Tag.function`).
     function: []Value,
     object: Handle,
+    /// A non-owning object handle. It is visible only to runtime storage
+    /// machinery; ordinary expression registers contain an upgraded object
+    /// or `none`, never this arm.
+    weak: Handle,
 };
 
 /// Map keys compare by content. Integer keys retain their exact width,

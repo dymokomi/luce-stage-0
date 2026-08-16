@@ -111,6 +111,7 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
             binding.annotation,
             binding.value,
             false,
+            false,
             binding.span,
         ),
         .variable => |binding| {
@@ -122,6 +123,7 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
                     binding.annotation,
                     value,
                     true,
+                    binding.weak,
                     binding.span,
                 );
             } else {
@@ -130,6 +132,7 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
                     binding.name,
                     binding.name_span,
                     binding.annotation.?,
+                    binding.weak,
                     binding.span,
                 );
             }
@@ -739,6 +742,7 @@ fn lowerBinding(
     annotation: ?ast.TypeName,
     value_expression: *ast.Expression,
     mutable: bool,
+    weak: bool,
     span: Span,
 ) Error!void {
     // A binding whose initializer failed still declares a name the
@@ -748,9 +752,27 @@ fn lowerBinding(
     // The annotation said `T?` and the initializer handed over a
     // plain `T`, so the binding starts out present.
     var widened = false;
+    if (weak and annotation == null) {
+        try self.fail(
+            "luce.sema.weak.target",
+            name_span,
+            "weak variable {s} needs an explicit optional ARC type, for example 'weak var {s}: list[i64]? = value'",
+            .{ name, name },
+        );
+        return refusals.forgetName(self, name);
+    }
     if (annotation) |written| {
         const expected = (try resolve.resolveType(self.analyzer, self.module, written)) orelse
             return refusals.forgetName(self, name);
+        if (weak and !shapes.weakTarget(self.analyzer, expected)) {
+            try self.fail(
+                "luce.sema.weak.target",
+                written.span,
+                "weak variable {s} must be an optional list, map, array, builder, or class reference, not {s}",
+                .{ name, try self.analyzer.typeName(expected) },
+            );
+            return refusals.forgetName(self, name);
+        }
         if (value_expression.* == .none_literal) {
             value = ((try self.lowerTyped(value_expression, expected, span, name)) orelse
                 return refusals.forgetName(self, name)).value;
@@ -788,17 +810,16 @@ fn lowerBinding(
         value = (try self.lowerExpression(value_expression, false)) orelse
             return refusals.forgetName(self, name);
     }
-    const local = (try self.declareLocal(
-        name,
-        value.value_type,
-        mutable,
-        name_span,
-    )) orelse return refusals.forgetName(self, name);
+    const local = (if (weak)
+        try self.declareWeakLocal(name, value.value_type, name_span)
+    else
+        try self.declareLocal(name, value.value_type, mutable, name_span)) orelse
+        return refusals.forgetName(self, name);
     const store = ledger.storeOwnedKind(self, local, value);
     // `let x: long? = 5` is optional in its type and present in
     // fact, and the reader should not have to test what they just
     // wrote.
-    if (widened) try flow.narrow(self, local);
+    if (widened and !weak) try flow.narrow(self, local);
     try recorder.recordStatement(self, .{ .declare = .{
         .local = local,
         .value = value.node,
@@ -1047,10 +1068,20 @@ fn lowerLateDeclaration(
     name: []const u8,
     name_span: Span,
     written: ast.TypeName,
+    weak: bool,
     span: Span,
 ) Error!void {
     const declared = (try resolve.resolveType(self.analyzer, self.module, written)) orelse
         return refusals.forgetName(self, name);
+    if (weak and !shapes.weakTarget(self.analyzer, declared)) {
+        try self.fail(
+            "luce.sema.weak.target",
+            written.span,
+            "weak variable {s} must be an optional list, map, array, builder, or class reference, not {s}",
+            .{ name, try self.analyzer.typeName(declared) },
+        );
+        return refusals.forgetName(self, name);
+    }
     // A function value has no zero: every value of the type names a
     // function, and there is no function to name here.  A slot that
     // starts empty is exactly what `(func(...) -> R)?` is for
@@ -1077,7 +1108,10 @@ fn lowerLateDeclaration(
     }
     // The declaration establishes the binding and its scope; the
     // scope owns whatever a later assignment fills in (S36, S40).
-    const local = (try self.declareLocal(name, declared, true, name_span)) orelse
+    const local = (if (weak)
+        try self.declareWeakLocal(name, declared, name_span)
+    else
+        try self.declareLocal(name, declared, true, name_span)) orelse
         return refusals.forgetName(self, name);
     // The zero fill's store decision, from the type alone: a
     // struct or union zero is a fresh built run the slot adopts,

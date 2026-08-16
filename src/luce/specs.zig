@@ -48,6 +48,8 @@ pub const functions = @import("specs/functions_spec.zig");
 pub const interfaces = @import("specs/interfaces_spec.zig");
 /// Transparent compile-time type aliases.
 pub const aliases = @import("specs/aliases_spec.zig");
+/// Zeroing non-owning storage and owned upgrade snapshots.
+pub const weak_references = @import("specs/weak_references_spec.zig");
 /// Implied receivers, inferred writers, and the `static` boundary
 /// (docs/SELF.md).
 pub const self = @import("specs/self_spec.zig");
@@ -109,6 +111,7 @@ comptime {
         _ = functions;
         _ = interfaces;
         _ = aliases;
+        _ = weak_references;
         _ = self;
         _ = binding;
         _ = constants;

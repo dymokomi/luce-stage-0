@@ -44,11 +44,12 @@ handler.
 | `allocation_failed` | not enough memory for this container | The allocator cannot create container or resource storage. |
 | `immutable_object` | constant container is immutable | A write reaches a file-scope constant container through hidden provenance. |
 | `ownership_cycle` | attempted store would create an ownership cycle | Reserved stable code from the retired manual-ownership model; current source does not raise it. |
+| `invalid_weak_target` | invalid weak-reference target | Damaged MIR asks the runtime to weaken a value or resource, or to upgrade something that is not weak storage. Correct source is rejected earlier. |
 
 `use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
 runtime's broad *object* wording; a handle may also be a `file` or `task`.
-`not_owned` and `ownership_cycle` remain in the stable module vocabulary even
-though correctly compiled current source does not produce them.
+`not_owned`, `ownership_cycle`, and `invalid_weak_target` remain defensive
+runtime vocabulary; correctly compiled current source does not produce them.
 
 ```luce trap
 func main():

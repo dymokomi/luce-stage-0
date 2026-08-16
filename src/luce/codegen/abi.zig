@@ -240,7 +240,12 @@ const trace = @import("../runtime/trace.zig");
 /// immutable-byte conversion service. The 24-byte `Value` layout is
 /// unchanged; hosts still rebuild because the appended tags are new ABI
 /// vocabulary.
-pub const version: u32 = 21;
+///
+/// 22 — zeroing weak storage appends the `weak` runtime tag and the
+/// `luce_rt_weak_store`/`luce_rt_weak_load` services. `Value` remains 24
+/// bytes, but generated code and the runtime must agree on the new tag and
+/// upgrade protocol.
+pub const version: u32 = 22;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the

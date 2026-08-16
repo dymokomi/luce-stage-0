@@ -549,6 +549,9 @@ pub const ConstantInfo = struct {
 pub const LocalInfo = struct {
     local: LocalId,
     mutable: bool,
+    /// This name denotes a zeroing non-owning slot. Reads are fresh owned
+    /// upgrades, so flow facts may not assume the optional stays present.
+    weak: bool = false,
     /// Where the name was written, so a second declaration of it can
     /// say where the first one is.
     declared_at: Span = .{ .start = 0, .end = 0 },

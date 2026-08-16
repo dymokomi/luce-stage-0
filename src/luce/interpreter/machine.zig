@@ -743,7 +743,16 @@ pub const Machine = struct {
         var filled: usize = 0;
         errdefer for (fields[0..filled]) |field| self.runtime.dropStorage(field);
         for (encoded.fields, layout.fields, fields) |field, declared, *slot| {
-            slot.* = try self.constantValue(field, declared.field_type);
+            const materialized = try self.constantValue(field, declared.field_type);
+            if (declared.weak) {
+                slot.* = self.runtime.weaken(materialized) catch |mistake| {
+                    self.runtime.freeValue(materialized);
+                    return mistake;
+                };
+                self.runtime.freeValue(materialized);
+            } else {
+                slot.* = materialized;
+            }
             filled += 1;
         }
         const made = self.runtime.makeStruct(fields) catch |mistake| {
@@ -848,7 +857,9 @@ pub const Machine = struct {
             // at the shared zero: the zero template is one value per
             // layout, and the release this slot will get must never
             // hand a shared run back (docs/STRINGS.md).
-            slot.* = if (local.owns_storage)
+            slot.* = if (local.weak)
+                .ofWeak(.none)
+            else if (local.owns_storage)
                 emptyValue(local.local_type)
             else
                 try self.zeroValue(local.local_type);
@@ -972,6 +983,14 @@ pub const Machine = struct {
                     },
                     .local_get => |local| registers[item] = self.localSlot(frame, local).*,
                     .local_set => |set| self.localSlot(frame, set.local).* = registers[set.value],
+                    .weak_local_get => |local| {
+                        registers[item] = self.runtime.strengthen(self.localSlot(frame, local).*) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .weak_local_set => |set| {
+                        self.localSlot(frame, set.local).* = self.runtime.weaken(registers[set.value]) catch |mistake|
+                            return self.caught(mistake);
+                    },
                     .binary => |operation| {
                         registers[item] = operators.binary(
                             &self.runtime,
@@ -998,16 +1017,26 @@ pub const Machine = struct {
                         ) catch |mistake| return self.caught(mistake);
                     },
                     .struct_make => |make| {
+                        const layout = self.program.structs[make.layout];
                         self.field_scratch.clearRetainingCapacity();
                         try self.field_scratch.ensureTotalCapacity(self.arena, make.fields.len);
-                        for (make.fields) |field_register| {
-                            self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                        for (make.fields, layout.fields) |field_register, field| {
+                            self.field_scratch.appendAssumeCapacity(if (field.weak)
+                                self.runtime.weaken(registers[field_register]) catch |mistake|
+                                    return self.caught(mistake)
+                            else
+                                registers[field_register]);
                         }
                         registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
                             return self.caught(mistake);
                     },
                     .struct_get => |get| {
                         registers[item] = registers[get.target].asStruct()[get.field];
+                    },
+                    .weak_struct_get => |get| {
+                        registers[item] = self.runtime.strengthen(
+                            registers[get.target].asStruct()[get.field],
+                        ) catch |mistake| return self.caught(mistake);
                     },
                     .struct_set => |set| {
                         registers[item] = self.runtime.setField(
@@ -1035,6 +1064,15 @@ pub const Machine = struct {
                         }
                         registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
                             return self.caught(mistake);
+                    },
+                    .weak_struct_set => |set| {
+                        const weak = self.runtime.weaken(registers[set.value]) catch |mistake|
+                            return self.caught(mistake);
+                        registers[item] = self.runtime.setField(
+                            registers[set.target],
+                            set.field,
+                            weak,
+                        ) catch |mistake| return self.caught(mistake);
                     },
                     .variant_tag => |tag| {
                         registers[item] = registers[tag.target].asStruct()[0];
@@ -1392,7 +1430,10 @@ pub const Machine = struct {
                 const layout = self.program.structs[layout_index];
                 const fields = try self.arena.alloc(RuntimeValue, layout.fields.len);
                 for (layout.fields, fields) |field, *slot| {
-                    slot.* = try self.zeroValue(field.field_type);
+                    slot.* = if (field.weak)
+                        .ofWeak(.none)
+                    else
+                        try self.zeroValue(field.field_type);
                 }
                 const zero: RuntimeValue = .ofStruct(fields);
                 self.struct_zeros[layout_index] = zero;

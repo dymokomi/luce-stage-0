@@ -920,6 +920,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
             .target = target.node,
             .layout = layout_index,
             .field = field_index,
+            .weak = layout.fields[field_index].weak,
             .result = field_type,
             .span = field.span,
         } }),

@@ -833,6 +833,15 @@ fn lowerUserCall(
             );
             return null;
         }
+        if (info.results.len == 1 and try shapes.carries(self.analyzer, info.return_type, .weak)) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s} answers {s}, which contains a weak reference into the worker's private object table; a weak reference cannot cross back through wait",
+                .{ name, try self.analyzer.typeName(info.return_type) },
+            );
+            return null;
+        }
         // A borrow cannot cross a worker boundary: a function value
         // borrows the receiver it may carry, the type cannot say
         // whether a given value carries one, so the boundary refuses
@@ -843,6 +852,15 @@ fn lowerUserCall(
                     "luce.sema.own",
                     span,
                     "parameter {s} of {s} is {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead",
+                    .{ parameter.name, name, try self.analyzer.typeName(held) },
+                );
+                return null;
+            }
+            if (try shapes.carries(self.analyzer, held, .weak)) {
+                try self.fail(
+                    "luce.sema.own",
+                    span,
+                    "parameter {s} of {s} is {s}, which contains a weak reference into this runtime's object table; a weak reference cannot cross a worker boundary",
                     .{ parameter.name, name, try self.analyzer.typeName(held) },
                 );
                 return null;

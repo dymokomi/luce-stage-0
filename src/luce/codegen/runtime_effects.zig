@@ -244,6 +244,8 @@ pub const Service = enum {
     // -- reference counting (ARC, docs/MEMORY.md) --------------------
     luce_rt_retain,
     luce_rt_release,
+    luce_rt_weak_store,
+    luce_rt_weak_load,
 
     /// The C symbol this service is declared under: a static string —
     /// the enum's own tag name — that the caller owns nothing of.
@@ -799,6 +801,10 @@ pub fn describe(service: Service) Effect {
         .luce_rt_retain, .luce_rt_release => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in },
+        },
+        .luce_rt_weak_store, .luce_rt_weak_load => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
         },
 
         // -- struct values --------------------------------------------

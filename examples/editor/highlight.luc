@@ -61,7 +61,7 @@ private const keyword_words = {
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,
     "struct": true, "true": true, "try": true, "union": true,
-    "var": true, "while": true,
+    "var": true, "weak": true, "while": true,
 }
 
 private const type_words = {

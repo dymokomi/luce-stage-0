@@ -95,6 +95,10 @@ pub fn applyFacts(self: *FunctionBuilder, condition: *const ast.Expression, want
                     return;
                 if (tested.* != .name) return;
                 const found = self.findLocal(tested.name.text) orelse return;
+                // Each weak read is a new optional snapshot. Proving one
+                // read present says nothing about a later read after code in
+                // the arm may have released the final strong owner.
+                if (found.info.weak) return;
                 if (recorder.localType(self, found.info.local) != .optional) return;
                 try narrow(self, found.info.local);
             },

@@ -230,6 +230,10 @@ pub const Lowering = struct {
         return self.locals.items[local].owns_storage;
     }
 
+    pub fn localIsWeak(self: *const Lowering, local: LocalId) bool {
+        return self.locals.items[local].weak;
+    }
+
     /// Enter a slot's claim on its storage at the point its
     /// declaration is emitted.  The caller made the row earlier — a
     /// replay that lays the whole local table down before the first
@@ -238,6 +242,7 @@ pub const Lowering = struct {
     /// sees a slot that owns nothing, which is what a slot with
     /// nothing in it owns.
     pub fn claimStorage(self: *Lowering, local: LocalId, owns_storage: bool) void {
+        std.debug.assert(!self.locals.items[local].weak or !owns_storage);
         self.locals.items[local].owns_storage = owns_storage;
     }
 
@@ -268,6 +273,20 @@ pub const Lowering = struct {
             .name = try self.arena.dupe(u8, name),
             .local_type = local_type,
             .owns_storage = owns_storage,
+        });
+        return local;
+    }
+
+    pub fn addWeakLocal(
+        self: *Lowering,
+        name: []const u8,
+        local_type: Type,
+    ) Error!LocalId {
+        const local: LocalId = @intCast(self.locals.items.len);
+        try self.locals.append(self.arena, .{
+            .name = try self.arena.dupe(u8, name),
+            .local_type = local_type,
+            .weak = true,
         });
         return local;
     }
@@ -309,11 +328,20 @@ pub const Lowering = struct {
     }
 
     pub fn load(self: *Lowering, local: LocalId) Error!Register {
-        return self.emit(.{ .local_get = local }, self.localType(local));
+        return self.emit(
+            if (self.localIsWeak(local)) .{ .weak_local_get = local } else .{ .local_get = local },
+            self.localType(local),
+        );
     }
 
     pub fn store(self: *Lowering, local: LocalId, value: Register) Error!void {
-        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value } }, .none);
+        _ = try self.emit(
+            if (self.localIsWeak(local))
+                .{ .weak_local_set = .{ .local = local, .value = value } }
+            else
+                .{ .local_set = .{ .local = local, .value = value } },
+            .none,
+        );
     }
 
     // Value-storage plumbing ------------------------------------------------
@@ -491,7 +519,7 @@ pub const Lowering = struct {
     /// the one that knows the types — and `rebuild` puts the place back
     /// together from the leaf.
     pub const Step = union(enum) {
-        field: struct { parent: Register, layout: u32, field_index: u32 },
+        field: struct { parent: Register, layout: u32, field_index: u32, weak: bool = false },
         index: struct { object: Register, subscripts: []Register },
     };
 
@@ -520,12 +548,20 @@ pub const Lowering = struct {
                     // struct_set copies the parent struct with one
                     // field replaced, so its result type is the parent
                     // register's type.
-                    updated = try self.emit(.{ .struct_set = .{
-                        .target = field.parent,
-                        .layout = field.layout,
-                        .field = field.field_index,
-                        .value = updated,
-                    } }, self.resultType(field.parent));
+                    updated = try self.emit(
+                        if (field.weak) .{ .weak_struct_set = .{
+                            .target = field.parent,
+                            .layout = field.layout,
+                            .field = field.field_index,
+                            .value = updated,
+                        } } else .{ .struct_set = .{
+                            .target = field.parent,
+                            .layout = field.layout,
+                            .field = field.field_index,
+                            .value = updated,
+                        } },
+                        self.resultType(field.parent),
+                    );
                 },
                 .index => |step| {
                     const arguments = try self.arena.alloc(Register, step.subscripts.len + 2);

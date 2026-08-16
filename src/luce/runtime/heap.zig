@@ -600,7 +600,7 @@ pub const Object = struct {
                 .boolean => .boolean,
                 // A function value is a boxed run like a struct's, so
                 // its cell is the 24-byte slot (docs/BINDING.md D12).
-                .none, .str, .bytes, .strukt, .function, .object => .value,
+                .none, .str, .bytes, .strukt, .function, .object, .weak => .value,
             };
         }
     };
@@ -1922,6 +1922,42 @@ pub const Runtime = struct {
         object.references += 1;
     }
 
+    /// Store a non-owning view of an optional object. The weak handle keeps
+    /// the row generation but contributes no strong reference. Source
+    /// checking and MIR verification restrict the target kinds; this seam
+    /// still validates the dynamic representation because the C ABI is a
+    /// trust boundary.
+    pub fn weaken(self: *Runtime, held: Value) Error!Value {
+        if (!held.hasValidRepresentation()) return self.fail(.invalid_weak_target);
+        return switch (held.view()) {
+            .none => Value.ofWeak(.none),
+            .object => |handle| weak: {
+                const object = self.liveObject(handle) orelse
+                    return self.fail(if (handle.index == value.null_index) .null_object else .use_after_free);
+                switch (object.data) {
+                    .file, .task => return self.fail(.invalid_weak_target),
+                    else => {},
+                }
+                break :weak Value.ofWeak(handle);
+            },
+            else => self.fail(.invalid_weak_target),
+        };
+    }
+
+    /// Upgrade a weak storage cell. A live target gains one strong count and
+    /// is returned as an owned object value; a dead or never-set target reads
+    /// as `none`. Marking a row dead increments its generation before child
+    /// teardown, so no weak read can observe a half-destroyed object or a
+    /// later occupant of the same row.
+    pub fn strengthen(self: *Runtime, held: Value) Error!Value {
+        if (!held.hasValidRepresentation() or held.tag != .weak)
+            return self.fail(.invalid_weak_target);
+        const handle = held.asWeak();
+        const object = self.liveObject(handle) orelse return .none;
+        if (!object.constant) object.references += 1;
+        return Value.ofObject(handle);
+    }
+
     /// Lower an object's reference count by one.  While others still name
     /// it the object only loses a count; when the last reference goes the
     /// object is destroyed and each object it named is released in turn,
@@ -2420,6 +2456,14 @@ pub const Runtime = struct {
                 if (self != source) return self.fail(.not_owned);
                 const duplicate = try self.copyValue(task.source);
                 task.destination.* = duplicate;
+            },
+            .weak => {
+                // A weak handle is meaningful only against the object table
+                // whose row and generation it names. Preserve it for an
+                // in-runtime semantic copy; never transplant it into a
+                // worker's unrelated table.
+                if (self != source) return self.fail(.not_owned);
+                task.destination.* = task.source;
             },
             else => {
                 const duplicate = try self.ownValue(task.source);

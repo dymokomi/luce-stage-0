@@ -302,6 +302,16 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
             const same = held.same(right.asObject());
             return if (op == .equal) same else !same;
         },
+        // Weak handles are internal struct/local storage. Source reads
+        // upgrade them before comparison, but recursive comparison of a
+        // damaged or legacy field run must remain total. Identity is the
+        // only representation-level answer that cannot dereference a dead
+        // row or mistake its later occupant for the original target.
+        .weak => |held| {
+            if (right.tag != .weak) return false;
+            const same = held.same(right.asWeak());
+            return if (op == .equal) same else !same;
+        },
         // A function value has no equality at all (docs/BINDING.md D6):
         // it is the function it names *and* the receiver it may carry,
         // and its type cannot say which, so stage 4 refuses `==` before
@@ -635,7 +645,7 @@ fn integerTag(tag: value.Tag) bool {
     return switch (tag) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => true,
         .f16, .f32, .f64 => false,
-        .none, .boolean, .char, .str, .bytes, .strukt, .function, .object => unreachable,
+        .none, .boolean, .char, .str, .bytes, .strukt, .function, .object, .weak => unreachable,
     };
 }
 

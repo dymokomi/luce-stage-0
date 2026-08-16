@@ -188,7 +188,12 @@ pub const magic = "LUCE";
 /// joins the intrinsic set, and `parse_string` is replaced by `parse_str`
 /// over immutable bytes. A 48 module cannot describe these values and must
 /// be refused rather than interpreted with the new tag ordinals.
-pub const format_version: u32 = 49;
+///
+/// 50 — zeroing weak storage joins the language. Struct layouts and locals
+/// record weak slots, the instruction set gains dedicated weak load/store
+/// operations, and reference layouts carry their identity bit. A 49 module
+/// cannot distinguish owning from non-owning storage.
+pub const format_version: u32 = 50;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -225,9 +230,11 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     for (program.structs) |layout| {
         try writer.blob(layout.name);
         try writer.int(u8, @intFromBool(layout.interface));
+        try writer.int(u8, @intFromBool(layout.reference));
         try writer.int(u32, @intCast(layout.fields.len));
         for (layout.fields) |field| {
             try writer.blob(field.name);
+            try writer.int(u8, @intFromBool(field.weak));
             try writer.valueType(field.field_type);
         }
     }
@@ -255,6 +262,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
             try writer.int(u32, @intCast(member.fields.len));
             for (member.fields) |field| {
                 try writer.blob(field.name);
+                try writer.int(u8, @intFromBool(field.weak));
                 try writer.valueType(field.field_type);
             }
         }
@@ -387,6 +395,7 @@ const Writer = struct {
             try self.blob(local.name);
             try self.valueType(local.local_type);
             try self.int(u8, @intFromBool(local.owns_storage));
+            try self.int(u8, @intFromBool(local.weak));
             try self.int(u8, @intFromBool(local.inout));
         }
 
@@ -428,6 +437,11 @@ const Writer = struct {
                 try self.int(u32, set.local);
                 try self.int(u32, set.value);
             },
+            .weak_local_get => |local| try self.int(u32, local),
+            .weak_local_set => |set| {
+                try self.int(u32, set.local);
+                try self.int(u32, set.value);
+            },
             .binary => |binary| {
                 try self.int(u8, @intFromEnum(binary.op));
                 try self.valueType(binary.operand_type);
@@ -449,6 +463,17 @@ const Writer = struct {
                 try self.int(u32, get.field);
             },
             .struct_set => |set| {
+                try self.int(u32, set.target);
+                try self.int(u32, set.layout);
+                try self.int(u32, set.field);
+                try self.int(u32, set.value);
+            },
+            .weak_struct_get => |get| {
+                try self.int(u32, get.target);
+                try self.int(u32, get.layout);
+                try self.int(u32, get.field);
+            },
+            .weak_struct_set => |set| {
                 try self.int(u32, set.target);
                 try self.int(u32, set.layout);
                 try self.int(u32, set.field);
@@ -538,10 +563,12 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (structs) |*layout| {
         layout.name = try arena.dupe(u8, try reader.blob());
         layout.interface = (try reader.int(u8)) != 0;
+        layout.reference = (try reader.int(u8)) != 0;
         const field_count = try reader.count();
         const fields = try arena.alloc(types.StructField, field_count);
         for (fields) |*field| {
             field.name = try arena.dupe(u8, try reader.blob());
+            field.weak = (try reader.int(u8)) != 0;
             field.field_type = try reader.valueType();
         }
         layout.fields = fields;
@@ -580,6 +607,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
             const fields = try arena.alloc(types.StructField, field_count);
             for (fields) |*field| {
                 field.name = try arena.dupe(u8, try reader.blob());
+                field.weak = (try reader.int(u8)) != 0;
                 field.field_type = try reader.valueType();
             }
             member.fields = fields;
@@ -795,6 +823,7 @@ const Reader = struct {
             local.name = try arena.dupe(u8, try self.blob());
             local.local_type = try self.valueType();
             local.owns_storage = (try self.int(u8)) != 0;
+            local.weak = (try self.int(u8)) != 0;
             local.inout = (try self.int(u8)) != 0;
         }
         out.locals = locals;
@@ -849,6 +878,11 @@ const Reader = struct {
                 .local = try self.int(u32),
                 .value = try self.int(u32),
             } },
+            .weak_local_get => .{ .weak_local_get = try self.int(u32) },
+            .weak_local_set => .{ .weak_local_set = .{
+                .local = try self.int(u32),
+                .value = try self.int(u32),
+            } },
             .binary => .{ .binary = .{
                 .op = try self.enumTag(mir.BinaryOp),
                 .operand_type = try self.valueType(),
@@ -870,6 +904,17 @@ const Reader = struct {
                 .field = try self.int(u32),
             } },
             .struct_set => .{ .struct_set = .{
+                .target = try self.int(u32),
+                .layout = try self.int(u32),
+                .field = try self.int(u32),
+                .value = try self.int(u32),
+            } },
+            .weak_struct_get => .{ .weak_struct_get = .{
+                .target = try self.int(u32),
+                .layout = try self.int(u32),
+                .field = try self.int(u32),
+            } },
+            .weak_struct_set => .{ .weak_struct_set = .{
                 .target = try self.int(u32),
                 .layout = try self.int(u32),
                 .field = try self.int(u32),
@@ -1275,6 +1320,58 @@ test "an inout receiver and call round-trip through the current format" {
     }
     try testing.expect(saw_inout);
     try testing.expect(saw_call);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "weak locals, fields, and operations round-trip through the current format" {
+    var program = try compileScript(
+        \\struct Observer:
+        \\    weak target: list[i64]? = none
+        \\
+        \\func main():
+        \\    let source = [42]
+        \\    weak var local: list[i64]? = source
+        \\    var observer = Observer()
+        \\    observer.target = local
+        \\    assert(observer.target != none)
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    try testing.expectEqual(@as(usize, 1), loaded.structs.len);
+    try testing.expect(loaded.structs[0].fields[0].weak);
+    var saw_weak_local = false;
+    var saw_local_get = false;
+    var saw_local_set = false;
+    var saw_field_get = false;
+    var saw_field_set = false;
+    for (loaded.functions) |function| {
+        for (function.locals) |local| saw_weak_local = saw_weak_local or local.weak;
+        for (function.instructions) |instruction| switch (instruction) {
+            .weak_local_get => saw_local_get = true,
+            .weak_local_set => saw_local_set = true,
+            .weak_struct_get => saw_field_get = true,
+            .weak_struct_set => saw_field_set = true,
+            else => {},
+        };
+    }
+    try testing.expect(saw_weak_local);
+    try testing.expect(saw_local_get and saw_local_set);
+    try testing.expect(saw_field_get and saw_field_set);
+
+    const dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(dump);
+    try testing.expect(std.mem.indexOf(u8, dump, "weak target: list[i64]?") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "weak_local_get") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "weak_struct_set") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -1927,8 +2024,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // names and no tag before them renumbers.
     // 48 -> 49: `char` and `bytes` join `types.Type`, `bytes_value` is
     // appended to `Intrinsic`, and `parse_string` is renamed `parse_str`.
-    try testing.expectEqual(@as(u32, 49), format_version);
-    try testing.expectEqual(@as(u64, 9292062166991129096), hasher.final());
+    // 49 -> 50: locals and struct fields record weak storage, reference
+    // layouts record identity, and four dedicated weak operations join
+    // `Instruction`.
+    try testing.expectEqual(@as(u32, 50), format_version);
+    try testing.expectEqual(@as(u64, 14287404226476713161), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

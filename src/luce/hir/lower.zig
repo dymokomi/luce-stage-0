@@ -294,6 +294,8 @@ const Replay = struct {
         for (self.body.locals, 0..) |row, index| {
             const id = if (index == 0 and self.deps.function.receiver == .writes)
                 try self.code.addInoutLocal(row.name.?, row.local_type, false)
+            else if (row.weak)
+                try self.code.addWeakLocal(row.name.?, row.local_type)
             else if (row.name) |written|
                 try self.code.addLocal(written, row.local_type, false)
             else
@@ -526,6 +528,14 @@ const Replay = struct {
         provenance: nodes.Provenance,
         recorded: ?nodes.StoreKind,
     ) Error!void {
+        if (self.code.localIsWeak(local)) {
+            // A weak place keeps no strong reference and owns no value
+            // storage. The source temporary remains parked and dies at the
+            // statement boundary unless some other strong place adopts it.
+            try self.code.store(local, register);
+            if (recorded) |kind| std.debug.assert(kind == .plain);
+            return;
+        }
         if (!self.code.localOwnsStorage(local)) {
             try self.keepReference(register, value_type, provenance);
             try self.code.store(local, register);
@@ -579,11 +589,18 @@ const Replay = struct {
             },
             .field_get => |read| field: {
                 const target = try self.replayValue(read.target);
-                break :field try self.code.emit(.{ .struct_get = .{
-                    .target = target,
-                    .layout = read.layout,
-                    .field = read.field,
-                } }, read.result);
+                break :field try self.code.emit(
+                    if (read.weak) .{ .weak_struct_get = .{
+                        .target = target,
+                        .layout = read.layout,
+                        .field = read.field,
+                    } } else .{ .struct_get = .{
+                        .target = target,
+                        .layout = read.layout,
+                        .field = read.field,
+                    } },
+                    read.result,
+                );
             },
             .variant_payload => |read| payload: {
                 const target = try self.replayValue(read.target);
@@ -1591,21 +1608,29 @@ const Replay = struct {
         const registers = try self.arena().alloc(Register, fields.len);
         for (entries[0..batch.written], batch.slots[0..batch.written]) |*entry, slot| {
             try self.applyWrappers(entry);
-            const stored = try self.ownedForStore(
-                entry.register,
-                fields[slot].field_type,
-                entry.provenance,
-            );
-            registers[slot] = stored.register;
+            if (fields[slot].weak) {
+                registers[slot] = entry.register;
+            } else {
+                const stored = try self.ownedForStore(
+                    entry.register,
+                    fields[slot].field_type,
+                    entry.provenance,
+                );
+                registers[slot] = stored.register;
+            }
         }
         for (batch.operands[batch.written..], batch.slots[batch.written..], batch.written..) |node, slot, position| {
             try self.replayDefaultEntry(entries, position, node, false);
-            const stored = try self.ownedForStore(
-                entries[position].register,
-                fields[slot].field_type,
-                entries[position].provenance,
-            );
-            registers[slot] = stored.register;
+            if (fields[slot].weak) {
+                registers[slot] = entries[position].register;
+            } else {
+                const stored = try self.ownedForStore(
+                    entries[position].register,
+                    fields[slot].field_type,
+                    entries[position].provenance,
+                );
+                registers[slot] = stored.register;
+            }
         }
         return registers;
     }
@@ -1917,6 +1942,7 @@ const Replay = struct {
     /// storage or a reference, so the scope's end gives its bytes back
     /// (`drop_storage`) and drops its reference (`release`).
     fn noteOwned(self: *Replay, local: LocalId) Error!void {
+        if (self.code.localIsWeak(local)) return;
         const owns_storage = self.code.localOwnsStorage(local);
         const owns_objects = try self.carriesObjects(self.code.localType(local));
         if (!owns_storage and !owns_objects) return;
@@ -2106,6 +2132,12 @@ const Replay = struct {
     ) Error!void {
         const register = try self.replayValue(value);
         const local_type = self.code.localType(local);
+        if (self.code.localIsWeak(local)) {
+            std.debug.assert(compound == null);
+            std.debug.assert(recorded == .plain);
+            try self.code.store(local, register);
+            return;
+        }
         var stored = register;
         var provenance = nodes.provenance(value);
         if (compound) |op| {
@@ -2165,7 +2197,8 @@ const Replay = struct {
         const register = try self.replayValue(value);
         const local_type = self.code.localType(place.base);
         const layout = self.code.structs[place.layout];
-        const field_type = layout.fields[place.field].field_type;
+        const field = layout.fields[place.field];
+        const field_type = field.field_type;
         const current = try self.code.load(place.base);
         var stored = register;
         var provenance = nodes.provenance(value);
@@ -2179,14 +2212,25 @@ const Replay = struct {
             stored = combined.register;
             provenance = combined.provenance;
         }
-        const stored_field = try self.ownedForStore(stored, field_type, provenance);
+        const stored_field = if (field.weak)
+            StoredValue{ .register = stored, .kind = .plain }
+        else
+            try self.ownedForStore(stored, field_type, provenance);
         std.debug.assert(stored_field.kind == recorded);
-        const updated = try self.code.emit(.{ .struct_set = .{
-            .target = current,
-            .layout = place.layout,
-            .field = place.field,
-            .value = stored_field.register,
-        } }, local_type);
+        const updated = try self.code.emit(
+            if (field.weak) .{ .weak_struct_set = .{
+                .target = current,
+                .layout = place.layout,
+                .field = place.field,
+                .value = stored_field.register,
+            } } else .{ .struct_set = .{
+                .target = current,
+                .layout = place.layout,
+                .field = place.field,
+                .value = stored_field.register,
+            } },
+            local_type,
+        );
         try self.code.release(place.base, self.code.localOwnsStorage(place.base));
         try self.code.store(place.base, updated);
     }
@@ -2289,12 +2333,19 @@ const Replay = struct {
                         .parent = current,
                         .layout = field.layout,
                         .field_index = field.field,
+                        .weak = field.weak,
                     } };
-                    current = try self.code.emit(.{ .struct_get = .{
-                        .target = current,
-                        .layout = field.layout,
-                        .field = field.field,
-                    } }, layout.fields[field.field].field_type);
+                    // A weak leaf is a write-only landing here. Semantics
+                    // rejects traversing it and compound assignment, so
+                    // upgrading it merely to overwrite it would create an
+                    // owned snapshot with no reader.
+                    if (!field.weak) {
+                        current = try self.code.emit(.{ .struct_get = .{
+                            .target = current,
+                            .layout = field.layout,
+                            .field = field.field,
+                        } }, layout.fields[field.field].field_type);
+                    }
                     current_type = layout.fields[field.field].field_type;
                 },
                 .index => |subscript_operands| {
@@ -2333,7 +2384,13 @@ const Replay = struct {
             stored = combined.register;
             provenance = combined.provenance;
         }
-        const leaf = try self.ownedForStore(stored, current_type, provenance);
+        const leaf_is_weak = chain.steps.len > 0 and
+            chain.steps[chain.steps.len - 1] == .field and
+            chain.steps[chain.steps.len - 1].field.weak;
+        const leaf = if (leaf_is_weak)
+            StoredValue{ .register = stored, .kind = .plain }
+        else
+            try self.ownedForStore(stored, current_type, provenance);
         std.debug.assert(leaf.kind == recorded);
         try self.code.rebuild(chain.root, accessors, leaf.register);
     }

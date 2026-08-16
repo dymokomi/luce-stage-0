@@ -139,6 +139,9 @@ pub const LocalDecl = struct {
     /// by an adopting store (`takeStorage`) is recorded post-
     /// retraction, per coupling #3.
     owns_storage: bool,
+    /// The physical slot holds an internal weak handle; `local_type` is the
+    /// logical optional type produced by each read.
+    weak: bool = false,
     /// The declaring name's span, or the making expression's for a
     /// hidden slot.
     span: Span,
@@ -338,6 +341,9 @@ pub const Expression = union(enum) {
 
     pub const LocalGet = struct {
         local: LocalId,
+        /// Read through zeroing storage. Lowering upgrades and retains the
+        /// target, so this node has fresh object provenance.
+        weak: bool = false,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -358,6 +364,8 @@ pub const Expression = union(enum) {
         target: NodeRef,
         layout: u32,
         field: u32,
+        /// The layout field is non-owning; lower emits an owned upgrade.
+        weak: bool = false,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -847,7 +855,7 @@ pub const Place = union(enum) {
     pub const Index = struct { base: Operand, indices: []const Operand };
     pub const Chain = struct { root: LocalId, steps: []const Step };
     pub const Step = union(enum) {
-        field: struct { layout: u32, field: u32 },
+        field: struct { layout: u32, field: u32, weak: bool = false },
         index: []const Operand,
     };
 };
@@ -1085,12 +1093,13 @@ pub fn provenance(expression: *const Expression) Provenance {
         // every other absence is a constant (`zeroOf`'s rule).
         .absent => |payload| zeroOf(payload.result),
         // A name reads as a view of what its slot holds.
-        .local_get => .view,
+        .local_get => |payload| if (payload.weak) .fresh else .view,
         // The narrowed unwrap answers neither fresh nor view, exactly
         // as the tape predicates read it.
         .narrowed_get => .plain,
         // Views into a run something else holds.
-        .field_get, .variant_payload, .index_get => .view,
+        .field_get => |payload| if (payload.weak) .fresh else .view,
+        .variant_payload, .index_get => .view,
         // A folded constant materializes as its value does: a struct
         // default is built whole and owns its run; everything else is
         // a constant.
@@ -1180,6 +1189,8 @@ pub fn ofIntrinsic(kind: mir.Intrinsic) Provenance {
 /// leak), never free a value something still holds.
 pub fn freshObject(expression: *const Expression) bool {
     return switch (expression.*) {
+        .local_get => |payload| payload.weak,
+        .field_get => |payload| payload.weak,
         .list_literal, .map_literal, .new_object => true,
         .struct_make, .variant_make, .interface_make => true,
         .function_value, .lambda_ref, .bound_method => true,

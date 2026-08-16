@@ -41,6 +41,26 @@ const Analyzer = @import("declarations.zig").Analyzer;
 
 // -- what a type carries, and how wide it is --------------------------
 
+/// Whether `of` is the logical `T?` type a weak place may expose. Weak is a
+/// storage modifier, never a type constructor: the optional remains the
+/// expression type, and its payload must be an ARC object with ordinary
+/// identity. Resources deliberately stay strong because their last release
+/// performs an effect (close/join).
+pub fn weakTarget(self: *const Analyzer, of: Type) bool {
+    const held = of.held() orelse return false;
+    return switch (held) {
+        .heap => |index| switch (self.heap_types.items[index]) {
+            .list, .map, .array, .builder => true,
+            .file, .task => false,
+        },
+        // The class scaffold records reference identity on its nominal
+        // layout. Phase 5 supplies the heap representation; value structs
+        // and today's interface witness runs are not weak targets.
+        .strukt => |index| self.structs.items[index].reference,
+        else => false,
+    };
+}
+
 /// True for types that transitively hold a heap-backed object: every
 /// heap object, including file and task resources, and structs and
 /// unions transitively containing one ("object-carrying").  The name
@@ -84,6 +104,10 @@ pub const Carried = enum {
     /// since a function can sit in a field or element, the question has to
     /// see through those.
     function,
+    /// A weak handle names a row in one Runtime's object table. Copying it
+    /// to a worker would make the index/generation pair refer to a different
+    /// table and could silently attach to an unrelated object.
+    weak,
 };
 
 /// Whether `of` reaches something of `sought` anywhere in its type
@@ -120,6 +144,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                 if (seen_structs[layout]) continue;
                 seen_structs[layout] = true;
                 for (self.structs.items[layout].fields) |field| {
+                    if (field.weak and sought == .weak) return true;
                     try pending.append(self.temporary, field.field_type);
                 }
             },
@@ -183,6 +208,10 @@ pub const Incomparable = struct {
         /// an inactive payload slot holds a different shape on each
         /// side, so a run-for-run comparison is not even well formed.
         variant,
+        /// Weak storage is compared through its public optional snapshot,
+        /// not by the hidden row/generation pair. A containing value has no
+        /// stable field-by-field equality without performing upgrades.
+        weak,
     };
 
     reason: Reason,
@@ -240,6 +269,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
                 if (seen_structs[layout]) continue;
                 seen_structs[layout] = true;
                 for (self.structs.items[layout].fields) |field| {
+                    if (field.weak) return .{ .reason = .weak, .part = field.field_type };
                     try pending.append(self.temporary, field.field_type);
                 }
             },

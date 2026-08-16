@@ -287,6 +287,7 @@ fn collect(
         for (function.blocks[block].items) |item| {
             switch (function.instructions[item]) {
                 .local_set => |set| assigned[set.local] = true,
+                .weak_local_set => |set| assigned[set.local] = true,
                 .call_inout => |call| assigned[call.receiver] = true,
                 .intrinsic => |call| {
                     switch (call.kind) {
@@ -315,12 +316,15 @@ fn collect(
                 .const_container,
                 .const_function,
                 .local_get,
+                .weak_local_get,
                 .binary,
                 .unary,
                 .convert,
                 .struct_make,
                 .struct_get,
                 .struct_set,
+                .weak_struct_get,
+                .weak_struct_set,
                 .variant_make,
                 .variant_tag,
                 .variant_field,

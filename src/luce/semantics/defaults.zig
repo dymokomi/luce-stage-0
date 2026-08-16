@@ -129,7 +129,8 @@ pub fn fieldHasDefault(self: *const Analyzer, layout_index: u32, field_index: us
     if (layout_index >= self.struct_decls.items.len) return false; // a synthesized shape has no declaration
     const info = self.struct_decls.items[layout_index];
     if (field_index >= info.field_defaults.len) return false;
-    return info.field_defaults[field_index].expression != null;
+    return info.field_defaults[field_index].expression != null or
+        self.structs.items[layout_index].fields[field_index].weak;
 }
 
 /// The folded default of one field (docs/ARGS.md D8), or null when
@@ -143,7 +144,11 @@ pub fn fieldDefault(self: *Analyzer, layout_index: u32, field_index: usize) Erro
         if (field_index >= info.field_defaults.len) return null;
     }
     const slot = &self.struct_decls.items[layout_index].field_defaults[field_index];
-    const written = slot.expression orelse return null;
+    const written = slot.expression orelse {
+        const field = self.structs.items[layout_index].fields[field_index];
+        if (!field.weak) return null;
+        return .{ .value = .absent, .value_type = field.field_type };
+    };
     switch (slot.state) {
         .ready => return .{ .value = slot.value, .value_type = slot.value_type },
         .failed => return null,

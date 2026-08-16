@@ -482,6 +482,16 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    const weak_reference_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"weak"},
+    });
+    const test_weak_references_step = b.step(
+        "test-weak-references",
+        "Run zeroing weak-reference lifetime specifications on both engines",
+    );
+    test_weak_references_step.dependOn(&b.addRunArtifact(weak_reference_tests).step);
+
     const thread_registry_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{ "full table", "closes publication" },

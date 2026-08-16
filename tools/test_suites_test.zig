@@ -37,7 +37,7 @@ test "every executable-specification file has exactly one suite" {
     // This is a tripwire, not the source of truth: the directory scan above
     // says which names are wrong, while the count ensures a narrowed scan
     // cannot quietly make the guard green.
-    try testing.expectEqual(@as(usize, 23), seen);
+    try testing.expectEqual(@as(usize, 24), seen);
 }
 
 test "harness and backend tests are assigned without catching unit tests" {

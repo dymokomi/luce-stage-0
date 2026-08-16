@@ -36,6 +36,7 @@ pub fn mapOperands(
         .const_str,
         .const_container,
         .local_get,
+        .weak_local_get,
         .jump,
         .trap,
         .unwind,
@@ -46,6 +47,7 @@ pub fn mapOperands(
             if (named.receiver) |receiver| named.receiver = map[receiver];
         },
         .local_set => |*set| set.value = map[set.value],
+        .weak_local_set => |*set| set.value = map[set.value],
         .binary => |*binary| {
             binary.left = map[binary.left];
             binary.right = map[binary.right];
@@ -55,6 +57,11 @@ pub fn mapOperands(
         .struct_make => |*make| make.fields = try mapSlice(arena, make.fields, map),
         .struct_get => |*get| get.target = map[get.target],
         .struct_set => |*set| {
+            set.target = map[set.target];
+            set.value = map[set.value];
+        },
+        .weak_struct_get => |*get| get.target = map[get.target],
+        .weak_struct_set => |*set| {
             set.target = map[set.target];
             set.value = map[set.value];
         },
@@ -95,6 +102,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .const_str,
         .const_container,
         .local_get,
+        .weak_local_get,
         .jump,
         .trap,
         .unwind,
@@ -103,6 +111,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             if (named.receiver) |receiver| used[receiver] = true;
         },
         .local_set => |set| used[set.value] = true,
+        .weak_local_set => |set| used[set.value] = true,
         .binary => |binary| {
             used[binary.left] = true;
             used[binary.right] = true;
@@ -114,6 +123,11 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         },
         .struct_get => |get| used[get.target] = true,
         .struct_set => |set| {
+            used[set.target] = true;
+            used[set.value] = true;
+        },
+        .weak_struct_get => |get| used[get.target] = true,
+        .weak_struct_set => |set| {
             used[set.target] = true;
             used[set.value] = true;
         },
@@ -159,8 +173,9 @@ pub const LocalUse = union(enum) {
 
 pub fn localUse(instruction: Instruction) LocalUse {
     return switch (instruction) {
-        .local_get => |local| .{ .read = local },
+        .local_get, .weak_local_get => |local| .{ .read = local },
         .local_set => |set| .{ .write = set.local },
+        .weak_local_set => |set| .{ .write = set.local },
         .call_inout => |call| .{ .read_write = call.receiver },
         // Everything else works in registers.  Listed rather than
         // defaulted, as `markOperands` lists its own: an instruction
@@ -178,6 +193,8 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .struct_make,
         .struct_get,
         .struct_set,
+        .weak_struct_get,
+        .weak_struct_set,
         .variant_make,
         .variant_tag,
         .variant_field,
@@ -249,4 +266,34 @@ test "every operand of every instruction shape is rewritten" {
     // shared `arguments` above did not map it twice.
     try testing.expectEqualSlices(Register, &.{ 2, 3 }, &arguments);
     for (seen[0..7]) |marked| try testing.expect(marked);
+}
+
+test "weak operands and local uses survive compaction" {
+    var map: [6]Register = undefined;
+    for (&map, 0..) |*slot, index| slot.* = @intCast(index + 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var instructions = [_]Instruction{
+        .{ .weak_local_get = 2 },
+        .{ .weak_local_set = .{ .local = 3, .value = 0 } },
+        .{ .weak_struct_get = .{ .target = 1, .layout = 0, .field = 0 } },
+        .{ .weak_struct_set = .{ .target = 2, .layout = 0, .field = 0, .value = 3 } },
+    };
+    var used: [6]bool = @splat(false);
+    for (&instructions) |*instruction| markOperands(instruction.*, &used);
+    try testing.expect(used[0] and used[1] and used[2] and used[3]);
+
+    for (&instructions) |*instruction| try mapOperands(arena, instruction, &map);
+    try testing.expectEqual(@as(Register, 1), instructions[1].weak_local_set.value);
+    try testing.expectEqual(@as(Register, 2), instructions[2].weak_struct_get.target);
+    try testing.expectEqual(@as(Register, 3), instructions[3].weak_struct_set.target);
+    try testing.expectEqual(@as(Register, 4), instructions[3].weak_struct_set.value);
+
+    try testing.expectEqual(LocalUse{ .read = 2 }, localUse(instructions[0]));
+    try testing.expectEqual(LocalUse{ .write = 3 }, localUse(instructions[1]));
+    try testing.expectEqual(LocalUse.none, localUse(instructions[2]));
+    try testing.expectEqual(LocalUse.none, localUse(instructions[3]));
 }

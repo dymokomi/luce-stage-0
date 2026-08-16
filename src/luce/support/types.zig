@@ -594,6 +594,10 @@ pub const EnumType = struct {
 
 pub const StructField = struct {
     name: []const u8, // arena-owned by the program
+    /// Zeroing non-owning storage. `field_type` remains the logical `T?`
+    /// seen by source and expression registers; only the field cell carries
+    /// the runtime's internal weak-handle tag.
+    weak: bool = false,
     field_type: Type,
 };
 

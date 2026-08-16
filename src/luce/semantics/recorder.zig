@@ -271,11 +271,32 @@ pub fn recordLocal(
     owns_storage: bool,
     span: Span,
 ) Error!LocalId {
+    return recordLocalKind(self, name, local_type, owns_storage, false, span);
+}
+
+pub fn recordWeakLocal(
+    self: *FunctionBuilder,
+    name: []const u8,
+    local_type: Type,
+    span: Span,
+) Error!LocalId {
+    return recordLocalKind(self, name, local_type, false, true, span);
+}
+
+fn recordLocalKind(
+    self: *FunctionBuilder,
+    name: ?[]const u8,
+    local_type: Type,
+    owns_storage: bool,
+    weak: bool,
+    span: Span,
+) Error!LocalId {
     const local: LocalId = @intCast(self.recorded_locals.items.len);
     try self.recorded_locals.append(self.temporary(), .{
         .name = name,
         .local_type = local_type,
         .owns_storage = owns_storage,
+        .weak = weak,
         .span = span,
     });
     return local;

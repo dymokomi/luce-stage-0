@@ -157,7 +157,8 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     // back up — are lower's to spell from these steps.
     const recorded_steps = try self.arena().alloc(nodes.Place.Step, steps.items.len);
     var current_type = root_type;
-    for (steps.items, recorded_steps) |node, *recorded_step| {
+    var leaf_is_weak = false;
+    for (steps.items, recorded_steps, 0..) |node, *recorded_step, step_index| {
         switch (node.*) {
             .field => |field| {
                 if (current_type != .strukt) {
@@ -173,8 +174,32 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                     return;
                 };
                 if (!try refusals.fieldReachable(self, layout_index, field_index, field.span)) return;
-                recorded_step.* = .{ .field = .{ .layout = layout_index, .field = field_index } };
-                current_type = layout.fields[field_index].field_type;
+                const declared = layout.fields[field_index];
+                if (declared.weak and step_index + 1 != steps.items.len) {
+                    try self.fail(
+                        "luce.sema.weak.access",
+                        field.span,
+                        "weak field {s} reads as an optional snapshot; bind and unwrap it before accessing another place",
+                        .{field.name},
+                    );
+                    return;
+                }
+                if (declared.weak and assign.compound != null) {
+                    try self.fail(
+                        "luce.sema.weak.access",
+                        assign.span,
+                        "a weak field reads as an optional snapshot and cannot use compound assignment; assign a new reference directly",
+                        .{},
+                    );
+                    return;
+                }
+                recorded_step.* = .{ .field = .{
+                    .layout = layout_index,
+                    .field = field_index,
+                    .weak = declared.weak,
+                } };
+                leaf_is_weak = declared.weak;
+                current_type = declared.field_type;
             },
             .index => |index| {
                 const lowered = operands[next_operand .. next_operand + index.indices.len];
@@ -201,6 +226,7 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                 // `t.counts["w"] += 1` is not this case: it is an
                 // `.index` target with `t.counts` for a base, and
                 // it defines like any other (`lowerAssignIndex`).
+                leaf_is_weak = false;
                 current_type = element_type;
             },
             else => unreachable, // only field/index steps are collected
@@ -224,7 +250,9 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     // The leaf is a store into whatever the chain descended to, so
     // it takes or copies its storage; every step above it moves
     // the value the step below just built (docs/STRINGS.md).
-    const store_kind = if (assign.compound) |op| kind: {
+    const store_kind: nodes.StoreKind = if (leaf_is_weak)
+        .plain
+    else if (assign.compound) |op| kind: {
         const combined = (try compoundCombine(self, op, current_type, placed, assign.span)) orelse return;
         break :kind storedKindOf(self, current_type, combined);
     } else ledger.ownedForStoreKind(self, placed);
@@ -397,6 +425,15 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
     }
     const local = info.local;
     const local_type = recorder.localType(self, local);
+    if (info.weak and assign.compound != null) {
+        try self.fail(
+            "luce.sema.weak.access",
+            assign.span,
+            "a weak variable reads as an optional snapshot and cannot use compound assignment; assign a new reference directly",
+            .{},
+        );
+        return;
+    }
     // A compound assignment works on the value the place holds, so
     // a narrowed `T?` combines at `T` and widens the result back.
     const narrowed_place = local_type == .optional and flow.isNarrowed(self, local);
@@ -410,7 +447,13 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
     // a `none` is back to being a question.  A compound assignment
     // reads the place, so it can only leave what was already there.
     if (local_type == .optional and assign.compound == null) {
-        if (fitted.present) try flow.narrow(self, local) else flow.widen(self, local);
+        if (info.weak) {
+            flow.widen(self, local);
+        } else if (fitted.present) {
+            try flow.narrow(self, local);
+        } else {
+            flow.widen(self, local);
+        }
     }
     var store_kind: nodes.StoreKind = .plain;
     const owns_storage = recorder.localOwnsStorage(self, local);
@@ -480,13 +523,24 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
     };
     if (!try refusals.fieldReachable(self, layout_index, field_index, target.span)) return;
     const expected = layout.fields[field_index].field_type;
+    if (layout.fields[field_index].weak and assign.compound != null) {
+        try self.fail(
+            "luce.sema.weak.access",
+            assign.span,
+            "a weak field reads as an optional snapshot and cannot use compound assignment; assign a new reference directly",
+            .{},
+        );
+        return;
+    }
     const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
     const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
     // The new field is a store into the run `struct_set` builds,
     // decided here and spelled by lower.  A field that carries
     // objects stores the reference plainly; only value storage — a
     // string's bytes, a nested struct's run — is taken or copied.
-    const store_kind = if (assign.compound) |op| kind: {
+    const store_kind: nodes.StoreKind = if (layout.fields[field_index].weak)
+        .plain
+    else if (assign.compound) |op| kind: {
         const combined = (try compoundCombine(self, op, expected, value, assign.span)) orelse return;
         break :kind storedKindOf(self, expected, combined);
     } else ledger.ownedForStoreKind(self, value);

@@ -8307,3 +8307,132 @@ test "ARC: a shared element outlives the container that let it go" {
     runtime.release(b.view().object); // b dies and releases leaf's last reference
     try testing.expectEqual(before - 3, runtime.live); // b and leaf both gone
 }
+
+test "ARC weak storage upgrades live targets and zeroes after final release" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const strong = try runtime.newList(Value.none);
+    const handle = strong.asObject();
+    const weak = try runtime.weaken(strong);
+    try testing.expectEqual(value.Tag.weak, weak.tag);
+    try testing.expect(weak.asWeak().same(handle));
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(strong)).references);
+
+    // A successful read is an owned upgrade, so it holds the target alive
+    // independently of the original strong name.
+    const upgraded = try runtime.strengthen(weak);
+    try testing.expectEqual(value.Tag.object, upgraded.tag);
+    try testing.expect(upgraded.asObject().same(handle));
+    try testing.expectEqual(@as(u32, 2), (try runtime.resolve(strong)).references);
+
+    runtime.release(handle);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(upgraded)).references);
+    runtime.release(upgraded.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+
+    const zeroed = try runtime.strengthen(weak);
+    try testing.expect(zeroed.isNone());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "ARC weak handles cannot attach to a reused object-table row" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const first = try runtime.newList(Value.none);
+    const weak = try runtime.weaken(first);
+    const first_handle = first.asObject();
+    runtime.release(first_handle);
+
+    const replacement = try runtime.newList(Value.none);
+    defer runtime.release(replacement.asObject());
+    try testing.expectEqual(first_handle.index, replacement.asObject().index);
+    try testing.expect(first_handle.generation != replacement.asObject().generation);
+    try testing.expect((try runtime.strengthen(weak)).isNone());
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(replacement)).references);
+}
+
+test "ARC weak storage accepts absence and rejects non-reference values" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const empty = try runtime.weaken(Value.none);
+    try testing.expectEqual(value.Tag.weak, empty.tag);
+    try testing.expect(empty.asWeak().same(value.Handle.none));
+    try testing.expect((try runtime.strengthen(empty)).isNone());
+
+    try expectTrap(.invalid_weak_target, &runtime, runtime.weaken(Value.ofI64(1)));
+    runtime.pending = null;
+    try expectTrap(.invalid_weak_target, &runtime, runtime.strengthen(Value.ofObject(value.Handle.none)));
+}
+
+test "ARC ownership walks preserve weak cells without retaining their targets" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const target = try runtime.newList(Value.none);
+    const weak = try runtime.weaken(target);
+    const aggregate = try runtime.makeStruct(&.{weak});
+    defer runtime.dropStorage(aggregate);
+
+    runtime.retainValue(aggregate);
+    runtime.freeObjectsIn(aggregate);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(target)).references);
+
+    const copied = try runtime.copyValue(aggregate);
+    defer runtime.freeValue(copied);
+    try testing.expectEqual(value.Tag.weak, copied.asStruct()[0].tag);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(target)).references);
+
+    runtime.release(target.asObject());
+    try testing.expect((try runtime.strengthen(copied.asStruct()[0])).isNone());
+}
+
+test "ARC weak handles cannot be copied into another runtime table" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{
+        .arena = source_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer source.deinit();
+
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{
+        .arena = target_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer target.deinit();
+
+    const strong = try source.newList(Value.none);
+    const weak = try source.weaken(strong);
+    const record = try source.makeStruct(&.{weak});
+    try expectTrap(.not_owned, &target, target.copyFrom(&source, record));
+    target.pending = null;
+    try testing.expectEqual(@as(u32, 0), target.live);
+
+    const snapshot = try source.strengthen(weak);
+    try testing.expect(snapshot.asObject().same(strong.asObject()));
+    source.freeValue(snapshot);
+    source.freeValue(record);
+    source.freeValue(strong);
+    try testing.expectEqual(@as(u32, 0), source.live);
+}

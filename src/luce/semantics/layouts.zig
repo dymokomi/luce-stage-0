@@ -487,7 +487,13 @@ pub fn collectStructs(self: *Analyzer) Error!void {
         // trailing rule a parameter list keeps (docs/ARGS.md D8).
         var first_defaulted: ?[]const u8 = null;
         for (declaration.fields) |field| {
-            if (field.default == null) {
+            // Weak storage has one inevitable zero: the absent weak
+            // handle. Requiring `= none` on every declaration would state
+            // the representation twice, so it is an implicit default and
+            // participates in the same trailing-default rule as a written
+            // one.
+            const defaulted = field.default != null or field.weak;
+            if (!defaulted) {
                 if (first_defaulted) |earlier| {
                     try self.fail(
                         "luce.sema.struct",
@@ -516,6 +522,24 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             // dispatch is a question of its own — deferred rather
             // than refused (docs/FUNCTIONS.md S2).
             if (try resolve.refuseFunctionPart(self, field_type, field.type_name.span, "struct field")) continue;
+            if (field.weak and !shapes.weakTarget(self, field_type)) {
+                if (field_type.held() == null) {
+                    try self.fail(
+                        "luce.sema.weak.target",
+                        field.type_name.span,
+                        "weak field {s} must read as an optional ARC reference; write an optional list, map, array, builder, or class type such as {s}?",
+                        .{ field.name, try self.typeName(field_type) },
+                    );
+                } else {
+                    try self.fail(
+                        "luce.sema.weak.target",
+                        field.type_name.span,
+                        "weak field {s} cannot target {s}; weak storage supports lists, maps, arrays, builders, and classes, but not values or resources",
+                        .{ field.name, try self.typeName(field_type) },
+                    );
+                }
+                continue;
+            }
             // D4, for a field: a reachable field may not publish a
             // hidden type.  Only the author of the marks can trip
             // this — nothing is private until someone writes it —
@@ -542,6 +566,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             }
             try fields.append(self.arena, .{
                 .name = try self.arena.dupe(u8, field.name),
+                .weak = field.weak,
                 .field_type = field_type,
             });
             try field_defaults.append(self.arena, .{ .expression = field.default });

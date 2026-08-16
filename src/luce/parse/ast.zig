@@ -266,6 +266,9 @@ pub const Variable = struct {
     name_span: Span,
     annotation: ?TypeName,
     value: ?*Expression,
+    /// Zeroing non-owning storage. Its annotation is always `T?`; reads
+    /// produce ordinary strong optional values.
+    weak: bool = false,
     span: Span,
 };
 /// `place = value`, or a compound assignment `place OP= value` when
@@ -435,6 +438,9 @@ pub const Field = struct {
     /// clause a parameter takes and the same folder behind it
     /// (docs/ARGS.md D8).  Null for a required field.
     default: ?*Expression = null,
+    /// Zeroing non-owning storage. The modifier belongs to the place, not
+    /// to `type_name`, and therefore never appears in a `TypeName`.
+    weak: bool = false,
     visibility: Visibility = .none,
     span: Span,
 };

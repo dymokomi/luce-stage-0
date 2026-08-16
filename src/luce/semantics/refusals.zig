@@ -609,6 +609,12 @@ pub fn failIncomparable(
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );
         },
+        .weak => try self.fail(
+            "luce.sema.weak.access",
+            span,
+            "{s} contains weak storage, whose public value is a liveness snapshot; {s} cannot compare hidden weak handles — read and compare the optional field explicitly",
+            .{ try self.analyzer.typeName(compared), operator },
+        ),
     }
 }
 
@@ -677,5 +683,11 @@ pub fn failUnsearchable(
                 .{ method_name, element_name, part_name },
             );
         },
+        .weak => try self.fail(
+            "luce.sema.weak.access",
+            span,
+            "{s} compares elements with ==, but {s} contains weak storage whose value is a liveness snapshot; search a stable key or read the optional field explicitly",
+            .{ method_name, element_name },
+        ),
     }
 }

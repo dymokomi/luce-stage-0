@@ -157,7 +157,13 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_var,
         => .storage,
 
-        .keyword_public, .keyword_private, .keyword_static => .modifier,
+        .keyword_public,
+        .keyword_private,
+        .keyword_static,
+        // `weak` qualifies a storage place: it neither declares a binding
+        // by itself nor changes the value's type.
+        .keyword_weak,
+        => .modifier,
 
         .keyword_import => .import,
 

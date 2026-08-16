@@ -203,6 +203,88 @@ test "local storage claims agree with the value representation" {
     try verify_mod.verify(testing.allocator, &function);
 }
 
+test "weak MIR operations are the only door to weak locals and fields" {
+    const optional_list: types.Type = .{ .optional = .{ .heap = 0 } };
+    var locals = try programOf(.{
+        .instructions = &.{
+            .{ .weak_local_get = 0 }, // r0
+            .{ .weak_local_set = .{ .local = 0, .value = 0 } }, // r1
+            .{ .ret = null }, // r2
+        },
+        .result_types = &.{ optional_list, .none, .none },
+        .blocks = &.{&.{ 0, 1, 2 }},
+        .locals = &.{.{ .name = "observed", .local_type = optional_list, .weak = true }},
+    });
+    defer locals.deinit();
+    locals.heap_types = try locals.arena.allocator().dupe(types.HeapType, &.{.{ .list = .i64 }});
+    try verify_mod.verify(testing.allocator, &locals);
+
+    locals.functions[0].instructions[0] = .{ .local_get = 0 };
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].instructions[0] = .{ .weak_local_get = 0 };
+    locals.functions[0].instructions[1] = .{ .local_set = .{ .local = 0, .value = 0 } };
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].instructions[1] = .{ .weak_local_set = .{ .local = 0, .value = 0 } };
+
+    locals.functions[0].locals[0].weak = false;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].locals[0].weak = true;
+    locals.functions[0].locals[0].owns_storage = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].locals[0].owns_storage = false;
+    locals.functions[0].locals[0].inout = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].locals[0].inout = false;
+    locals.functions[0].locals[0].local_type = .i64;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+    locals.functions[0].locals[0].local_type = optional_list;
+    locals.heap_types[0] = .file;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
+
+    var make_fields = [_]Register{0};
+    var fields = try programOf(.{
+        .instructions = &.{
+            .{ .weak_local_get = 0 }, // r0: logical optional value
+            .{ .struct_make = .{ .layout = 0, .fields = &make_fields } }, // r1
+            .{ .weak_struct_get = .{ .target = 1, .layout = 0, .field = 0 } }, // r2
+            .{ .weak_struct_set = .{ .target = 1, .layout = 0, .field = 0, .value = 2 } }, // r3
+            .{ .ret = null }, // r4
+        },
+        .result_types = &.{ optional_list, .{ .strukt = 0 }, optional_list, .{ .strukt = 0 }, .none },
+        .blocks = &.{&.{ 0, 1, 2, 3, 4 }},
+        .locals = &.{.{ .name = "observed", .local_type = optional_list, .weak = true }},
+    });
+    defer fields.deinit();
+    const arena = fields.arena.allocator();
+    fields.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .i64 }});
+    fields.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Observer",
+        .fields = try arena.dupe(types.StructField, &.{.{
+            .name = "target",
+            .field_type = optional_list,
+            .weak = true,
+        }}),
+    }});
+    try verify_mod.verify(testing.allocator, &fields);
+
+    fields.functions[0].instructions[2] = .{ .struct_get = .{ .target = 1, .layout = 0, .field = 0 } };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &fields));
+    fields.functions[0].instructions[2] = .{ .weak_struct_get = .{ .target = 1, .layout = 0, .field = 0 } };
+    fields.functions[0].instructions[3] = .{ .struct_set = .{ .target = 1, .layout = 0, .field = 0, .value = 2 } };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &fields));
+    fields.functions[0].instructions[3] = .{ .weak_struct_set = .{
+        .target = 1,
+        .layout = 0,
+        .field = 0,
+        .value = 2,
+    } };
+    fields.structs[0].fields[0].weak = false;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &fields));
+    fields.structs[0].fields[0].weak = true;
+    fields.structs[0].fields[0].field_type = .i64;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &fields));
+}
+
 fn expectForgedResult(program: *Program, register: Register) !void {
     program.functions[0].result_types[register] = .i64;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, program));
@@ -948,7 +1030,7 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     try verify_mod.verify(testing.allocator, &program);
 }
 
-test "spawn rejects worker parameters carrying functions or resources" {
+test "spawn rejects worker parameters carrying functions, resources, or weak storage" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();
     const arena = program.arena.allocator();
@@ -1006,9 +1088,23 @@ test "spawn rejects worker parameters carrying functions or resources" {
     // direct file/task parameter.
     program.heap_types[1] = .{ .list = .{ .heap = 2 } };
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // A weak handle is meaningful only in the runtime whose generation
+    // table created it.  Nest one inside an otherwise copyable list so a
+    // decoded module must prove the complete parameter graph.
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Observer",
+        .fields = try arena.dupe(types.StructField, &.{.{
+            .name = "target",
+            .field_type = .{ .optional = .{ .heap = 1 } },
+            .weak = true,
+        }}),
+    }});
+    program.heap_types[1] = .{ .list = .{ .strukt = 0 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
 }
 
-test "spawn rejects worker results carrying functions or resources" {
+test "spawn rejects worker results carrying functions, resources, or weak storage" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();
     const arena = program.arena.allocator();
@@ -1055,6 +1151,17 @@ test "spawn rejects worker results carrying functions or resources" {
     // A returned resource is just as invalid as a resource argument: the
     // wait would have to re-own a file or task made by another runtime.
     program.heap_types[1] = .{ .list = .{ .heap = 2 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Observer",
+        .fields = try arena.dupe(types.StructField, &.{.{
+            .name = "target",
+            .field_type = .{ .optional = .{ .heap = 1 } },
+            .weak = true,
+        }}),
+    }});
+    program.heap_types[1] = .{ .list = .{ .strukt = 0 } };
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
 }
 

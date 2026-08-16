@@ -222,6 +222,10 @@ pub const TrapCode = enum {
     /// directly or through one of its descendants.  Appended so every
     /// earlier trap keeps its wire ordinal.
     ownership_cycle,
+    /// Damaged MIR or a hostile runtime caller attempted to create or load
+    /// weak storage from something other than a supported ARC object.
+    /// Source programs are refused earlier with `luce.sema.weak.target`.
+    invalid_weak_target,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -247,6 +251,7 @@ pub const TrapCode = enum {
             .allocation_failed => "not enough memory for this container",
             .immutable_object => "constant container is immutable",
             .ownership_cycle => "attempted store would create an ownership cycle",
+            .invalid_weak_target => "invalid weak-reference target",
         };
     }
 };

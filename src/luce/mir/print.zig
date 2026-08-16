@@ -16,11 +16,18 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
     errdefer text.deinit(allocator);
 
     for (program.structs) |layout| {
-        try appendPrint(&text, allocator, "struct {s}:\n", .{layout.name});
+        try appendPrint(&text, allocator, "{s} {s}:\n", .{
+            if (layout.reference) "class" else "struct",
+            layout.name,
+        });
         for (layout.fields) |field| {
             const field_type_name = try typeName(allocator, program, field.field_type);
             defer allocator.free(field_type_name);
-            try appendPrint(&text, allocator, "    {s}: {s}\n", .{ field.name, field_type_name });
+            try appendPrint(&text, allocator, "    {s}{s}: {s}\n", .{
+                if (field.weak) "weak " else "",
+                field.name,
+                field_type_name,
+            });
         }
     }
 
@@ -212,6 +219,8 @@ fn printInstruction(
             }),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),
+        .weak_local_get => |local| try appendPrint(text, allocator, "weak_local_get %{d}", .{local}),
+        .weak_local_set => |set| try appendPrint(text, allocator, "weak_local_set %{d}, r{d}", .{ set.local, set.value }),
         .binary => |binary| {
             const operand_type_name = try typeName(allocator, program, binary.operand_type);
             defer allocator.free(operand_type_name);
@@ -234,6 +243,17 @@ fn printInstruction(
             program.structs[get.layout].fields[get.field].name,
         }),
         .struct_set => |set| try appendPrint(text, allocator, "struct_set r{d}, {s}.{s}, r{d}", .{
+            set.target,
+            program.structs[set.layout].name,
+            program.structs[set.layout].fields[set.field].name,
+            set.value,
+        }),
+        .weak_struct_get => |get| try appendPrint(text, allocator, "weak_struct_get r{d}, {s}.{s}", .{
+            get.target,
+            program.structs[get.layout].name,
+            program.structs[get.layout].fields[get.field].name,
+        }),
+        .weak_struct_set => |set| try appendPrint(text, allocator, "weak_struct_set r{d}, {s}.{s}, r{d}", .{
             set.target,
             program.structs[set.layout].name,
             program.structs[set.layout].fields[set.field].name,

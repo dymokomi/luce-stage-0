@@ -572,6 +572,29 @@ pub const FunctionBuilder = struct {
         storage_class: StorageClass,
         span: Span,
     ) Error!?LocalId {
+        return self.declareLocalKind(name, local_type, mutable, storage_class, false, span);
+    }
+
+    /// Declare a zeroing non-owning local. The slot owns neither value
+    /// storage nor an object count; every read performs an owned upgrade.
+    pub fn declareWeakLocal(
+        self: *FunctionBuilder,
+        name: []const u8,
+        local_type: Type,
+        span: Span,
+    ) Error!?LocalId {
+        return self.declareLocalKind(name, local_type, true, .borrows, true, span);
+    }
+
+    fn declareLocalKind(
+        self: *FunctionBuilder,
+        name: []const u8,
+        local_type: Type,
+        mutable: bool,
+        storage_class: StorageClass,
+        weak: bool,
+        span: Span,
+    ) Error!?LocalId {
         if (isReserved(name) or std.mem.eql(u8, name, "evaluate")) {
             try self.fail("luce.sema.reserved", span, "{s} is a reserved name", .{name});
             return null;
@@ -591,11 +614,15 @@ pub const FunctionBuilder = struct {
         const owns = storage_class == .owns;
         const owns_storage = owns and shapes.ownsStorage(self.analyzer, local_type);
         const owns_objects = owns and shapes.carriesObjects(self.analyzer, local_type);
-        const local = try recorder.recordLocal(self, name, local_type, owns_storage, span);
+        const local = if (weak)
+            try recorder.recordWeakLocal(self, name, local_type, span)
+        else
+            try recorder.recordLocal(self, name, local_type, owns_storage, span);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), name, .{
             .local = local,
             .mutable = mutable,
+            .weak = weak,
             .declared_at = span,
         });
         if (owns_storage or owns_objects) {
@@ -1752,7 +1779,7 @@ pub const FunctionBuilder = struct {
                 // A narrowed local reads as its payload: the value is
                 // the same bits, and the flow analysis has already
                 // proved it is there.
-                if (local_type == .optional and flow.isNarrowed(self, local)) {
+                if (!found.info.weak and local_type == .optional and flow.isNarrowed(self, local)) {
                     const payload = local_type.held().?;
                     return .{
                         .node = try recorder.recordNode(self, .{ .narrowed_get = .{
@@ -1769,6 +1796,7 @@ pub const FunctionBuilder = struct {
                 return .{
                     .node = try recorder.recordNode(self, .{ .local_get = .{
                         .local = local,
+                        .weak = found.info.weak,
                         .result = local_type,
                         .span = name.span,
                     } }),

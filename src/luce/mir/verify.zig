@@ -99,14 +99,22 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         .task => |work| try verifyType(program, work.result),
     };
     for (program.structs) |layout| {
-        for (layout.fields) |field| try verifyFieldType(program, field.field_type, layout.interface);
+        if (layout.interface and layout.reference) return error.BadStruct;
+        for (layout.fields) |field| {
+            try verifyFieldType(program, field.field_type, layout.interface);
+            if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
+                return error.BadStruct;
+        }
     }
     for (program.variants) |declared| {
         // A union with no members has no zero and no tag to dispatch
         // on; stage 4 cannot write one, so this is decode defense.
         if (declared.members.len == 0) return error.BadStruct;
         for (declared.members) |member| {
-            for (member.fields) |field| try verifyFieldType(program, field.field_type, false);
+            for (member.fields) |field| {
+                if (field.weak) return error.BadStruct;
+                try verifyFieldType(program, field.field_type, false);
+            }
         }
     }
     if (try typeTableCycle(allocator, program)) |cycle| return switch (cycle) {
@@ -133,6 +141,11 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.functions) |*function| {
         if (function.parameter_count > function.locals.len) return error.BadLocal;
         for (function.locals, 0..) |local, index| {
+            if (local.weak) {
+                if (index < function.parameter_count or local.inout or local.owns_storage)
+                    return error.BadLocal;
+                if (!isWeakTarget(program, local.local_type)) return error.BadLocal;
+            }
             if (!local.inout) continue;
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
         }
@@ -165,6 +178,20 @@ fn isCommandLine(program: *const Program, of: Type) bool {
     if (of != .heap or of.heap >= program.heap_types.len) return false;
     const descriptor = program.heap_types[of.heap];
     return descriptor == .list and descriptor.list == .str;
+}
+
+fn isWeakTarget(program: *const Program, of: Type) bool {
+    const held = of.held() orelse return false;
+    return switch (held) {
+        .heap => |index| if (index >= program.heap_types.len)
+            false
+        else switch (program.heap_types[index]) {
+            .list, .map, .array, .builder => true,
+            .file, .task => false,
+        },
+        .strukt => |index| index < program.structs.len and program.structs[index].reference,
+        else => false,
+    };
 }
 
 fn verifyType(program: *const Program, of: Type) VerifyError!void {
@@ -714,6 +741,7 @@ fn verifyConstantValue(
             const layout = program.structs[held.layout];
             if (held.fields.len != layout.fields.len) return error.BadConstant;
             for (held.fields, layout.fields) |field, declared| {
+                if (declared.weak and field != .absent) return error.BadConstant;
                 try verifyConstantValue(program, field, declared.field_type, true, depth + 1);
             }
         },
@@ -833,11 +861,24 @@ fn verifyInstruction(
         },
         .local_get => |local| {
             if (local >= function.locals.len) return error.BadLocal;
+            if (function.locals[local].weak) return error.BadLocal;
             try expectType(result, function.locals[local].local_type);
         },
         .local_set => |set| {
             try expectType(result, .none);
             if (set.local >= function.locals.len) return error.BadLocal;
+            if (function.locals[set.local].weak) return error.BadLocal;
+            const value = try operandType(function, defined, set.value);
+            try expectType(value, function.locals[set.local].local_type);
+        },
+        .weak_local_get => |local| {
+            if (local >= function.locals.len or !function.locals[local].weak) return error.BadLocal;
+            try expectType(result, function.locals[local].local_type);
+        },
+        .weak_local_set => |set| {
+            try expectType(result, .none);
+            if (set.local >= function.locals.len or !function.locals[set.local].weak)
+                return error.BadLocal;
             const value = try operandType(function, defined, set.value);
             try expectType(value, function.locals[set.local].local_type);
         },
@@ -960,6 +1001,7 @@ fn verifyInstruction(
             if (get.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[get.layout];
             if (get.field >= layout.fields.len) return error.BadStruct;
+            if (layout.fields[get.field].weak) return error.BadStruct;
             const target = try operandType(function, defined, get.target);
             try expectType(target, .{ .strukt = get.layout });
             try expectType(result, layout.fields[get.field].field_type);
@@ -968,6 +1010,27 @@ fn verifyInstruction(
             if (set.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[set.layout];
             if (set.field >= layout.fields.len) return error.BadStruct;
+            if (layout.fields[set.field].weak) return error.BadStruct;
+            const target = try operandType(function, defined, set.target);
+            try expectType(target, .{ .strukt = set.layout });
+            const value = try operandType(function, defined, set.value);
+            try expectType(value, layout.fields[set.field].field_type);
+            try expectType(result, .{ .strukt = set.layout });
+        },
+        .weak_struct_get => |get| {
+            if (get.layout >= program.structs.len) return error.BadStruct;
+            const layout = program.structs[get.layout];
+            if (get.field >= layout.fields.len or !layout.fields[get.field].weak)
+                return error.BadStruct;
+            const target = try operandType(function, defined, get.target);
+            try expectType(target, .{ .strukt = get.layout });
+            try expectType(result, layout.fields[get.field].field_type);
+        },
+        .weak_struct_set => |set| {
+            if (set.layout >= program.structs.len) return error.BadStruct;
+            const layout = program.structs[set.layout];
+            if (set.field >= layout.fields.len or !layout.fields[set.field].weak)
+                return error.BadStruct;
             const target = try operandType(function, defined, set.target);
             try expectType(target, .{ .strukt = set.layout });
             const value = try operandType(function, defined, set.value);
@@ -1053,13 +1116,15 @@ fn verifyInstruction(
             // borrowed receiver with no valid owner on the far side).
             for (callee.locals[0..callee.parameter_count]) |parameter| {
                 if (try typeCarriesWorker(allocator, program, parameter.local_type, .resource) or
-                    try typeCarriesWorker(allocator, program, parameter.local_type, .function))
+                    try typeCarriesWorker(allocator, program, parameter.local_type, .function) or
+                    try typeCarriesWorker(allocator, program, parameter.local_type, .weak))
                 {
                     return error.BadFunction;
                 }
             }
             if (try typeCarriesWorker(allocator, program, callee.return_type, .resource) or
-                try typeCarriesWorker(allocator, program, callee.return_type, .function))
+                try typeCarriesWorker(allocator, program, callee.return_type, .function) or
+                try typeCarriesWorker(allocator, program, callee.return_type, .weak))
             {
                 return error.BadFunction;
             }
@@ -1946,6 +2011,7 @@ fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) 
                 if (seen[layout]) continue;
                 seen[layout] = true;
                 for (program.structs[layout].fields) |field| {
+                    if (field.weak) return true;
                     try pending.append(allocator, field.field_type);
                 }
             },
@@ -1985,7 +2051,7 @@ fn typeCanOwnStorage(of: Type) bool {
     };
 }
 
-const WorkerCarry = enum { resource, function };
+const WorkerCarry = enum { resource, function, weak };
 
 /// Whether a type graph contains a value that cannot cross a worker
 /// boundary.  The source checker asks the same question through
@@ -2025,6 +2091,7 @@ fn typeCarriesWorker(
                 if (seen_structs[index]) continue;
                 seen_structs[index] = true;
                 for (program.structs[index].fields) |field| {
+                    if (field.weak and sought == .weak) return true;
                     try pending.append(allocator, field.field_type);
                 }
             },

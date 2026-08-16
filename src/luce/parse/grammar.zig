@@ -1409,6 +1409,19 @@ pub const Parser = struct {
         functions: *std.ArrayList(ast.FuncDecl),
         visibility: ast.Visibility,
     ) Error!void {
+        const weak_marker = self.accept(.keyword_weak);
+        if (weak_marker != null and
+            (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static))
+        {
+            try self.report(
+                "luce.parse.weak",
+                weak_marker.?.span,
+                "weak modifies stored fields, not methods",
+                .{},
+            );
+            self.recover();
+            return;
+        }
         if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
             const declaration = if (self.peekKind() == .keyword_static)
                 try self.staticFuncDecl()
@@ -1455,8 +1468,12 @@ pub const Parser = struct {
             .name_span = field_name.span,
             .type_name = field_type,
             .default = default_value,
+            .weak = weak_marker != null,
             .visibility = visibility,
-            .span = .{ .start = field_name.span.start, .end = written_end },
+            .span = .{
+                .start = if (weak_marker) |marker| marker.span.start else field_name.span.start,
+                .end = written_end,
+            },
         });
     }
 
@@ -1497,6 +1514,7 @@ pub const Parser = struct {
                 try self.markerInRegion(word);
                 if (self.peekKind() == .keyword_func or
                     self.peekKind() == .keyword_static or
+                    self.peekKind() == .keyword_weak or
                     self.peekKind() == .identifier)
                 {
                     try self.structMember(fields, functions, visibility);
@@ -1533,6 +1551,7 @@ pub const Parser = struct {
             .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .keyword_static => if (self.peekAhead(1) == .keyword_func and
                 self.peekAhead(2) == .identifier) self.tokenAhead(2) else null,
+            .keyword_weak => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .identifier => self.peek(),
             else => null,
         };
@@ -2160,6 +2179,7 @@ pub const Parser = struct {
         switch (self.peekKind()) {
             .keyword_let => return self.binding(false),
             .keyword_var => return self.binding(true),
+            .keyword_weak => return self.weakBinding(),
             .keyword_const => {
                 try self.report(
                     "luce.parse.expected",
@@ -2234,11 +2254,48 @@ pub const Parser = struct {
 
     fn binding(self: *Parser, mutable: bool) Error!?ast.Statement {
         const start = self.advance(); // let or var
+        return self.bindingAfter(start, mutable, false);
+    }
+
+    /// A weak slot is observable mutable state: the runtime writes `none`
+    /// when the target's last strong reference dies. Keeping `var` explicit
+    /// makes that fact visible in source and gives `weak let` one precise
+    /// diagnostic.
+    fn weakBinding(self: *Parser) Error!?ast.Statement {
+        const start = self.advance(); // weak
+        if (self.peekKind() == .keyword_let) {
+            const immutable = self.advance();
+            try self.report(
+                "luce.parse.weak",
+                .{ .start = start.span.start, .end = immutable.span.end },
+                "weak storage changes to none when its target dies; write 'weak var', not 'weak let'",
+                .{},
+            );
+            self.recover();
+            return null;
+        }
+        if ((try self.expect(.keyword_var, "'var' after 'weak'")) == null) return null;
+        return self.bindingAfter(start, true, true);
+    }
+
+    fn bindingAfter(self: *Parser, start: Token, mutable: bool, weak: bool) Error!?ast.Statement {
         const name = (try self.expect(.identifier, "a binding name")) orelse return null;
         try self.refuseWildcardName(name);
         // `let low, high = minmax(xs)` — a destructuring bind.  An
         // existing-name assignment uses its own statement path below.
-        if (self.peekKind() == .comma) return self.destructure(start, name, mutable);
+        if (self.peekKind() == .comma) {
+            if (weak) {
+                try self.report(
+                    "luce.parse.weak",
+                    start.span,
+                    "weak storage declares one explicitly typed place; declare each weak variable separately",
+                    .{},
+                );
+                self.recover();
+                return null;
+            }
+            return self.destructure(start, name, mutable);
+        }
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
@@ -2266,6 +2323,7 @@ pub const Parser = struct {
                 .name_span = name.span,
                 .annotation = annotation,
                 .value = null,
+                .weak = weak,
                 .span = .{ .start = start.span.start, .end = annotation.?.span.end },
             } };
         }
@@ -2310,6 +2368,7 @@ pub const Parser = struct {
                 .name_span = name.span,
                 .annotation = annotation,
                 .value = value,
+                .weak = weak,
                 .span = span,
             } };
         }
@@ -3091,6 +3150,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_const => "the keyword 'const'",
         .keyword_let => "the keyword 'let'",
         .keyword_var => "the keyword 'var'",
+        .keyword_weak => "the keyword 'weak'",
         .keyword_if => "the keyword 'if'",
         .keyword_elif => "the keyword 'elif'",
         .keyword_else => "the keyword 'else'",

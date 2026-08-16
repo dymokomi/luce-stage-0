@@ -58,6 +58,9 @@ pub const Kind = enum {
     keyword_const,
     keyword_let,
     keyword_var,
+    /// `weak var name: T?` and `weak field: T?` declare zeroing,
+    /// non-owning storage. `weak` never names a type or an expression.
+    keyword_weak,
     keyword_if,
     keyword_elif,
     keyword_else,
@@ -201,6 +204,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "const", .kind = .keyword_const },
     .{ .word = "let", .kind = .keyword_let },
     .{ .word = "var", .kind = .keyword_var },
+    .{ .word = "weak", .kind = .keyword_weak },
     .{ .word = "if", .kind = .keyword_if },
     .{ .word = "elif", .kind = .keyword_elif },
     .{ .word = "else", .kind = .keyword_else },

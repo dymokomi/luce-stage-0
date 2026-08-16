@@ -872,7 +872,15 @@ const Module = struct {
         defer fields.deinit(self.gpa);
         for (layout.fields) |field| {
             // The analyzer rejects struct cycles, so this bottoms out.
-            try fields.append(self.gpa, try self.zeroField(field.field_type));
+            try fields.append(self.gpa, if (field.weak)
+                try self.constantBox(
+                    .weak,
+                    0,
+                    try self.builder.intConst(.i64, runtime.null_index),
+                    0,
+                )
+            else
+                try self.zeroField(field.field_type));
         }
 
         const run_type = try self.builder.arrayType(layout.fields.len, self.value_type);
@@ -1123,7 +1131,17 @@ const Module = struct {
         var fields: std.ArrayList(Builder.Constant) = .empty;
         defer fields.deinit(self.gpa);
         for (folded.fields, layout.fields) |field, declared| {
-            try fields.append(self.gpa, try self.constantValue(field, declared.field_type));
+            if (declared.weak) {
+                if (field != .absent) return self.fail("a non-absent weak constant field");
+                try fields.append(self.gpa, try self.constantBox(
+                    .weak,
+                    0,
+                    try self.builder.intConst(.i64, runtime.null_index),
+                    0,
+                ));
+            } else {
+                try fields.append(self.gpa, try self.constantValue(field, declared.field_type));
+            }
         }
 
         const run_type = try self.builder.arrayType(fields.items.len, self.value_type);
@@ -2990,6 +3008,8 @@ const Body = struct {
                 .const_function,
                 .local_get,
                 .local_set,
+                .weak_local_get,
+                .weak_local_set,
                 .spawn,
                 .call_indirect,
                 .binary,
@@ -2998,6 +3018,8 @@ const Body = struct {
                 .struct_make,
                 .struct_get,
                 .struct_set,
+                .weak_struct_get,
+                .weak_struct_set,
                 .variant_make,
                 .variant_tag,
                 .variant_field,
@@ -3022,12 +3044,12 @@ const Body = struct {
     /// shape it always had, which is what keeps a String parameter's
     /// inner loop two words in registers.
     fn slotType(self: *Body, local: mir.Local) Error!Builder.Type {
-        if (local.owns_storage) return self.module.value_type;
+        if (local.owns_storage or local.weak) return self.module.value_type;
         return self.module.valueType(local.local_type);
     }
 
     fn slotAlignment(local: mir.Local) Builder.Alignment {
-        if (local.owns_storage) return value_alignment;
+        if (local.owns_storage or local.weak) return value_alignment;
         return Module.valueAlignment(local.local_type);
     }
 
@@ -3052,6 +3074,10 @@ const Body = struct {
         }
         for (function.locals, self.local_slots, 0..) |local, slot, index| {
             if (local.inout) continue;
+            if (local.weak) {
+                try self.fillWeakZero(slot);
+                continue;
+            }
             const stored = if (index < function.parameter_count)
                 self.wip.arg(@intCast(index + 3))
             else if (local.owns_storage)
@@ -3322,6 +3348,19 @@ const Body = struct {
         ));
         try self.storeBoxField(address, box_bits, try builder.intValue(.i64, 0));
         try self.storeBoxField(address, box_length, try builder.intValue(.i64, 0));
+    }
+
+    /// Initialize a physical weak slot to the null weak handle. The logical
+    /// type is `T?`, but this cell is never unboxed directly: dedicated weak
+    /// loads upgrade it first.
+    fn fillWeakZero(self: *Body, slot: Builder.Value) Error!void {
+        const builder = self.module.builder;
+        try self.storeBoxByte(slot, box_tag, try builder.intValue(
+            .i8,
+            @intFromEnum(runtime.Tag.weak),
+        ));
+        try self.storeBoxField(slot, box_bits, try builder.intValue(.i64, runtime.null_index));
+        try self.storeBoxField(slot, box_length, try builder.intValue(.i64, 0));
     }
 
     /// Element `index` of a run, filled with a value the run is going
@@ -5514,6 +5553,14 @@ const Body = struct {
                 );
             },
             .local_set => |set| try self.emitLocalSet(set.local, set.value),
+            .weak_local_get => |local| try self.callAnswering(register, .luce_rt_weak_load, &.{
+                self.runtime,
+                self.local_slots[local],
+            }),
+            .weak_local_set => |set| try self.emitWeakStore(
+                self.local_slots[set.local],
+                set.value,
+            ),
             .binary => |operation| try self.emitBinary(register, operation),
             .unary => |operation| try self.emitUnary(register, operation),
             .convert => |operand| try self.emitConvert(register, operand),
@@ -5533,6 +5580,16 @@ const Body = struct {
                     "field",
                 );
                 self.produced[register].box = address;
+            },
+            .weak_struct_get => |get| {
+                const address = try self.wip.gep(
+                    .inbounds,
+                    self.module.value_type,
+                    self.produced[get.target].value,
+                    &.{try self.module.builder.intValue(.i64, get.field)},
+                    "weak.field.at",
+                );
+                try self.callAnswering(register, .luce_rt_weak_load, &.{ self.runtime, address });
             },
             .variant_make => |make| try self.emitVariantMake(
                 register,
@@ -5578,6 +5635,16 @@ const Body = struct {
                 try self.module.builder.intValue(.i64, set.field),
                 try self.storageOf(set.value),
             }),
+            .weak_struct_set => |set| {
+                const weak = try self.scratch(self.module.value_type, value_alignment, "weak.field");
+                try self.emitWeakStore(weak, set.value);
+                try self.callAnswering(register, .luce_rt_struct_set, &.{
+                    self.runtime,
+                    try self.boxedRegister(set.target, "target"),
+                    try self.module.builder.intValue(.i64, set.field),
+                    weak,
+                });
+            },
             .call => |called| try self.emitCall(register, called),
             .call_inout => |called| try self.emitInoutCall(register, called),
             .spawn => |called| try self.emitSpawn(register, called),
@@ -5648,6 +5715,14 @@ const Body = struct {
         // byte has to say otherwise before the words are written.
         try self.fillBoxShape(slot, held.local_type);
         try self.fillBoxValue(slot, held.local_type, self.produced[value].value);
+    }
+
+    fn emitWeakStore(self: *Body, destination: Builder.Value, value: mir.Register) Error!void {
+        try self.callChecked(.luce_rt_weak_store, &.{
+            self.runtime,
+            try self.boxedRegister(value, "weak.source"),
+            destination,
+        });
     }
 
     // -- conversion and struct values ----------------------------------
@@ -5936,7 +6011,18 @@ const Body = struct {
             "fields",
         );
         for (fields, 0..) |field, index| {
-            try self.storedAt(run, index, field);
+            if (shape.fields[index].weak) {
+                const address = try self.wip.gep(
+                    .inbounds,
+                    self.module.value_type,
+                    run,
+                    &.{try self.module.builder.intValue(.i64, index)},
+                    "weak.field",
+                );
+                try self.emitWeakStore(address, field);
+            } else {
+                try self.storedAt(run, index, field);
+            }
         }
         try self.callAnswering(register, .luce_rt_struct_make, &.{
             self.runtime,
