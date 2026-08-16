@@ -260,16 +260,6 @@ pub const Host = struct {
             .print = cPrint,
             .trap = cTrap,
             .finished = cFinished,
-            // Retired at ABI version 12 (docs/BYTES.md R2): the whole-
-            // file text services are open-read-close over the byte
-            // channel inside `libluce_rt` now, and these three slots
-            // keep their positions without being filled.
-            .file_read = null,
-            .file_write = null,
-            // Retired at ABI version 17 (docs/FILESYSTEM.md D16): one
-            // bit could not tell "nothing is there" from "I was not
-            // allowed to look", and `path_kind` below asks properly.
-            .file_exists = null,
             .arg_count = cArgCount,
             .arg = cArg,
             .term_rows = cTermRows,
@@ -288,7 +278,6 @@ pub const Host = struct {
             .clock_ms = cClock,
             .sleep_ms = cSleep,
             .env = cEnv,
-            .file_append = null,
             .file_delete = cFileDelete,
             .file_rename = cFileRename,
             .dir_list = cDirList,
@@ -2286,16 +2275,9 @@ test "the C table offers every service, over the same implementation" {
     defer host.deinit();
 
     const table = host.table();
-    // Fail-closed is a property of the *host*, not of the table shape:
-    // loom withholds nothing it still offers, so no slot may be null —
-    // except the three the ABI **retired** at version 12, which are
-    // deliberately empty because nothing indexes them any more
-    // (docs/BYTES.md R2).  Naming them here rather than weakening the
-    // sweep is the point: a fourth one going quiet would be caught.
-    // `file_exists` joined them at version 17, for its own reason:
-    // one bit could not tell absence from refusal (docs/FILESYSTEM.md
-    // D16), and `path_kind` is what asks now.
-    const retired = [_][]const u8{ "file_read", "file_write", "file_append", "file_exists" };
+    // Fail-closed is a property of the host, not of the table shape.
+    // Loom fills every portable service; the backend-specific GPU/UI
+    // services are the only intentionally unavailable entries here.
     const unavailable = [_][]const u8{
         "gpu_backend",
         "ui_window_open",
@@ -2308,14 +2290,11 @@ test "the C table offers every service, over the same implementation" {
     };
     inline for (@typeInfo(abi.Host).@"struct".fields) |field| {
         if (@typeInfo(field.type) == .optional) {
-            var is_retired = false;
-            for (retired) |name| {
-                if (std.mem.eql(u8, name, field.name)) is_retired = true;
-            }
+            var is_unavailable = false;
             for (unavailable) |name| {
-                if (std.mem.eql(u8, name, field.name)) is_retired = true;
+                if (std.mem.eql(u8, name, field.name)) is_unavailable = true;
             }
-            if (is_retired) {
+            if (is_unavailable) {
                 try testing.expect(@field(table, field.name) == null);
             } else {
                 try testing.expect(@field(table, field.name) != null);
@@ -2339,9 +2318,8 @@ test "the C table offers every service, over the same implementation" {
     // be one `false` (docs/FILESYSTEM.md D16).
     try testing.expectEqual(@as(i64, 0), found_kind);
     var text: [*]const u8 = undefined;
-    // Writing and reading go through the byte channel now, which is
-    // the whole of ABI version 12: the retired whole-file slots are
-    // null above, and this is what stands in their place.
+    // Writing and reading go through the byte channel now; the obsolete
+    // whole-file callback fields no longer exist in the pre-1.0 ABI.
     var handle: i64 = 0;
     try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
         table.context,

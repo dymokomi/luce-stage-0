@@ -5901,7 +5901,7 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
     runtime.freeObject(table.asObject());
 }
 
-test "str and chr answer text that needs no allocation at all" {
+test "str answers numeric text that needs no allocation at all" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -5918,11 +5918,6 @@ test "str and chr answer text that needs no allocation at all" {
             try std.fmt.bufPrint(&digits, "{d}", .{number}),
             made.asStr(),
         );
-    }
-    // A codepoint is four bytes at the most.
-    for ([_]i64{ 0, 'a', 0x00e9, 0x10FFFF }) |code| {
-        const made = try text.chr(runtime, code);
-        try testing.expect(made.textIsInline());
     }
     // Text long enough to need one still allocates, and is released
     // like any other owned storage.
@@ -6020,8 +6015,6 @@ test "direct text primitives reject non-string values before decoding payloads" 
     runtime.pending = null;
     try expectTrap(.not_owned, runtime, text.parseF64(runtime, forged));
     runtime.pending = null;
-    try expectTrap(.not_owned, runtime, text.ord(runtime, forged));
-    runtime.pending = null;
 }
 
 test "the conversions round trip and refuse what they cannot represent" {
@@ -6062,14 +6055,6 @@ test "the conversions round trip and refuse what they cannot represent" {
     try testing.expect((try text.parseF64(runtime, Value.ofStr("inf"))).isNone());
     try testing.expect((try text.parseF64(runtime, Value.ofStr("nan"))).isNone());
     try testing.expect((try text.parseF64(runtime, Value.ofStr("zero"))).isNone());
-
-    try testing.expectEqualStrings(
-        "\xF0\x9F\x99\x82",
-        bench.made(try text.chr(runtime, 0x1F642)).asStr(),
-    );
-    try expectTrap(.bad_codepoint, runtime, text.chr(runtime, 0x110000));
-    try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofStr("\xF0\x9F\x99\x82"))).asI64());
-    try expectTrap(.bad_codepoint, runtime, text.ord(runtime, Value.ofStr("")));
 }
 
 test "integer arithmetic is checked and float arithmetic is IEEE" {
@@ -6440,8 +6425,6 @@ extern fn luce_rt_file_flush(
 extern fn luce_rt_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_parse_i64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_parse_f64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
-extern fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32;
-extern fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_struct_set(
     runtime: *Runtime,
     held: [*c]const Value,
@@ -7058,8 +7041,6 @@ test "C Value output pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_str(runtime, &held, null_out));
     try expectCNullValueTrap(runtime, luce_rt_parse_i64(runtime, &text_value, null_out));
     try expectCNullValueTrap(runtime, luce_rt_parse_f64(runtime, &text_value, null_out));
-    try expectCNullValueTrap(runtime, luce_rt_chr(runtime, 'v', null_out));
-    try expectCNullValueTrap(runtime, luce_rt_ord(runtime, &text_value, null_out));
 
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
@@ -7255,7 +7236,6 @@ test "C borrowed Value and array pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_str(runtime, null_value, &out));
     try expectCNullValueTrap(runtime, luce_rt_parse_i64(runtime, null_value, &out));
     try expectCNullValueTrap(runtime, luce_rt_parse_f64(runtime, null_value, &out));
-    try expectCNullValueTrap(runtime, luce_rt_ord(runtime, null_value, &out));
 
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, null_value, &held));
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, &held, null_value));

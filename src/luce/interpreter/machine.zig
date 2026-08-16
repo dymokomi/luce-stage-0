@@ -1869,8 +1869,6 @@ pub const Machine = struct {
             .parse_i64 => return text.parseI64(&self.runtime, registers[arguments[0]]),
             .parse_f64 => return text.parseF64(&self.runtime, registers[arguments[0]]),
             .parse_str => return text.parseStr(&self.runtime, registers[arguments[0]]),
-            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asI64()),
-            .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
             .string_slice => return text.slice(
                 &self.runtime,
                 registers[arguments[0]],

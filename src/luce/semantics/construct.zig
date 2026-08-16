@@ -992,11 +992,6 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "parse_str takes bytes");
             result = .{ .optional = .str };
         },
-        // Retired source builtins. Their opcodes remain readable in
-        // old and adversarial MIR, but no row in `builtins` can route
-        // source here.
-        .chr_code,
-        .ord_text,
         // Lowered from syntax or method calls, never from bare names.
         .own_storage,
         .drop_storage,

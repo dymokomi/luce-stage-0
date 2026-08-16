@@ -1039,11 +1039,6 @@ pub const Capture = struct {
             .print = if (provided.print) print else null,
             .trap = reportTrap,
             .finished = finished,
-            .file_read = if (provided.files) fileRead else null,
-            .file_write = if (provided.files) fileWrite else null,
-            // Retired at ABI 17 (docs/FILESYSTEM.md D16); `path_kind`
-            // below is what asks the question now.
-            .file_exists = null,
             .arg_count = if (provided.arguments) argCount else null,
             .arg = if (provided.arguments) argAt else null,
             .term_rows = if (provided.terminal) termRows else null,
@@ -1056,7 +1051,6 @@ pub const Capture = struct {
             .term_event_data = if (provided.terminal) termEventData else null,
             .key_read = if (provided.terminal) keyRead else null,
             .raised = raised,
-            .file_append = if (provided.files) fileAppend else null,
             .file_delete = if (provided.files) fileDelete else null,
             .file_rename = if (provided.files) fileRename else null,
             .dir_list = if (provided.files) dirList else null,
@@ -1175,33 +1169,6 @@ pub const Capture = struct {
         of(context).exit_status = status;
     }
 
-    fn fileRead(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        const found = of(context).world.read(path[0..@intCast(path_length)]) orelse return .no;
-        text.* = found.ptr;
-        length.* = @intCast(found.len);
-        return .yes;
-    }
-
-    fn fileWrite(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const wrote = of(context).world.write(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (wrote) .yes else .no;
-    }
-
     fn pathKind(
         context: ?*anyopaque,
         path: [*]const u8,
@@ -1289,20 +1256,6 @@ pub const Capture = struct {
         text.* = pressed.text.ptr;
         text_length.* = @intCast(pressed.text.len);
         return .yes;
-    }
-
-    fn fileAppend(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const added = of(context).world.append(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (added) .yes else .no;
     }
 
     fn fileDelete(

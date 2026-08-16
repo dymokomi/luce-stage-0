@@ -248,7 +248,11 @@ const trace = @import("../runtime/trace.zig");
 /// 23 — nominal class instances add three runtime services for consuming
 /// construction, borrowed field reads, and shared in-place field writes.
 /// The value representation stays an ordinary ARC object handle.
-pub const version: u32 = 23;
+///
+/// 24 — the pre-1.0 table is compacted. Four services already replaced by
+/// the byte-handle channel (`file_read`, `file_write`, `file_append`, and
+/// `file_exists`) leave the layout instead of surviving as null tombstones.
+pub const version: u32 = 24;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -448,49 +452,6 @@ pub const ShellRunFn = *const fn (
     length: *i64,
 ) callconv(.c) Answer;
 
-/// Read a whole file.  `yes` fills `text`/`length` with bytes borrowed
-/// for the duration of the call; `no` means the read failed and the
-/// program traps `file_read_failed`.
-///
-/// **Retired at version 12** (docs/BYTES.md R2), along with
-/// `FileWriteFn` and `FileAppendFn`.  The slot keeps its position
-/// because the table is append-only, but nothing calls it: `file_read`
-/// is open-read-close over the handle channel plus `libluce_rt`'s own
-/// UTF-8 validation, and the hosts in this tree leave the slot null.
-pub const FileReadFn = *const fn (
-    context: ?*anyopaque,
-    path: [*]const u8,
-    path_length: i64,
-    text: *[*]const u8,
-    length: *i64,
-) callconv(.c) Answer;
-
-/// Write a whole file.  `no` is the answer `file_write` gives the
-/// program as `false`, not a trap: a program may ask whether a write
-/// worked.
-pub const FileWriteFn = *const fn (
-    context: ?*anyopaque,
-    path: [*]const u8,
-    path_length: i64,
-    content: [*]const u8,
-    content_length: i64,
-) callconv(.c) Answer;
-
-/// Whether a file exists.  `no` is the program-visible `false`.
-///
-/// **Retired at version 17** (docs/FILESYSTEM.md D16).  The type and
-/// the slot keep their positions, because the table is append-only and
-/// a field that never moves is a loader that never has to guess — but
-/// nothing indexes it and the hosts in this tree leave it null.  It is
-/// here as a record of a shape rather than as a service: one bit
-/// cannot tell "nothing is there" from "I was not allowed to look",
-/// and `path_kind` is what asks the question properly.
-pub const FileExistsFn = *const fn (
-    context: ?*anyopaque,
-    path: [*]const u8,
-    path_length: i64,
-) callconv(.c) Answer;
-
 /// How many program arguments there are.  Cannot fail, so it answers
 /// the count directly rather than an `Answer`.
 pub const ArgCountFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
@@ -614,16 +575,6 @@ pub const ClockFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 pub const SleepFn = *const fn (
     context: ?*anyopaque,
     milliseconds: i64,
-) callconv(.c) Answer;
-
-/// Append to a file, creating it if it is not there.  `no` is the
-/// world saying no, which the program meets as `io_failed`.
-pub const FileAppendFn = *const fn (
-    context: ?*anyopaque,
-    path: [*]const u8,
-    path_length: i64,
-    content: [*]const u8,
-    content_length: i64,
 ) callconv(.c) Answer;
 
 /// Remove a file.  `no` on anything that left the file there,
@@ -911,9 +862,6 @@ pub const Host = extern struct {
     /// run that opened a runtime, including a trap or uncaught error.
     /// Exhaustion has no census and does not call this slot.
     finished: ?FinishedFn = null,
-    file_read: ?FileReadFn = null,
-    file_write: ?FileWriteFn = null,
-    file_exists: ?FileExistsFn = null,
     arg_count: ?ArgCountFn = null,
     arg: ?ArgFn = null,
     term_rows: ?TermSizeFn = null,
@@ -928,27 +876,19 @@ pub const Host = extern struct {
     /// effect: a policy the host sets, like the interpreter's budget.
     call_depth: ?CallDepthFn = null,
     /// Required — the other way a run can end (docs/FAILURE.md).
-    /// Appended rather than placed beside `trap`, because every field
-    /// before it keeps the offset it had.
     raised: RaisedFn,
-    /// The nine that arrived at version 8, appended in one run for the
-    /// same reason as everything above them: a field that never moves
-    /// is a loader that never has to guess.  All optional, all
-    /// fail-closed.
+    /// Optional services fail closed when absent.
     read_line: ?ReadLineFn = null,
     print_error: ?PrintFn = null,
     clock_ms: ?ClockFn = null,
     sleep_ms: ?SleepFn = null,
     env: ?EnvFn = null,
-    file_append: ?FileAppendFn = null,
     file_delete: ?FileDeleteFn = null,
     file_rename: ?FileRenameFn = null,
     dir_list: ?DirListFn = null,
-    /// Version 10: the program's chosen end, appended like everything
-    /// before it so no field moves.
+    /// The program's chosen exit status.
     exited: ?ExitedFn = null,
-    /// Version 11: the machine's own facts, behind `std.os`.  Bytes,
-    /// bytes, and a count — appended in one run, for one subject.
+    /// The machine's own facts, behind `std.os`.
     os_total_memory: ?MachineFactFn = null,
     os_available_memory: ?MachineFactFn = null,
     os_cpu_count: ?MachineFactFn = null,
@@ -1014,54 +954,50 @@ pub const Slot = enum(u32) {
     print = 1,
     trap = 2,
     finished = 3,
-    file_read = 4,
-    file_write = 5,
-    file_exists = 6,
-    arg_count = 7,
-    arg = 8,
-    term_rows = 9,
-    term_cols = 10,
-    term_clear = 11,
-    term_move = 12,
-    term_style = 13,
-    term_write = 14,
-    term_flush = 15,
-    key_read = 16,
-    call_depth = 17,
-    raised = 18,
-    read_line = 19,
-    print_error = 20,
-    clock_ms = 21,
-    sleep_ms = 22,
-    env = 23,
-    file_append = 24,
-    file_delete = 25,
-    file_rename = 26,
-    dir_list = 27,
-    exited = 28,
-    os_total_memory = 29,
-    os_available_memory = 30,
-    os_cpu_count = 31,
-    handle_open = 32,
-    handle_read = 33,
-    handle_write = 34,
-    handle_flush = 35,
-    handle_close = 36,
-    worker_spawn = 37,
-    worker_join = 38,
-    shell_run = 39,
-    term_event_data = 40,
-    dir_create = 41,
-    epoch_ms = 42,
-    path_kind = 43,
-    gpu_backend = 44,
-    ui_window_open = 45,
-    ui_window_surface = 46,
-    gpu_surface_size = 47,
-    gpu_surface_clear = 48,
-    gpu_surface_fill_rect = 49,
-    gpu_surface_present = 50,
-    gpu_close = 51,
+    arg_count = 4,
+    arg = 5,
+    term_rows = 6,
+    term_cols = 7,
+    term_clear = 8,
+    term_move = 9,
+    term_style = 10,
+    term_write = 11,
+    term_flush = 12,
+    key_read = 13,
+    call_depth = 14,
+    raised = 15,
+    read_line = 16,
+    print_error = 17,
+    clock_ms = 18,
+    sleep_ms = 19,
+    env = 20,
+    file_delete = 21,
+    file_rename = 22,
+    dir_list = 23,
+    exited = 24,
+    os_total_memory = 25,
+    os_available_memory = 26,
+    os_cpu_count = 27,
+    handle_open = 28,
+    handle_read = 29,
+    handle_write = 30,
+    handle_flush = 31,
+    handle_close = 32,
+    worker_spawn = 33,
+    worker_join = 34,
+    shell_run = 35,
+    term_event_data = 36,
+    dir_create = 37,
+    epoch_ms = 38,
+    path_kind = 39,
+    gpu_backend = 40,
+    ui_window_open = 41,
+    ui_window_surface = 42,
+    gpu_surface_size = 43,
+    gpu_surface_clear = 44,
+    gpu_surface_fill_rect = 45,
+    gpu_surface_present = 46,
+    gpu_close = 47,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

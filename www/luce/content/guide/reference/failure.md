@@ -43,13 +43,12 @@ handler.
 | `shift_out_of_range` | shift count out of range | A shift count is negative or at least the operand width. |
 | `allocation_failed` | not enough memory for this container | The allocator cannot create container or resource storage. |
 | `immutable_object` | constant container is immutable | A write reaches a file-scope constant container through hidden provenance. |
-| `ownership_cycle` | attempted store would create an ownership cycle | Reserved stable code from the retired manual-ownership model; current source does not raise it. |
 | `invalid_weak_target` | invalid weak-reference target | Damaged MIR asks the runtime to weaken a value or resource, or to upgrade something that is not weak storage. Correct source is rejected earlier. |
 | `class_resurrection` | deinit cannot create a new strong self reference | A class finalizer attempts to make its dying object strongly reachable again. Correct source is rejected at compile time; the runtime code defends damaged MIR. |
 
 `use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
 runtime's broad *object* wording; a handle may also be a `file` or `task`.
-`not_owned`, `ownership_cycle`, `invalid_weak_target`, and
+`not_owned`, `invalid_weak_target`, and
 `class_resurrection` remain defensive runtime vocabulary; correctly compiled
 current source does not produce them.
 

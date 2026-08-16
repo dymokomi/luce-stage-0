@@ -1782,16 +1782,6 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .bytes);
             try expectType(result, .{ .optional = .str });
         },
-        .chr_code => {
-            try exactly(arguments, 1);
-            try expectType(arguments[0], .i64);
-            try expectType(result, .str);
-        },
-        .ord_text => {
-            try exactly(arguments, 1);
-            try expectType(arguments[0], .str);
-            try expectType(result, .i64);
-        },
         .print, .term_write => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);

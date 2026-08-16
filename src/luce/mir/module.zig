@@ -207,7 +207,11 @@ pub const magic = "LUCE";
 /// set; numeric parsing is named for its exact result (`parse_i64` and
 /// `parse_f64`); and the public text trap names become `str_bounds` and
 /// `str_boundary`. These changes alter serialized enum ordinals or names.
-pub const format_version: u32 = 54;
+///
+/// 55 — dead `chr_code` and `ord_text` intrinsics leave the wire set; their
+/// work is performed by checked scalar conversions. The unused
+/// `ownership_cycle` trap from the manual-ownership design leaves as well.
+pub const format_version: u32 = 55;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2140,8 +2144,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 53 -> 54: the obsolete cross-family numeric comparison intrinsic is
     // removed, numeric parsing names its exact result widths, and the
     // text-boundary trap names use the public `str` vocabulary.
-    try testing.expectEqual(@as(u32, 54), format_version);
-    try testing.expectEqual(@as(u64, 12373355455909797561), hasher.final());
+    // 54 -> 55: the dead `chr_code` and `ord_text` intrinsics and the
+    // retired manual-ownership `ownership_cycle` trap are removed.
+    try testing.expectEqual(@as(u32, 55), format_version);
+    try testing.expectEqual(@as(u64, 8342519655480777746), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

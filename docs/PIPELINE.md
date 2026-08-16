@@ -116,7 +116,7 @@ instructions, ownership claims, worker boundaries, and control flow before
 either execution path receives a program.
 
 `mir/module.zig` encodes the verified front-end handoff. The current
-`format_version` is **54**. The format includes explicit-width types, weak
+`format_version` is **55**. The format includes explicit-width types, weak
 storage, class reference layouts and deinitializers, closure-only layouts, and
 boxed non-owning closure bridges. It is a cache seam, not a stable distribution
 format: incompatible modules recompile from source.
@@ -148,7 +148,7 @@ object. Application code links that object with `libluce_rt` into an
 executable or `.lc` library.
 
 Generated code reaches host effects only through the versioned table in
-`codegen/abi.zig`. The current host ABI version is **23**. Internal runtime
+`codegen/abi.zig`. The current host ABI version is **24**. Internal runtime
 changes do not bump it; changing a table field, order, signature, or published
 value representation does. Before 1.0, a coherent change may remove or reorder
 fields; every host and generated slot moves atomically, and stale artifacts are

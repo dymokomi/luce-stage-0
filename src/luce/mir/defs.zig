@@ -193,8 +193,6 @@ pub const Intrinsic = enum {
     /// or another string, which is why the validator behind it is
     /// `libluce_rt`'s and not a host's.
     parse_str,
-    chr_code,
-    ord_text,
     print,
     file_read,
     file_write,
@@ -535,8 +533,6 @@ pub const Intrinsic = enum {
             .parse_i64,
             .parse_f64,
             .parse_str,
-            .chr_code,
-            .ord_text,
             .own_storage,
             .drop_storage,
             .export_storage,
@@ -640,8 +636,6 @@ pub const Intrinsic = enum {
             .parse_i64,
             .parse_f64,
             .parse_str,
-            .chr_code,
-            .ord_text,
             .print,
             .term_rows,
             .term_cols,
@@ -682,12 +676,11 @@ pub const Intrinsic = enum {
     /// releasing where it dies (docs/STRINGS.md).
     pub fn makesFreshStorage(self: Intrinsic) bool {
         return switch (self) {
-            // `str` and `chr` allocate, as do the host services that
+            // `str` allocates, as do the host services that
             // answer text; `pop` takes the element's storage out of its
             // container, which leaves it owned by nobody; `copy`
             // duplicates; `own_storage` is the taking of a copy itself.
             .str_value,
-            .chr_code,
             .parse_str,
             .file_read,
             .key_read,
@@ -757,7 +750,6 @@ pub const Intrinsic = enum {
             .array_fill,
             .parse_i64,
             .parse_f64,
-            .ord_text,
             .print,
             .file_write,
             .file_append,
@@ -865,8 +857,6 @@ pub const Intrinsic = enum {
             .parse_i64,
             .parse_f64,
             .parse_str,
-            .chr_code,
-            .ord_text,
             .print,
             .file_read,
             .file_write,

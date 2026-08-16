@@ -222,13 +222,11 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .string_slice,
         .string_byte,
         .string_find_byte,
-        .ord_text,
         => .stable,
 
-        // Both make fresh owned text, so both have an identity
-        // (docs/STRINGS.md); `str` of a builder reads the heap on top
-        // of that.
-        .chr_code, .str_value, .bytes_value => .impure,
+        // These make fresh owned text, so each result has an identity
+        // (docs/STRINGS.md); `str` of a builder reads the heap too.
+        .str_value, .bytes_value => .impure,
 
         // Reads of the heap.  These *are* deterministic between two
         // mutations, and folding them is exactly the optimization LLVM
@@ -425,8 +423,6 @@ pub fn viewStable(instruction: Instruction) bool {
             .parse_i64,
             .parse_f64,
             .parse_str,
-            .chr_code,
-            .ord_text,
             .null_object,
             .none_value,
             .is_none,

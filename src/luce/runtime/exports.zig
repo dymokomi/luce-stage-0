@@ -1889,19 +1889,6 @@ pub export fn luce_rt_parse_f64(runtime: *Runtime, held: [*c]const Value, out: [
     return completed(runtime);
 }
 
-pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32 {
-    if (!requireValueOut(runtime, out)) return raised_trap;
-    out.* = text.chr(runtime, code) catch |mistake| return failed(runtime, mistake);
-    return completed(runtime);
-}
-
-pub export fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
-    if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireStringInput(runtime, held)) return raised_trap;
-    out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
-    return completed(runtime);
-}
-
 // ---------------------------------------------------------------------------
 // Operators
 // ---------------------------------------------------------------------------

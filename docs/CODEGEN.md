@@ -489,7 +489,7 @@ the instruction, their wire tags, and `immutable_object` moved the
 serialized module to **format 33**; none is a host service, so
 `abi.version` remains **13** at that point in the format history.
 Later host services and instruction changes moved both forward under
-the append-only discipline — the module format to **47** and the ABI
+their versioned layouts — the module format to **47** and the ABI
 to **19** — each bump refusing a stale artifact by name rather than
 migrating it.
 
@@ -561,8 +561,8 @@ convention: a store performed before an error remains visible while
 the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
 program-root constants then moved it to 33, and later host services
-and instruction changes carried both forward under the append-only
-discipline to the current **format 54** and **host ABI 23**.
+and instruction changes carried both forward to the current **format
+55** and **host ABI 24**.
 
 ## Call depth, and the trace a trap carries
 
@@ -1058,7 +1058,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/codegen/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **23**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **24**. A compiled artifact
 exports one symbol:
 
 ```c
@@ -1180,11 +1180,9 @@ they are one bump.  **UTF-8 validation left the host**: `file_read` is
 open-read-close over the channel plus `libluce_rt`'s own check, so the
 interpreter, a compiled artifact and every future host agree
 byte-for-byte on what "not text" means — that sentence used to live in
-`apps/host.zig`, where only loom could say it.  **The whole-file text
-slots retired**: `file_read`, `file_write` and `file_append` keep their
-positions and their signatures, because the table is append-only and
-nothing reorders, but no version-12 artifact indexes them and the
-hosts in this tree leave them null.  And **the channel is installed
+`apps/host.zig`, where only loom could say it. At ABI 12, the replaced
+whole-file callbacks became unused tombstones; ABI 24 removes those
+pre-1.0 fields entirely. And **the channel is installed
 rather than called through**: `luce_rt_files_install` hands the five
 pointers to the runtime once at the start of a run, and the runtime is
 what calls them.

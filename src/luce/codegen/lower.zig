@@ -471,9 +471,6 @@ const Module = struct {
             // the error and the one position it carries.
             .raised => builder.fnType(.void, &.{ .ptr, .i32, .ptr, .i64, .ptr }, .normal),
             .finished => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
-            .file_read => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
-            .file_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .i64 }, .normal),
-            .file_exists => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             // A path in, a kind code in an out-parameter, an answer
             // that may be "the world will not say".
             .path_kind => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr }, .normal),
@@ -496,7 +493,7 @@ const Module = struct {
             .print_error => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .clock_ms => builder.fnType(.i64, &.{.ptr}, .normal),
             .sleep_ms => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
-            .file_append, .file_rename => builder.fnType(
+            .file_rename => builder.fnType(
                 .i32,
                 &.{ .ptr, .ptr, .i64, .ptr, .i64 },
                 .normal,
@@ -7639,14 +7636,6 @@ const Body = struct {
                 try self.boxedRegister(of[0], "bytes"),
             }),
             .parse_f64 => try self.callAnswering(register, .luce_rt_parse_f64, &.{
-                rt,
-                try self.boxedRegister(of[0], "text"),
-            }),
-            .chr_code => try self.callAnswering(register, .luce_rt_chr, &.{
-                rt,
-                self.produced[of[0]].value,
-            }),
-            .ord_text => try self.callAnswering(register, .luce_rt_ord, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),

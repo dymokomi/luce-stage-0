@@ -188,10 +188,6 @@ pub const TrapCode = enum {
     /// through a borrow whose static provenance was no longer visible.
     /// Appended so every earlier trap keeps its wire ordinal.
     immutable_object,
-    /// A retaining store attempted to make an object own itself,
-    /// directly or through one of its descendants.  Appended so every
-    /// earlier trap keeps its wire ordinal.
-    ownership_cycle,
     /// Damaged MIR or a hostile runtime caller attempted to create or load
     /// weak storage from something other than a supported ARC object.
     /// Source programs are refused earlier with `luce.sema.weak.target`.
@@ -223,7 +219,6 @@ pub const TrapCode = enum {
             .shift_out_of_range => "shift count out of range",
             .allocation_failed => "not enough memory for this container",
             .immutable_object => "constant container is immutable",
-            .ownership_cycle => "attempted store would create an ownership cycle",
             .invalid_weak_target => "invalid weak-reference target",
             .class_resurrection => "deinit cannot create a new strong self reference",
         };

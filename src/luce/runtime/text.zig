@@ -333,30 +333,3 @@ pub fn parseF64(runtime: *Runtime, held: Value) Error!Value {
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
     return Value.ofF64(parsed);
 }
-
-/// `chr(code)` — one codepoint, UTF-8 encoded into fresh owned
-/// storage, sized to the encoding so the release gives back exactly
-/// what was taken.
-pub fn chr(runtime: *Runtime, code: i64) Error!Value {
-    if (code < 0 or code > 0x10FFFF) return runtime.fail(.bad_codepoint);
-    const codepoint: u21 = @intCast(code);
-    var buffer: [4]u8 = undefined;
-    const encoded_length = std.unicode.utf8Encode(codepoint, &buffer) catch
-        return runtime.fail(.bad_codepoint);
-    // Four bytes at the most, so a codepoint always fits in the value.
-    return Value.ofInlineText(.str, buffer[0..encoded_length]);
-}
-
-/// `ord(s)` — the first codepoint of `s`, or a trap when there is none
-/// or the bytes are not a whole sequence.
-pub fn ord(runtime: *Runtime, held: Value) Error!Value {
-    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asStr();
-    if (text.len == 0) return runtime.fail(.bad_codepoint);
-    const scalar_length = std.unicode.utf8ByteSequenceLength(text[0]) catch
-        return runtime.fail(.bad_codepoint);
-    if (text.len < scalar_length) return runtime.fail(.bad_codepoint);
-    const codepoint = std.unicode.utf8Decode(text[0..scalar_length]) catch
-        return runtime.fail(.bad_codepoint);
-    return Value.ofI64(codepoint);
-}

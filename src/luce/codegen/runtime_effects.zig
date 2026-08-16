@@ -226,8 +226,6 @@ pub const Service = enum {
     luce_rt_parse_i64,
     luce_rt_parse_f64,
     luce_rt_parse_str,
-    luce_rt_chr,
-    luce_rt_ord,
     luce_rt_bytes,
 
     // -- operators ----------------------------------------------------
@@ -947,7 +945,7 @@ pub fn describe(service: Service) Effect {
             .memory = reads_text,
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
         },
-        .luce_rt_parse_i64, .luce_rt_parse_f64, .luce_rt_ord => .{
+        .luce_rt_parse_i64, .luce_rt_parse_f64 => .{
             .memory = reads_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
@@ -967,11 +965,6 @@ pub fn describe(service: Service) Effect {
         .luce_rt_str => .{
             .memory = reads_heap_makes_text,
             .parameters = &.{ .run, .value_in, .value_out },
-        },
-        // `chr` takes the codepoint itself, not a boxed value.
-        .luce_rt_chr => .{
-            .memory = touches_text,
-            .parameters = &.{ .run, .plain, .value_out },
         },
         .luce_rt_bytes => .{
             .memory = reads_heap_makes_text,
