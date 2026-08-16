@@ -91,6 +91,7 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         .name,
         .int_literal,
         .float_literal,
+        .char_literal,
         .string_literal,
         .bool_literal,
         .none_literal,

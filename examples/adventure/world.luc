@@ -34,10 +34,10 @@ private const carried = -1
 private func article(name: str) -> str:
     if len(name) == 0:
         return "A"
-    let opening = name.byte_at(0)
-    if opening == 97 or opening == 101 or opening == 105:
+    let opening = name[0]
+    if opening == 'a' or opening == 'e' or opening == 'i':
         return "An"
-    if opening == 111 or opening == 117:
+    if opening == 'o' or opening == 'u':
         return "An"
     return "A"
 
@@ -69,7 +69,7 @@ struct Way:
         locked: bool = false
         needs: str = ""
 
-    # Half a door, and marked because f16 a door is not something a
+    # Half a door, and marked because half a door is not something a
     # story should be able to write: `Realm.link` below makes both
     # halves out of one line, and two halves written separately can
     # disagree about which of them is locked.

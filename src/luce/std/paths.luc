@@ -19,7 +19,7 @@
 
 # True when the path starts at the root.
 func is_absolute(path: str) -> bool:
-    return len(path) > 0 and path.byte_at(0) == 47
+    return len(path) > 0 and path[0] == '/'
 
 # head joined to tail with one separator at the seam.  An empty side
 # answers the other side alone; an absolute tail answers itself, the
@@ -34,10 +34,10 @@ func join(head: str, tail: str) -> str:
     if is_absolute(tail):
         return tail
     var end = len(head)
-    while end > 1 and head.byte_at(end - 1) == 47:
+    while end > 1 and head[end - 1] == '/':
         end -= 1
     let trimmed = head[0:end]
-    if trimmed.byte_at(len(trimmed) - 1) == 47:
+    if trimmed[len(trimmed) - 1] == '/':
         return trimmed + tail
     return trimmed + "/" + tail
 
@@ -68,12 +68,12 @@ func base(path: str) -> str:
     if len(path) == 0:
         return ""
     var end = len(path)
-    while end > 1 and path.byte_at(end - 1) == 47:
+    while end > 1 and path[end - 1] == '/':
         end -= 1
-    if end == 1 and path.byte_at(0) == 47:
+    if end == 1 and path[0] == '/':
         return "/"
     var start = end
-    while start > 0 and path.byte_at(start - 1) != 47:
+    while start > 0 and path[start - 1] != '/':
         start -= 1
     return path[start:end]
 
@@ -85,19 +85,19 @@ func dir(path: str) -> str:
     if len(path) == 0:
         return "."
     var end = len(path)
-    while end > 1 and path.byte_at(end - 1) == 47:
+    while end > 1 and path[end - 1] == '/':
         end -= 1
-    if end == 1 and path.byte_at(0) == 47:
+    if end == 1 and path[0] == '/':
         return "/"
     var start = end
-    while start > 0 and path.byte_at(start - 1) != 47:
+    while start > 0 and path[start - 1] != '/':
         start -= 1
     if start == 0:
         return "."
     var stop = start
-    while stop > 1 and path.byte_at(stop - 1) == 47:
+    while stop > 1 and path[stop - 1] == '/':
         stop -= 1
-    if stop == 1 and path.byte_at(0) == 47:
+    if stop == 1 and path[0] == '/':
         return "/"
     return path[0:stop]
 
@@ -107,7 +107,7 @@ func dir(path: str) -> str:
 func extension(path: str) -> str:
     let name = base(path)
     var at = len(name)
-    while at > 0 and name.byte_at(at - 1) != 46:
+    while at > 0 and name[at - 1] != '.':
         at -= 1
     if at <= 1:
         return ""

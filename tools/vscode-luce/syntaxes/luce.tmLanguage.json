@@ -51,7 +51,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.luce",
-          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_int|parse_float|parse_string|chr|ord)\\b"
+          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_int|parse_float|parse_str)\\b"
         },
         {
           "name": "support.function.builtin.host.luce",
@@ -444,6 +444,27 @@
               "match": "\\\\."
             }
           ]
+        },
+        {
+          "name": "constant.character.luce",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.character.begin.luce" }
+          },
+          "end": "(')|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.character.end.luce" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.luce",
+              "match": "\\\\(?:[nt\\\\'\"]|u\\{[0-9A-Fa-f]+\\})"
+            },
+            {
+              "name": "invalid.illegal.escape.luce",
+              "match": "\\\\."
+            }
+          ]
         }
       ]
     },
@@ -451,7 +472,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|u8|i16|i32|i64|f16|f32|f64|str|list|map|array|builder|file|task|None)\\b"
+          "match": "\\b(?:bool|u8|u16|u32|u64|i8|i16|i32|i64|f16|f32|f64|char|str|bytes|list|map|array|builder|file|task|None)\\b"
         },
         {
           "name": "entity.name.type.luce",

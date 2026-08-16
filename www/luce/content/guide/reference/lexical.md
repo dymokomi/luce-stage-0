@@ -77,7 +77,7 @@ func read_count() -> i64:
 
 ```output
 luce: compile failed
-main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name [luce.parse.expected]
+main.luc:2:9: _ is the array-shape wildcard, not a name (array[i64, _]); a binding needs a name [luce.parse.expected]
         let _ = read_count()
             ^
 ```
@@ -109,15 +109,15 @@ declaration using one is `luce.sema.reserved`.
 range                                                    None
 abs         min          max          clamp               sqrt
 floor       ceil         trunc        len                 byte_at
-assert      trap         parse_int    parse_float         chr
-ord         append       pop          insert              remove
-has         dim          print        file_read
-file_write  path_kind    key_read     key_text            error
-read_line   print_error  clock_ms     sleep_ms            env
-file_append file_delete  file_rename  dir_list            term_rows
-term_cols   term_clear   term_move    term_style          term_write
-term_flush  exit         os_total_memory os_available_memory os_cpu_count
-file_open   parse_string shell_run    term_event_data     dir_create
+assert      trap         parse_int    parse_float         append
+pop         insert       remove       has                 dim
+print       file_read    file_write   path_kind            key_read
+key_text    error        read_line    print_error          clock_ms
+sleep_ms    env          file_append file_delete          file_rename
+dir_list    term_rows    term_cols    term_clear           term_move
+term_style  term_write   term_flush   exit                 os_total_memory
+os_available_memory os_cpu_count file_open parse_str shell_run
+term_event_data dir_create
 epoch_ms    gpu_backend  ui_window_open  ui_window_surface
 gpu_surface_size  gpu_surface_clear  gpu_surface_fill_rect  gpu_surface_present
 ```
@@ -129,15 +129,15 @@ The historical method names `append`, `insert`, `pop`, `remove`, `has`,
 
 ## Number literals
 
-An unannotated integer literal has type `int`; an unannotated fraction
-or exponent literal has type `float`. A context can select another
+An unannotated integer literal has type `i64`; an unannotated fraction
+or exponent literal has type `f64`. A context can select another
 numeric type.
 
 ```
-12        int
-1.5       float
-1e10      float
-1.5e-3    float
+12        i64
+1.5       f64
+1e10      f64
+1.5e-3    f64
 ```
 
 Hexadecimal (`0xFF`) and binary (`0b1010`) integer literals are
@@ -158,13 +158,17 @@ rejected.
 | `\\` | backslash |
 | `\"` | double quote |
 
-Other escapes, including `\r`, `\0`, hexadecimal, and Unicode escapes,
-are invalid. Use `chr(...)` for a code point.
+Other string escapes, including `\r`, `\0`, hexadecimal, and Unicode
+escapes, are invalid.
+
+A character literal is one Unicode scalar in single quotes: `'A'`, `'λ'`,
+`'\n'`, or `'\u{1F44B}'`. Empty, multi-scalar, surrogate, and malformed
+literals are `luce.parse.char` errors.
 
 `f"..."` is an interpolated string. `{expression}` is converted with
-`string(...)`; `{{` and `}}` produce literal braces. A hole contains
+`str(...)`; `{{` and `}}` produce literal braces. A hole contains
 one expression and may contain nested string literals. A hole may end
-with `:.Nf`, which formats a `double` to N decimal places (rounded half
+with `:.Nf`, which formats an `f64` to N decimal places (rounded half
 away from zero) through `std.strings.format_float`; that form requires
 `import std.strings`. A colon inside brackets is part of a slice, so
 `f"{s[1:3]}"` is not a format spec. See [formatting](/guide/strings/#formatting-and-byte-conversion).
@@ -173,7 +177,7 @@ away from zero) through `std.strings.format_float`; that form requires
 
 ```
 +  -  *  /  %  //          arithmetic
-&  |  ^  ~  << >>          bitwise (int and long only)
+&  |  ^  ~  << >>          bitwise (all integer types)
 == != <  <= >  >=          comparison (non-associative)
 =  += -= *= /= //= %=      assignment
 &= |= ^= <<= >>=           bitwise assignment
@@ -219,8 +223,8 @@ A program has exactly one `main`, in one of these forms:
 ```
 func main():
 func main() -> !:
-func main(args: list(string)):
-func main(args: list(string)) -> !:
+func main(args: list[str]):
+func main(args: list[str]) -> !:
 ```
 
 There is no value result and no other parameter list. A missing or

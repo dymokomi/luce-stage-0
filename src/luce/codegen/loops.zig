@@ -265,9 +265,10 @@ fn writesPlainElement(
         .f16,
         .f32,
         .f64,
+        .char,
         .str,
         => true,
-        .none, .strukt, .variant, .heap, .optional => false,
+        .none, .bytes, .strukt, .variant, .heap, .optional => false,
         .enumeration => unreachable, // answered by storage() above
         .function => unreachable, // not an element type
     };

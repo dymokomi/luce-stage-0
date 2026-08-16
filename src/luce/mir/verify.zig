@@ -204,7 +204,9 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         .f16,
         .f32,
         .f64,
+        .char,
         .str,
+        .bytes,
         => {},
     }
 }
@@ -544,6 +546,10 @@ fn fitsInteger(held: i128, at: Type) bool {
     return held >= bounds.low and held <= bounds.high;
 }
 
+fn fitsChar(held: i128) bool {
+    return held >= 0 and held <= 0x10ffff and !(held >= 0xd800 and held <= 0xdfff);
+}
+
 /// The same question for a float constant carried as an `f64`.  A NaN
 /// is representable at either width and compares equal to nothing, so
 /// it is answered before the round trip rather than by it; an infinity
@@ -553,7 +559,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .f64 => true,
         .f32 => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .f16 => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
+        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
     };
 }
 
@@ -698,7 +704,9 @@ fn verifyConstantValue(
         },
         .float => |held| if (!fitsFloat(held, expected)) return error.BadConstant,
         .str => |index| {
-            if (expected != .str or index >= program.constants.len) return error.BadConstant;
+            if ((expected != .str and expected != .bytes) or index >= program.constants.len) {
+                return error.BadConstant;
+            }
         },
         .strukt => |held| {
             if (expected != .strukt or held.layout != expected.strukt) return error.BadConstant;
@@ -789,6 +797,10 @@ fn verifyInstruction(
         // representable where it lands, or the constant and its type
         // would disagree about which number this is.
         .const_integer => |held| {
+            if (result == .char) {
+                if (!fitsChar(held)) return error.BadConstant;
+                return;
+            }
             if (result == .enumeration) {
                 if (!fitsInteger(held, result.storage())) return error.BadConstant;
                 if (!isMember(program, held, result)) return error.BadConstant;
@@ -803,7 +815,7 @@ fn verifyInstruction(
         },
         .const_str => |constant| {
             if (constant >= program.constants.len) return error.BadConstant;
-            try expectType(result, .str);
+            if (result != .str and result != .bytes) return error.TypeMismatch;
         },
         .const_container => |constant| {
             if (constant >= program.container_constants.len) return error.BadConstant;
@@ -855,12 +867,12 @@ fn verifyInstruction(
                         program,
                         binary.operand_type,
                     )) return error.TypeMismatch,
-                    else => if (!binary.operand_type.isNumeric() and binary.operand_type != .str)
+                    else => if (!binary.operand_type.isNumeric() and binary.operand_type != .char and binary.operand_type != .str and binary.operand_type != .bytes)
                         return error.TypeMismatch,
                 }
                 try expectType(result, .boolean);
             } else {
-                const concat = binary.op == .add and binary.operand_type == .str;
+                const concat = binary.op == .add and (binary.operand_type == .str or binary.operand_type == .bytes);
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
                 // `/` is real division and always answers `f64`
                 // (docs/NUMERICS.md §2), so `Binary { .divide, .i64 }`
@@ -909,6 +921,14 @@ fn verifyInstruction(
         // legal instruction (docs/TYPES.md §3).
         .convert => |operand_register| {
             const operand = try operandType(function, defined, operand_register);
+            if (result == .char) {
+                if (!operand.isInteger()) return error.TypeMismatch;
+                return;
+            }
+            if (operand == .char) {
+                if (result != .u32) return error.TypeMismatch;
+                return;
+            }
             // **An enum converts to a number and nothing converts to an
             // enum** (docs/ENUMS.md D4, R2): `int(m)` is this
             // instruction reading the member's width, and `Method(n)`
@@ -1301,7 +1321,7 @@ fn verifyIntrinsic(
             // A `file` and a `task` are heap types with no length, and
             // `containers.length` says so with an `unreachable` — so
             // the shape is what decides here, not the tag.
-            if (arguments[0] != .str) {
+            if (arguments[0] != .str and arguments[0] != .bytes) {
                 if (arguments[0] != .heap) return error.BadIntrinsic;
                 switch (try heapShape(program, arguments[0])) {
                     .list, .map, .array, .builder => {},
@@ -1312,10 +1332,10 @@ fn verifyIntrinsic(
         },
         .string_slice => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .str);
+            if (arguments[0] != .str and arguments[0] != .bytes) return error.BadIntrinsic;
             try expectType(arguments[1], .i64);
             try expectType(arguments[2], .i64);
-            try expectType(result, .str);
+            try expectType(result, arguments[0]);
         },
         .string_byte => {
             try exactly(arguments, 2);
@@ -1403,6 +1423,13 @@ fn verifyIntrinsic(
             const reads = call.kind == .index_get;
             const value_slots: usize = if (reads) 0 else 1;
             if (arguments.len < 1) return error.BadIntrinsic;
+            if (arguments[0] == .str or arguments[0] == .bytes) {
+                if (!reads) return error.BadIntrinsic;
+                try exactly(arguments, 2);
+                try expectType(arguments[1], .i64);
+                try expectType(result, if (arguments[0] == .str) .char else .u8);
+                return;
+            }
             const element: Type = switch (try heapShape(program, arguments[0])) {
                 .list => |item| blk: {
                     try exactly(arguments, 2 + value_slots);
@@ -1525,7 +1552,7 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             };
             if (call.kind == .list_sort and
-                !element.isNumeric() and element != .str)
+                !element.isNumeric() and element != .char and element != .str and element != .bytes)
             {
                 return error.BadIntrinsic;
             }
@@ -1611,12 +1638,27 @@ fn verifyIntrinsic(
         .str_value => {
             try exactly(arguments, 1);
             const stringable = switch (arguments[0]) {
-                .u8, .i16, .i32, .i64, .f16, .f32, .f64, .boolean, .str => true,
+                .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .boolean, .str => true,
                 .heap => (try heapShape(program, arguments[0])) == .builder,
                 else => false,
             };
             if (!stringable) return error.BadIntrinsic;
             try expectType(result, .str);
+        },
+        .bytes_value => {
+            try exactly(arguments, 1);
+            const accepted = if (arguments[0] == .str)
+                true
+            else if (arguments[0] == .heap) accepted: {
+                const shape = try heapShape(program, arguments[0]);
+                break :accepted switch (shape) {
+                    .list => |element| element == .u8,
+                    .array => |array| array.rank == 1 and array.element == .u8,
+                    .map, .builder, .file, .task => false,
+                };
+            } else false;
+            if (!accepted) return error.BadIntrinsic;
+            try expectType(result, .bytes);
         },
         // `string(f)` reads a name out of the program's function
         // table: a function value in, text out (docs/FUNCTIONS.md D3).
@@ -1633,14 +1675,9 @@ fn verifyIntrinsic(
             else
                 .{ .optional = .f64 });
         },
-        .parse_string => {
+        .parse_str => {
             try exactly(arguments, 1);
-            // A packed `list(byte)` is the one shape the validator
-            // reads in place, and a `.lcm` reaches this stage without
-            // passing the analyzer, so the element type is checked
-            // here rather than trusted.
-            const shape = try heapShape(program, arguments[0]);
-            if (shape != .list or shape.list != .u8) return error.BadIntrinsic;
+            try expectType(arguments[0], .bytes);
             try expectType(result, .{ .optional = .str });
         },
         .chr_code => {
@@ -1926,7 +1963,7 @@ fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) 
 /// the representation contract the lowerer records.
 fn typeCanOwnStorage(of: Type) bool {
     return switch (of) {
-        .str, .strukt, .variant, .function => true,
+        .str, .bytes, .strukt, .variant, .function => true,
         .optional => |payload| typeCanOwnStorage(payload.asType()),
         .none,
         .boolean,
@@ -1941,6 +1978,7 @@ fn typeCanOwnStorage(of: Type) bool {
         .f16,
         .f32,
         .f64,
+        .char,
         .heap,
         .enumeration,
         => false,
@@ -2028,7 +2066,9 @@ fn typeCarriesWorker(
             .f16,
             .f32,
             .f64,
+            .char,
             .str,
+            .bytes,
             .enumeration,
             => {},
         }

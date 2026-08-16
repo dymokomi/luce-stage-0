@@ -225,9 +225,10 @@ pub const Service = enum {
     luce_rt_str,
     luce_rt_parse_int,
     luce_rt_parse_float,
-    luce_rt_parse_string,
+    luce_rt_parse_str,
     luce_rt_chr,
     luce_rt_ord,
+    luce_rt_bytes,
 
     // -- operators ----------------------------------------------------
     luce_rt_compare,
@@ -914,10 +915,9 @@ pub fn describe(service: Service) Effect {
             .memory = reads_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
-        // Reads a list's element run and makes a String out of it, so
-        // it resolves a handle: the heap is what it touches, not text.
-        .luce_rt_parse_string => .{
-            .memory = touches_heap,
+        // Reads immutable bytes and makes valid text.
+        .luce_rt_parse_str => .{
+            .memory = touches_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
         .luce_rt_string_byte => .{
@@ -936,6 +936,10 @@ pub fn describe(service: Service) Effect {
         .luce_rt_chr => .{
             .memory = touches_text,
             .parameters = &.{ .run, .plain, .value_out },
+        },
+        .luce_rt_bytes => .{
+            .memory = reads_heap_makes_text,
+            .parameters = &.{ .run, .value_in, .value_out },
         },
 
         // -- operators ------------------------------------------------

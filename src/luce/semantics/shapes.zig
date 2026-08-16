@@ -160,7 +160,9 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
             .f16,
             .f32,
             .f64,
+            .char,
             .str,
+            .bytes,
             .enumeration,
             => {},
         }
@@ -257,7 +259,9 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
             .f16,
             .f32,
             .f64,
+            .char,
             .str,
+            .bytes,
             .enumeration,
             => {},
         }
@@ -284,7 +288,7 @@ pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
         // A function value owns the two-slot run that holds the
         // function it names and the receiver it carries, the same way
         // and for the same reason (docs/BINDING.md D12).
-        .str, .strukt, .variant, .function => true,
+        .str, .bytes, .strukt, .variant, .function => true,
         .optional => |payload| ownsStorage(self, payload.asType()),
         else => false,
     };

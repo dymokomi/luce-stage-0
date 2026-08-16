@@ -1184,7 +1184,7 @@ fine.  `f"..."` desugars to plain `+` concatenation of `string(...)`
 pieces, so it is a string like any other.
 
 **Format specs.**  A hole may end `:.Nf` — N decimal places of a
-`double`, rounded half away from zero (docs/NUMERICS.md §8).  That is
+`f64`, rounded half away from zero (docs/NUMERICS.md §8).  That is
 the whole spec language: no width, no fill, no alignment, no `%`, no
 `e`, no thousands separator, and anything else is a
 `luce.parse.fstring` naming the one form that exists.  The `f` is
@@ -1204,37 +1204,37 @@ a slice and `f"{m[k]}"` a lookup.
 
 ## Conversions and generic builtins
 
-**Eight conversion constructors, each named for the type it
-produces**: one per numeric type — `byte(x)`, `short(x)`, `int(x)`,
-`long(x)`, `half(x)`, `float(x)`, `double(x)` — and `string(x)`
-(docs/NUMERICS.md §7, docs/TYPES.md §3).  They are the only ones, and
-none of them is a builtin — the compiler matches the names before it
-resolves anything, which is why all eight are reserved.
+Every numeric type is an explicit conversion constructor: `u8`, `u16`,
+`u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f16`, `f32`, and `f64`.
+`char(integer)` checks for a Unicode scalar, `u32(character)` reads its
+code point, `str(value)` renders text, and `bytes(value)` copies binary
+data from text or a byte container. These names are resolved as type
+constructors and are therefore reserved.
 
-`long(x)` **rounds half away from zero** — `long(2.5)` is `3` and
-`long(-2.5)` is `-3`, the same rounding `math.round` does — and traps
-`conversion_range` on NaN, an infinity, or a value outside the `long`
-range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
-`trunc` and round are four spellings for four different answers.
-`double(x)` widens and never traps.  `string(x)` prints any numeric
-width, a `bool` or a `string`; it gives an enum member's name and a
-function value's name.  Container objects, resources, and structs are
-not accepted: a `builder` hands over its text with `b.build()`.
+A floating-point value converted to an integer truncates toward zero and traps
+`conversion_range` on NaN, an infinity, or a value outside the target
+range. Integer narrowing checks rather than wrapping. Narrowing a float
+rounds to nearest, ties to even, and may reach infinity. `str(x)` prints
+any numeric width, a `bool`, `char`, or `str`; it gives an enum or union
+member's name and a function value's name. Container objects, resources,
+and structs are not accepted: a `builder` hands over its text with
+`b.build()`.
 A float prints as the shortest text that round-trips at its own
 width; the infinities print `inf` and `-inf`, and **every NaN prints
 `nan`** — IEEE gives a NaN's sign bit no meaning and hardware
 disagrees about which sign an invalid operation produces, so the sign
 is unobservable: comparisons already answer `false`, `parse_float`
-refuses NaN, `long(NaN)` traps, and the formatter declines to show it.
-An f-string hole is a `string(...)` the reader did not write, so the
+refuses NaN, `i64(NaN)` traps, and the formatter declines to show it.
+An f-string hole is a `str(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
 ```luce fragment
 str(42)          # "42"        (numbers, bool, str, enum, function)
 parse_int("42")  # 42          i64?   — none when the text is not a number
 parse_float("2.5")               # f64?
-chr(955)         # "λ"         codepoint -> str; traps on invalid
-ord("λ")         # 955         first codepoint; traps on empty
+str(char(955))    # "λ"         checked codepoint -> char -> str
+u32('λ')          # 955         char -> codepoint
+parse_str(bytes("λ"))             # "λ" as str?
 ```
 
 `parse_int` and `parse_float` answer a `T?` rather than trapping:

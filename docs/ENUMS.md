@@ -159,7 +159,7 @@ enum Method:
     deflated = 8
 
 func read(raw: i64) -> str:
-    let m = Method(raw)
+    let m = Method(i32(raw))
     if m == none:
         return "unknown"
     return str(m)
@@ -170,9 +170,8 @@ func main():
     assert(read(9) == "unknown")
 ```
 
-`Method(n)` also answers `none` for a number no member holds and for a
-number that would not fit the backing width, so a narrow enum asked about
-an out-of-range value is `none` rather than a trap:
+`Method(n)` answers `none` for a backing value no member holds. Crossing
+from another integer representation is a separate explicit conversion:
 
 ```luce
 enum Small(u8):
@@ -181,8 +180,7 @@ enum Small(u8):
 
 func main():
     assert(Small(200) != none)
-    assert(Small(300) == none)
-    assert(Small(-1) == none)
+    assert(Small(201) == none)
 ```
 
 `Method(n)` does not fold in constant position: it answers `Method?`, and a
@@ -280,7 +278,7 @@ enum Light:
                 self = Light.red
 
     static func of(raw: i64) -> Light:
-        return Light(raw) else Light.red
+        return Light(i32(raw)) else Light.red
 
 func main():
     var light = Light.red

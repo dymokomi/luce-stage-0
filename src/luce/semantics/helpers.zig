@@ -119,7 +119,7 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
     if (budget == 0) return true;
     const left = budget - 1;
     return switch (expression.*) {
-        .int_literal, .float_literal, .bool_literal, .string_literal, .none_literal, .name => false,
+        .int_literal, .float_literal, .bool_literal, .char_literal, .string_literal, .none_literal, .name => false,
         .field => |field| deeperThan(field.target, left),
         .unary => |unary| deeperThan(unary.operand, left),
         .try_call => |attempt| deeperThan(attempt.operand, left),
@@ -255,19 +255,6 @@ pub fn isUntypedNumber(expression: *const ast.Expression) bool {
         },
         else => false,
     };
-}
-
-/// The codepoint `ord` would read from a string literal, or null when
-/// the literal is empty (which traps at run time, so it must not
-/// fold).  Source text is valid UTF-8 by stage 1, so decoding cannot
-/// fail here — but the fallible form is kept, because believing that
-/// in a fold is how a compiler emits a wrong constant.
-pub fn ordOfLiteral(decoded: []const u8) ?i64 {
-    if (decoded.len == 0) return null;
-    const length = std.unicode.utf8ByteSequenceLength(decoded[0]) catch return null;
-    if (decoded.len < length) return null;
-    const codepoint = std.unicode.utf8Decode(decoded[0..length]) catch return null;
-    return codepoint;
 }
 
 /// The `s` that makes a counted noun agree: "1 argument", but
@@ -560,13 +547,6 @@ test "an integer literal landing on a float reads its digits, not a long" {
     try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false, .f64));
 }
 
-test "ord reads the first codepoint of a literal, and nothing from an empty one" {
-    try testing.expectEqual(@as(?i64, 40), ordOfLiteral("("));
-    try testing.expectEqual(@as(?i64, 955), ordOfLiteral("\u{03bb}"));
-    try testing.expectEqual(@as(?i64, 'a'), ordOfLiteral("abc"));
-    try testing.expectEqual(@as(?i64, null), ordOfLiteral(""));
-}
-
 test "edit distance stops counting once it is past the limit" {
     try testing.expectEqual(@as(usize, 0), editDistance("total", "total", 3));
     try testing.expectEqual(@as(usize, 1), editDistance("totl", "total", 3));
@@ -663,8 +643,8 @@ test "a suggestion keeps the closest name, and stays quiet when nothing is close
 
 /// Whether one argument is unnamed or names exactly `name` — the
 /// whole of name resolution for a surface of one slot (docs/ARGS.md),
-/// which is what the conversion constructors and the folded `ord` are.
-/// Both passes ask it, so it lives here.
+/// which is what conversion constructors are. Both passes ask it, so
+/// it lives here.
 pub fn argumentMayName(argument: ast.Argument, name: []const u8) bool {
     const written = argument.name orelse return true;
     return std.mem.eql(u8, written, name);

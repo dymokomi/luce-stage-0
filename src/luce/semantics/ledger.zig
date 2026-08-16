@@ -281,7 +281,7 @@ pub fn ownedForStore(self: *FunctionBuilder, value: Typed) void {
 /// simply be handed out of the frame that made it.
 fn carriesText(of: Type) bool {
     return switch (of) {
-        .str => true,
+        .str, .bytes => true,
         .optional => |payload| carriesText(payload.asType()),
         else => false,
     };

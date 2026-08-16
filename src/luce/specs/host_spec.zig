@@ -45,6 +45,17 @@ test "a host builtin with no host at all traps host_unavailable" {
     , .nothing, .host_unavailable);
 }
 
+test "host text ingress rejects invalid UTF-8 before constructing str" {
+    var world: agree.World = .{};
+    world.lines = &.{"a\x80b"};
+    try agree.trapGiven(
+        \\func main():
+        \\    let line = read_line("") else ""
+        \\    print(line)
+        \\
+    , .{ .world = world }, .host_unavailable);
+}
+
 test "print, arguments, and files flow through the host" {
     var world: agree.World = .withFile("notes.txt", "file body");
     world.arguments = &one_argument;
@@ -957,8 +968,8 @@ test "a refused fact stops the program where it stood" {
     var session = try agree.compare(
         \\func main():
         \\    print("asking")
-        \\    let bytes = os_available_memory()
-        \\    print("got " + str(bytes))
+        \\    let available = os_available_memory()
+        \\    print("got " + str(available))
         \\
     , .{ .world = .{ .unmeasurable = true } });
     defer session.deinit();

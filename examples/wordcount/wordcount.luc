@@ -4,22 +4,22 @@
 
 import std.files
 
-func is_word_byte(code: u8) -> bool:
-    if code >= 97 and code <= 122:
+func is_word_char(code: char) -> bool:
+    if code >= 'a' and code <= 'z':
         return true
-    if code >= 65 and code <= 90:
+    if code >= 'A' and code <= 'Z':
         return true
-    if code >= 48 and code <= 57:
+    if code >= '0' and code <= '9':
         return true
-    return code == 95 or code >= 128
+    return code == '_' or u32(code) >= 128
 
 # Collect every word of `content` into the counts map.
 func count_words(content: str, counts: map[str, i64]):
     var at = 0
     while at < len(content):
-        if is_word_byte(content.byte_at(at)):
+        if is_word_char(content[at]):
             var stop = at + 1
-            while stop < len(content) and is_word_byte(content.byte_at(stop)):
+            while stop < len(content) and is_word_char(content[stop]):
                 stop = stop + 1
             let word = content[at:stop]
             # A compound store defines the key it writes into, at the

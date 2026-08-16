@@ -234,7 +234,13 @@ const trace = @import("../runtime/trace.zig");
 /// code now boxes, unboxes, compares, hashes, and stores each of the eight
 /// integer widths without the retired promotion ladder, so artifacts built
 /// against the old reading must be rebuilt.
-pub const version: u32 = 20;
+///
+/// 21 — `char` and `bytes` append two runtime value tags, packed character
+/// cells append their element kind, and generated code may call the new
+/// immutable-byte conversion service. The 24-byte `Value` layout is
+/// unchanged; hosts still rebuild because the appended tags are new ABI
+/// vocabulary.
+pub const version: u32 = 21;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the

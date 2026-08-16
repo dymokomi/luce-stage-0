@@ -15,6 +15,7 @@
 const std = @import("std");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
+const text = @import("text.zig");
 const value = @import("value.zig");
 
 const Error = heap.Error;
@@ -24,11 +25,8 @@ const Value = value.Value;
 /// `len(x)`: bytes for a String, elements for a list, entries for a
 /// map, the first axis for an array, bytes for a Builder.
 pub fn length(runtime: *Runtime, target: Value) Error!Value {
+    if (target.tag == .str or target.tag == .bytes) return text.length(runtime, target);
     const measured: usize = switch (target.tag) {
-        .str => if (target.hasValidStringRepresentation())
-            target.asStr().len
-        else
-            return runtime.fail(.not_owned),
         .object => blk: {
             const object = try runtime.resolve(target);
             break :blk switch (object.data) {
@@ -51,6 +49,11 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
 /// the total form, and `mapPlace` is what a compound store reads
 /// instead — a read that defines, because it is half of a write).
 pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!Value {
+    if (target.tag == .str or target.tag == .bytes) {
+        if (indices.len != 1) return runtime.fail(.index_bounds);
+        try requireLongIndex(runtime, indices[0]);
+        return text.at(runtime, target, indices[0].asI64());
+    }
     const object = try runtime.resolve(target);
     try requireIndexRank(runtime, object, indices);
     switch (object.data) {
@@ -403,6 +406,7 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
                 .i16 => Value.ofI16(cell),
                 .u8 => Value.ofU8(cell),
                 .i8 => Value.ofI8(cell),
+                .char => Value.ofChar(cell),
                 .boolean => Value.ofBoolean(cell != 0),
             };
         }
@@ -497,7 +501,7 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
     errdefer dropBuilt(runtime, &listed);
     try listed.ensureCapacity(runtime.objects, names.len);
     for (names) |name| {
-        const held = try runtime.ownValue(Value.ofStr(name));
+        const held = try text.ownHost(runtime, name);
         errdefer runtime.dropStorage(held);
         try listed.append(runtime.objects, held);
     }
@@ -518,7 +522,7 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
     var rest = joined;
     while (rest.len != 0) {
         const stop = std.mem.indexOfScalar(u8, rest, 0) orelse rest.len;
-        const held = try runtime.ownValue(Value.ofStr(rest[0..stop]));
+        const held = try text.ownHost(runtime, rest[0..stop]);
         errdefer runtime.dropStorage(held);
         try listed.append(runtime.objects, held);
         rest = if (stop == rest.len) rest[stop..] else rest[stop + 1 ..];
@@ -559,11 +563,11 @@ pub fn listOfArguments(
     if (get) |callback| {
         var index: i64 = 0;
         while (index < count) : (index += 1) {
-            var text: [*c]const u8 = null;
+            var text_pointer: [*c]const u8 = null;
             var size: i64 = 0;
             // A host that says no about an index it counted itself has
             // nothing left to say about the ones after it.
-            const answer = callback(context, index, &text, &size);
+            const answer = callback(context, index, &text_pointer, &size);
             switch (answer) {
                 0 => break,
                 1 => {},
@@ -573,11 +577,11 @@ pub fn listOfArguments(
                 },
                 else => return runtime.fail(.host_unavailable),
             }
-            if (text == null) return runtime.fail(.host_unavailable);
+            if (text_pointer == null) return runtime.fail(.host_unavailable);
             const text_length = std.math.cast(usize, size) orelse
                 return runtime.fail(.host_unavailable);
-            const borrowed = text[0..text_length];
-            const held = try runtime.ownValue(Value.ofStr(borrowed));
+            const borrowed = text_pointer[0..text_length];
+            const held = try text.ownHost(runtime, borrowed);
             errdefer runtime.dropStorage(held);
             try listed.append(runtime.objects, held);
         }

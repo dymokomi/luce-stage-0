@@ -181,7 +181,7 @@ const CCompoundAllocationDoor = enum {
     map_place,
     array_fill,
     concat,
-    parse_string,
+    parse_str,
 };
 
 const CFileState = struct {
@@ -5977,7 +5977,7 @@ test "a list slice shares object identity through retained references" {
 // Strings, conversions, and arithmetic
 // ---------------------------------------------------------------------------
 
-test "string slicing is checked twice: in range, and on a UTF-8 boundary" {
+test "string slicing uses Unicode scalar positions" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -5985,11 +5985,11 @@ test "string slicing is checked twice: in range, and on a UTF-8 boundary" {
 
     const held = Value.ofStr("a\xF0\x9F\x99\x82b");
     try testing.expectEqualStrings("a", (try text.slice(runtime, held, 0, 1)).asStr());
-    try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.slice(runtime, held, 1, 5)).asStr());
-    try expectTrap(.string_boundary, runtime, text.slice(runtime, held, 0, 2));
+    try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.slice(runtime, held, 1, 2)).asStr());
+    try testing.expectEqualStrings("a\xF0\x9F\x99\x82", (try text.slice(runtime, held, 0, 2)).asStr());
     try expectTrap(.string_bounds, runtime, text.slice(runtime, held, 0, 99));
 
-    try testing.expectEqual(@as(i64, 0xf0), (try text.byteAt(runtime, held, 1)).asI64());
+    try testing.expectEqual(@as(u8, 0xf0), (try text.byteAt(runtime, held, 1)).asU8());
     try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asI64());
     try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asI64());
 }
@@ -6363,7 +6363,7 @@ extern fn luce_rt_string_find_byte(
     start: i64,
     out: [*c]Value,
 ) callconv(.c) i32;
-extern fn luce_rt_parse_string(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_parse_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_spawn(
     runtime: *Runtime,
     function: i64,
@@ -6870,7 +6870,7 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     try expectCTrapCode(runtime, luce_rt_index_get(runtime, &forged_scalar, &index, 1, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_append_ascii(runtime, &forged_scalar, 'x'), .not_owned);
-    try expectCTrapCode(runtime, luce_rt_parse_string(runtime, &forged_scalar, &out), .not_owned);
+    try expectCTrapCode(runtime, luce_rt_parse_str(runtime, &forged_scalar, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asI64());
     try expectCTrapCode(runtime, luce_rt_string_slice(runtime, &forged_scalar, 0, 1, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asI64());
@@ -7016,7 +7016,7 @@ test "C Value output pointers reject null before work" {
     luce_rt_drop_storage(runtime, &held, null_out);
     try expectCNullValueVoid(runtime);
     try expectCNullValueTrap(runtime, luce_rt_copy(runtime, &held, null_out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_string(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_str(runtime, &held, null_out));
     try expectCNullValueTrap(runtime, luce_rt_struct_set(runtime, &held, 0, &held, null_out));
 
     try expectCNullValueTrap(runtime, luce_rt_spawn(runtime, 0, &fields, fields.len, null_out));
@@ -7172,7 +7172,7 @@ test "C borrowed Value and array pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_copy(runtime, null_value, &out));
     try expectCNullValueTrap(runtime, luce_rt_struct_set(runtime, null_value, 0, &held, &out));
     try expectCNullValueTrap(runtime, luce_rt_struct_set(runtime, &held, 0, null_value, &out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_string(runtime, null_value, &out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_str(runtime, null_value, &out));
 
     try expectCNullValueTrap(runtime, luce_rt_spawn(runtime, 0, null_values, 1, &out));
     try expectCNullValueTrap(runtime, luce_rt_task_wait(runtime, null_value, &out));
@@ -7861,14 +7861,14 @@ test "C compound value doors preserve destinations through every allocation fail
     const fill_text = "the array fill value is copied into every destination cell";
     const left_text = "the left side of a long concatenation owns no borrowed result";
     const right_text = "the right side of a long concatenation becomes owned output";
-    const parse_text = "parse_string copies a packed byte array into owned text";
+    const parse_text = "parse_str copies immutable bytes into owned text";
     const doors = [_]CCompoundAllocationDoor{
         .maybe_text,
         .struct_set,
         .map_place,
         .array_fill,
         .concat,
-        .parse_string,
+        .parse_str,
     };
 
     for (doors) |door| {
@@ -7913,12 +7913,9 @@ test "C compound value doors preserve destinations through every allocation fail
                     source = try runtime.newArray(&.{3}, Value.ofInlineText(.str, "old"));
                     source_owned = true;
                 },
-                .parse_string => {
-                    source = try runtime.newList(Value.ofU8(0));
+                .parse_str => {
+                    source = try runtime.ownValue(Value.ofBytes(parse_text));
                     source_owned = true;
-                    for (parse_text) |byte| {
-                        try containers.append(&runtime, source, Value.ofU8(byte));
-                    }
                 },
                 .maybe_text, .concat => {},
             }
@@ -7953,7 +7950,7 @@ test "C compound value doors preserve destinations through every allocation fail
                     &Value.ofStr(right_text),
                     &out,
                 ),
-                .parse_string => luce_rt_parse_string(&runtime, &source, &out),
+                .parse_str => luce_rt_parse_str(&runtime, &source, &out),
             };
             objects.fail_index = std.math.maxInt(usize);
 
@@ -7996,7 +7993,7 @@ test "C compound value doors preserve destinations through every allocation fail
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
                     },
-                    .parse_string => {
+                    .parse_str => {
                         try testing.expectEqualStrings(parse_text, out.asStr());
                         try testing.expect(out.ownsStorage());
                         runtime.dropStorage(out);
@@ -8027,10 +8024,10 @@ test "C compound value doors preserve destinations through every allocation fail
                             &.{Value.ofI64(@intCast(index))},
                         )).asStr(),
                     ),
-                    .parse_string => try testing.expectEqualSlices(
+                    .parse_str => try testing.expectEqualSlices(
                         u8,
                         parse_text,
-                        (try runtime.resolve(source)).elements.cells(u8),
+                        source.asBytes(),
                     ),
                     .maybe_text, .concat => {},
                 }
@@ -8054,7 +8051,7 @@ test "C compound value doors preserve destinations through every allocation fail
     }
 }
 
-test "C string slices preserve views and refuse invalid boundaries" {
+test "C string slices preserve scalar-positioned views" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var runtime: Runtime = .init(.{
         .arena = arena.allocator(),
@@ -8098,11 +8095,19 @@ test "C string slices preserve views and refuse invalid boundaries" {
 
     out = Value.ofI64(99);
     try testing.expectEqual(
-        @as(i32, 1),
+        @as(i32, 0),
         luce_rt_string_slice(&runtime, &inline_text, 6, 7, &out),
     );
+    try testing.expectEqualStrings("🙂", out.asStr());
+    try testing.expect(out.textIsInline());
+
+    out = Value.ofI64(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_string_slice(&runtime, &inline_text, 6, 99, &out),
+    );
     try testing.expectEqual(@as(i64, 99), out.asI64());
-    try testing.expectEqual(vocabulary.TrapCode.string_boundary, runtime.pending.?.code);
+    try testing.expectEqual(vocabulary.TrapCode.string_bounds, runtime.pending.?.code);
     runtime.pending = null;
 }
 

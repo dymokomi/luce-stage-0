@@ -1210,9 +1210,9 @@ test "a compound store into a missing map key begins from the value type's zero"
         \\    var words = new map[str, str]
         \\    words["k"] += "text"
         \\    assert(words["k"] == "text")
-        \\    var bytes = new map[str, u8]
-        \\    bytes["k"] += 7
-        \\    assert(bytes["k"] == 7)
+        \\    var octets = new map[str, u8]
+        \\    octets["k"] += 7
+        \\    assert(octets["k"] == 7)
         \\    var shorts = new map[str, i16]
         \\    shorts["k"] += 300
         \\    assert(shorts["k"] == 300)
@@ -1615,14 +1615,16 @@ test "strings: concatenation, comparison, and slicing" {
 }
 
 test "strings: UTF-8 aware slicing and byte access" {
-    // The 🙂 is four bytes (F0 9F 99 82); slices and byte_at see the
-    // real UTF-8, and a slice that keeps it whole is exact.
+    // Ordinary positions are Unicode scalars. The raw byte door still
+    // exposes 🙂 as F0 9F 99 82 when encoding work needs it.
     try agreeOk(
         \\func main():
         \\    let s = "a🙂b"
-        \\    assert(len(s) == 6)
+        \\    assert(len(s) == 3)
+        \\    assert(len(bytes(s)) == 6)
         \\    assert(s[0:1] == "a")
-        \\    assert(s[1:5] == "🙂")
+        \\    assert(s[1:2] == "🙂")
+        \\    assert(s[1] == '🙂')
         \\    assert(s.byte_at(0) == 97)
         \\    assert(s.byte_at(1) == 240)
         \\
@@ -1633,7 +1635,7 @@ test "strings: UTF-8 aware slicing and byte access" {
 // Conversions
 // ---------------------------------------------------------------------------
 
-test "conversions: string, parse, chr, ord" {
+test "conversions: text, parsing, and char code points" {
     try agreeOk(
         \\func main():
         \\    assert(str(42) == "42")
@@ -1642,60 +1644,45 @@ test "conversions: string, parse, chr, ord" {
         \\    assert(str(false) == "false")
         \\    assert((parse_int("100") else 0) == 100)
         \\    assert((parse_float("1.5") else 0.0) == 1.5)
-        \\    assert(chr(65) == "A")
-        \\    assert(ord("A") == 65)
-        \\    assert(chr(955) == "λ")
-        \\    assert(ord("λ") == 955)
+        \\    assert(str(char(65)) == "A")
+        \\    assert(u32('A') == u32(65))
+        \\    assert(str(char(955)) == "λ")
+        \\    assert(u32('λ') == u32(955))
         \\
     );
 }
 
-test "ord of a literal is a compile-time constant" {
-    // Folding `ord` is what lets the language do without character
-    // literal syntax at all: `byte_at(s, i) == ord("(")` should cost
-    // exactly what `== 40` costs, or nobody will write it.
+test "a char-to-u32 conversion is a compile-time constant" {
     var compiled = try agree.program(
         \\func main():
         \\    let text = "(x)"
-        \\    assert(i64(text.byte_at(0)) == ord("("))
+        \\    assert(u32(text.byte_at(0)) == u32('('))
         \\
     );
     defer compiled.deinit();
     var folded = false;
     for (compiled.functions) |function| {
         for (function.instructions) |instruction| {
-            if (instruction == .intrinsic and instruction.intrinsic.kind == .ord_text) {
-                std.debug.print("ord survived to run time\n", .{});
-                return error.TestUnexpectedResult;
-            }
-            // `(` is 40, and the fold has to have left it somewhere: a
-            // scan that only looks for what must be absent passes on an
-            // empty program, which proves nothing.
+            // `(` is 40, and the fold has to have left it somewhere.
+            // Looking only for the absence of work could pass on an
+            // empty program and prove nothing.
             if (instruction == .const_integer and instruction.const_integer == 40) folded = true;
         }
     }
     try testing.expect(folded);
 }
 
-test "ord folds in a file-scope constant, and an empty one still traps at run time" {
+test "char-to-u32 conversions fold in file-scope constants" {
     try agreeOk(
-        \\const open_paren = ord("(")
-        \\const lambda = ord("λ")
+        \\const open_paren = u32('(')
+        \\const lambda = u32('λ')
         \\
         \\func main():
-        \\    assert(open_paren == 40)
-        \\    assert(lambda == 955)
-        \\    assert(i64("(a)".byte_at(0)) == open_paren)
+        \\    assert(open_paren == u32(40))
+        \\    assert(lambda == u32(955))
+        \\    assert(u32("(a)".byte_at(0)) == open_paren)
         \\
     );
-    // A literal with no codepoint is left to the run time, so the
-    // fold cannot quietly change what the program does.
-    try agreeTrap(
-        \\func main():
-        \\    var empty = ""
-        \\    assert(ord(empty) == 0)
-        \\
-    , .bad_codepoint);
 }
 
 // ---------------------------------------------------------------------------
@@ -2474,8 +2461,9 @@ test "builtins: the table is the signature, so a call may name its slots" {
         \\    assert(max(3, b = 9) == 9)
         \\    assert(clamp(value = 42, low = 0, high = 10) == 10)
         \\    assert(abs(value = -7) == 7)
-        \\    assert(chr(code = 65) == "A")
-        \\    assert(ord(text = "A") == 65)
+        \\    assert(char(value = 65) == 'A')
+        \\    assert(u32(value = 'A') == u32(65))
+        \\    assert(str(value = 'A') == "A")
         \\    assert(i64(value = 2.5) == 2)
         \\
     );
@@ -3379,20 +3367,22 @@ test "strings: slicing corners — empty, full, and open ends" {
 }
 
 test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
-    // λ is two bytes (CE BB); byte_at exposes each byte and len counts
-    // bytes, not codepoints.
+    // λ is one scalar and two bytes (CE BB); byte_at is explicitly the
+    // raw encoding view.
     try agreeOk(
         \\func main():
         \\    let s = "λ"
-        \\    assert(len(s) == 2)
+        \\    assert(len(s) == 1)
+        \\    assert(len(bytes(s)) == 2)
         \\    assert(s.byte_at(0) == 206)
         \\    assert(s.byte_at(1) == 187)
         \\    let mix = "aλb"
-        \\    assert(len(mix) == 4)
+        \\    assert(len(mix) == 3)
+        \\    assert(len(bytes(mix)) == 4)
         \\    assert(mix.byte_at(0) == 97)
         \\    assert(mix[0:1] == "a")
-        \\    assert(mix[1:3] == "λ")
-        \\    assert(mix[3:4] == "b")
+        \\    assert(mix[1:2] == "λ")
+        \\    assert(mix[2:3] == "b")
         \\
     );
 }
@@ -3446,17 +3436,17 @@ test "parse_int and parse_float answer none rather than trapping" {
     );
 }
 
-test "chr and ord round-trip across ASCII and multibyte codepoints" {
+test "char conversions round-trip across ASCII and multibyte codepoints" {
     try agreeOk(
         \\func main():
-        \\    assert(chr(97) == "a")
-        \\    assert(ord("a") == 97)
-        \\    assert(ord(chr(0)) == 0)
-        \\    assert(chr(955) == "λ")
-        \\    assert(ord("λ") == 955)
-        \\    assert(chr(128578) == "🙂")
-        \\    assert(ord("🙂") == 128578)
-        \\    assert(ord(chr(128578)) == 128578)
+        \\    assert(str(char(97)) == "a")
+        \\    assert(u32('a') == u32(97))
+        \\    assert(u32(char(0)) == u32(0))
+        \\    assert(str(char(955)) == "λ")
+        \\    assert(u32('λ') == u32(955))
+        \\    assert(str(char(128578)) == "🙂")
+        \\    assert(u32('🙂') == u32(128578))
+        \\    assert(u32(char(128578)) == u32(128578))
         \\
     );
 }
@@ -4580,7 +4570,7 @@ test "bounds: a map answers for a key it holds and traps for one it does not" {
     , .key_missing);
 }
 
-test "bounds: a string slice is checked at its length and on its boundaries" {
+test "bounds: string slices use scalar length and byte_at uses byte length" {
     try agreeOk(
         \\func main():
         \\    var s = "abc"
@@ -4604,13 +4594,13 @@ test "bounds: a string slice is checked at its length and on its boundaries" {
         \\    let bad = s.byte_at(past)
         \\
     , .string_bounds);
-    try agreeTrap(
+    try agreeOk(
         \\func main():
         \\    var s = "é"
         \\    var middle = 1
-        \\    let bad = s[0:middle]
+        \\    assert(s[0:middle] == "é")
         \\
-    , .string_boundary);
+    );
 }
 
 test "trap: array index out of bounds" {
@@ -4659,13 +4649,13 @@ test "trap: byte_at past the end of a string" {
     , .string_bounds);
 }
 
-test "trap: slicing through the middle of a UTF-8 character" {
-    try agreeTrap(
+test "scalar slicing cannot split a UTF-8 character" {
+    try agreeOk(
         \\func main():
         \\    var s = "🙂"
-        \\    let bad = s[0:1]
+        \\    assert(s[0:1] == "🙂")
         \\
-    , .string_boundary);
+    );
 }
 
 test "trap: using an unfilled late object slot" {
@@ -4701,20 +4691,11 @@ test "arrays: fill retains one shared object for every cell" {
     , "2\n2\n");
 }
 
-test "trap: chr of a codepoint beyond Unicode's range" {
+test "trap: char conversion of a codepoint beyond Unicode's range" {
     try agreeTrap(
         \\func main():
         \\    var code = 11141111
-        \\    let bad = chr(code)
-        \\
-    , .bad_codepoint);
-}
-
-test "trap: ord of an empty string" {
-    try agreeTrap(
-        \\func main():
-        \\    var s = ""
-        \\    let bad = ord(s)
+        \\    let bad = char(code)
         \\
     , .bad_codepoint);
 }
@@ -4793,40 +4774,29 @@ test "checked string intrinsics slice and inspect UTF-8 bytes" {
     try agreeOk("func main():\n" ++
         "    let text = \"ab" ++ smiley ++ "cd\\nnext\"\n" ++
         "    assert(text[0:2] == \"ab\")\n" ++
-        "    assert(text[2:6] == \"" ++ smiley ++ "\")\n" ++
+        "    assert(text[2:3] == \"" ++ smiley ++ "\")\n" ++
         "    assert(text.byte_at(2) == 240)\n");
 }
 
-test "string intrinsics implement multiline UTF-8-safe edits" {
-    try agreeOk("func continuation(code: u8) -> bool:\n" ++
-        "    return code >= 128 and code < 192\n" ++
-        "\n" ++
-        "func previous(value: str, cursor: i64) -> i64:\n" ++
-        "    var at = cursor - 1\n" ++
-        "    while at > 0 and continuation(value.byte_at(at)):\n" ++
-        "        at = at - 1\n" ++
-        "    return at\n" ++
-        "\n" ++
-        "func inserted(text: str, cursor: i64, added: str) -> str:\n" ++
+test "string intrinsics implement multiline scalar-safe edits" {
+    try agreeOk("func inserted(text: str, cursor: i64, added: str) -> str:\n" ++
         "    return text[0:cursor] + added + text[cursor:len(text)]\n" ++
         "\n" ++
         "func erased(text: str, cursor: i64) -> str:\n" ++
-        "    let before = previous(text, cursor)\n" ++
+        "    let before = cursor - 1\n" ++
         "    return text[0:before] + text[cursor:len(text)]\n" ++
         "\n" ++
         "func main():\n" ++
         "    let original = \"A" ++ smiley ++ "\\nB\"\n" ++
-        "    assert(inserted(original, 5, \"x\") == \"A" ++ smiley ++ "x\\nB\")\n" ++
-        "    assert(erased(original, 5) == \"A\\nB\")\n" ++
-        "    assert(previous(original, 5) == 1)\n");
+        "    assert(inserted(original, 2, \"x\") == \"A" ++ smiley ++ "x\\nB\")\n" ++
+        "    assert(erased(original, 2) == \"A\\nB\")\n");
 }
 
-test "checked string intrinsics trap on bounds and UTF-8 splits" {
+test "checked string intrinsics trap on scalar and byte bounds" {
     const text = "\"a" ++ smiley ++ "b\"";
     const cases = [_]struct { edit: []const u8, code: mir.TrapCode }{
         .{ .edit = "assert(len(" ++ text ++ "[-1:0]) == 0)", .code = .string_bounds },
-        .{ .edit = "assert(len(" ++ text ++ "[0:7]) == 0)", .code = .string_bounds },
-        .{ .edit = "assert(len(" ++ text ++ "[0:2]) == 0)", .code = .string_boundary },
+        .{ .edit = "assert(len(" ++ text ++ "[0:4]) == 0)", .code = .string_bounds },
         .{ .edit = "assert(" ++ text ++ ".byte_at(6) == 0)", .code = .string_bounds },
     };
     for (cases) |case| {
@@ -4958,7 +4928,7 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     );
 }
 
-test "conversions: string, parse_int, parse_float, chr, ord over every kind" {
+test "conversions: str, parsing, and char over every scalar kind" {
     try agreeOk(
         \\func main():
         \\    assert(str(42) == "42")
@@ -4969,10 +4939,10 @@ test "conversions: string, parse_int, parse_float, chr, ord over every kind" {
         \\    assert((parse_int("-9") else 0) == 0 - 9)
         \\    assert((parse_float("2.5") else 0.0) == 2.5)
         \\    assert(parse_int("twelve") == none)
-        \\    assert(chr(65) == "A")
-        \\    assert(chr(955) == "λ")
-        \\    assert(ord("λ") == 955)
-        \\    assert(ord("A") == 65)
+        \\    assert(str(char(65)) == "A")
+        \\    assert(str(char(955)) == "λ")
+        \\    assert(u32('λ') == u32(955))
+        \\    assert(u32('A') == u32(65))
         \\
     );
 }
@@ -5005,7 +4975,7 @@ test "collection misuse traps with stable codes" {
         , .code = .null_object },
         .{ .source =
         \\func main():
-        \\    let bad = chr(11141111)
+        \\    let bad = char(11141111)
         \\
         , .code = .bad_codepoint },
         .{ .source =

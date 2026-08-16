@@ -79,7 +79,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .f16 => half_range_message,
         .f32 => float_range_message,
         .f64 => double_range_message,
-        .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
+        .none, .boolean, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
     };
 }
 
@@ -104,9 +104,9 @@ pub fn literalLandingType(expected: Type) ?Type {
             .f64 => .f64,
             // A number never lands on an enum: `Method` is a set of
             // names and `Method(8)` is the only way in (D4, R2).
-            .boolean, .str, .strukt, .heap, .enumeration, .variant, .function => null,
+            .boolean, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function => null,
         },
-        .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function => null,
+        .none, .boolean, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function => null,
     };
 }
 
@@ -233,7 +233,6 @@ pub const reserved_names = [_][]const u8{
     "len",                   "byte_at",
     "assert",                "trap",
     "parse_int",             "parse_float",
-    "chr",                   "ord",
     "append",                "pop",
     "insert",                "remove",
     "has",                   "dim",
@@ -251,7 +250,7 @@ pub const reserved_names = [_][]const u8{
     "term_flush",            "exit",
     "os_total_memory",       "os_available_memory",
     "os_cpu_count",          "file_open",
-    "parse_string",          "shell_run",
+    "parse_str",             "shell_run",
     "term_event_data",       "dir_create",
     "epoch_ms",              "gpu_backend",
     "ui_window_open",        "ui_window_surface",

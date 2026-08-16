@@ -29,6 +29,8 @@ pub const agree = @import("specs/agree.zig");
 
 /// The language, feature by feature (docs/LANGUAGE.md).
 pub const behavior = @import("specs/behavior_spec.zig");
+/// Unicode scalars, scalar-indexed text, and immutable binary values.
+pub const text_types = @import("specs/text_types_spec.zig");
 /// Enums and the match statement, decision by decision
 /// (docs/ENUMS.md).
 pub const enums = @import("specs/enums_spec.zig");
@@ -100,6 +102,7 @@ comptime {
     if (builtin.is_test) {
         _ = agree;
         _ = behavior;
+        _ = text_types;
         _ = enums;
         _ = unions;
         _ = errors;

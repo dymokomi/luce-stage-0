@@ -128,35 +128,33 @@ loom: trap: conversion out of range [conversion_range]
 The floats never trap on arithmetic; they reach `inf` and `NaN` under
 IEEE 754.
 
-## Comparison across the ladders
+## Comparison across representations
 
-`==`, `<` and the other comparisons work between an integer and a float,
-and the comparison is **exact** — it compares the two numbers, not a
-lossy conversion of one to the other. Widening the integer first would
-answer wrongly at the boundary:
+Concrete numeric values compare only when they have the same type. A
+conversion makes a representation change visible, including its rounding:
 
 ```luce
 func main():
     var n: i64 = 9007199254740993
-    print(str(n == 9007199254740992.0))   # false
+    print(str(n == i64(9007199254740992)))
+    print(str(f64(n) == 9007199254740992.0))
 ```
 
-The two values differ by one, and `9007199254740993` cannot be
-represented in `double`; an exact comparison reports `false`, where a
-naive widening would report `true`.
+The first comparison is exact and false. The second is true because the
+written `f64` conversion rounds an integer that binary64 cannot represent.
 
 ## Conversions
 
 Every numeric type has a conversion constructor named for the type it
-produces — `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`,
-`float(x)`, `double(x)` — and `string(x)` renders to text. A conversion
-is the only way to narrow, since narrowing is never implicit.
+produces: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f16`,
+`f32`, and `f64`. `str(x)` renders text. A conversion is the only way to
+change a concrete representation.
 
-- **A float to an integer** rounds half away from zero and traps
+- **A float to an integer** truncates toward zero and traps
   `conversion_range` outside the target's range — `NaN` and the
-  infinities included. `int(3.9)` is `4`; `int(-2.5)` is `-3`.
+  infinities included. `i32(3.9)` is `3`; `i32(-2.5)` is `-2`.
 - **An integer to an integer that cannot hold it** traps the same way:
-  `byte(300)` is a program that stops, not `300` modulo anything.
+  `u8(300)` is a program that stops, not `300` modulo anything.
 - **An integer to a float** rounds to nearest and never traps.
 - **A float to a narrower float** rounds to nearest, ties to even, and
   may produce `inf` rather than trapping.
@@ -167,7 +165,7 @@ is the only way to narrow, since narrowing is never implicit.
 ```luce
 func main():
     let x = 3.9
-    print(str(i32(x)))            # 4 — rounds
+    print(str(i32(x)))            # 3 — truncates
     print(str(i64(floor(x))))    # 3 — floor, then convert
 ```
 

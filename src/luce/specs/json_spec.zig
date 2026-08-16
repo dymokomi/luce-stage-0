@@ -106,17 +106,17 @@ test "json: whitespace is four bytes and no others" {
         \\    # RFC 8259 section 2: space, horizontal tab, line feed,
         \\    # carriage return.  Around the document and between every
         \\    # token inside it.
-        \\    let blank = " " + chr(9) + chr(10) + chr(13)
+        \\    let blank = " " + str(char(9)) + str(char(10)) + str(char(13))
         \\    assert(accepted(blank + "[1]" + blank))
         \\    assert(accepted("[" + blank + "1" + blank + "," + blank + "2" + blank + "]"))
         \\    assert(accepted("{" + blank + "\"a\"" + blank + ":" + blank + "1" + blank + "}"))
         \\
         \\    # A vertical tab and a form feed are whitespace in C and
         \\    # in nothing RFC 8259 says.
-        \\    assert(not accepted("[" + chr(11) + "1]"))
-        \\    assert(not accepted("[" + chr(12) + "1]"))
+        \\    assert(not accepted("[" + str(char(11)) + "1]"))
+        \\    assert(not accepted("[" + str(char(12)) + "1]"))
         \\    # And a non-breaking space is a character, not a space.
-        \\    assert(not accepted("[" + chr(160) + "1]"))
+        \\    assert(not accepted("[" + str(char(160)) + "1]"))
         \\
     );
 }
@@ -276,10 +276,10 @@ test "json: the eight escapes decode, and nothing else is an escape" {
         \\    assert(doc.element(0).as_text() else "" == "\"")
         \\    assert(doc.element(1).as_text() else "" == "\\")
         \\    assert(doc.element(2).as_text() else "" == "/")
-        \\    assert(doc.element(3).as_text() else "" == chr(8))
-        \\    assert(doc.element(4).as_text() else "" == chr(12))
+        \\    assert(doc.element(3).as_text() else "" == str(char(8)))
+        \\    assert(doc.element(4).as_text() else "" == str(char(12)))
         \\    assert(doc.element(5).as_text() else "" == "\n")
-        \\    assert(doc.element(6).as_text() else "" == chr(13))
+        \\    assert(doc.element(6).as_text() else "" == str(char(13)))
         \\    assert(doc.element(7).as_text() else "" == "\t")
         \\
         \\    # RFC 8259 section 7 lists those eight and \u, and the
@@ -297,8 +297,8 @@ test "json: a \\u escape is four hexadecimal digits, in either case" {
         \\func main() -> !:
         \\    let doc = try json.parse("[\"\\u0041\", \"\\u00e9\", \"\\u20AC\", \"\\u0000\"]")
         \\    assert(doc.element(0).as_text() else "" == "A")
-        \\    assert(doc.element(1).as_text() else "" == chr(233))
-        \\    assert(doc.element(2).as_text() else "" == chr(8364))
+        \\    assert(doc.element(1).as_text() else "" == str(char(233)))
+        \\    assert(doc.element(2).as_text() else "" == str(char(8364)))
         \\    assert(len(doc.element(3).as_text() else "x") == 1)
         \\
         \\    assert(not accepted("\"\\u041\""))
@@ -317,9 +317,10 @@ test "json: a surrogate pair is one codepoint, and half of one is refused" {
         \\    # four bytes of UTF-8, not two characters of three.
         \\    let doc = try json.parse("[\"\\ud834\\udd1e\", \"\\uD801\\uDC37\"]")
         \\    let clef = doc.element(0).as_text() else ""
-        \\    assert(len(clef) == 4)
-        \\    assert(clef == chr(119070))
-        \\    assert((doc.element(1).as_text() else "") == chr(66615))
+        \\    assert(len(clef) == 1)
+        \\    assert(len(bytes(clef)) == 4)
+        \\    assert(clef == str(char(119070)))
+        \\    assert((doc.element(1).as_text() else "") == str(char(66615)))
         \\
         \\    # Half a pair has no UTF-8 and a Luce str is UTF-8, so
         \\    # the choice is refuse or quietly substitute, and this
@@ -341,14 +342,14 @@ test "json: a control character inside a string must be escaped" {
         \\    # a quote, a backslash, and the control characters, which
         \\    # is what makes a raw newline inside a str an error and
         \\    # the escape for it fine.
-        \\    assert(not accepted("\"a" + chr(10) + "b\""))
-        \\    assert(not accepted("\"a" + chr(9) + "b\""))
-        \\    assert(not accepted("\"a" + chr(0) + "b\""))
+        \\    assert(not accepted("\"a" + str(char(10)) + "b\""))
+        \\    assert(not accepted("\"a" + str(char(9)) + "b\""))
+        \\    assert(not accepted("\"a" + str(char(0)) + "b\""))
         \\    assert(accepted("\"a\\nb\""))
         \\    assert(accepted("\"a\\tb\""))
         \\    # And one after an escape, where the decoding path meets
         \\    # it rather than the scanning one.
-        \\    assert(not accepted("\"a\\nb" + chr(10) + "c\""))
+        \\    assert(not accepted("\"a\\nb" + str(char(10)) + "c\""))
         \\
         \\    # A str that is never closed is not a str, with and
         \\    # without an escape in front of the end.
@@ -365,9 +366,9 @@ test "json: text outside ASCII arrives as itself" {
         \\    # The input is a Luce str, so it is valid UTF-8 before
         \\    # the parser sees a u8 of it (RFC 8259 section 8.1) —
         \\    # there is no encoding question here to get wrong.
-        \\    let doc = try json.parse("{\"caf" + chr(233) + "\": \"" + chr(955) + chr(119070) + "\"}")
-        \\    let name = "caf" + chr(233)
-        \\    assert((child(doc, name).as_text() else "") == chr(955) + chr(119070))
+        \\    let doc = try json.parse("{\"caf" + str(char(233)) + "\": \"" + str(char(955)) + str(char(119070)) + "\"}")
+        \\    let name = "caf" + str(char(233))
+        \\    assert((child(doc, name).as_text() else "") == str(char(955)) + str(char(119070)))
         \\    match doc:
         \\        object(fields):
         \\            assert(fields.keys()[0] == name)
@@ -808,9 +809,9 @@ test "json: write re-encodes the value, and parsing what it wrote gives the same
         \\    # shorter spelling gets it, a solidus loses the one it did
         \\    # not need, and a real is written with the point that
         \\    # keeps it a real.
-        \\    let doc = try json.parse("[1e3,42.0,-0,\"\\u0041\",\"a\\/b\",\"caf" + chr(233) + "\"]")
+        \\    let doc = try json.parse("[1e3,42.0,-0,\"\\u0041\",\"a\\/b\",\"caf" + str(char(233)) + "\"]")
         \\    let once = doc.write()
-        \\    assert(once == "[1000.0,42.0,0,\"A\",\"a/b\",\"caf" + chr(233) + "\"]")
+        \\    assert(once == "[1000.0,42.0,0,\"A\",\"a/b\",\"caf" + str(char(233)) + "\"]")
         \\    # And that is a fixed point: what comes out reads back as
         \\    # the same value and writes the same bytes again.
         \\    let again = try json.parse(once)
@@ -833,8 +834,8 @@ test "json: parse, write, parse is a fixed point over a rich document" {
         \\    assert(second.count() == 8)
         \\    assert(child(second, "tags").count() == 3)
         \\    let decoded = child(second, "escaped").as_text() else ""
-        \\    let clef = decoded[len(decoded) - 4:]
-        \\    assert(clef == chr(119070))
+        \\    let clef = decoded[len(decoded) - 1:]
+        \\    assert(clef == str(char(119070)))
         \\    assert(decoded[0:14] == "quote \" slash ")
         \\
         \\    # Pretty is the same value with room around it, and
@@ -898,20 +899,20 @@ test "json: quote escapes what must be escaped and leaves the rest alone" {
         \\    assert(json.quote("a\\b") == "\"a\\\\b\"")
         \\    assert(json.quote("a\nb") == "\"a\\nb\"")
         \\    assert(json.quote("a\tb") == "\"a\\tb\"")
-        \\    assert(json.quote(chr(8) + chr(12) + chr(13)) == "\"\\b\\f\\r\"")
+        \\    assert(json.quote(str(char(8)) + str(char(12)) + str(char(13))) == "\"\\b\\f\\r\"")
         \\    # A control character with no i16 name goes out as four
         \\    # hexadecimal digits, lower case, as JavaScript writes it.
-        \\    assert(json.quote(chr(11)) == "\"\\u000b\"")
-        \\    assert(json.quote(chr(1)) == "\"\\u0001\"")
+        \\    assert(json.quote(str(char(11))) == "\"\\u000b\"")
+        \\    assert(json.quote(str(char(1))) == "\"\\u0001\"")
         \\    # The solidus may be escaped and need not be, so it is not.
         \\    assert(json.quote("a/b") == "\"a/b\"")
         \\    # Text outside ASCII is UTF-8 in the output, which is what
         \\    # RFC 8259 section 8.1 asks for.
-        \\    assert(json.quote(chr(233)) == "\"" + chr(233) + "\"")
+        \\    assert(json.quote(str(char(233))) == "\"" + str(char(233)) + "\"")
         \\
         \\    # And what it writes is what this module reads back — and
         \\    # what `write` puts around a str of its own.
-        \\    let awkward = "a\"b\\c" + chr(11) + "d/e" + chr(233)
+        \\    let awkward = "a\"b\\c" + str(char(11)) + "d/e" + str(char(233))
         \\    let doc = try json.parse(json.quote(awkward))
         \\    assert((doc.as_text() else "") == awkward)
         \\    assert(json.Json.text(value = awkward).write() == json.quote(awkward))
@@ -923,7 +924,7 @@ test "json: quote escapes what must be escaped and leaves the rest alone" {
 // What a refusal says
 // ---------------------------------------------------------------------------
 
-test "json: a refusal names the problem and the byte it happened at" {
+test "json: a refusal names the problem and its scalar position" {
     try agreeRaises(
         \\import std.json
         \\
@@ -938,7 +939,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("{} {}")
         \\
-    , "json: text after the document's one value, at byte 3");
+    , "json: text after the document's one value, at position 3");
 
     try agreeRaises(
         \\import std.json
@@ -946,7 +947,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[1, 2")
         \\
-    , "json: the text ends inside the array opened at byte 0");
+    , "json: the text ends inside the array opened at position 0");
 
     try agreeRaises(
         \\import std.json
@@ -954,7 +955,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("{\"a\": 1 \"b\": 2}")
         \\
-    , "json: a comma or a close was expected at byte 8");
+    , "json: a comma or a close was expected at position 8");
 
     try agreeRaises(
         \\import std.json
@@ -962,7 +963,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("{a: 1}")
         \\
-    , "json: a member name must be a string, at byte 1");
+    , "json: a member name must be a string, at position 1");
 
     try agreeRaises(
         \\import std.json
@@ -970,7 +971,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("{\"a\" 1}")
         \\
-    , "json: a member name must be followed by a colon, at byte 5");
+    , "json: a member name must be followed by a colon, at position 5");
 
     try agreeRaises(
         \\import std.json
@@ -978,7 +979,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[01]")
         \\
-    , "json: a number may not have a leading zero, at byte 1");
+    , "json: a number may not have a leading zero, at position 1");
 
     try agreeRaises(
         \\import std.json
@@ -986,7 +987,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[1.]")
         \\
-    , "json: a fraction needs a digit after the point, at byte 3");
+    , "json: a fraction needs a digit after the point, at position 3");
 
     try agreeRaises(
         \\import std.json
@@ -994,7 +995,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[1e999]")
         \\
-    , "json: the number at byte 1 is past what a double can hold");
+    , "json: the number at position 1 is past what an f64 can hold");
 
     try agreeRaises(
         \\import std.json
@@ -1002,7 +1003,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[\"a\\qb\"]")
         \\
-    , "json: unknown escape at byte 3");
+    , "json: unknown escape at position 3");
 
     try agreeRaises(
         \\import std.json
@@ -1010,7 +1011,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[\"\\ud834\"]")
         \\
-    , "json: a high surrogate escape at byte 2 is not followed by its low half");
+    , "json: a high surrogate escape at position 2 is not followed by its low half");
 
     try agreeRaises(
         \\import std.json
@@ -1018,7 +1019,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[\"\\udd1e\"]")
         \\
-    , "json: a low surrogate escape stands alone at byte 2");
+    , "json: a low surrogate escape stands alone at position 2");
 
     try agreeRaises(
         \\import std.json
@@ -1026,7 +1027,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\func main() -> !:
         \\    let doc = try json.parse("[garbage]")
         \\
-    , "json: a value was expected at byte 1");
+    , "json: a value was expected at position 1");
 
     try agreeRaises(
         \\import std.json
@@ -1040,7 +1041,7 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\        deep.append("]")
         \\    let doc = try json.parse(deep.build())
         \\
-    , "json: values nested deeper than 64, at byte 64");
+    , "json: values nested deeper than 64, at position 64");
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,8 +1109,8 @@ test "json: the JSONTestSuite n_ cases, which every parser must refuse" {
         \\    assert(not accepted("[\"\\a\"]"))                     # n_string_invalid_backslash_esc
         \\    assert(not accepted("[\"\\uD800\\u\"]"))              # n_string_1_surrogate_then_escape_u
         \\    assert(not accepted("[\"\\uD834\\uDd\"]"))            # n_string_incomplete_surrogate
-        \\    assert(not accepted("[\"a" + chr(9) + "b\"]"))        # n_string_unescaped_tab
-        \\    assert(not accepted("[\"line" + chr(10) + "\"]"))     # n_string_unescaped_newline
+        \\    assert(not accepted("[\"a" + str(char(9)) + "b\"]"))        # n_string_unescaped_tab
+        \\    assert(not accepted("[\"line" + str(char(10)) + "\"]"))     # n_string_unescaped_newline
         \\    assert(not accepted("[\"unclosed"))                   # n_string_unclosed
         \\    assert(not accepted("[{"))                            # n_structure_open_array_open_object
         \\    assert(not accepted("{]"))                            # n_structure_object_with_comment_like
@@ -1194,8 +1195,8 @@ test "json: the recipe for a file is three calls, and none of them is this modul
         \\    # json touches nothing: the bytes come off the disk, the
         \\    # text is a validation of those bytes, and the value is a
         \\    # reading of that text.
-        \\    let bytes = try files.read_bytes("config.json")
-        \\    let text = strings.from_bytes(bytes) else ""
+        \\    let data = try files.read_bytes("config.json")
+        \\    let text = strings.from_bytes(data) else ""
         \\    let doc = try json.parse(text)
         \\    # The walking form: the map inside the value is reached by
         \\    # `match` and nothing is copied.

@@ -172,7 +172,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         return resolveSignature(self, module, written);
     }
     if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
-        .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
+        .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => {
             if (written.arguments.len != 0 or written.wildcards != 0) {
                 try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
                 return null;
@@ -190,7 +190,9 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 .f16 => .f16,
                 .f32 => .f32,
                 .f64 => .f64,
+                .char => .char,
                 .str => .str,
+                .bytes => .bytes,
                 .list, .map, .array, .builder, .file, .task => unreachable, // answered by the outer switch
             };
         },

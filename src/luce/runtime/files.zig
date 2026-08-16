@@ -26,6 +26,7 @@
 
 const std = @import("std");
 const heap = @import("heap.zig");
+const runtime_text = @import("text.zig");
 const value = @import("value.zig");
 
 const Error = heap.Error;
@@ -312,48 +313,6 @@ pub fn pathOf(runtime: *Runtime, held: Value) []const u8 {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Text, as a validation over the bytes
-// ---------------------------------------------------------------------------
-
-/// True when `bytes` can be a Luce `string`.
-///
-/// **The one place this sentence is written.**  A `string` is valid
-/// UTF-8, which is what lets `s[a:b]` be checked against character
-/// boundaries and `len` mean what it says; a half-read JPEG handed over
-/// as text would make both of those lies, and the trap they raise would
-/// fire on the contents of a file rather than on anything the program
-/// did.  Both engines reach this function, so "not text" is one
-/// decision rather than each host's opinion.
-pub fn isText(bytes: []const u8) bool {
-    return std.unicode.utf8ValidateSlice(bytes);
-}
-
-/// `parse_string(xs)` — a `list(byte)` as text, or absent when the
-/// bytes are not valid UTF-8 (docs/BYTES.md R3).
-///
-/// The `parse_int` shape, for the `parse_int` reason: "not text" is
-/// the same reason every time and the name already implies it, so
-/// absence carries all the information there is.  The bytes are copied
-/// into storage the answer owns, like every other value that leaves a
-/// container.
-pub fn parseString(runtime: *Runtime, held: Value) Error!Value {
-    const object = try runtime.resolve(held);
-    const stored = switch (object.data) {
-        .list => if (object.elements.kind == .u8)
-            object.elements
-        else
-            return runtime.fail(.not_owned),
-        .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
-    };
-    // A packed `list(byte)` *is* its bytes, which is the whole point
-    // of R1: the validator reads the run in place and nothing is
-    // gathered first.  The verifier admits nothing else here.
-    const bytes = stored.cells(u8);
-    if (!isText(bytes)) return Value.none;
-    return runtime.ownValue(Value.ofStr(bytes));
-}
-
 /// `file_read(path)` — the whole file as a `string`, or null when it
 /// could not be read *as a string*: the world said no, it is larger
 /// than the convenience carries, or its bytes are not text.
@@ -405,7 +364,7 @@ fn readTextLimited(runtime: *Runtime, path: []const u8, limit: usize) Error!?Val
         if (taken == 0) break;
     }
     if (loaded.items.len > limit) return null;
-    if (!isText(loaded.items)) return null;
+    if (!runtime_text.isValid(loaded.items)) return null;
     return try runtime.ownValue(Value.ofStr(loaded.items));
 }
 

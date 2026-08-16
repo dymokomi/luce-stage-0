@@ -35,7 +35,9 @@
 //! * **Strings** are `"..."` on one line, with exactly four escapes:
 //!   `\n`, `\t`, `\\`, `\"`.  Anything else after a backslash is a
 //!   `luce.lex.escape` diagnostic.  `f"..."` is scanned whole and
-//!   expanded by the parser.
+//!   expanded by the parser.  **Characters** are single-quoted and
+//!   become one Unicode scalar; this stage keeps the quoted run whole
+//!   and stage 3 validates and decodes it, including `\u{...}`.
 //! * **Identifiers** are ASCII: a letter or `_`, then letters, digits
 //!   or `_`.  A stray non-ASCII character is one diagnostic per
 //!   *codepoint*, naming its `U+XXXX` — and for the look-alikes people
@@ -47,7 +49,7 @@
 //!   without changing what it means, which is exactly the Trojan Source
 //!   attack (CVE-2021-42574): source that reads one way and runs
 //!   another.  A program that genuinely needs one in its text builds it
-//!   with `chr(...)`.
+//!   with `str(char(codepoint))`.
 //! * **Comments** run from `#` to the end of the line; there is no
 //!   block comment form.  A `#!` first line therefore works by
 //!   construction.  `/* ... */` is a `luce.lex.comment` diagnostic
@@ -100,20 +102,12 @@
 //!
 //! ## Deliberately not here
 //!
-//! * **Character literals.**  `'x'` is diagnosed with the two things to
-//!   write instead, and both are live: `ord("x")` folds to a constant
-//!   in stage 4 today, at top level and in expressions, so the
-//!   diagnostic is advice and not an apology.  A payload-free `Token`
-//!   could not carry a decoded codepoint anyway — the syntax could
-//!   never land in this file alone — and with the folding in place
-//!   there is nothing left for it to buy (docs/MISSING.md tier 1,
-//!   item 5).
-//! * **More escapes.**  `\r` and `\u{...}` are both defensible
-//!   additions, and both are *half* in this file: the lexer only
-//!   validates an escape, stage 3's `decodeString` produces the bytes.
-//!   Adding one here without the decoder would silently produce wrong
-//!   text, so the escape set moves as one change across two stages or
-//!   not at all.  `\xNN` is refused permanently for a different
+//! * **More string escapes.**  `\r` and `\u{...}` are both defensible
+//!   additions to strings, and both are *half* in this file: the lexer
+//!   only validates an escape, stage 3's `decodeString` produces the
+//!   bytes.  Adding one here without the decoder would silently produce
+//!   wrong text, so the escape set moves as one change across two stages
+//!   or not at all.  `\xNN` is refused permanently for a different
 //!   reason: a raw byte escape can build a string that is not UTF-8,
 //!   and every other layer is allowed to assume it is.
 
@@ -684,7 +678,7 @@ const Lexer = struct {
         try self.report(
             "luce.lex.bidi",
             .{ .start = at, .end = @min(at + length, self.source.len) },
-            "U+{X:0>4} is a bidirectional control: it changes how this line reads without changing what it does; build the character with chr({d}) if text really needs it",
+            "U+{X:0>4} is a bidirectional control: it changes how this line reads without changing what it does; build the text with str(char({d})) if it is really needed",
             .{ codepoint, codepoint },
         );
     }
@@ -1156,41 +1150,36 @@ const Lexer = struct {
         }
     }
 
-    // -- rejections -------------------------------------------------------
-
-    /// `'x'` is not Luce, and neither is `'hello'` — the apostrophe
-    /// has no role at all, so a matched pair on one line is read as
-    /// the quoted run its author meant and reported once, with both
-    /// spellings to use instead (docs/MISSING.md tier 1, item 5;
-    /// should character literals ever arrive, this is where they
-    /// land).  The scan stops at anything that starts something else,
-    /// so one stray apostrophe cannot swallow the rest of the line —
-    /// rustc's `single_quoted_string` guards the same way.
+    /// Scan a single-quoted character spelling. Validation belongs to
+    /// the parser because it needs the decoded value: this stage only
+    /// finds the matching quote without mistaking `\'` for it. Like a
+    /// string, a character never crosses a line ending.
     fn characterLiteral(self: *Lexer) Error!void {
         const start = self.offset;
-        var scan = self.offset + 1;
-        while (scan < self.source.len) : (scan += 1) {
-            const character = self.source[scan];
-            if (character == '\n' or character == '"' or character == '#') break;
-            if (character != '\'') continue;
-            self.offset = scan + 1;
-            const span: Span = .{ .start = start, .end = self.offset };
-            try self.report(
-                "luce.lex.character",
-                span,
-                "single quotes do not delimit anything in Luce; write \"...\" for text, or ord(\"x\") for a codepoint",
-                .{},
-            );
-            // Recovery: the parser strips the outer byte from each end
-            // and decodes what is between, which is exactly the text
-            // meant here.  A recovery token is only ever seen next to
-            // a diagnostic, so a `string_literal` spanning `'...'` is
-            // never observable in a compiled program.
-            try self.emit(.string_literal, span);
-            return;
+        self.offset += 1;
+        while (self.offset < self.source.len) {
+            const character = self.source[self.offset];
+            if (character == '\n') break;
+            if (character == '\'') {
+                self.offset += 1;
+                try self.emit(.char_literal, .{ .start = start, .end = self.offset });
+                return;
+            }
+            if (character == '\\') {
+                self.offset += 1;
+                if (self.offset >= self.source.len or self.source[self.offset] == '\n') break;
+                self.offset += 1;
+                continue;
+            }
+            try self.checkTextByte(self.offset);
+            self.offset += 1;
         }
-        try self.unexpectedCharacter();
+        const span: Span = .{ .start = start, .end = self.offset };
+        try self.report("luce.lex.char", span, "unterminated character literal", .{});
+        if (span.end - span.start >= 2) try self.emit(.char_literal, span);
     }
+
+    // -- rejections -------------------------------------------------------
 
     /// Report one ASCII character the language has no use for, and step
     /// past it.  A run of the *same* character is one mistake and one
@@ -1495,7 +1484,6 @@ fn hintFor(character: u8) ?[]const u8 {
     return switch (character) {
         '!' => "use 'not'; '!=' is inequality",
         ';' => "a statement ends at the line, not at a ';'",
-        '\'' => "strings are written with double quotes",
         '\\' => "a backslash only escapes inside a string",
         else => null,
     };
@@ -2015,35 +2003,31 @@ test "a non-ASCII character is one diagnostic per codepoint, not per byte" {
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "\u{1F600}") != null);
 }
 
-test "a quoted run in single quotes is one diagnostic and still an operand" {
-    // Both habits land here: `'x'` from C, `'hello'` from Python.
-    for ([_][]const u8{ "a = '('\n", "a = 'hello'\n", "a = ''\n" }) |source| {
-        try lexWithDiagnostics(
+test "single quotes produce one character-literal token" {
+    for ([_][]const u8{ "a = '('\n", "a = '🙂'\n", "a = '\\n'\n", "a = '\\u{1F44B}'\n" }) |source| {
+        try lexKinds(
             testing.allocator,
             source,
-            &.{ .identifier, .assign, .string_literal, .newline, .end_of_file },
-            &.{"luce.lex.character"},
+            &.{ .identifier, .assign, .char_literal, .newline, .end_of_file },
         );
     }
-    const allocator = testing.allocator;
-    var diagnostics = Diagnostics.init(allocator);
-    defer diagnostics.deinit();
-    const tokens = (try lex(allocator, "a = '('\n", &diagnostics)).tokens;
-    defer allocator.free(tokens);
-    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "ord(") != null);
+    // Cardinality is a parser concern because it requires decoding;
+    // the lexer still keeps each malformed spelling in one token.
+    for ([_][]const u8{ "a = 'hello'\n", "a = ''\n" }) |source| {
+        try lexKinds(
+            testing.allocator,
+            source,
+            &.{ .identifier, .assign, .char_literal, .newline, .end_of_file },
+        );
+    }
 }
 
-test "a lone apostrophe does not swallow the rest of the line" {
-    // Without a stopping rule the scan would run to the next quote and
-    // take real code with it.
+test "an unterminated character literal stops at the line" {
     try lexWithDiagnostics(
         testing.allocator,
         "a = 'x + \"b\"\n",
-        &.{
-            .identifier,     .assign,  .identifier,  .plus,
-            .string_literal, .newline, .end_of_file,
-        },
-        &.{"luce.lex.character"},
+        &.{ .identifier, .assign, .char_literal, .newline, .end_of_file },
+        &.{"luce.lex.char"},
     );
 }
 

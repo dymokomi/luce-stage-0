@@ -36,7 +36,9 @@ pub fn boxTag(of: Type) ?value.Tag {
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
+        .char => .char,
         .str => .str,
+        .bytes => .bytes,
         .strukt => .strukt,
         // A union value is a struct value whose field 0 is the tag
         // (docs/UNION.md D8): to the runtime it is a field run, so it
@@ -192,15 +194,15 @@ pub const Intrinsic = enum {
     function_name,
     parse_int,
     parse_float,
-    /// `parse_string(xs)` — a `list(byte)` as text, or absent when the
-    /// bytes are not valid UTF-8 (docs/BYTES.md R3).  The parse
+    /// `parse_str(data)` — immutable bytes as text, or absent when the
+    /// bytes are not valid UTF-8.  The parse
     /// family's third member, named for what it produces exactly as
     /// its two siblings are: "not text" is the same reason every time,
     /// so absence carries all the information there is.  It is also
     /// the one door into a `string` that did not come from a literal
     /// or another string, which is why the validator behind it is
     /// `libluce_rt`'s and not a host's.
-    parse_string,
+    parse_str,
     chr_code,
     ord_text,
     print,
@@ -406,6 +408,10 @@ pub const Intrinsic = enum {
     /// Appended so the intrinsic tags before them do not renumber.
     retain,
     release,
+    /// `bytes(value)` — a fresh immutable byte run copied from valid
+    /// text, `list[u8]`, or a rank-one `array[u8, _]`.  Appended so
+    /// every earlier intrinsic keeps its wire number.
+    bytes_value,
 
     // -- per-intrinsic facts, classified once ---------------------------
     //
@@ -539,7 +545,7 @@ pub const Intrinsic = enum {
             .function_name,
             .parse_int,
             .parse_float,
-            .parse_string,
+            .parse_str,
             .chr_code,
             .ord_text,
             .own_storage,
@@ -547,6 +553,7 @@ pub const Intrinsic = enum {
             .export_storage,
             .retain,
             .release,
+            .bytes_value,
             => false,
         };
     }
@@ -644,7 +651,7 @@ pub const Intrinsic = enum {
             .function_name,
             .parse_int,
             .parse_float,
-            .parse_string,
+            .parse_str,
             .chr_code,
             .ord_text,
             .print,
@@ -674,6 +681,7 @@ pub const Intrinsic = enum {
             .export_storage,
             .retain,
             .release,
+            .bytes_value,
             => false,
         };
     }
@@ -692,7 +700,7 @@ pub const Intrinsic = enum {
             // duplicates; `own_storage` is the taking of a copy itself.
             .str_value,
             .chr_code,
-            .parse_string,
+            .parse_str,
             .file_read,
             .key_read,
             .read_line,
@@ -701,6 +709,7 @@ pub const Intrinsic = enum {
             .pop_value,
             .copy_object,
             .own_storage,
+            .bytes_value,
             // A worker's result is re-owned into *this* runtime as it
             // crosses the join, so a string that comes back is storage
             // nobody else owns (docs/THREADS.md).
@@ -869,7 +878,7 @@ pub const Intrinsic = enum {
             .function_name,
             .parse_int,
             .parse_float,
-            .parse_string,
+            .parse_str,
             .chr_code,
             .ord_text,
             .print,
@@ -919,6 +928,7 @@ pub const Intrinsic = enum {
             .export_storage,
             .retain,
             .release,
+            .bytes_value,
             => null,
         };
     }

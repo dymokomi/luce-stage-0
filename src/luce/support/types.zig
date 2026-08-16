@@ -80,7 +80,12 @@ pub const Type = union(enum) {
     f16,
     f32,
     f64,
+    /// One Unicode scalar value, stored as a 32-bit code point.
+    char,
+    /// Immutable, valid UTF-8 text.
     str,
+    /// Immutable binary data with no text invariant.
+    bytes,
     strukt: u32,
     heap: u32,
     /// A set of named constants at one integer width (docs/ENUMS.md).
@@ -191,7 +196,9 @@ pub const Type = union(enum) {
         f16,
         f32,
         f64,
+        char,
         str,
+        bytes,
         strukt: u32,
         heap: u32,
         enumeration: EnumRef,
@@ -229,7 +236,9 @@ pub const Type = union(enum) {
                 .f16 => .f16,
                 .f32 => .f32,
                 .f64 => .f64,
+                .char => .char,
                 .str => .str,
+                .bytes => .bytes,
                 .strukt => |index| .{ .strukt = index },
                 .heap => |index| .{ .heap = index },
                 .enumeration => |reference| .{ .enumeration = reference },
@@ -318,7 +327,7 @@ pub const Type = union(enum) {
             .u16, .i16, .f16 => 16,
             .u32, .i32, .f32 => 32,
             .u64, .i64, .f64 => 64,
-            .none, .boolean, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
+            .none, .boolean, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
         };
     }
 
@@ -338,7 +347,7 @@ pub const Type = union(enum) {
             .i16 => .{ .low = std.math.minInt(i16), .high = std.math.maxInt(i16) },
             .i32 => .{ .low = std.math.minInt(i32), .high = std.math.maxInt(i32) },
             .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
-            .none, .boolean, .f16, .f32, .f64, .str, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
+            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
         };
     }
 
@@ -393,6 +402,18 @@ pub const Type = union(enum) {
     /// Asked only of a legal conversion: both ends numeric, and not
     /// the same type.
     pub fn conversionTraps(from: Type, to: Type) bool {
+        // `char(integer)` is checked against the Unicode scalar set,
+        // whose surrogate-shaped hole means no integer width can make
+        // the conversion total.  The one way back, `u32(char)`, is the
+        // scalar's representation and cannot fail.
+        if (to == .char) {
+            std.debug.assert(from.isInteger());
+            return true;
+        }
+        if (from == .char) {
+            std.debug.assert(to == .u32);
+            return false;
+        }
         std.debug.assert(from.isNumeric() and to.isNumeric());
         if (from.isFloating()) return to.isInteger();
         if (to.isFloating()) return false;
@@ -428,7 +449,9 @@ pub const Type = union(enum) {
             .f16 => .{ .optional = .f16 },
             .f32 => .{ .optional = .f32 },
             .f64 => .{ .optional = .f64 },
+            .char => .{ .optional = .char },
             .str => .{ .optional = .str },
+            .bytes => .{ .optional = .bytes },
             .strukt => |index| .{ .optional = .{ .strukt = index } },
             .heap => |index| .{ .optional = .{ .heap = index } },
             // `Shape?` is D14's converse: the cheap half of keeping
@@ -672,7 +695,9 @@ pub const Builtin = enum {
     f16,
     f32,
     f64,
+    char,
     str,
+    bytes,
     list,
     map,
     array,
@@ -722,7 +747,9 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "f16", .is = .f16 },
     .{ .name = "f32", .is = .f32 },
     .{ .name = "f64", .is = .f64 },
+    .{ .name = "char", .is = .char },
     .{ .name = "str", .is = .str },
+    .{ .name = "bytes", .is = .bytes },
     .{ .name = "list", .is = .list },
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
@@ -780,7 +807,7 @@ pub fn retiredSpelling(text: []const u8) ?[]const u8 {
 pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
-        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => builtin,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => builtin,
         .boolean, .list, .map, .array, .builder, .file, .task => null,
     };
 }
@@ -839,7 +866,9 @@ fn writeTypeName(
         .f16 => try written.appendSlice(allocator, "f16"),
         .f32 => try written.appendSlice(allocator, "f32"),
         .f64 => try written.appendSlice(allocator, "f64"),
+        .char => try written.appendSlice(allocator, "char"),
         .str => try written.appendSlice(allocator, "str"),
+        .bytes => try written.appendSlice(allocator, "bytes"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
         .variant => |index| try written.appendSlice(allocator, variants[index].name),

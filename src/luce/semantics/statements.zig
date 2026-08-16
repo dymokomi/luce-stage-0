@@ -1248,20 +1248,26 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     const entry = try flow.narrowSave(self);
     defer self.temporary().free(entry);
     const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
-    const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
-        try self.fail("luce.sema.loop", loop.span, "for iterates a list, a rank-1 array, or a map, not {s}{s}", .{
+    const descriptor = self.analyzer.heapOf(iterable.value_type);
+    const scalar_element: ?Type = switch (iterable.value_type) {
+        .str => .char,
+        .bytes => .u8,
+        else => null,
+    };
+    if (descriptor == null and scalar_element == null) {
+        try self.fail("luce.sema.loop", loop.span, "for iterates str, bytes, a list, a rank-1 array, or a map, not {s}{s}", .{
             try self.analyzer.typeName(iterable.value_type),
             try refusals.absenceAdvice(self, iterable.value_type, loop.iterable),
         });
         return;
-    };
+    }
     // Each collection has a "position" (a map's key, or a
     // list/array's long index) and a "payload" (a map's value, or
     // the element).  `for x in c:` binds the payload for
     // sequences and the key for maps (Python's habit); `for a, b
     // in c:` binds position then payload.
     var position_type: Type = .i64;
-    const payload_type: Type = switch (descriptor) {
+    const payload_type: Type = scalar_element orelse switch (descriptor.?) {
         .list => |element| element,
         .array => |shape| blk: {
             if (shape.rank != 1) {
@@ -1300,7 +1306,7 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     // payload for sequences, key for maps.  Two names: first =
     // position, second = payload.
     const two_names = loop.value_name != null;
-    const map_like = descriptor == .map;
+    const map_like = descriptor != null and descriptor.? == .map;
     const first_type: Type = if (two_names or map_like) position_type else payload_type;
     // A loop name holds a *view* of the element, and the body can
     // invalidate it: an element overwrite frees the old element

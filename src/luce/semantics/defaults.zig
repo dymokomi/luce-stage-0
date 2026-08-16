@@ -342,7 +342,7 @@ fn foldVariantFieldDefault(
 /// wins.
 fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expression) ?[]const u8 {
     switch (expression.*) {
-        .int_literal, .float_literal, .bool_literal, .string_literal, .none_literal => return null,
+        .int_literal, .float_literal, .bool_literal, .char_literal, .string_literal, .none_literal => return null,
         .name => |name| {
             for (declaration.parameters) |parameter| {
                 if (std.mem.eql(u8, parameter.name, name.text)) return name.text;

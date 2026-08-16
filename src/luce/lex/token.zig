@@ -112,6 +112,9 @@ pub const Kind = enum {
     int_literal,
     /// A decimal literal with a fraction, an exponent, or both.
     float_literal,
+    /// `'x'` or `'\u{1F44B}'`, quotes included. The parser decodes and
+    /// verifies that the spelling denotes exactly one Unicode scalar.
+    char_literal,
     /// `"..."`, quotes included; escapes are decoded by the parser.
     string_literal,
     /// f"...{expr}..." — the parser expands it into string()-wrapped

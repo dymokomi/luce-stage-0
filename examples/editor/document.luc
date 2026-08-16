@@ -1,8 +1,8 @@
 # The text buffer and the pure arithmetic over it.
 #
 # Everything here is pure — no host, no terminal, no editing state —
-# so it is the f16 of the editor a test drives directly.  A cursor is
-# a **u8** offset into UTF-8 content; how wide a str *draws* is
+# so it is the core of the editor a test drives directly. A cursor is
+# a Unicode-scalar position; how wide a str *draws* is
 # `strings.width`, a display question this file never asks.  The
 # functions move a cursor between boundaries, find line starts and
 # columns, and splice or erase text, each answering a value the caller
@@ -22,45 +22,36 @@ struct Buffer:
     scroll: i64 = 0
     dirty: bool = false
 
-# --- cursor motion over UTF-8 boundaries -----------------------------
-
-func continuation(code: u8) -> bool:
-    return code >= 128 and code < 192
+# --- cursor motion over Unicode scalars ------------------------------
 
 func previous_boundary(value: str, cursor: i64) -> i64:
     if cursor <= 0:
         return 0
-    var at = cursor - 1
-    while at > 0 and continuation(value.byte_at(at)):
-        at = at - 1
-    return at
+    return cursor - 1
 
 func next_boundary(value: str, cursor: i64) -> i64:
     if cursor >= len(value):
         return len(value)
-    var at = cursor + 1
-    while at < len(value) and continuation(value.byte_at(at)):
-        at = at + 1
-    return at
+    return cursor + 1
 
 # --- lines and columns -----------------------------------------------
 
 func line_start(value: str, cursor: i64) -> i64:
     var at = cursor
-    while at > 0 and value.byte_at(at - 1) != 10:
+    while at > 0 and value[at - 1] != '\n':
         at = at - 1
     return at
 
 func line_end(value: str, cursor: i64) -> i64:
     var at = cursor
-    while at < len(value) and value.byte_at(at) != 10:
+    while at < len(value) and value[at] != '\n':
         at = at + 1
     return at
 
 func line_of(value: str, cursor: i64) -> i64:
     var line = 0
     for at in range(0, cursor):
-        if value.byte_at(at) == 10:
+        if value[at] == '\n':
             line = line + 1
     return line
 
@@ -75,17 +66,17 @@ func column_of(value: str, cursor: i64) -> i64:
         column = column + 1
     return column
 
-# The u8 offset where line `wanted` begins.
+# The scalar position where line `wanted` begins.
 func line_at(value: str, wanted: i64) -> i64:
     var at = 0
     var line = 0
     while line < wanted and at < len(value):
-        if value.byte_at(at) == 10:
+        if value[at] == '\n':
             line = line + 1
         at = at + 1
     return at
 
-# The u8 offset at display `column` in the line beginning at `start`.
+# The scalar position at display `column` in the line beginning at `start`.
 func at_column(value: str, start: i64, column: i64) -> i64:
     var at = start
     var current = 0
@@ -103,8 +94,8 @@ func indentation(value: str, cursor: i64) -> str:
     let start = line_start(value, cursor)
     var at = start
     while at < cursor:
-        let code = value.byte_at(at)
-        if code != 32 and code != 9:
+        let code = value[at]
+        if code != ' ' and code != '\t':
             break
         at = at + 1
     return value[start:at]
@@ -117,24 +108,24 @@ func opens_block(value: str, cursor: i64) -> bool:
     var at = start
     var quoted = false
     var escaped = false
-    var last: u8 = 0
+    var last: char = char(0)
     while at < cursor:
-        let code = value.byte_at(at)
+        let code = value[at]
         if quoted:
             if escaped:
                 escaped = false
-            elif code == 92:
+            elif code == '\\':
                 escaped = true
-            elif code == 34:
+            elif code == '"':
                 quoted = false
-        elif code == 35:
+        elif code == '#':
             break
-        elif code == 34:
+        elif code == '"':
             quoted = true
-        elif code != 32 and code != 9:
+        elif code != ' ' and code != '\t':
             last = code
         at = at + 1
-    return not quoted and last == 58
+    return not quoted and last == ':'
 
 # --- editing (str in, str out) ---------------------------------
 

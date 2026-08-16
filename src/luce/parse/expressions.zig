@@ -67,6 +67,7 @@ pub fn startsExpression(kind: Kind) bool {
     return switch (kind) {
         .int_literal,
         .float_literal,
+        .char_literal,
         .string_literal,
         .fstring,
         .identifier,
@@ -590,6 +591,10 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
         .keyword_none => {
             const item = self.advance();
             return make(self, .{ .none_literal = .{ .span = item.span } });
+        },
+        .char_literal => {
+            const item = self.advance();
+            return make(self, .{ .char_literal = .{ .value = try decodeChar(self, item), .span = item.span } });
         },
         .string_literal => {
             const item = self.advance();
@@ -1279,6 +1284,69 @@ fn topLevelColon(bytes: []const u8) ?usize {
 /// `least` is the shortest closed form (2 for `""`, 3 for `f""`).
 fn closedLiteral(raw: []const u8, least: usize) bool {
     return raw.len >= least and raw[raw.len - 1] == '"';
+}
+
+fn decodeChar(self: *Parser, item: Token) Error!u32 {
+    const raw = self.text(item);
+    // The lexer already diagnosed an unterminated token.  A closed
+    // two-byte spelling is different: `''` is the empty literal and
+    // belongs to the cardinality diagnostic below.
+    if (raw.len < 2 or raw[raw.len - 1] != '\'') return 0;
+    const inner = raw[1 .. raw.len - 1];
+    if (inner.len == 0) {
+        try self.report("luce.parse.char", item.span, "a character literal contains exactly one Unicode scalar; this one is empty", .{});
+        return 0;
+    }
+    if (inner[0] == '\\') return decodeCharEscape(self, item, inner);
+
+    const length = std.unicode.utf8ByteSequenceLength(inner[0]) catch {
+        try self.report("luce.parse.char", item.span, "malformed Unicode scalar in character literal", .{});
+        return 0;
+    };
+    if (length != inner.len) {
+        try self.report("luce.parse.char", item.span, "a character literal contains exactly one Unicode scalar; this one contains more than one", .{});
+        return 0;
+    }
+    return std.unicode.utf8Decode(inner[0..length]) catch {
+        try self.report("luce.parse.char", item.span, "malformed Unicode scalar in character literal", .{});
+        return 0;
+    };
+}
+
+fn decodeCharEscape(self: *Parser, item: Token, inner: []const u8) Error!u32 {
+    if (inner.len == 2) return switch (inner[1]) {
+        'n' => '\n',
+        't' => '\t',
+        '\\' => '\\',
+        '\'' => '\'',
+        '"' => '"',
+        else => {
+            try self.report("luce.parse.char", item.span, "unknown character escape", .{});
+            return 0;
+        },
+    };
+    if (!std.mem.startsWith(u8, inner, "\\u{") or inner[inner.len - 1] != '}') {
+        try self.report("luce.parse.char", item.span, "a Unicode character escape is written \\u{{HEX}}", .{});
+        return 0;
+    }
+    const digits = inner[3 .. inner.len - 1];
+    if (digits.len == 0 or digits.len > 6) {
+        try self.report("luce.parse.char", item.span, "a Unicode character escape needs one to six hexadecimal digits", .{});
+        return 0;
+    }
+    const scalar = std.fmt.parseInt(u32, digits, 16) catch {
+        try self.report("luce.parse.char", item.span, "a Unicode character escape contains a non-hexadecimal digit", .{});
+        return 0;
+    };
+    if (!isUnicodeScalar(scalar)) {
+        try self.report("luce.parse.char", item.span, "U+{X} is not a Unicode scalar value", .{scalar});
+        return 0;
+    }
+    return scalar;
+}
+
+fn isUnicodeScalar(value: u32) bool {
+    return value <= 0x10ffff and !(value >= 0xd800 and value <= 0xdfff);
 }
 
 /// The empty string a truncated literal stands in as.  Stage 2 already

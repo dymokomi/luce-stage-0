@@ -1459,7 +1459,7 @@ pub const FunctionBuilder = struct {
     /// type, and everything a position can address — a list, an array,
     /// a string being sliced — takes a `long`.
     fn subscriptType(self: *FunctionBuilder, container: Type) ?Type {
-        if (container == .str) return .i64;
+        if (container == .str or container == .bytes) return .i64;
         const descriptor = self.analyzer.heapOf(container) orelse return null;
         return switch (descriptor) {
             .list, .array => .i64,
@@ -1716,6 +1716,12 @@ pub const FunctionBuilder = struct {
                 return .{
                     .node = try recorder.recordNode(self, .{ .const_boolean = .{ .value = literal.value, .result = .boolean, .span = literal.span } }),
                     .value_type = .boolean,
+                };
+            },
+            .char_literal => |literal| {
+                return .{
+                    .node = try recorder.recordNode(self, .{ .const_integer = .{ .value = literal.value, .result = .char, .span = literal.span } }),
+                    .value_type = .char,
                 };
             },
             .string_literal => |literal| {

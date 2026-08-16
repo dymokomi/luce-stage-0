@@ -451,6 +451,19 @@ pub fn build(b: *std.Build) void {
         &addProgressTestRun(b, explicit_type_tests, "explicit-types").step,
     );
 
+    const text_type_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"specs.text_types_spec."},
+        .test_runner = progress_test_runner,
+    });
+    const test_text_types_step = b.step(
+        "test-text-types",
+        "Run char, Unicode text, and immutable bytes specifications",
+    );
+    test_text_types_step.dependOn(
+        &addProgressTestRun(b, text_type_tests, "text-types").step,
+    );
+
     // Keep the highest-risk function/union ownership composition seams addressable
     // without waiting for the bundled applications.  This is a focused
     // differential specification, not a replacement for the full suite.

@@ -502,7 +502,9 @@ pub fn lowerAliasConvert(self: *FunctionBuilder, call: ast.Call, target: Type) E
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
+        .char => .char,
         .str => .str,
+        .bytes => .bytes,
         else => unreachable, // the alias-call dispatcher admits only these
     };
     return lowerConvertAs(self, call, produces);
@@ -535,7 +537,8 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .str, .list, .map, .array, .builder, .file, .task => null,
+        .char => .u32,
+        .boolean, .str, .bytes, .list, .map, .array, .builder, .file, .task => null,
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
@@ -545,6 +548,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // an f-string hole performs for a reader who wrote none.
     if (value.value_type == .enumeration) {
         if (produces == .str) return lowerEnumName(self, value, call.span);
+        if (produces == .char or produces == .bytes) return failConvert(self, call, value, produces);
         return lowerEnumToNumber(self, call, value, produces);
     }
     // `string(u)` is the member's **name**, by the enum mechanism
@@ -576,6 +580,47 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
             .value_type = .str,
         };
     }
+    if (produces == .char) {
+        if (value.value_type == .char) return value;
+        if (!value.value_type.isInteger()) return failConvert(self, call, value, produces);
+        return .{
+            .node = try recorder.recordCallNode(
+                self,
+                .{ .conversion = .char },
+                &.{.{ .node = value.node, .slot = 0 }},
+                1,
+                false,
+                .char,
+                call.span,
+            ),
+            .value_type = .char,
+        };
+    }
+    if (produces == .bytes) {
+        if (value.value_type == .bytes) return value;
+        const byte_sequence = if (self.analyzer.heapOf(value.value_type)) |descriptor| switch (descriptor) {
+            .list => |element| element == .u8,
+            .array => |shape| shape.rank == 1 and shape.element == .u8,
+            .map, .builder, .file, .task => false,
+        } else false;
+        if (value.value_type != .str and !byte_sequence) {
+            return failConvert(self, call, value, produces);
+        }
+        const answer: Typed = .{
+            .node = try recorder.recordCallNode(
+                self,
+                .{ .conversion = .bytes },
+                &.{.{ .node = value.node, .slot = 0 }},
+                1,
+                false,
+                .bytes,
+                call.span,
+            ),
+            .value_type = .bytes,
+        };
+        try ledger.parkFreshStorage(self, answer, call.span);
+        return answer;
+    }
     if (produces == .str) {
         switch (value.value_type) {
             // The identity: `string(s)` emits nothing and answers
@@ -583,7 +628,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
             // `nodes.provenance` never claims fresh bytes an
             // identity does not make (the section comment above).
             .str => return value,
-            .u8, .i16, .i32, .i64, .f16, .f32, .f64, .boolean => {},
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .boolean => {},
             .heap => {
                 const descriptor = self.analyzer.heapOf(value.value_type).?;
                 if (descriptor == .builder) {
@@ -634,12 +679,16 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
     if (value.value_type.eql(target)) return value;
-    if (!value.value_type.isNumeric()) return failConvert(self, call, value, produces);
+    if (value.value_type == .char) {
+        if (target != .u32) return failConvert(self, call, value, produces);
+    } else if (!value.value_type.isNumeric()) {
+        return failConvert(self, call, value, produces);
+    }
     return .{
         .node = try recorder.recordCallNode(
             self,
@@ -681,7 +730,7 @@ fn lowerEnumToNumber(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
     };
     return .{
         // The same node shape as the numeric constructors: one
@@ -816,32 +865,6 @@ pub fn lowerIntrinsic(
         if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
     } else return .not_builtin;
 
-    // `ord` of a literal folds to its codepoint.  That is what
-    // lets the language do without character-literal syntax
-    // altogether: `byte_at(s, i) == ord("(")` reads better than
-    // `== 40` and now costs exactly the same.  An empty literal
-    // is left alone — it traps at run time, and a fold that
-    // changed that would be a fold that changed the program.
-    if (matched.kind == .ord_text and call.arguments.len == 1 and
-        helpers.argumentMayName(call.arguments[0], "text") and
-        call.arguments[0].value.* == .string_literal)
-    {
-        if (helpers.ordOfLiteral(call.arguments[0].value.string_literal.decoded)) |codepoint| {
-            // The fold hands lower a constant, so the tree says
-            // constant — the same shape a folded file-scope
-            // constant records (`emitConstant`), at the call's
-            // span.
-            return .{ .value = .{
-                .node = try recorder.recordNode(self, .{ .const_integer = .{
-                    .value = codepoint,
-                    .result = .i64,
-                    .span = call.span,
-                } }),
-                .value_type = .i64,
-            } };
-        }
-    }
-
     if (matched.host and !self.analyzer.options.allow_host) {
         try self.fail(
             "luce.sema.host",
@@ -952,7 +975,8 @@ pub fn lowerIntrinsic(
             // runtime switch whose file/task arm is `unreachable`.  The
             // gate now asks the descriptor, so the predicate and the
             // sentence say the same thing.
-            const measurable = arguments[0].value_type == .str or measure: {
+            const measurable = arguments[0].value_type == .str or
+                arguments[0].value_type == .bytes or measure: {
                 const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse break :measure false;
                 break :measure switch (descriptor) {
                     .list, .map, .array, .builder => true,
@@ -968,12 +992,12 @@ pub fn lowerIntrinsic(
                     try self.fail(
                         "luce.sema.type",
                         call.span,
-                        "len takes a str, list, map, array, or builder; {s} is a resource, not a container, and has no length",
+                        "len takes str, bytes, list, map, array, or builder; {s} is a resource, not a container, and has no length",
                         .{try self.analyzer.typeName(arguments[0].value_type)},
                     );
                     return .failed;
                 }
-                return failIntrinsic(self, call, "len takes a str, list, map, array, or builder");
+                return failIntrinsic(self, call, "len takes str, bytes, list, map, array, or builder");
             }
             result = .i64;
         },
@@ -990,22 +1014,16 @@ pub fn lowerIntrinsic(
         },
         // The parse family's third member (docs/BYTES.md R3): the
         // bytes back as text, or absent when they are not text.
-        .parse_string => {
-            const buffer = try resolve.internHeapType(self.analyzer, .{ .list = .u8 });
-            if (!arguments[0].value_type.eql(buffer))
-                return failIntrinsic(self, call, "parse_string takes a list[u8]");
+        .parse_str => {
+            if (arguments[0].value_type != .bytes)
+                return failIntrinsic(self, call, "parse_str takes bytes");
             result = .{ .optional = .str };
         },
-        .chr_code => {
-            if (!try self.widensInto(&arguments[0], .i64))
-                return failIntrinsic(self, call, "chr takes an i64 codepoint");
-            result = .str;
-        },
-        .ord_text => {
-            if (arguments[0].value_type != .str)
-                return failIntrinsic(self, call, "ord takes a str");
-            result = .i64;
-        },
+        // Retired source builtins. Their opcodes remain readable in
+        // old and adversarial MIR, but no row in `builtins` can route
+        // source here.
+        .chr_code,
+        .ord_text,
         // Lowered from syntax or method calls, never from bare names.
         .own_storage,
         .drop_storage,
@@ -1021,6 +1039,7 @@ pub fn lowerIntrinsic(
         // Emitted by `string(x)` and by `builder.build()`, both of
         // which are resolved before this table is consulted.
         .str_value,
+        .bytes_value,
         // The same, one type later: `string(f)` on a function value
         // (docs/FUNCTIONS.md D3).
         .function_name,

@@ -101,6 +101,11 @@ pub const Tag = enum(u8) {
     u16 = 14,
     u32 = 15,
     u64 = 16,
+    /// One Unicode scalar value in the low 32 bits.
+    char = 17,
+    /// Immutable binary data using the same inline/outside storage shape
+    /// as text, but without a UTF-8 invariant.
+    bytes = 18,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -235,11 +240,19 @@ pub const Value = extern struct {
         return .{ .tag = .u64, .bits = held };
     }
 
+    pub fn ofChar(held: u32) Value {
+        return .{ .tag = .char, .bits = held };
+    }
+
     /// Text that lives somewhere else — a program constant, an owned
     /// allocation, a borrow of either.  This is the form every *view*
     /// takes, because a view must not copy.
     pub fn ofStr(held: []const u8) Value {
         return ofOutside(.str, held);
+    }
+
+    pub fn ofBytes(held: []const u8) Value {
+        return ofOutside(.bytes, held);
     }
 
     /// The same, for a caller that already has the tag in hand.
@@ -342,6 +355,10 @@ pub const Value = extern struct {
         return self.bits;
     }
 
+    pub fn asChar(self: Value) u32 {
+        return @truncate(self.bits);
+    }
+
     /// The text this value holds.
     ///
     /// **The receiver is a pointer on purpose.**  Inline text lives in
@@ -351,6 +368,10 @@ pub const Value = extern struct {
     /// across anything that could move or overwrite that place
     /// (docs/STRINGS.md).
     pub fn asStr(self: *const Value) []const u8 {
+        return self.textOf();
+    }
+
+    pub fn asBytes(self: *const Value) []const u8 {
         return self.textOf();
     }
 
@@ -371,6 +392,22 @@ pub const Value = extern struct {
     pub fn hasValidStringRepresentation(self: Value) bool {
         const tag = self.validTag() orelse return false;
         if (tag != .str) return false;
+        // This is a representation check at an untrusted ABI boundary,
+        // not a content walk.  An outside pointer can be proved non-null,
+        // non-wrapping, and correctly shaped here; it cannot be safely
+        // dereferenced merely because foreign code supplied an address.
+        // Luce's constructors and parsers establish the UTF-8 invariant
+        // when text enters the runtime.
+        return self.hasValidInlineOrOutsideBytes();
+    }
+
+    pub fn hasValidBytesRepresentation(self: Value) bool {
+        const tag = self.validTag() orelse return false;
+        if (tag != .bytes) return false;
+        return self.hasValidInlineOrOutsideBytes();
+    }
+
+    fn hasValidInlineOrOutsideBytes(self: Value) bool {
         if (self.inline_length == text_outside) {
             return self.hasValidByteRun();
         }
@@ -397,6 +434,7 @@ pub const Value = extern struct {
         const tag = self.validTag() orelse return false;
         return switch (tag) {
             .str => self.hasValidStringRepresentation(),
+            .bytes => self.hasValidBytesRepresentation(),
             .strukt => self.hasValidFieldRun(),
             // An unwritten function slot is a valid null function: its
             // ABI shape is still the two-slot run, but there is no
@@ -430,7 +468,7 @@ pub const Value = extern struct {
     pub fn ownsStorage(self: Value) bool {
         const tag = self.validTag() orelse return false;
         return switch (tag) {
-            .str => !self.textIsInline() and self.bits != 0 and self.length != 0,
+            .str, .bytes => !self.textIsInline() and self.bits != 0 and self.length != 0,
             .strukt, .function => self.bits != 0 and self.length != 0,
             else => false,
         };
@@ -515,7 +553,9 @@ pub const Value = extern struct {
             .f16 => .{ .f16 = self.asF16() },
             .f32 => .{ .f32 = self.asF32() },
             .f64 => .{ .f64 = self.asF64() },
+            .char => .{ .char = self.asChar() },
             .str => .{ .str = self.asStr() },
+            .bytes => .{ .bytes = self.asBytes() },
             .strukt => .{ .strukt = self.asStruct() },
             .function => .{ .function = self.asStruct() },
             .object => .{ .object = self.asObject() },
@@ -539,7 +579,9 @@ pub const View = union(enum) {
     f16: f16,
     f32: f32,
     f64: f64,
+    char: u32,
     str: []const u8,
+    bytes: []const u8,
     strukt: []Value,
     /// A function value's run: the same shape a struct's run has, and a
     /// separate arm because the objects inside one are **borrowed**, so
@@ -563,8 +605,13 @@ pub fn keyEquals(left: *const Value, right: *const Value) bool {
         .i16 => left.asI16() == right.asI16(),
         .i32 => left.asI32() == right.asI32(),
         .i64 => left.asI64() == right.asI64(),
+        .char => left.asChar() == right.asChar(),
         .str => if (left.hasValidStringRepresentation() and right.hasValidStringRepresentation())
             std.mem.eql(u8, left.asStr(), right.asStr())
+        else
+            false,
+        .bytes => if (left.hasValidBytesRepresentation() and right.hasValidBytesRepresentation())
+            std.mem.eql(u8, left.asBytes(), right.asBytes())
         else
             false,
         else => false,

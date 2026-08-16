@@ -1,9 +1,12 @@
 # Types
 
 Luce is statically typed and supports inference. Every expression has exactly
-one type, known at compile time. Widening is implicit along each
-numeric ladder and, across the two, only into `double`. **Nothing
-narrows implicitly** — not in any direction and not in any context.
+one type, known at compile time. Concrete numeric values do not change width
+or signedness implicitly; a literal can take its type from context.
+
+The complete built-in vocabulary is `bool`; `u8`, `u16`, `u32`, `u64`,
+`i8`, `i16`, `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`, `bytes`;
+`list`, `map`, `array`, `builder`, `file`, and `task`.
 
 An annotation is optional wherever the initializer decides the type,
 and required where nothing does — an empty list literal, a `var` with
@@ -13,13 +16,13 @@ no value.
 
 The lines between them decide everything about memory.
 
-**Values** copy on assignment and on call: the seven numbers, `bool`,
-`string`, structs, unions, enums, and plain function values. A value may
+**Values** copy on assignment and on call: numbers, `bool`, `char`, `str`,
+`bytes`, structs, unions, enums, and plain function values. A value may
 contain references. Copying it copies value fields and retains reference
 fields.
 
-**References** share one runtime object: `list(T)`, `map(K, V)`,
-`array(T, ...)`, `builder`, `file`, and `task(...)`. They are created by
+**References** share one runtime object: `list[T]`, `map[K, V]`,
+`array[T, ...]`, `builder`, `file`, and `task(...)`. They are created by
 a literal, `new`, a host/library operation, or `spawn`. Assignment,
 arguments, results, fields, optionals, and container slots share the same
 object. ARC destroys it after its last strong reference.

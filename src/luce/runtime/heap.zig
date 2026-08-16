@@ -333,6 +333,7 @@ pub const Object = struct {
                 .i16 => Value.ofI16(self.cells(i16)[index]),
                 .u8 => Value.ofU8(self.cells(u8)[index]),
                 .i8 => Value.ofI8(self.cells(i8)[index]),
+                .char => Value.ofChar(self.cells(u32)[index]),
                 .boolean => Value.ofBoolean(self.cells(u8)[index] != 0),
             };
         }
@@ -354,6 +355,7 @@ pub const Object = struct {
                 .i16 => self.cells(i16)[index] = held.asI16(),
                 .u8 => self.cells(u8)[index] = held.asU8(),
                 .i8 => self.cells(i8)[index] = held.asI8(),
+                .char => self.cells(u32)[index] = held.asChar(),
                 .boolean => self.cells(u8)[index] = @intFromBool(held.asBoolean()),
             }
         }
@@ -374,6 +376,7 @@ pub const Object = struct {
                 .i16 => @memset(self.cells(i16), held.asI16()),
                 .u8 => @memset(self.cells(u8), held.asU8()),
                 .i8 => @memset(self.cells(i8), held.asI8()),
+                .char => @memset(self.cells(u32), held.asChar()),
                 .boolean => @memset(self.cells(u8), @intFromBool(held.asBoolean())),
             }
         }
@@ -530,6 +533,8 @@ pub const Object = struct {
         u16 = 10,
         u32 = 11,
         u64 = 12,
+        /// A Unicode scalar occupies one 32-bit cell.
+        char = 13,
 
         /// The cell type `Array.cells` reads, so a switch with an
         /// `inline else` gets the storage type for free.
@@ -547,6 +552,7 @@ pub const Object = struct {
                 .u16 => u16,
                 .u32 => u32,
                 .u64 => u64,
+                .char => u32,
                 .boolean => u8,
             };
         }
@@ -565,6 +571,7 @@ pub const Object = struct {
                 .u16 => @sizeOf(u16),
                 .u32 => @sizeOf(u32),
                 .u64 => @sizeOf(u64),
+                .char => @sizeOf(u32),
                 .boolean => 1,
             };
         }
@@ -589,10 +596,11 @@ pub const Object = struct {
                 .u16 => .u16,
                 .u32 => .u32,
                 .u64 => .u64,
+                .char => .char,
                 .boolean => .boolean,
                 // A function value is a boxed run like a struct's, so
                 // its cell is the 24-byte slot (docs/BINDING.md D12).
-                .none, .str, .strukt, .function, .object => .value,
+                .none, .str, .bytes, .strukt, .function, .object => .value,
             };
         }
     };
@@ -819,7 +827,7 @@ pub fn maxElements(kind: Object.ElementKind) usize {
         .u32 => proofCeiling(std.math.maxInt(u32)),
         // A plain `int` sum; no `int` product qualifies at any width.
         .i32 => proofCeiling(1 << 31),
-        .value, .f64, .u64, .i64, .f32, .f16, .boolean => std.math.maxInt(usize) /
+        .value, .f64, .u64, .i64, .f32, .f16, .char, .boolean => std.math.maxInt(usize) /
             kind.width(),
     };
 }
@@ -1639,8 +1647,8 @@ pub const Runtime = struct {
     pub fn ownValue(self: *Runtime, held: Value) Error!Value {
         if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         switch (held.tag) {
-            .str => {
-                const text = held.asStr();
+            .str, .bytes => {
+                const text = if (held.tag == .str) held.asStr() else held.asBytes();
                 // Short text is the value: copying the slot copies the
                 // bytes, so there is nothing to allocate and nothing to
                 // give back.  This is where the allocation copy-on-store
@@ -1681,7 +1689,7 @@ pub const Runtime = struct {
     pub fn dropStorage(self: *Runtime, held: Value) void {
         if (!held.hasValidRepresentation()) return;
         switch (held.tag) {
-            .str => {
+            .str, .bytes => {
                 // Inline text is the value, and a value is not an
                 // allocation: there is nothing here to give back.
                 if (!held.ownsStorage()) return;
@@ -1706,7 +1714,7 @@ pub const Runtime = struct {
             // An emptied String is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
-            .str, .strukt, .function => .{ .tag = held.tag },
+            .str, .bytes, .strukt, .function => .{ .tag = held.tag },
             else => held,
         };
     }
@@ -1727,9 +1735,9 @@ pub const Runtime = struct {
     /// before short text lived in the value at all.
     pub fn exportValue(self: *Runtime, held: Value) Error!Value {
         switch (held.tag) {
-            .str => {
+            .str, .bytes => {
                 if (!held.textIsInline()) return held;
-                const text = held.asStr();
+                const text = if (held.tag == .str) held.asStr() else held.asBytes();
                 // Empty text has nothing to allocate and no address
                 // worth handing out, so it leaves as the static one.
                 if (text.len == 0) return .ofOutside(held.tag, "");

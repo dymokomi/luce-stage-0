@@ -205,10 +205,9 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .parse_float,
         => .pure,
 
-        // `parse_string` is the parse family's third member and the
-        // one exception to their purity: it reads a list's elements,
-        // which an append can change, and it makes fresh owned text.
-        .parse_string => .impure,
+        // `parse_str` validates immutable bytes and makes fresh owned
+        // text. Allocation gives the result identity.
+        .parse_str => .impure,
         // A slice is a borrow and the rest answer scalars, so none of
         // these allocates.
         .string_slice,
@@ -220,7 +219,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // Both make fresh owned text, so both have an identity
         // (docs/STRINGS.md); `str` of a builder reads the heap on top
         // of that.
-        .chr_code, .str_value => .impure,
+        .chr_code, .str_value, .bytes_value => .impure,
 
         // Reads of the heap.  These *are* deterministic between two
         // mutations, and folding them is exactly the optimization LLVM
@@ -413,7 +412,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .string_find_byte,
             .parse_int,
             .parse_float,
-            .parse_string,
+            .parse_str,
             .chr_code,
             .ord_text,
             .null_object,
@@ -422,6 +421,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .optional_wrap,
             .optional_unwrap,
             .str_value,
+            .bytes_value,
             .assert_true,
             .trap_message,
             // Ending the run touches no handle either — the frame

@@ -33,102 +33,81 @@ not syntax. Do not use either as if the target semantics had shipped.
 [ROADMAP.md](ROADMAP.md) specifies their destination and acceptance tests.
 [MEMORY.md](MEMORY.md) is the source of truth for current behavior.
 
-## The numeric ladder
+## Numeric types
 
-There are seven numeric types on two ladders — four integers and three
-floats — sized the way Java, C, C# and every GPU API size them.
+There are eight fixed-width integers and three IEEE floating-point types.
+Every one is a real arithmetic type; no value promotes implicitly.
 
 | Type | Bits | Kind | Range | Role |
 |---|---:|---|---|---|
-| `byte` | 8 | unsigned integer | 0 … 255 | storage |
-| `short` | 16 | signed integer | −32 768 … 32 767 | storage |
-| `int` | 32 | signed integer | ±2.147 × 10⁹ | arithmetic; the default for an integer literal |
-| `long` | 64 | signed integer | ±9.223 × 10¹⁸ | arithmetic |
-| `half` | 16 | binary16 float | ±65 504, ~3 digits | storage |
-| `float` | 32 | binary32 float | ±3.4 × 10³⁸, ~7 digits | arithmetic; the default for a float literal |
-| `double` | 64 | binary64 float | ±1.8 × 10³⁰⁸, ~16 digits | arithmetic |
+| `u8` | 8 | unsigned integer | 0 … 255 | arithmetic and storage |
+| `u16` | 16 | unsigned integer | 0 … 65 535 | arithmetic and storage |
+| `u32` | 32 | unsigned integer | 0 … 2³²−1 | arithmetic and storage |
+| `u64` | 64 | unsigned integer | 0 … 2⁶⁴−1 | arithmetic and storage |
+| `i8` | 8 | signed integer | −128 … 127 | arithmetic and storage |
+| `i16` | 16 | signed integer | −32 768 … 32 767 | arithmetic and storage |
+| `i32` | 32 | signed integer | −2³¹ … 2³¹−1 | arithmetic and storage |
+| `i64` | 64 | signed integer | −2⁶³ … 2⁶³−1 | arithmetic; default integer |
+| `f16` | 16 | IEEE binary16 | finite through ±65 504 | arithmetic and storage |
+| `f32` | 32 | IEEE binary32 | about 7 decimal digits | arithmetic and storage |
+| `f64` | 64 | IEEE binary64 | about 16 decimal digits | arithmetic; default float |
 
-`byte` is the only unsigned numeric type, and the only one there is:
-`short`, `int` and `long` are signed. The four integer types are
-**checked** — an operation whose result does not fit traps
+The integer types are **checked** — an operation whose result does not fit traps
 `integer_overflow` rather than wrapping (`docs/NUMERICS.md`). The three
 floats follow IEEE 754 and do not trap; they reach `inf` and `NaN`
 instead.
 
-## Storage types and arithmetic types
-
-Three of the seven — `byte`, `short` and `half` — are **storage types**.
-No expression ever *has* one of them: an operator widens `byte` and
-`short` to `int`, and `half` to `float`, before it does anything. So
-there are four arithmetic types, not seven, and there is no checked
-arithmetic at 8 or 16 bits and no binary16 arithmetic on any machine.
-
-A storage type is what an annotation, a parameter, a struct field, and
-above all an array element may say. What they are for is `array(byte, _)`
-at one byte an element — an eighth of what the same array of `long`
-costs, and the same vector register holding four `float`s where it held
-two `double`s.
+Every numeric type computes at its own width. This keeps an annotation,
+parameter, field, and array element honest about both storage and arithmetic.
 
 ```luce
 func main():
     var a: u8 = 255
     var b: u8 = 1
-    print(str(a + b))     # 256 — the i32 value, not a wrap
+    print(str(a + b))     # traps integer_overflow at u8
 
     let pixels = new array[u8](3)
     pixels[0] = 200          # 200 fits a u8
     print(str(pixels[0]))
 ```
 
-Storing a value back into a storage type is a checked narrowing:
-`pixels[0] = 300` traps `conversion_range`, because 300 is not a `byte`.
+An out-of-range literal is rejected at compile time. A runtime conversion
+such as `u8(wide)` traps `conversion_range` when the value does not fit.
 
-## Implicit widening
+## Explicit representation changes
 
-A value widens **upward on its own ladder** with nothing written down:
-
-- `byte` → `short`, `int`, `long`
-- `short` → `int`, `long`
-- `int` → `long`
-- `half` → `float`
-
-**Across the two ladders the target is always `double`**: `int` and
-`long` widen to `double` (an `int` exactly, a `long` exactly below
-2⁵³), and `half` and `float` widen to `double`. There is no implicit
-`int` → `float`, because a 32-bit float cannot hold every 32-bit
-integer; a program that wants one writes `float(x)`.
+Concrete numeric types never widen or narrow implicitly. Literals take a
+type from context; values cross a representation boundary through a
+constructor named for the destination.
 
 ```luce
 func main():
     let n: i32 = 100
-    let wide: i64 = n       # i32 widens to i64
-    let d: f64 = n        # and to f64
+    let wide: i64 = i64(n)
+    let d: f64 = f64(n)
     let f: f32 = 1         # a literal lands on f32 directly
-    print(str(wide + d + f))
+    print(str(wide) + " " + str(d) + " " + str(f))
 ```
 
-**Narrowing is never implicit** — not `long` into `int`, not `double`
-into `float`, not `int` into `byte`, and not at a store, an argument, or
-a return. It is always spelled with a conversion constructor named for
-its target (`docs/NUMERICS.md`).
+This rule applies to assignment, calls, returns, comparisons, operators,
+and container stores (`docs/NUMERICS.md`).
 
 ```luce refused
 func main():
-    let wide: long = 5
-    let narrow: int = wide   # narrowing is never implicit
-    print(string(narrow))
+    let wide: i64 = 5
+    let narrow: i32 = wide   # representation changes are never implicit
+    print(str(narrow))
 ```
 
-## `bool` and `string`
+## `bool`, `char`, `str`, and `bytes`
 
 `bool` is `true` or `false`, and is the only type a condition may have —
 there is no truthiness, and no numeric type is a `bool`.
 
-`string` is an immutable UTF-8 value. It copies like any value type,
-compares with `==` and `<`, concatenates with `+`, and supports slicing
-`s[a:b]`, `len(s)`, and byte access; the richer operations live in
-`std.strings`. Because it is a value, sharing a `string` never shares
-mutable state.
+`char` is one Unicode scalar. `str` is immutable valid UTF-8 whose length,
+indexing, slicing, and iteration use scalar positions. `bytes` is immutable
+binary data whose element is `u8`. Raw text bytes remain available through
+`byte_at` and `find_byte`; richer text operations live in `std.strings`.
 
 ## Optionals: `T?`
 
@@ -164,7 +143,7 @@ literal, and parameterized by their element types:
 - `builder` — an append-only text buffer, finished with `b.build()`.
 
 ```luce fragment
-let xs = new list[i32]
+let xs = new list[i64]
 xs.append(10)
 xs.append(20)
 let totals = {"a": 1, "b": 2}

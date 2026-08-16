@@ -405,6 +405,7 @@ pub const Lowering = struct {
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
             .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => try self.emit(.{ .const_integer = 0 }, of),
             .f16, .f32, .f64 => try self.emit(.{ .const_float = 0.0 }, of),
+            .char => try self.emit(.{ .const_integer = 0 }, .char),
             // **An enum's zero is its first declared member.**  Zero
             // itself would be a value no member holds — the one thing
             // an enum promises is that every value of it is a member,
@@ -417,6 +418,7 @@ pub const Lowering = struct {
                 of,
             ),
             .str => try self.emit(.{ .const_str = try self.pool.intern("") }, .str),
+            .bytes => try self.emit(.{ .const_str = try self.pool.intern("") }, .bytes),
             // A function value has no zero: every value of the type
             // names a function, and a slot with no function in it names
             // none.  Stage 4 refuses the one declaration that would ask
@@ -445,7 +447,7 @@ pub const Lowering = struct {
                     // and a nested struct's own run moves in whole
                     // (docs/STRINGS.md).
                     slot.* = switch (field.field_type) {
-                        .str => try self.ownStorage(zero),
+                        .str, .bytes => try self.ownStorage(zero),
                         else => zero,
                     };
                 }
@@ -466,7 +468,7 @@ pub const Lowering = struct {
                 for (member.fields, fields) |field, *slot| {
                     const zero = try self.zeroOf(field.field_type);
                     slot.* = switch (field.field_type) {
-                        .str => try self.ownStorage(zero),
+                        .str, .bytes => try self.ownStorage(zero),
                         else => zero,
                     };
                 }

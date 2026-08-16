@@ -49,7 +49,12 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
         .f64 => |held| return floating(op, f64, held, right.asF64()),
         .str => |left_string| {
             // The analyzer only admits + for strings.
-            return text.concat(runtime, left_string, right.asStr());
+            _ = left_string;
+            return text.concat(runtime, left, right);
+        },
+        .bytes => |left_bytes| {
+            _ = left_bytes;
+            return text.concat(runtime, left, right);
         },
         else => unreachable,
     }
@@ -218,6 +223,8 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
     // instead of letting a payload accessor reinterpret unrelated bits.
     if (left.tag == .str and !left.hasValidStringRepresentation()) return false;
     if (right.tag == .str and !right.hasValidStringRepresentation()) return false;
+    if (left.tag == .bytes and !left.hasValidBytesRepresentation()) return false;
+    if (right.tag == .bytes and !right.hasValidBytesRepresentation()) return false;
     switch (left.view()) {
         .u8 => |held| return if (right.tag == .u8) ordered(op, held, right.asU8()) else false,
         .u16 => |held| return if (right.tag == .u16) ordered(op, held, right.asU16()) else false,
@@ -230,9 +237,23 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         .f16 => |held| return if (right.tag == .f16) ordered(op, held, right.asF16()) else false,
         .f32 => |held| return if (right.tag == .f32) ordered(op, held, right.asF32()) else false,
         .f64 => |held| return if (right.tag == .f64) ordered(op, held, right.asF64()) else false,
+        .char => |held| return if (right.tag == .char) ordered(op, held, right.asChar()) else false,
         .str => |held| {
             if (right.tag != .str) return false;
             const order = std.mem.order(u8, held, right.asStr());
+            return switch (op) {
+                .equal => order == .eq,
+                .not_equal => order != .eq,
+                .less => order == .lt,
+                .less_equal => order != .gt,
+                .greater => order == .gt,
+                .greater_equal => order != .lt,
+                else => unreachable,
+            };
+        },
+        .bytes => |held| {
+            if (right.tag != .bytes) return false;
+            const order = std.mem.order(u8, held, right.asBytes());
             return switch (op) {
                 .equal => order == .eq,
                 .not_equal => order != .eq,
@@ -508,7 +529,9 @@ pub fn orderedBefore(context: void, left: Value, right: Value) bool {
         .f16 => |held| held < right.asF16(),
         .f32 => |held| held < right.asF32(),
         .f64 => |held| held < right.asF64(),
+        .char => |held| held < right.asChar(),
         .str => |held| std.mem.order(u8, held, right.asStr()) == .lt,
+        .bytes => |held| std.mem.order(u8, held, right.asBytes()) == .lt,
         else => unreachable,
     };
 }
@@ -577,6 +600,18 @@ pub fn logicalNot(operand: Value) Value {
 /// an integer, and an integer landing on a narrower one — and both
 /// answer `conversion_range`.  The other two always have an answer.
 pub fn convert(runtime: *Runtime, operand: Value, to: value.Tag) Error!Value {
+    if (to == .char) {
+        if (!integerTag(operand.tag)) return runtime.fail(.not_owned);
+        const scalar = wideInteger(operand);
+        if (scalar < 0 or scalar > 0x10ffff or (scalar >= 0xd800 and scalar <= 0xdfff)) {
+            return runtime.fail(.bad_codepoint);
+        }
+        return Value.ofChar(@intCast(scalar));
+    }
+    if (operand.tag == .char) {
+        if (to != .u32) return runtime.fail(.not_owned);
+        return Value.ofU32(operand.asChar());
+    }
     // Each family is read at its widest member first, which is exact
     // for every source: every integer width fits an `i64`, and `half`
     // and `float` are both exactly representable in `f64`.  So the
@@ -600,7 +635,7 @@ fn integerTag(tag: value.Tag) bool {
     return switch (tag) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => true,
         .f16, .f32, .f64 => false,
-        .none, .boolean, .str, .strukt, .function, .object => unreachable,
+        .none, .boolean, .char, .str, .bytes, .strukt, .function, .object => unreachable,
     };
 }
 

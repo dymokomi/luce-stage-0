@@ -4084,8 +4084,8 @@ test "luce.sema.index: only a string is sliced, so a number is refused" {
     try expectRejected("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: a string is sliced, not indexed" {
-    try expectRejected("func main():\n    let s = \"abc\"\n    let c = s[0]\n", "luce.sema.index");
+test "luce.sema.index: a string index must be i64" {
+    try expectRejected("func main():\n    let s = \"abc\"\n    let c = s[true]\n", "luce.sema.index");
 }
 
 test "luce.sema.index: a list indexes with a long, not a bool" {
@@ -4423,8 +4423,8 @@ test "luce.sema.const: a non-finite default f64 constant is rejected as well" {
     try expectRejected("const a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
-test "luce.sema.const: ord of an empty str has no codepoint to fold" {
-    try expectRejected("const a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+test "luce.sema.const: an invalid char constant has no value to fold" {
+    try expectRejected("const a = char(1114112)\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
 // ---------------------------------------------------------------------------

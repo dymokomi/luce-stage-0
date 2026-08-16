@@ -389,12 +389,12 @@ const Module = struct {
             .boolean => .i1,
             .u8, .i8 => .i8,
             .u16, .i16 => .i16,
-            .u32, .i32 => .i32,
+            .u32, .i32, .char => .i32,
             .u64, .i64 => .i64,
             .f16 => .half,
             .f32 => .float,
             .f64 => .double,
-            .str => self.string_type,
+            .str, .bytes => self.string_type,
             // A heap object is a `runtime.Handle`: the row of the
             // object table it lives in, and which occupant of that
             // row it is, packed as the `Value.bits` word carries them
@@ -610,12 +610,13 @@ const Module = struct {
         return switch (of) {
             .boolean, .u8, .i8 => Builder.Alignment.fromByteUnits(1),
             .u16, .i16, .f16 => Builder.Alignment.fromByteUnits(2),
-            .u32, .i32, .f32 => Builder.Alignment.fromByteUnits(4),
+            .u32, .i32, .f32, .char => Builder.Alignment.fromByteUnits(4),
             .none,
             .u64,
             .i64,
             .f64,
             .str,
+            .bytes,
             .strukt,
             .variant,
             .function,
@@ -975,7 +976,9 @@ const Module = struct {
             .f16 => .{ .f16, try self.builder.intConst(.i64, 0) },
             .f32 => .{ .f32, try self.builder.intConst(.i64, 0) },
             .f64 => .{ .f64, try self.builder.intConst(.i64, 0) },
+            .char => .{ .char, try self.builder.intConst(.i64, 0) },
             .str => .{ .str, try self.builder.intConst(.i64, 0) },
+            .bytes => .{ .bytes, try self.builder.intConst(.i64, 0) },
             .heap => .{ .object, try self.builder.intConst(.i64, runtime.null_index) },
             .strukt => |nested| .{ .strukt, try self.builder.castConst(
                 .ptrtoint,
@@ -1011,7 +1014,7 @@ const Module = struct {
         // null address, none of them — which reads as `""` and owns
         // nothing, the same value `Value.ofStr("")` is.
         const form: u8 = switch (of) {
-            .str => runtime.text_outside,
+            .str, .bytes => runtime.text_outside,
             else => 0,
         };
         const head = try self.builder.arrayType(8 - runtime.inline_at, .i8);
@@ -1058,7 +1061,7 @@ const Module = struct {
                 break :blk try self.builder.intConst(.i64, @intFromBool(held));
             },
             .integer => |held| blk: {
-                if (!stored.isInteger()) return self.fail("an integer constant at another type");
+                if (!stored.isInteger() and stored != .char) return self.fail("an integer constant at another type");
                 break :blk try self.builder.intConst(
                     .i64,
                     @as(i64, @bitCast(narrowBits(held, stored))),
@@ -1082,7 +1085,7 @@ const Module = struct {
                 break :blk try self.builder.intConst(.i64, @as(i64, @bitCast(raw)));
             },
             .str => |index| blk: {
-                if (stored != .str) return self.fail("a str constant at another type");
+                if (stored != .str and stored != .bytes) return self.fail("a byte-run constant at another type");
                 const text = self.program.constants[index];
                 form = runtime.text_outside;
                 length = text.len;
@@ -1490,7 +1493,7 @@ const Module = struct {
     /// that stays true by construction and not by luck.
     fn constantOwnsStorage(of: types.Type) bool {
         return switch (of) {
-            .str, .strukt, .variant => true,
+            .str, .bytes, .strukt, .variant => true,
             .optional => |payload| constantOwnsStorage(payload.asType()),
             // Scalars are their own storage; an object is a handle the
             // row's container call takes.
@@ -1507,6 +1510,7 @@ const Module = struct {
             .f16,
             .f32,
             .f64,
+            .char,
             .heap,
             .enumeration,
             .function,
@@ -2174,11 +2178,11 @@ const Module = struct {
         return switch (of) {
             .boolean, .u8, .i8 => 1,
             .u16, .i16, .f16 => 2,
-            .u32, .i32, .f32 => 4,
+            .u32, .i32, .f32, .char => 4,
             // A function value travels as the pointer to its run.
             .u64, .i64, .f64, .strukt, .variant, .function, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
-            .str => 16,
+            .str, .bytes => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
             // rounded up to the payload's own alignment.  A Bool
             // payload aligns to 1, so `{i1, i1}` really is two bytes —
@@ -2190,14 +2194,14 @@ const Module = struct {
                 .u16, .i16, .f16 => 4,
                 // {i32, i1} and {float, i1} align to 4, so eight
                 // bytes rather than sixteen.
-                .u32, .i32, .f32 => 8,
+                .u32, .i32, .f32, .char => 8,
                 // A function value travels as the pointer to its run,
                 // so `(func(...) -> R)?` is a pointer beside the bit —
                 // the storable form of every function value
                 // (docs/BINDING.md D7), and the one payload that
                 // reaches here through a *type* rather than a width.
                 .u64, .i64, .f64, .strukt, .variant, .heap, .function => 16,
-                .str => 24,
+                .str, .bytes => 24,
                 .none, .enumeration, .optional => unreachable, // a payload is a value of a width
             },
             // Never reached: a function returning nothing has no slot.
@@ -3142,12 +3146,12 @@ const Body = struct {
             .boolean => .false,
             .u8, .i8 => try self.module.builder.intValue(.i8, 0),
             .u16, .i16 => try self.module.builder.intValue(.i16, 0),
-            .u32, .i32 => try self.module.builder.intValue(.i32, 0),
+            .u32, .i32, .char => try self.module.builder.intValue(.i32, 0),
             .u64, .i64 => try self.module.builder.intValue(.i64, 0),
             .f16 => try self.module.builder.halfValue(0.0),
             .f32 => try self.module.builder.floatValue(0.0),
             .f64 => try self.module.builder.doubleValue(0.0),
-            .str => (try self.module.textConstant("")).toValue(),
+            .str, .bytes => (try self.module.textConstant("")).toValue(),
             // The zero of an object-typed place is the null handle;
             // using it traps rather than touching anything.
             .heap => try self.module.builder.intValue(.i64, runtime.null_index),
@@ -3374,7 +3378,7 @@ const Body = struct {
             // A narrow scalar sits in the low half of the word,
             // zero-extended: `asI32` reads it back by truncating, so
             // the top half is never read and must not be a sign.
-            .u8, .u16, .u32, .i8, .i16, .i32 => try self.wip.cast(.zext, held, .i64, "box.bits"),
+            .u8, .u16, .u32, .i8, .i16, .i32, .char => try self.wip.cast(.zext, held, .i64, "box.bits"),
             .f32 => try self.wip.cast(
                 .zext,
                 try self.wip.cast(.bitcast, held, .i32, "box.word"),
@@ -3388,7 +3392,7 @@ const Body = struct {
                 "box.bits",
             ),
             .strukt, .variant, .function => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
-            .str => try self.wip.cast(
+            .str, .bytes => try self.wip.cast(
                 .ptrtoint,
                 try self.wip.extractValue(held, &.{0}, "box.text"),
                 .i64,
@@ -3420,6 +3424,7 @@ const Body = struct {
             .f16,
             .f32,
             .f64,
+            .char,
             => try builder.intValue(.i64, 0),
             .strukt => |layout| try builder.intValue(
                 .i64,
@@ -3439,7 +3444,7 @@ const Body = struct {
             // not (docs/BINDING.md D12), which is what lets its box be
             // re-derived from the static type as a struct's is.
             .function => try builder.intValue(.i64, mir.function_run_length),
-            .str => try self.wip.extractValue(held, &.{1}, "box.length"),
+            .str, .bytes => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
             .enumeration => unreachable, // answered by storage() above
         };
@@ -3449,7 +3454,7 @@ const Body = struct {
     /// value — true for everything but a String, whose length travels
     /// with its bytes.
     fn boxLengthIsFixed(of: types.Type) bool {
-        return of != .str;
+        return of != .str and of != .bytes;
     }
 
     /// The words of a `runtime.Value` that the Luce type alone decides:
@@ -3469,7 +3474,7 @@ const Body = struct {
         // that decides to inline, at the store sites where it copies
         // anyway (docs/STRINGS.md).  So the form byte is a constant
         // here and rides to the entry block with the tag.
-        if (of == .str) {
+        if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
         if (boxLengthIsFixed(of)) {
@@ -3522,7 +3527,7 @@ const Body = struct {
         // Absence is the `none` tag, and nothing reads the form byte of
         // a value that is not text, so a present String's constant
         // serves for both.
-        if (of == .str) {
+        if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
         try self.storeBoxField(slot, box_bits, try self.wip.select(
@@ -3572,7 +3577,7 @@ const Body = struct {
             .u64, .i64, .heap => bits,
             .u8, .i8 => try self.wip.cast(.trunc, bits, .i8, name),
             .u16, .i16 => try self.wip.cast(.trunc, bits, .i16, name),
-            .u32, .i32 => try self.wip.cast(.trunc, bits, .i32, name),
+            .u32, .i32, .char => try self.wip.cast(.trunc, bits, .i32, name),
             .f32 => try self.wip.cast(
                 .bitcast,
                 try self.wip.cast(.trunc, bits, .i32, "unbox.word"),
@@ -3592,7 +3597,7 @@ const Body = struct {
                 name,
             ),
             .f64 => try self.wip.cast(.bitcast, bits, .double, name),
-            .str => try self.unboxedText(slot, bits, name),
+            .str, .bytes => try self.unboxedText(slot, bits, name),
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
             .strukt, .variant, .function => try self.wip.cast(.inttoptr, bits, .ptr, name),
@@ -3857,8 +3862,8 @@ const Body = struct {
         // An enum is a number in a cell, so it writes in place like one
         // (docs/ENUMS.md D9).
         return switch (written.storage()) {
-            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => true,
-            .none, .str, .strukt, .variant, .function, .heap, .optional => false,
+            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => true,
+            .none, .str, .bytes, .strukt, .variant, .function, .heap, .optional => false,
             .enumeration => unreachable, // answered by storage() above
         };
     }
@@ -4112,13 +4117,13 @@ const Body = struct {
             .f64 => .double,
             .u64, .i64 => .i64,
             .f32 => .float,
-            .u32, .i32 => .i32,
+            .u32, .i32, .char => .i32,
             .f16 => .half,
             .u16, .i16 => .i16,
             .u8, .i8, .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
-            .none, .str, .strukt, .variant, .heap, .optional => self.module.value_type,
+            .none, .str, .bytes, .strukt, .variant, .heap, .optional => self.module.value_type,
             .enumeration => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
@@ -4131,12 +4136,13 @@ const Body = struct {
         return switch (written.storage()) {
             .boolean, .u8, .i8 => Builder.Alignment.fromByteUnits(1),
             .u16, .i16, .f16 => Builder.Alignment.fromByteUnits(2),
-            .u32, .i32, .f32 => Builder.Alignment.fromByteUnits(4),
+            .u32, .i32, .f32, .char => Builder.Alignment.fromByteUnits(4),
             .none,
             .u64,
             .i64,
             .f64,
             .str,
+            .bytes,
             .strukt,
             .variant,
             .heap,
@@ -4163,11 +4169,11 @@ const Body = struct {
         return switch (written.storage()) {
             .boolean, .u8, .i8 => 1,
             .u16, .i16, .f16 => 2,
-            .u32, .i32, .f32 => 4,
+            .u32, .i32, .f32, .char => 4,
             .u64, .i64, .f64 => 8,
             // The boxed slot, whose size is `runtime.Value`'s and is
             // asserted against it by `runtime/test.zig`.
-            .none, .str, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
+            .none, .str, .bytes, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
@@ -4427,7 +4433,7 @@ const Body = struct {
     fn loadCell(self: *Body, written: types.Type, address: Builder.Value) Error!Builder.Value {
         const element = written.storage();
         return switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => try self.cellLoad(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => try self.cellLoad(
                 self.cellType(element),
                 address,
                 cellAlignment(element),
@@ -4441,7 +4447,7 @@ const Body = struct {
             ),
             // A boxed cell: the tag and the length are already the
             // element type's, so only the payload words are read.
-            .none, .str, .strukt, .variant, .heap, .optional => try self.unboxed(
+            .none, .str, .bytes, .strukt, .variant, .heap, .optional => try self.unboxed(
                 element,
                 address,
                 "element",
@@ -4465,7 +4471,7 @@ const Body = struct {
     ) Error!void {
         const element = written.storage();
         switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => try self.cellStore(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => try self.cellStore(
                 held,
                 address,
                 cellAlignment(element),
@@ -4475,7 +4481,7 @@ const Body = struct {
                 address,
                 cellAlignment(element),
             ),
-            .none, .str, .strukt, .variant, .heap, .optional => try self.fillBoxValue(
+            .none, .str, .bytes, .strukt, .variant, .heap, .optional => try self.fillBoxValue(
                 address,
                 element,
                 held,
@@ -5692,6 +5698,22 @@ const Body = struct {
             return;
         }
 
+        if (to == .char) {
+            try self.checkUnicodeScalar(held, from);
+            self.produced[register].value = if (from.numericBits() > 32)
+                try self.wip.cast(.trunc, held, target, "char")
+            else if (from.numericBits() < 32)
+                try self.wip.cast(if (from.isUnsigned()) .zext else .sext, held, target, "char")
+            else
+                held;
+            return;
+        }
+        if (from == .char) {
+            std.debug.assert(to == .u32);
+            self.produced[register].value = held;
+            return;
+        }
+
         if (to.isFloating()) {
             self.produced[register].value = if (from.isInteger())
                 // A `byte`'s bits are a magnitude and every other
@@ -5739,6 +5761,63 @@ const Body = struct {
             target,
             "int",
         );
+    }
+
+    /// Refuse every integer that is not a Unicode scalar before it is
+    /// narrowed to the 32-bit `char` representation.  The check is made
+    /// at the source width, so `char(u64.max)` cannot become `0xffffffff`
+    /// first and accidentally pass a smaller comparison.
+    fn checkUnicodeScalar(self: *Body, held: Builder.Value, from: types.Type) Error!void {
+        std.debug.assert(from.isInteger());
+        const llvm_type = try self.module.valueType(from);
+        const range = from.integerRange();
+        var invalid: Builder.Value = .false;
+
+        if (range.low < 0) {
+            invalid = try self.wip.icmp(
+                .slt,
+                held,
+                try self.module.builder.intValue(llvm_type, 0),
+                "char.negative",
+            );
+        }
+        if (range.high > 0x10ffff) {
+            const above = try self.wip.icmp(
+                if (from.isUnsigned()) .ugt else .sgt,
+                held,
+                try self.module.builder.intValue(llvm_type, 0x10ffff),
+                "char.above.maximum",
+            );
+            invalid = if (invalid == .false)
+                above
+            else
+                try self.wip.bin(.@"or", invalid, above, "char.outside.range");
+        }
+        if (range.high >= 0xd800) {
+            const at_or_above_surrogate = try self.wip.icmp(
+                if (from.isUnsigned()) .uge else .sge,
+                held,
+                try self.module.builder.intValue(llvm_type, 0xd800),
+                "char.surrogate.start",
+            );
+            const at_or_below_surrogate = try self.wip.icmp(
+                if (from.isUnsigned()) .ule else .sle,
+                held,
+                try self.module.builder.intValue(llvm_type, 0xdfff),
+                "char.surrogate.end",
+            );
+            const surrogate = try self.wip.bin(
+                .@"and",
+                at_or_above_surrogate,
+                at_or_below_surrogate,
+                "char.is.surrogate",
+            );
+            invalid = if (invalid == .false)
+                surrogate
+            else
+                try self.wip.bin(.@"or", invalid, surrogate, "char.invalid");
+        }
+        try self.check(invalid, .bad_codepoint);
     }
 
     /// The bounds of `to`, tested on a float that has already been
@@ -5925,13 +6004,14 @@ const Body = struct {
             ),
             // The analyzer only admits + for strings, and the joined
             // bytes come from the runtime's arena.
-            .str => try self.callAnswering(register, .luce_rt_concat, &.{
+            .str, .bytes => try self.callAnswering(register, .luce_rt_concat, &.{
                 self.runtime,
                 try self.boxedRegister(operation.left, "left"),
                 try self.boxedRegister(operation.right, "right"),
             }),
             .none,
             .boolean,
+            .char,
             .strukt,
             // A union is compared by match and nothing else
             // (docs/UNION.md D16): the analyzer refuses every operator
@@ -6249,7 +6329,7 @@ const Body = struct {
         // String and struct comparison are content, not address: the
         // runtime owns both, and a struct comparison recurses into
         // nested fields rather than comparing the slots that hold them.
-        if (operation.operand_type == .str or operation.operand_type == .strukt) {
+        if (operation.operand_type == .str or operation.operand_type == .bytes or operation.operand_type == .strukt) {
             const answer = try self.callRuntime(.luce_rt_compare, .i32, &.{
                 try self.module.builder.intValue(.i32, @intFromEnum(operation.op)),
                 try self.boxedRegister(operation.left, "left"),
@@ -6293,13 +6373,13 @@ const Body = struct {
         }
 
         const condition: Builder.IntegerCondition = switch (operation.operand_type) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => switch (operation.op) {
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char => switch (operation.op) {
                 .equal => .eq,
                 .not_equal => .ne,
-                .less => if (operation.operand_type.isUnsigned()) .ult else .slt,
-                .less_equal => if (operation.operand_type.isUnsigned()) .ule else .sle,
-                .greater => if (operation.operand_type.isUnsigned()) .ugt else .sgt,
-                .greater_equal => if (operation.operand_type.isUnsigned()) .uge else .sge,
+                .less => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ult else .slt,
+                .less_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ule else .sle,
+                .greater => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ugt else .sgt,
+                .greater_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .uge else .sge,
                 .add,
                 .subtract,
                 .multiply,
@@ -6357,7 +6437,7 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
-            .f16, .f32, .f64, .str, .strukt, .enumeration => unreachable, // answered above
+            .f16, .f32, .f64, .str, .bytes, .strukt, .enumeration => unreachable, // answered above
             // A function value has no equality: its receiver is not part
             // of the function type, so comparing only the named slot would
             // make two different binds equal.  The verifier refuses this
@@ -6416,7 +6496,9 @@ const Body = struct {
                 .u16,
                 .u32,
                 .u64,
+                .char,
                 .str,
+                .bytes,
                 .strukt,
                 .variant,
                 .heap,
@@ -6849,7 +6931,7 @@ const Body = struct {
     /// which form the bytes were in.
     fn carriesText(of: types.Type) bool {
         return switch (of) {
-            .str => true,
+            .str, .bytes => true,
             .optional => |payload| carriesText(payload.asType()),
             .none,
             .boolean,
@@ -6864,6 +6946,7 @@ const Body = struct {
             .f16,
             .f32,
             .f64,
+            .char,
             .strukt,
             .variant,
             .heap,
@@ -7113,16 +7196,6 @@ const Body = struct {
                 );
             },
             .len => {
-                // A String is `{ ptr, i64 }` in a register already, so
-                // its length is the second word and nothing else.
-                if (self.function.result_types[of[0]] == .str) {
-                    self.produced[register].value = try self.wip.extractValue(
-                        self.produced[of[0]].value,
-                        &.{1},
-                        "length",
-                    );
-                    return;
-                }
                 if (self.elementShape(of[0])) |shape| {
                     return self.emitInlineLength(register, of[0], shape);
                 }
@@ -7305,6 +7378,10 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "held"),
             }),
+            .bytes_value => try self.callAnswering(register, .luce_rt_bytes, &.{
+                rt,
+                try self.boxedRegister(of[0], "held"),
+            }),
             // `string(f)` — one `getelementptr` into the name table and
             // one load; the bytes are the module's own constants and
             // nobody frees them (docs/FUNCTIONS.md D3).
@@ -7330,7 +7407,7 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .parse_string => try self.callAnswering(register, .luce_rt_parse_string, &.{
+            .parse_str => try self.callAnswering(register, .luce_rt_parse_str, &.{
                 rt,
                 try self.boxedRegister(of[0], "bytes"),
             }),
@@ -7346,7 +7423,12 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .string_slice => try self.emitStringSlice(register, of[0], of[1], of[2]),
+            .string_slice => try self.callAnswering(register, .luce_rt_string_slice, &.{
+                rt,
+                try self.boxedRegister(of[0], "text"),
+                self.produced[of[1]].value,
+                self.produced[of[2]].value,
+            }),
             .string_byte => try self.emitStringByte(register, of[0], of[1]),
             .string_find_byte => try self.callAnswering(register, .luce_rt_string_find_byte, &.{
                 rt,
@@ -7793,7 +7875,9 @@ const Body = struct {
             .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => of,
             .none,
             .boolean,
+            .char,
             .str,
+            .bytes,
             .strukt,
             .variant,
             .heap,

@@ -1,15 +1,15 @@
 # In-file search — find every match, and step through them.
 #
-# Matches are u8 offsets into the content, held in a `list[i64]` the
+# Matches are scalar positions in the content, held in a `list[i64]` the
 # app owns.  `scan` refills it for a query; `step` moves a cursor
 # through the matches, wrapping at each end.  Pure over its arguments,
 # so a test drives it without a terminal.
 
 import std.strings
 
-# Refill `matches` with the u8 offset of every occurrence of `query`
+# Refill `matches` with the scalar position of every occurrence of `query`
 # in `content`.  An empty query matches nothing.  Overlapping matches
-# advance by one u8, so "aa" in "aaa" finds two.
+# advance by one scalar, so "aa" in "aaa" finds two.
 func scan(matches: list[i64], content: str, query: str):
     matches.clear()
     if query == "":

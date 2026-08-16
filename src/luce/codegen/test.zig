@@ -1080,7 +1080,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    let word = text.build()
         \\    print(word + " " + str(len(word)) + " " + str(word.byte_at(0)))
         \\    print(word[1:3] + " " + str(word.find_byte(99, 0)))
-        \\    print(str(41 + 1) + chr(33) + str(ord("A")))
+        \\    print(str(41 + 1) + str(char(33)) + str(u32('A')))
         \\    print(str("abc" < "abd") + str("abc" == "abc"))
         \\
         \\    let kept = xs
@@ -1486,22 +1486,23 @@ test "a lifted resolution on a null row still traps at the access" {
     );
 }
 
-test "inline String length, byte_at and slicing agree, boundaries included" {
+test "inline str scalar length and slicing agree with explicit raw bytes" {
     try agree(
         \\func main():
         \\    let text = "héllo wörld"
         \\    print(str(len(text)) + " " + str(text.byte_at(0)) + " " + str(text.byte_at(1)))
         \\    print(text[0:1] + "|" + text[1:3] + "|" + text[0:0] + "|" + text[3:len(text)])
+        \\    let encoded = bytes(text)
         \\    var i = 0
         \\    var total: i64 = 0
-        \\    while i < len(text):
-        \\        total += i64(text.byte_at(i))
+        \\    while i < len(encoded):
+        \\        total += i64(encoded[i])
         \\        i += 1
         \\    print(str(total))
         \\
     );
-    // The end of a String is a legal bound and the byte there is not
-    // ours to read; splitting a sequence is a trap, not a wrong answer.
+    // Scalar slice bounds cannot split UTF-8. The end of a byte run is
+    // still a legal slice bound and not a legal byte index.
     try agree(
         \\func main():
         \\    let text = "héllo"

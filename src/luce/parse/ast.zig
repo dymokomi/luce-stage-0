@@ -99,6 +99,7 @@ pub const Argument = struct {
 /// receives.
 pub const Literal = struct { text: []const u8, span: Span };
 pub const BoolLiteral = struct { value: bool, span: Span };
+pub const CharLiteral = struct { value: u32, span: Span };
 pub const StringLiteral = struct { decoded: []const u8, span: Span }; // arena-owned, unescaped
 pub const Name = struct { text: []const u8, span: Span };
 pub const FieldAccess = struct { target: *Expression, name: []const u8, span: Span };
@@ -168,6 +169,7 @@ pub const Expression = union(enum) {
     int_literal: Literal,
     float_literal: Literal,
     bool_literal: BoolLiteral,
+    char_literal: CharLiteral,
     string_literal: StringLiteral,
     /// `none` — the absent value.  It has no type of its own; the
     /// place it is written into supplies one.

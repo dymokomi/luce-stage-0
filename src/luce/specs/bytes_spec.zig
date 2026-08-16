@@ -14,7 +14,7 @@
 //!   * **Bytes round-trip**, including bytes that are not text — which
 //!     is the finding the whole run came out of: `list(byte)` at one
 //!     byte an element, `strings.to_bytes` and `strings.from_bytes`,
-//!     and `parse_string` answering absent for a sequence UTF-8 does
+//!     and `parse_str` answering absent for a sequence UTF-8 does
 //!     not admit.
 //!   * **A handle is a reference-counted resource** (R5): open, read,
 //!     close when its last reference is released; `free f` as an early
@@ -230,19 +230,19 @@ test "read_bytes and write_bytes carry bytes that are not text" {
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    var bytes = new list[u8]
-        \\    bytes.append(u8(0x89))
-        \\    bytes.append(u8(0x50))
-        \\    bytes.append(u8(0x4E))
-        \\    bytes.append(u8(0x47))
-        \\    bytes.append(u8(0x00))
-        \\    try files.write_bytes("image.bin", bytes)
+        \\    var data = new list[u8]
+        \\    data.append(u8(0x89))
+        \\    data.append(u8(0x50))
+        \\    data.append(u8(0x4E))
+        \\    data.append(u8(0x47))
+        \\    data.append(u8(0x00))
+        \\    try files.write_bytes("image.bin", data)
         \\    let back = try files.read_bytes("image.bin")
         \\    print(str(len(back)))
         \\    var same = true
         \\    var at = 0
         \\    while at < len(back):
-        \\        if back[at] != bytes[at]:
+        \\        if back[at] != data[at]:
         \\            same = false
         \\        at += 1
         \\    print(str(same))

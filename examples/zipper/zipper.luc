@@ -65,7 +65,7 @@ func safe_name(name: str) -> str!:
         error("zipper: " + name + " is an absolute path, and an entry may not name where it lands")
     if strings.contains(name, "\\"):
         error("zipper: " + name + " separates its parts with a backslash, which an archive's names may not (APPNOTE 4.4.17.1)")
-    if len(name) >= 2 and name.byte_at(1) == 58 and is_letter(name.byte_at(0)):
+    if len(name) >= 2 and name[1] == ':' and is_letter(name[0]):
         error("zipper: " + name + " names a drive, and an entry may not name where it lands")
     let parts = strings.split(name, "/")
     for part in parts:
@@ -73,10 +73,10 @@ func safe_name(name: str) -> str!:
             error("zipper: " + name + " climbs out of the directory it would be extracted into")
     return name
 
-func is_letter(value: u8) -> bool:
-    if value >= 97 and value <= 122:
+func is_letter(value: char) -> bool:
+    if value >= 'a' and value <= 'z':
         return true
-    return value >= 65 and value <= 90
+    return value >= 'A' and value <= 'Z'
 
 # --- list ------------------------------------------------------------
 

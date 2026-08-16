@@ -154,7 +154,7 @@ func delete(path: str) -> !:
 
 # Move a file.  Renaming onto an existing name replaces it, which is
 # what makes write-then-rename the way to replace a file without ever
-# leaving f16 of one on disk.
+# leaving half of one on disk.
 func rename(from: str, to: str) -> !:
     try file_rename(from, to)
 
@@ -227,14 +227,14 @@ func read_bytes(path: str) -> list[u8]!:
     return all
 
 # Write bytes, replacing whatever was there.
-func write_bytes(path: str, bytes: list[u8]) -> !:
+func write_bytes(path: str, data: list[u8]) -> !:
     var f = try create(path)
-    try send(f, bytes)
+    try send(f, data)
 
 # Add bytes to the end of a file, creating it if it is not there.
-func append_bytes(path: str, bytes: list[u8]) -> !:
+func append_bytes(path: str, data: list[u8]) -> !:
     var f = try append_to(path)
-    try send(f, bytes)
+    try send(f, data)
 
 # The loop both writers share: fill a buffer from where the last write
 # stopped, hand it over, and go round again.  A i16 write is
@@ -243,13 +243,13 @@ func append_bytes(path: str, bytes: list[u8]) -> !:
 # than re-sending bytes that already landed.  A host that accepts
 # nothing at all has stopped writing, and says so as an error instead
 # of spinning.
-private func send(f: file, bytes: list[u8]) -> !:
+private func send(f: file, data: list[u8]) -> !:
     var buffer = new array[u8](chunk)
     var at: i64 = 0
-    while at < len(bytes):
+    while at < len(data):
         var held: i64 = 0
-        while held < chunk and at + held < len(bytes):
-            buffer[held] = bytes[at + held]
+        while held < chunk and at + held < len(data):
+            buffer[held] = data[at + held]
             held += 1
         let sent = try f.write(buffer, held)
         if sent <= 0:

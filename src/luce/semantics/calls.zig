@@ -1088,7 +1088,7 @@ fn lowerAliasCall(
             reference.index,
         ),
         .variant => |index| construct.failVariantAsCallee(self, call.callee, index, call.span),
-        .u8, .i16, .i32, .i64, .f16, .f32, .f64, .str => construct.lowerAliasConvert(self, call, target),
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => construct.lowerAliasConvert(self, call, target),
         else => {
             const declaration = self.analyzer.alias_decls.items[alias_index].declaration;
             if (target == .heap) {
@@ -2746,8 +2746,8 @@ fn sequenceMethod(
     }
     if (std.mem.eql(u8, name, "sort")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;
-        const ordered = element.isNumeric() or element == .str;
-        if (!ordered) return methodFail(self, method, "sort orders numbers or str elements");
+        const ordered = element.isNumeric() or element == .char or element == .str or element == .bytes;
+        if (!ordered) return methodFail(self, method, "sort orders numbers, char, str, or bytes elements");
         return .{ .kind = .list_sort, .result = .none };
     }
     if (std.mem.eql(u8, name, "reverse")) {

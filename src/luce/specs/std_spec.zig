@@ -467,30 +467,32 @@ test "strings: find (with its start default), contains, starts_with, ends_with, 
         \\    assert(strings.count("aaaa", "aa") == 2)
         \\    assert(strings.count("a.b.c", ".") == 2)
         \\    assert(strings.count("abc", "") == 4)
+        \\    assert((strings.find("aé🙂b", "🙂") else -1) == 2)
+        \\    assert((strings.find("aé🙂b", "b", 2) else -1) == 3)
         \\
     );
 }
 
-test "strings: the ASCII character classes answer bytes, not codepoints" {
+test "strings: the ASCII character classes answer char values" {
     try agreeOk(
         \\import std.strings
         \\
         \\func main():
         \\    let s = "aZ3 _\té"
-        \\    assert(strings.is_lower(s.byte_at(0)))
-        \\    assert(not strings.is_upper(s.byte_at(0)))
-        \\    assert(strings.is_upper(s.byte_at(1)))
-        \\    assert(strings.is_alpha(s.byte_at(0)) and strings.is_alpha(s.byte_at(1)))
-        \\    assert(strings.is_digit(s.byte_at(2)))
-        \\    assert(not strings.is_alpha(s.byte_at(2)))
-        \\    assert(strings.is_alnum(s.byte_at(0)) and strings.is_alnum(s.byte_at(2)))
-        \\    assert(strings.is_space(s.byte_at(3)))
-        \\    assert(strings.is_space(s.byte_at(5)))
-        \\    assert(not strings.is_alnum(s.byte_at(4)))
-        \\    assert(not strings.is_space(s.byte_at(4)))
-        \\    # A UTF-8 lead u8 is not a letter: the classes are ASCII.
-        \\    assert(not strings.is_alpha(s.byte_at(6)))
-        \\    assert(not strings.is_alnum(s.byte_at(6)))
+        \\    assert(strings.is_lower(s[0]))
+        \\    assert(not strings.is_upper(s[0]))
+        \\    assert(strings.is_upper(s[1]))
+        \\    assert(strings.is_alpha(s[0]) and strings.is_alpha(s[1]))
+        \\    assert(strings.is_digit(s[2]))
+        \\    assert(not strings.is_alpha(s[2]))
+        \\    assert(strings.is_alnum(s[0]) and strings.is_alnum(s[2]))
+        \\    assert(strings.is_space(s[3]))
+        \\    assert(strings.is_space(s[5]))
+        \\    assert(not strings.is_alnum(s[4]))
+        \\    assert(not strings.is_space(s[4]))
+        \\    # The helpers are deliberately ASCII-only.
+        \\    assert(not strings.is_alpha(s[6]))
+        \\    assert(not strings.is_alnum(s[6]))
         \\
     );
 }
@@ -516,7 +518,7 @@ test "strings: trim, lower, upper keep multibyte characters whole" {
         \\
         \\func main():
         \\    assert(strings.trim("  hi  ") == "hi")
-        \\    assert(strings.trim("\t\nhi" + chr(13) + "\n") == "hi")
+        \\    assert(strings.trim("\t\nhi" + str(char(13)) + "\n") == "hi")
         \\    assert(strings.trim("") == "")
         \\    assert(strings.trim("   ") == "")
         \\    assert(strings.trim("hi") == "hi")
@@ -570,13 +572,14 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
     );
 }
 
-test "strings: characters and width count code points, and len still counts bytes" {
+test "strings: len and character helpers count Unicode scalars" {
     try agreeOk(
         \\import std.strings
         \\
         \\func main():
         \\    let mixed = "aé日🙂"
-        \\    assert(len(mixed) == 1 + 2 + 3 + 4)
+        \\    assert(len(mixed) == 4)
+        \\    assert(len(bytes(mixed)) == 1 + 2 + 3 + 4)
         \\    assert(strings.width(mixed) == 4)
         \\    let parts = strings.characters(mixed)
         \\    assert(len(parts) == 4)
@@ -598,7 +601,7 @@ test "strings: characters and width count code points, and len still counts byte
         \\
         \\func main():
         \\    assert(strings.width("日本") == 2)
-        \\    assert(strings.width("e" + chr(769)) == 2)
+        \\    assert(strings.width("e" + str(char(769))) == 2)
         \\
     );
 }
@@ -609,11 +612,10 @@ test "strings: take cuts on a character boundary, at the end, and below zero" {
         \\
         \\func main():
         \\    let word = "héllo"
-        \\    assert(len(word) == 6)
-        \\    # The boundary case: two cells is three bytes, and a
-        \\    # u8-counted prefix would have cut é in f16.
+        \\    assert(len(word) == 5)
+        \\    # The boundary case: two scalars occupy three UTF-8 bytes.
         \\    assert(strings.take(word, 2) == "hé")
-        \\    assert(len(strings.take(word, 2)) == 3)
+        \\    assert(len(bytes(strings.take(word, 2))) == 3)
         \\    assert(strings.take(word, 1) == "h")
         \\    assert(strings.take(word, 5) == word)
         \\    # Past the end is the whole str, not a trap.
@@ -653,50 +655,24 @@ test "strings: pad_left and pad_right pad by cells, and ASCII is unchanged" {
         \\    assert(strings.pad_right("é", 3) == "é  ")
         \\    assert(strings.pad_left("naïve", 6) == " naïve")
         \\    assert(strings.pad_left("🙂", 2) == " 🙂")
-        \\    # Padded by cells, measured in bytes: five bytes of text
-        \\    # plus one space.
-        \\    assert(len(strings.pad_left("naïve", 6)) == 7)
+        \\    assert(len(strings.pad_left("naïve", 6)) == 6)
+        \\    assert(len(bytes(strings.pad_left("naïve", 6))) == 7)
         \\
     );
 }
 
-test "strings: malformed UTF-8 is answered, never trapped" {
-    // A `string` can hold bytes nobody checked: `read_line` and `env`
-    // carry the world's, and neither engine validates them (both build
-    // the value straight off the host's buffer).  So the character
-    // walk has to terminate and slice safely on any bytes at all.
-    var world: agree.World = .{};
-    world.lines = &.{ "a\x80b", "\x80ab", "caf\xC3" };
-    try agree.okGiven(
+test "strings: malformed UTF-8 remains binary and parses as absent" {
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
-        \\    # A stray continuation u8 belongs to the character
-        \\    # before it, so "a\x80" is one character and "b" is another.
-        \\    let inside = read_line("") else ""
-        \\    assert(len(inside) == 3)
-        \\    assert(strings.width(inside) == 2)
-        \\    let two = strings.characters(inside)
-        \\    assert(len(two) == 2)
-        \\    assert(len(two[0]) == 2 and two[1] == "b")
-        \\    assert(strings.take(inside, 1) == two[0])
+        \\    var invalid: list[u8] = [u8(0x61), u8(0x80), u8(0x62)]
+        \\    assert(strings.from_bytes(invalid) == none)
+        \\    var truncated: list[u8] = [u8(0x63), u8(0x61), u8(0x66), u8(0xC3)]
+        \\    assert(strings.from_bytes(truncated) == none)
+        \\    assert((strings.from_bytes(strings.to_bytes("café")) else "") == "café")
         \\
-        \\    # Continuation bytes at the very start begin no character,
-        \\    # so every one of the three steps over them.
-        \\    let opening = read_line("") else ""
-        \\    assert(len(opening) == 3)
-        \\    assert(strings.width(opening) == 2)
-        \\    assert(strings.take(opening, 2) == "ab")
-        \\    assert(len(strings.characters(opening)) == 2)
-        \\
-        \\    # A truncated sequence is the character it began.
-        \\    let cut = read_line("") else ""
-        \\    assert(len(cut) == 4)
-        \\    assert(strings.width(cut) == 4)
-        \\    assert(strings.take(cut, 3) == "caf")
-        \\    assert(strings.take(cut, 9) == cut)
-        \\
-    , .{ .call_depth = 4096, .world = world });
+    );
 }
 
 test "strings: format_float rounds half away and carries" {

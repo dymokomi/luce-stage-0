@@ -45,10 +45,10 @@ test "zip: CRC-32 answers the published check values" {
         \\func main():
         \\    # The check value every CRC-32 implementation is measured
         \\    # against, and three that bracket it.
-        \\    assert(zip.crc32(zip.bytes("123456789")) == 3421780262)
-        \\    assert(zip.crc32(zip.bytes("")) == 0)
-        \\    assert(zip.crc32(zip.bytes("a")) == 3904355907)
-        \\    assert(zip.crc32(zip.bytes("hello\n")) == 909783072)
+        \\    assert(zip.crc32(zip.to_bytes("123456789")) == 3421780262)
+        \\    assert(zip.crc32(zip.to_bytes("")) == 0)
+        \\    assert(zip.crc32(zip.to_bytes("a")) == 3904355907)
+        \\    assert(zip.crc32(zip.to_bytes("hello\n")) == 909783072)
         \\
         \\    # Bytes no str could hold: three NULs, four 0xFFs, and
         \\    # every u8 there is, in order.
@@ -74,12 +74,12 @@ test "zip: bytes and text are inverse over anything a string can hold" {
         \\
         \\func main() -> !:
         \\    let plain = "the quick brown fox"
-        \\    let plain_again = zip.text(zip.bytes(plain)) else ""
+        \\    let plain_again = zip.text(zip.to_bytes(plain)) else ""
         \\    assert(plain_again == plain)
         \\    let wide = "héllo — λ"
-        \\    let wide_again = zip.text(zip.bytes(wide)) else ""
+        \\    let wide_again = zip.text(zip.to_bytes(wide)) else ""
         \\    assert(wide_again == wide)
-        \\    let nothing = zip.text(zip.bytes("")) else ""
+        \\    let nothing = zip.text(zip.to_bytes("")) else ""
         \\    assert(nothing == "")
         \\
         \\    # A NUL is a character like any other: one u8, and it
@@ -90,9 +90,9 @@ test "zip: bytes and text are inverse over anything a string can hold" {
         \\    assert(held.byte_at(1) == 0)
         \\
         \\    # The widths, one of each.
-        \\    assert(len(zip.bytes("a")) == 1)
-        \\    assert(len(zip.bytes("é")) == 2)
-        \\    assert(len(zip.bytes("—")) == 3)
+        \\    assert(len(zip.to_bytes("a")) == 1)
+        \\    assert(len(zip.to_bytes("é")) == 2)
+        \\    assert(len(zip.to_bytes("—")) == 3)
         \\
     );
 }
@@ -145,7 +145,7 @@ test "zip: an archive this module wrote is one it can read" {
         \\
         \\    var writer = zip.writer()
         \\    try writer.add("empty", nothing)
-        \\    try writer.add("greeting.txt", zip.bytes("hello, world\n"))
+        \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    try writer.add("every.bin", every)
         \\    try writer.add("large.bin", large)
         \\    let archive = writer.finish()
@@ -156,7 +156,7 @@ test "zip: an archive this module wrote is one it can read" {
         \\    assert(found[0].size() == 0)
         \\    assert(found[1].name() == "greeting.txt")
         \\    assert(found[1].size() == 13)
-        \\    assert(found[1].crc() == zip.crc32(zip.bytes("hello, world\n")))
+        \\    assert(found[1].crc() == zip.crc32(zip.to_bytes("hello, world\n")))
         \\    assert(found[2].name() == "every.bin")
         \\    assert(found[2].size() == 256)
         \\    assert(found[3].size() == 5000)
@@ -171,11 +171,11 @@ test "zip: an archive this module wrote is one it can read" {
         \\    let back = try zip.extract(archive, found[2])
         \\    assert(len(back) == 256)
         \\    for index in range(0, 256):
-        \\        assert(back[index] == index)
+        \\        assert(back[index] == u8(index))
         \\    let bulk = try zip.extract(archive, found[3])
         \\    assert(len(bulk) == 5000)
         \\    for index in range(0, 5000):
-        \\        assert(bulk[index] == index % 251)
+        \\        assert(bulk[index] == u8(index % 251))
         \\
     );
 }
@@ -188,7 +188,7 @@ test "zip: compressing an entry changes its size and nothing else" {
         \\    var text = ""
         \\    for step in range(0, 60):
         \\        text += "luce compiles bytes into machine code. "
-        \\    let data = zip.bytes(text)
+        \\    let data = zip.to_bytes(text)
         \\
         \\    var writer = zip.writer()
         \\    try writer.add("prose.txt", data, compress = true)
@@ -244,7 +244,7 @@ test "zip: deflate and inflate are inverse, on text and on raw bytes" {
         \\    var text = ""
         \\    for step in range(0, 80):
         \\        text += "the quick brown fox jumps over the lazy dog. "
-        \\    let prose = zip.bytes(text)
+        \\    let prose = zip.to_bytes(text)
         \\    let squeezed = zip.deflate(prose)
         \\    assert(len(squeezed) < len(prose) // 8)
         \\    let prose_back = try zip.inflate(squeezed)
@@ -345,7 +345,7 @@ test "zip: an archive std.zip wrote to a file is one it reads back" {
         \\
         \\func main() -> !:
         \\    var writer = zip.writer()
-        \\    try writer.add("greeting.txt", zip.bytes("hello, world\n"))
+        \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    var raw: list[u8] = [0, 255, 128, 1]
         \\    try writer.add("every.bin", raw)
         \\    try zip.write("built.zip", writer.finish())
@@ -443,7 +443,7 @@ test "zip: bytes that are not an archive answer by name" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    let prose = zip.bytes("this file is prose, not an archive at all")
+        \\    let prose = zip.to_bytes("this file is prose, not an archive at all")
         \\    let found = try zip.entries(prose)
         \\
     , "zip: not an archive (no end-of-central-directory record)");

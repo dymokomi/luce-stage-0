@@ -673,8 +673,8 @@ fn foldMap(
 
 /// Fold a constant expression.  The surface includes literals, other
 /// constants (`pi`, `geo.pi`, struct-constant fields), operators,
-/// conversion constructors, `ord`, enum members and conversions from
-/// enums, typed absence, object-free value structs, and flat literal
+/// conversion constructors, enum members and conversions from enums,
+/// typed absence, object-free value structs, and flat literal
 /// list/map/rank-1-array constructions.  General calls, runtime object
 /// operations and ownership verbs do not fold.
 ///
@@ -702,6 +702,9 @@ pub fn fold(
         },
         .bool_literal => |literal| {
             return .{ .value = .{ .boolean = literal.value }, .value_type = .boolean };
+        },
+        .char_literal => |literal| {
+            return .{ .value = .{ .integer = literal.value }, .value_type = .char };
         },
         .string_literal => |literal| {
             return .{ .value = .{ .str = literal.decoded }, .value_type = .str };
@@ -846,24 +849,6 @@ pub fn fold(
                 const operand = (try fold(analyzer, module, call.arguments[0].value, null)) orelse return null;
                 return foldConvert(analyzer, call, operand);
             }
-            // ord is the one builtin that folds, so a character
-            // can be written as one: `ord("(")` where another
-            // language would need character literal syntax.
-            if (std.mem.eql(u8, call.callee, "ord")) {
-                if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "text")) {
-                    return constantError(analyzer, call.span, "ord(text) takes one argument", .{});
-                }
-                const operand = (try fold(analyzer, module, call.arguments[0].value, null)) orelse return null;
-                if (operand.value != .str) {
-                    return constantError(analyzer, call.span, "ord takes a str, not {s}", .{
-                        try analyzer.typeName(operand.value_type),
-                    });
-                }
-                const codepoint = helpers.ordOfLiteral(operand.value.str) orelse {
-                    return constantError(analyzer, call.span, "ord has no codepoint to read from an empty str", .{});
-                };
-                return .{ .value = .{ .integer = codepoint }, .value_type = .i64 };
-            }
             const qualified = try naming.qualify(analyzer, analyzer.modules[module].prefix, call.callee);
             if (analyzer.alias_names.get(qualified)) |alias_index| {
                 const target = (try resolve.resolveAlias(analyzer, module, alias_index, call.span)) orelse
@@ -878,7 +863,7 @@ pub fn fold(
                             .{ call.callee, analyzer.enums.items[reference.index].name, call.callee },
                         );
                     },
-                    .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
+                    .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => {
                         if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
                             return constantError(analyzer, call.span, "{s}(value) takes one argument", .{call.callee});
                         }
@@ -929,7 +914,7 @@ pub fn fold(
                             return null;
                         switch (target) {
                             .strukt => |layout_index| return foldConstruct(analyzer, module, method.arguments, method.span, layout_index),
-                            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
+                            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => {
                                 if (method.arguments.len != 1 or !helpers.argumentMayName(method.arguments[0], "value")) {
                                     return constantError(analyzer, method.span, "{s}(value) takes one argument", .{method.name});
                                 }
@@ -1076,10 +1061,31 @@ fn foldConvertAs(
             const member = declared.memberOfValue(operand.value.integer).?;
             return .{ .value = .{ .str = declared.members[member].name }, .value_type = .str };
         }
+        if (produces == .char or produces == .bytes) {
+            return constantError(analyzer, call.span, "{s}() cannot convert an enum", .{call.callee});
+        }
         return foldConvertAs(analyzer, call, .{
             .value = operand.value,
             .value_type = declared.backing.asType(),
         }, produces);
+    }
+    if (produces == .char) {
+        if (operand.value_type == .char) return operand;
+        if (!operand.value_type.isInteger()) {
+            return constantError(analyzer, call.span, "char() converts an integer", .{});
+        }
+        const scalar = operand.value.integer;
+        if (scalar < 0 or scalar > 0x10ffff or (scalar >= 0xd800 and scalar <= 0xdfff)) {
+            return constantError(analyzer, call.span, "integer is not a Unicode scalar value", .{});
+        }
+        return .{ .value = .{ .integer = scalar }, .value_type = .char };
+    }
+    if (produces == .bytes) {
+        if (operand.value_type == .bytes) return operand;
+        if (operand.value_type != .str) {
+            return constantError(analyzer, call.span, "bytes() converts str, list[u8], or array[u8, _]", .{});
+        }
+        return .{ .value = operand.value, .value_type = .bytes };
     }
     if (produces == .str) {
         // The same text a run would print, spelled by the same
@@ -1090,7 +1096,10 @@ fn foldConvertAs(
         // representation that round-trips, and a folded constant
         // has to be the same bytes a run would produce.
         const printed: []const u8 = switch (operand.value) {
-            .integer => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
+            .integer => |held| if (operand.value_type == .char)
+                try encodeScalar(analyzer.arena, held)
+            else
+                try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
             .float => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
             .boolean => |held| if (held) "true" else "false",
             .str => |held| held,
@@ -1113,8 +1122,14 @@ fn foldConvertAs(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
+    if (operand.value_type == .char) {
+        if (target != .u32) {
+            return constantError(analyzer, call.span, "only u32() converts a char code point", .{});
+        }
+        return .{ .value = operand.value, .value_type = .u32 };
+    }
     if (!operand.value_type.isNumeric()) {
         return constantError(analyzer, call.span, "{s}() converts a number", .{call.callee});
     }
@@ -1179,9 +1194,17 @@ fn builtinForScalar(target: Type) types.Builtin {
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
+        .char => .char,
         .str => .str,
+        .bytes => .bytes,
         else => unreachable,
     };
+}
+
+fn encodeScalar(arena: std.mem.Allocator, held: i128) Error![]const u8 {
+    var buffer: [4]u8 = undefined;
+    const length = std.unicode.utf8Encode(@intCast(held), &buffer) catch unreachable;
+    return try arena.dupe(u8, buffer[0..length]);
 }
 
 fn foldConstruct(
@@ -1379,6 +1402,9 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
         },
         .add, .subtract, .multiply, .divide, .floor_divide, .modulo => switch (left.value) {
             .integer => |a| {
+                if (!left.value_type.isInteger()) {
+                    return constantError(analyzer, binary.span, "{s} does not support this operator", .{try analyzer.typeName(left.value_type)});
+                }
                 const b = right.value.integer;
                 const folded = foldIntegerForType(left.value_type, binary.op, a, b) catch |mistake| switch (mistake) {
                     error.division_by_zero => return constantError(analyzer, binary.span, "constant division by zero", .{}),
@@ -1403,10 +1429,10 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
             },
             .str => |a| {
                 if (binary.op != .add) {
-                    return constantError(analyzer, binary.span, "str supports + only", .{});
+                    return constantError(analyzer, binary.span, "{s} supports + only", .{try analyzer.typeName(left.value_type)});
                 }
                 const joined = try std.mem.concat(analyzer.arena, u8, &.{ a, right.value.str });
-                return .{ .value = .{ .str = joined }, .value_type = .str };
+                return .{ .value = .{ .str = joined }, .value_type = left.value_type };
             },
             else => return constantError(analyzer, binary.span, "{s} does not support this operator", .{
                 try analyzer.typeName(left.value_type),

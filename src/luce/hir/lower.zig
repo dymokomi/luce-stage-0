@@ -206,7 +206,7 @@ const Replay = struct {
 
     fn ownsStorage(self: *const Replay, of: Type) bool {
         return switch (of) {
-            .str, .strukt, .variant, .function => true,
+            .str, .bytes, .strukt, .variant, .function => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
@@ -214,7 +214,7 @@ const Replay = struct {
 
     fn carriesText(of: Type) bool {
         return switch (of) {
-            .str => true,
+            .str, .bytes => true,
             .optional => |payload| carriesText(payload.asType()),
             else => false,
         };
@@ -1319,12 +1319,15 @@ const Replay = struct {
 
     fn replayConversion(self: *Replay, called: nodes.Expression.Call, produced: Type) Error!Register {
         const operand = try self.replayValue(called.operands.operands[0]);
-        if (produced == .str) {
+        if (produced == .str or produced == .bytes) {
             const arguments = try self.arena().alloc(Register, 1);
             arguments[0] = operand;
             return self.code.emit(
-                .{ .intrinsic = .{ .kind = .str_value, .arguments = arguments } },
-                .str,
+                .{ .intrinsic = .{
+                    .kind = if (produced == .str) .str_value else .bytes_value,
+                    .arguments = arguments,
+                } },
+                produced,
             );
         }
         return self.code.emit(.{ .convert = operand }, produced);
@@ -1719,7 +1722,7 @@ const Replay = struct {
         arguments[0] = entries[0].register;
         arguments[1] = start;
         arguments[2] = stop;
-        const kind: mir.Intrinsic = if (sliced.result == .str) .string_slice else .list_slice;
+        const kind: mir.Intrinsic = if (sliced.result == .str or sliced.result == .bytes) .string_slice else .list_slice;
         return self.code.emit(
             .{ .intrinsic = .{ .kind = kind, .arguments = arguments } },
             sliced.result,
@@ -1808,7 +1811,7 @@ const Replay = struct {
             .str => |folded| .{
                 .register = try self.code.emit(
                     .{ .const_str = try self.code.pool.intern(folded) },
-                    .str,
+                    value_type,
                 ),
                 .provenance = .plain,
             },
@@ -2085,7 +2088,7 @@ const Replay = struct {
             .left = left,
             .right = right,
         } }, at);
-        const string_concat = op == .add and place_type == .str;
+        const string_concat = op == .add and (place_type == .str or place_type == .bytes);
         const narrowed = if (at.eql(place_type))
             combined
         else
@@ -2429,12 +2432,12 @@ const Replay = struct {
     fn replayForIn(self: *Replay, loop: nodes.Statement.ForIn) Error!void {
         const sequence = try self.replayValue(loop.sequence);
         const sequence_type = loop.sequence.result();
-        const descriptor = self.heapOf(sequence_type).?;
+        const descriptor = self.heapOf(sequence_type);
         // The iteration's shape, re-derived from the sequence: a map
         // binds its key (or key and value), a list or rank-1 array its
         // element (or index and element).
         const two_names = loop.second != null;
-        const map_like = descriptor == .map;
+        const map_like = descriptor != null and descriptor.? == .map;
         const payload_kind: mir.Intrinsic = if (map_like) .value_at else .index_get;
         const position_kind: ?mir.Intrinsic = if (map_like) .key_at else null;
         const first_kind: ?mir.Intrinsic = if (two_names or map_like) position_kind else payload_kind;

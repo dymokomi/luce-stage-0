@@ -333,9 +333,9 @@ fn compoundCombine(
         );
         return null;
     }
-    const string_concat = op == .add and place_type == .str;
+    const string_concat = op == .add and (place_type == .str or place_type == .bytes);
     if (!place_type.isNumeric() and !string_concat) {
-        try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on str){s}", .{
+        try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on str/bytes){s}", .{
             try self.analyzer.typeName(place_type),
             try refusals.absenceAdvice(self, place_type, null),
         });
@@ -522,6 +522,15 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     const object = values[0];
     const indices = values[1 .. values.len - 1];
     const value = &values[values.len - 1];
+    if (object.value_type == .str or object.value_type == .bytes) {
+        try self.fail(
+            "luce.sema.assign",
+            target.span,
+            "{s} is immutable; slicing or concatenation makes a new value",
+            .{try self.analyzer.typeName(object.value_type)},
+        );
+        return;
+    }
     const element_type = (try checkIndex(self, object.value_type, indices, target.span)) orelse return;
     // The value was lowered before the container named a type for
     // it, so `fit` applies both implicit conversions here — a wider
@@ -590,15 +599,18 @@ pub fn checkIndex(
     indices: []Typed,
     span: Span,
 ) Error!?Type {
-    const descriptor = self.analyzer.heapOf(object_type) orelse {
-        if (object_type == .str) {
-            try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
-        } else {
-            try self.fail("luce.sema.index", span, "{s} cannot be indexed{s}", .{
-                try self.analyzer.typeName(object_type),
-                try refusals.absenceAdvice(self, object_type, null),
-            });
+    if (object_type == .str or object_type == .bytes) {
+        if (indices.len != 1 or !try self.widensInto(&indices[0], .i64)) {
+            try self.fail("luce.sema.index", span, "{s} indexes with one i64", .{try self.analyzer.typeName(object_type)});
+            return null;
         }
+        return if (object_type == .str) .char else .u8;
+    }
+    const descriptor = self.analyzer.heapOf(object_type) orelse {
+        try self.fail("luce.sema.index", span, "{s} cannot be indexed{s}", .{
+            try self.analyzer.typeName(object_type),
+            try refusals.absenceAdvice(self, object_type, null),
+        });
         return null;
     };
     if (indices.len > 4) {

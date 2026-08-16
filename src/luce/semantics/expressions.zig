@@ -150,10 +150,10 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
         .str => |folded| .{
             .node = try recorder.recordNode(self, .{ .const_str = .{
                 .constant = try self.analyzer.pool.intern(folded),
-                .result = .str,
+                .result = value_type,
                 .span = span,
             } }),
-            .value_type = .str,
+            .value_type = value_type,
         },
         .strukt => |folded| blk: {
             const layout = self.analyzer.structs.items[folded.layout];
@@ -558,10 +558,10 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     const run = (try self.lowerOperandsIntoTracking(whole_sequence.items, .subscripts)) orelse return null;
     const sequence = run.values;
     const target = sequence[0];
-    const is_string = target.value_type == .str;
+    const is_text_sequence = target.value_type == .str or target.value_type == .bytes;
     const descriptor = self.analyzer.heapOf(target.value_type);
-    if (!is_string and (descriptor == null or descriptor.? != .list)) {
-        try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list and str", .{
+    if (!is_text_sequence and (descriptor == null or descriptor.? != .list)) {
+        try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list, str, and bytes", .{
             try self.analyzer.typeName(target.value_type),
         });
         return null;
@@ -1147,7 +1147,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             },
             else => {},
         }
-        const string_concat = operation == .add and operand_type == .str;
+        const text_concat = operation == .add and (operand_type == .str or operand_type == .bytes);
         if (operation == .modulo and operand_type == .str) {
             try self.fail(
                 "luce.sema.type",
@@ -1157,7 +1157,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             );
             return null;
         }
-        if (!operand_type.isNumeric() and !string_concat) {
+        if (!operand_type.isNumeric() and !text_concat) {
             try self.fail("luce.sema.type", binary.span, "{s} does not support this operator", .{
                 try self.analyzer.typeName(operand_type),
             });
@@ -1179,7 +1179,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     // Comparisons: equality everywhere; ordering for long, double,
     // and string.
     const ordering = operation != .equal and operation != .not_equal;
-    if (ordering and !(operand_type.isNumeric() or operand_type == .str)) {
+    if (ordering and !(operand_type.isNumeric() or operand_type == .char or operand_type == .str or operand_type == .bytes)) {
         // **An enum is a set of names, not a number line**
         // (docs/ENUMS.md D6), and the reader who wanted the numbers
         // is one word away from having them — so the sentence says

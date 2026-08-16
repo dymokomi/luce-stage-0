@@ -1,21 +1,18 @@
 # strings — the Luce standard str module.
 #
-# The language keeps the primitives: str the immutable UTF-8
-# value, literals and f-strings, `+`, comparison, boundary-checked
-# slices `s[a:b]`, `len`, and `s.byte_at(i)`.  Everything built on
+# The language keeps the primitives: `str`, the immutable UTF-8
+# value, literals and f-strings, `+`, comparison, scalar-indexed
+# slices `s[a:b]`, `len`, and the explicitly raw `s.byte_at(i)`.
+# Everything built on
 # top of them lives here, in ordinary Luce — and `s.find(x)` is sugar
 # for `strings.find(s, x)` whenever this module is imported.
 #
-# Byte offsets throughout, like the primitives.  Slices below always
-# cut at safe places: ASCII positions, or match positions of a valid
-# UTF-8 needle (a needle's first u8 can never be a continuation
-# u8, so a match never starts or ends mid-character).
-#
-# The exception, and it is a deliberate one: `characters`, `width`,
-# `take` and the two pads count **characters** rather than bytes.
-# Their rule is stated once, above `continuation` below.
+# Positions throughout are Unicode-scalar positions, exactly like the
+# primitives. Raw encoding work is confined to `bytes(s)`, `byte_at`,
+# and `find_byte`; an ordinary string operation never mixes those byte
+# positions with a scalar slice.
 
-# The u8 offset of the first occurrence of needle at or after
+# The scalar position of the first occurrence of needle at or after
 # `start`, or absence — for a match that never comes, and for a
 # `start` outside the str, where no match can begin.  Absence, not
 # a -1 sentinel: `find(s, x) else -1` spells the sentinel for anyone
@@ -31,23 +28,12 @@ func find(s: str, needle: str, start: i64 = 0) -> i64?:
         return none
     if needle_size == 0:
         return start
-    # The needle's first u8 is located with the scanning primitive —
-    # one call an engine is free to vectorize — and only a candidate
-    # position pays the u8-by-u8 compare, which stops at the first
-    # mismatch.  Lengths are hoisted out of the loop.
-    let head = needle.byte_at(0)
     let limit = size - needle_size
     var at = start
     while at <= limit:
-        let hit = s.find_byte(head, at)
-        if hit < 0 or hit > limit:
-            return none
-        var i = 1
-        while i < needle_size and s.byte_at(hit + i) == needle.byte_at(i):
-            i += 1
-        if i == needle_size:
-            return hit
-        at = hit + 1
+        if s[at:at + needle_size] == needle:
+            return at
+        at += 1
     return none
 
 func contains(s: str, needle: str) -> bool:
@@ -64,7 +50,7 @@ func ends_with(s: str, suffix: str) -> bool:
     return s[len(s) - len(suffix):] == suffix
 
 # How many non-overlapping occurrences; an empty needle matches every
-# u8 boundary, including the two ends of an empty str.
+# scalar boundary, including the two ends of an empty str.
 func count(s: str, needle: str) -> i64:
     if len(needle) == 0:
         return len(s) + 1
@@ -78,61 +64,59 @@ func count(s: str, needle: str) -> i64:
         at = find(s, needle, at + len(needle)) else -1
     return found
 
-# The ASCII character classes, on the u8 the primitives answer
-# (`s.byte_at(i)`).  Bytes above 127 are in none of them: these are
-# the classes a lexer or a validator asks about, and a UTF-8
-# continuation u8 is not a letter.
-func is_digit(b: u8) -> bool:
-    return b >= 48 and b <= 57
+# ASCII character classes. Non-ASCII scalars are in none of them;
+# Unicode-aware classification belongs in a Unicode library with a
+# named data version.
+func is_digit(c: char) -> bool:
+    return c >= '0' and c <= '9'
 
-func is_upper(b: u8) -> bool:
-    return b >= 65 and b <= 90
+func is_upper(c: char) -> bool:
+    return c >= 'A' and c <= 'Z'
 
-func is_lower(b: u8) -> bool:
-    return b >= 97 and b <= 122
+func is_lower(c: char) -> bool:
+    return c >= 'a' and c <= 'z'
 
-func is_alpha(b: u8) -> bool:
-    return is_upper(b) or is_lower(b)
+func is_alpha(c: char) -> bool:
+    return is_upper(c) or is_lower(c)
 
-func is_alnum(b: u8) -> bool:
-    return is_alpha(b) or is_digit(b)
+func is_alnum(c: char) -> bool:
+    return is_alpha(c) or is_digit(c)
 
-func is_space(b: u8) -> bool:
-    return b == 32 or b == 9 or b == 13 or b == 10
+func is_space(c: char) -> bool:
+    return c == ' ' or c == '\t' or c == char(13) or c == '\n'
 
 # ASCII whitespace off both ends.
 func trim(s: str) -> str:
     var first = 0
-    while first < len(s) and is_space(s.byte_at(first)):
+    while first < len(s) and is_space(s[first]):
         first += 1
     var last = len(s)
-    while last > first and is_space(s.byte_at(last - 1)):
+    while last > first and is_space(s[last - 1]):
         last -= 1
     return s[first:last]
 
-# ASCII case folding; every other u8 passes through untouched.
-# Unchanged runs are sliced whole, so multi-u8 characters survive.
+# ASCII case folding; every other scalar passes through untouched.
 func lower(s: str) -> str:
-    return fold_case(s, first = 65, last = 90, shift = 32)
+    return fold_case(s, first = 'A', last = 'Z', shift = 32)
 
 func upper(s: str) -> str:
-    return fold_case(s, first = 97, last = 122, shift = -32)
+    return fold_case(s, first = 'a', last = 'z', shift = -32)
 
-private func fold_case(s: str, first: i64, last: i64, shift: i64) -> str:
+private func fold_case(s: str, first: char, last: char, shift: i64) -> str:
     var out = new builder
     var run = 0
     var at = 0
     let size = len(s)
     while at < size:
-        let code = i64(s.byte_at(at))
-        if code >= first and code <= last:
+        let current = s[at]
+        if current >= first and current <= last:
             # Adjacent folded bytes leave an empty run; appending it
             # would cost a slice and a service call for nothing.  The
-            # folded u8 is ASCII by construction (both ranges are),
+            # folded scalar is ASCII by construction (both ranges are),
             # so it goes in without a str to carry it.
             if at > run:
                 out.append(s[run:at])
-            out.append_ascii(code + shift)
+            out.append_ascii(i64(u32(current)) + shift)
             run = at + 1
         at += 1
     if run == 0:
@@ -175,10 +159,10 @@ func split(s: str, separator: str) -> list[str]:
     if len(separator) == 0:
         var at = 0
         while at < len(s):
-            while at < len(s) and is_space(s.byte_at(at)):
+            while at < len(s) and is_space(s[at]):
                 at += 1
             var word_end = at
-            while word_end < len(s) and not is_space(s.byte_at(word_end)):
+            while word_end < len(s) and not is_space(s[word_end]):
                 word_end += 1
             if word_end > at:
                 pieces.append(s[at:word_end])
@@ -202,14 +186,7 @@ func join(parts: list[str], separator: str) -> str:
         out.append(piece)
     return out.build()
 
-# -- characters (docs/TERMUI.md D11) ----------------------------------
-#
-# The one place in the library that knows what a *character* is.  A
-# UTF-8 sequence is a lead u8 followed by its continuation bytes, so
-# **a character begins at every u8 that is not a continuation u8**
-# and runs to the next u8 that does.  That is the same rule the
-# `s[a:b]` primitive enforces, which is why every slice cut below is a
-# legal one.
+# -- characters and display width -------------------------------------
 #
 # **v0.1 counts code points, not terminal cells.**  `width` answers 1
 # for a wide CJK character that occupies two cells, and counts a
@@ -220,76 +197,38 @@ func join(parts: list[str], separator: str) -> str:
 # what one character costs and the two pads ask it what the whole text
 # costs, so a width table lands here and nowhere else.
 #
-# **Malformed bytes are answered, never refused.**  Nothing here
-# validates, so the walk terminates on any bytes at all — and a
-# `str` can hold bytes the world handed over, since `read_line` and
-# `env` carry text nobody checked.  A stray continuation u8 belongs
-# to the character before it; a truncated sequence is the character it
-# began; and continuation bytes at the very start of a str begin no
-# character, so nothing here counts one or hands one back (they are
-# also the one place `s[a:b]` would refuse to cut, which is the same
-# fact).
-
-private func continuation(b: u8) -> bool:
-    return b >= 128 and b < 192
-
-# Where the first character begins — 0 for every well-formed str.
-private func first_character(s: str) -> i64:
-    var at: i64 = 0
-    while at < len(s) and continuation(s.byte_at(at)):
-        at += 1
-    return at
-
-# Where the character that begins at `at` ends: the next u8 that
-# begins a character, or the end of the str.
-private func next_character(s: str, at: i64) -> i64:
-    var stop = at + 1
-    while stop < len(s) and continuation(s.byte_at(stop)):
-        stop += 1
-    return stop
-
 # The characters of `s`, one str each, in order.  A fresh
 # `list[str]` the caller owns; an empty str has no characters.
 func characters(s: str) -> list[str]:
     var out: list[str] = []
-    var at = first_character(s)
+    var at: i64 = 0
     while at < len(s):
-        let stop = next_character(s, at)
-        out.append(s[at:stop])
-        at = stop
+        out.append(str(s[at]))
+        at += 1
     return out
 
 # The display-width seam described above. In v0.1 it counts code
-# points, not terminal cells, so `width(s)` is the character count and
-# `len(s)` is still the u8 count.
+# points, not terminal cells, so it currently equals `len(s)`.
 func width(s: str) -> i64:
-    var cells: i64 = 0
-    var at = first_character(s)
-    while at < len(s):
-        at = next_character(s, at)
-        cells += 1
-    return cells
+    return len(s)
 
 # The longest prefix of `s` that fits in `cells` cells: the whole
 # str when it already fits, "" for a width of zero or less.  A
-# character is never cut in f16, so the answer always ends where one
-# ends.
+# scalar is never cut, so the answer always ends where one ends.
 func take(s: str, cells: i64) -> str:
     if cells <= 0:
         return ""
-    let first = first_character(s)
     var taken: i64 = 0
-    var at = first
+    var at: i64 = 0
     while at < len(s):
-        let stop = next_character(s, at)
         # What one character costs is `width`'s answer and nobody
         # else's; that is what keeps the rule in one body.
-        let cost = width(s[at:stop])
+        let cost = width(str(s[at]))
         if taken + cost > cells:
             break
         taken += cost
-        at = stop
-    return s[first:at]
+        at += 1
+    return s[0:at]
 
 # Space-padded to `cells` display cells; text already that wide is
 # unchanged.  The count is `width`'s and not `len`'s, so a label
@@ -350,13 +289,14 @@ func format_float(value: f64, decimals: i64) -> str:
 #
 # Total, and it has to be: a str is already valid UTF-8, so there
 # is nothing here that can fail and nothing to ask about.  The bytes
-# are the encoding, not the characters — `len(to_bytes(s))` is
-# `len(s)`, which is bytes on both sides.
+# are the encoding, not the characters: `len(to_bytes("é"))` is 2
+# while `len("é")` is 1.
 func to_bytes(s: str) -> list[u8]:
     var out = new list[u8]
+    let encoded = bytes(s)
     var at: i64 = 0
-    while at < len(s):
-        out.append(s.byte_at(at))
+    while at < len(encoded):
+        out.append(encoded[at])
         at += 1
     return out
 
@@ -369,4 +309,4 @@ func to_bytes(s: str) -> list[u8]:
 # `libluce_rt`'s, so a compiled program and the test oracle agree
 # u8-for-u8 on what "not text" means.
 func from_bytes(xs: list[u8]) -> str?:
-    return parse_string(xs)
+    return parse_str(bytes(xs))

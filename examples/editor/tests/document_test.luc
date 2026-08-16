@@ -3,11 +3,11 @@
 import document
 
 func test_boundaries_step_over_multibyte_characters():
-    # "héllo": h(1) é(2) l l o.  From column after 'h' (u8 1), the
-    # next boundary skips the two bytes of 'é'.
+    # "héllo" has five scalar positions; moving once crosses é no
+    # matter how many bytes encode it.
     let value = "héllo"
-    assert(document.next_boundary(value, 1) == 3)
-    assert(document.previous_boundary(value, 3) == 1)
+    assert(document.next_boundary(value, 1) == 2)
+    assert(document.previous_boundary(value, 2) == 1)
     assert(document.next_boundary(value, len(value)) == len(value))
     assert(document.previous_boundary(value, 0) == 0)
 
@@ -24,7 +24,7 @@ func test_line_at_and_at_column():
     let value = "ab\ncde\nf"
     assert(document.line_at(value, 1) == 3)
     let start = document.line_at(value, 1)
-    # Column 2 of "cde" is the 'e' at u8 5.
+    # Column 2 of "cde" is the 'e' at scalar position 5.
     assert(document.at_column(value, start, 2) == 5)
     # A column past the line's end clamps to the line end.
     assert(document.at_column(value, start, 99) == 6)

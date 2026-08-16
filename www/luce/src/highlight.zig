@@ -53,15 +53,14 @@ pub const verbs = [_][]const u8{ "new", "spawn" };
 /// `support/types.zig`.
 pub const type_names = [_][]const u8{
     // The language's current lowercase scalar and heap vocabulary.
-    "bool",    "u8",    "i16",    "i32",    "i64",    "f16",
-    "f32",     "f64",   "str",    "list",   "map",    "array",
-    "builder", "file",  "task",
+    "bool",   "u8",      "u16", "u32",   "u64",     "i8",    "i16",
+    "i32",    "i64",     "f16", "f32",   "f64",     "char",  "str",
+    "bytes",  "list",    "map", "array", "builder", "file",  "task",
     // Retired spellings remain highlighted because the compiler gives
     // each one a targeted replacement diagnostic.
-      "byte",   "short",  "int",
-    "long",    "half",  "float",  "double", "string", "Bool",
-    "Int",     "Float", "String", "List",   "Map",    "Array",
-    "Builder",
+    "byte",   "short",   "int", "long",  "half",    "float", "double",
+    "string", "Bool",    "Int", "Float", "String",  "List",  "Map",
+    "Array",  "Builder",
 };
 
 /// Everything callable by name on its own: standalone builtins, the
@@ -71,18 +70,17 @@ pub const type_names = [_][]const u8{
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
-    "abs",                 "min",                 "max",              "clamp",             "sqrt",
-    "floor",               "ceil",                "trunc",            "len",               "range",
-    "assert",              "trap",                "error",            "parse_int",         "parse_float",
-    "chr",                 "ord",                 "print",            "print_error",       "read_line",
-    "env",                 "clock_ms",            "sleep_ms",         "file_read",         "file_write",
-    "file_append",         "path_kind",           "file_delete",      "file_rename",       "dir_list",
-    "term_rows",           "term_cols",           "term_clear",       "term_move",         "term_style",
-    "term_write",          "term_flush",          "key_read",         "key_text",          "exit",
-    "os_total_memory",     "os_available_memory", "os_cpu_count",     "shell_run",         "file_open",
-    "term_event_data",     "parse_string",        "dir_create",       "epoch_ms",          "gpu_backend",
-    "ui_window_open",      "ui_window_surface",   "gpu_surface_size", "gpu_surface_clear", "gpu_surface_fill_rect",
-    "gpu_surface_present",
+    "abs",              "min",               "max",                   "clamp",               "sqrt",
+    "floor",            "ceil",              "trunc",                 "len",                 "range",
+    "assert",           "trap",              "error",                 "parse_int",           "parse_float",
+    "print",            "print_error",       "read_line",             "env",                 "clock_ms",
+    "sleep_ms",         "file_read",         "file_write",            "file_append",         "path_kind",
+    "file_delete",      "file_rename",       "dir_list",              "term_rows",           "term_cols",
+    "term_clear",       "term_move",         "term_style",            "term_write",          "term_flush",
+    "key_read",         "key_text",          "exit",                  "os_total_memory",     "os_available_memory",
+    "os_cpu_count",     "shell_run",         "file_open",             "term_event_data",     "parse_str",
+    "dir_create",       "epoch_ms",          "gpu_backend",           "ui_window_open",      "ui_window_surface",
+    "gpu_surface_size", "gpu_surface_clear", "gpu_surface_fill_rect", "gpu_surface_present",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

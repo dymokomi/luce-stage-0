@@ -1102,7 +1102,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         .carried_get => |payload| provenance(payload.origin),
         // String `+` allocates the joined bytes; every numeric binary
         // answers a scalar.
-        .binary => |payload| if (payload.result == .str) .fresh else .plain,
+        .binary => |payload| if (payload.result == .str or payload.result == .bytes) .fresh else .plain,
         .convert, .unary, .compare => .plain,
         // The wrapped value is a new scalar-shaped `T?`; the storage a
         // string payload views keeps its owner (the tape reads
@@ -1118,7 +1118,7 @@ pub fn provenance(expression: *const Expression) Provenance {
             .intrinsic => |kind| ofIntrinsic(kind),
             // `string(x)` allocates its text; the numeric conversions
             // answer scalars.
-            .conversion => |produced| if (produced == .str) .fresh else .plain,
+            .conversion => |produced| if (produced == .str or produced == .bytes) .fresh else .plain,
             // The member chains answer a reload of their result slot.
             .enum_name, .variant_name => .view,
         },

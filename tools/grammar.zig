@@ -361,6 +361,7 @@ fn isSymbolKind(kind: luce.lex.Kind) bool {
         .int_literal,
         .float_literal,
         .string_literal,
+        .char_literal,
         .fstring,
         => false,
         else => !std.mem.startsWith(u8, @tagName(kind), "keyword_"),
@@ -709,6 +710,16 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .pattern = "\\\\.",
         } },
     };
+    const character_escape_rules = [_]Rule{
+        .{ .match = .{
+            .scope = "constant.character.escape.luce",
+            .pattern = "\\\\(?:[nt\\\\'\"]|u\\{[0-9A-Fa-f]+\\})",
+        } },
+        .{ .match = .{
+            .scope = "invalid.illegal.escape.luce",
+            .pattern = "\\\\.",
+        } },
+    };
     const nested_code_rules = [_]Rule{
         .{ .include = "#comments" },
         .{ .include = "#strings" },
@@ -765,6 +776,14 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .end = "(\")|$",
             .end_captures = &.{.{ .group = "1", .scope = "punctuation.definition.string.end.luce" }},
             .patterns = &escape_rules,
+        } },
+        .{ .region = .{
+            .scope = "constant.character.luce",
+            .begin = "'",
+            .begin_captures = &.{.{ .group = "0", .scope = "punctuation.definition.character.begin.luce" }},
+            .end = "(')|$",
+            .end_captures = &.{.{ .group = "1", .scope = "punctuation.definition.character.end.luce" }},
+            .patterns = &character_escape_rules,
         } },
     };
 
@@ -1347,6 +1366,38 @@ test "f-string holes enter strings and recursively balanced braces" {
     try std.testing.expect(hole_has_braces);
     try std.testing.expect(braces_recurse);
     try std.testing.expect(braces_enter_strings);
+}
+
+test "character literals have their own quoted rule and Unicode escape" {
+    const gpa = std.testing.allocator;
+    const text = try emit(gpa);
+    defer gpa.free(text);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, text, .{});
+    defer parsed.deinit();
+    const string_rules = parsed.value.object
+        .get("repository").?.object
+        .get("strings").?.object
+        .get("patterns").?.array.items;
+
+    var found_character = false;
+    var found_unicode_escape = false;
+    for (string_rules) |value| {
+        const rule = value.object;
+        const begin = rule.get("begin") orelse continue;
+        if (begin != .string or !std.mem.eql(u8, begin.string, "'")) continue;
+        const scope = rule.get("name") orelse continue;
+        found_character = scope == .string and
+            std.mem.eql(u8, scope.string, "constant.character.luce");
+        for (rule.get("patterns").?.array.items) |pattern_value| {
+            const pattern = pattern_value.object.get("match") orelse continue;
+            if (pattern == .string and std.mem.indexOf(u8, pattern.string, "u\\{") != null) {
+                found_unicode_escape = true;
+            }
+        }
+    }
+    try std.testing.expect(found_character);
+    try std.testing.expect(found_unicode_escape);
 }
 
 test "every keyword the lexer reserves has a class" {

@@ -34,6 +34,7 @@ pub const definitions = [_]Definition{
         .description = "Run the core language's differential specification",
         .filters = &.{
             "specs.behavior_spec.",
+            "specs.text_types_spec.",
             "specs.enums_spec.",
             "specs.union_spec.",
             "specs.errors_spec.",

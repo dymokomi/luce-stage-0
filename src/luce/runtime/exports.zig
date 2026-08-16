@@ -372,7 +372,7 @@ pub export fn luce_rt_intern_text(
     if (!requireValueOut(runtime, out)) return raised_trap;
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.ownValue(Value.ofStr(borrowed)) catch |mistake|
+    out.* = text.ownHost(runtime, borrowed) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -398,7 +398,7 @@ pub export fn luce_rt_maybe_text(
     }
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.ownValue(Value.ofStr(borrowed)) catch |mistake|
+    out.* = text.ownHost(runtime, borrowed) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -456,6 +456,8 @@ pub export fn luce_rt_set_key_text(
     length: i64,
 ) callconv(.c) i32 {
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
+        return failed(runtime, mistake);
+    text.requireHost(runtime, borrowed) catch |mistake|
         return failed(runtime, mistake);
     runtime.setKeyText(borrowed) catch |mistake|
         return failed(runtime, mistake);
@@ -543,16 +545,30 @@ pub export fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) v
 // out-parameter the caller branches on, because "the file could not be
 // opened" is news a program may catch and not a bug (docs/FAILURE.md).
 
-/// `parse_string(xs)` — a `list(byte)` as text, or absent when the
-/// bytes are not valid UTF-8 (docs/BYTES.md R3).
-pub export fn luce_rt_parse_string(
+/// `parse_str(data)` — immutable bytes as text, or absent when they
+/// are not valid UTF-8.
+pub export fn luce_rt_parse_str(
     runtime: *Runtime,
     held: [*c]const Value,
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireObjectInput(runtime, held)) return raised_trap;
-    out.* = files.parseString(runtime, held.*) catch |mistake|
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = text.parseStr(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+/// `bytes(value)` — copy text or a packed one-dimensional u8
+/// container into immutable binary storage.
+pub export fn luce_rt_bytes(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = text.bytes(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1332,6 +1348,22 @@ fn requireStringInput(runtime: *Runtime, held: [*c]const Value) bool {
     return false;
 }
 
+fn requireTextLikeInput(runtime: *Runtime, held: [*c]const Value) bool {
+    if (!requireValueInput(runtime, held)) return false;
+    if (held.*.hasValidStringRepresentation() or held.*.hasValidBytesRepresentation()) return true;
+    _ = runtime.fail(.not_owned) catch {};
+    return false;
+}
+
+fn requireIndexableInput(runtime: *Runtime, held: [*c]const Value) bool {
+    if (!requireValueInput(runtime, held)) return false;
+    if (held.*.tag == .object or
+        held.*.hasValidStringRepresentation() or
+        held.*.hasValidBytesRepresentation()) return true;
+    _ = runtime.fail(.not_owned) catch {};
+    return false;
+}
+
 fn requireI64Input(runtime: *Runtime, values: [*c]const i64) bool {
     if (values != null) return true;
     _ = runtime.fail(.host_unavailable) catch {};
@@ -1380,7 +1412,7 @@ pub export fn luce_rt_index_get(
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, indices)) return raised_trap;
     const index_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
-    if (!requireObjectInput(runtime, target)) return raised_trap;
+    if (!requireIndexableInput(runtime, target)) return raised_trap;
     out.* = containers.indexGet(runtime, target.*, indices[0..index_count]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1677,8 +1709,8 @@ pub export fn luce_rt_concat(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireStringInput(runtime, left) or !requireStringInput(runtime, right)) return raised_trap;
-    out.* = text.concat(runtime, left.*.asStr(), right.*.asStr()) catch |mistake|
+    if (!requireTextLikeInput(runtime, left) or !requireTextLikeInput(runtime, right)) return raised_trap;
+    out.* = text.concat(runtime, left.*, right.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1691,7 +1723,7 @@ pub export fn luce_rt_string_slice(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireStringInput(runtime, held)) return raised_trap;
+    if (!requireTextLikeInput(runtime, held)) return raised_trap;
     out.* = text.slice(runtime, held.*, start, end) catch |mistake|
         return failed(runtime, mistake);
     return survived;

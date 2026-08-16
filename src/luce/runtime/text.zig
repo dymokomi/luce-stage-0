@@ -23,6 +23,39 @@ const Error = heap.Error;
 const Runtime = heap.Runtime;
 const Value = value.Value;
 
+/// Whether a byte run can inhabit Luce's `str` type.
+///
+/// This is the one UTF-8 predicate used by binary-to-text parsing,
+/// whole-file text reads, and every host ingress. Keeping it here makes
+/// the `str` invariant a runtime rule shared by both execution engines.
+pub fn isValid(encoded: []const u8) bool {
+    return std.unicode.utf8ValidateSlice(encoded);
+}
+
+/// Copy text borrowed from a host into a Luce value. A host slot that
+/// claims arbitrary bytes are text has violated the ABI contract, so it
+/// fails closed before an invalid `str` can enter the program.
+pub fn ownHost(runtime: *Runtime, encoded: []const u8) Error!Value {
+    try requireHost(runtime, encoded);
+    return runtime.ownValue(Value.ofStr(encoded));
+}
+
+/// Validate host-owned text that is copied somewhere other than a Value,
+/// such as the terminal's remembered key payload.
+pub fn requireHost(runtime: *Runtime, encoded: []const u8) Error!void {
+    if (!isValid(encoded)) return runtime.fail(.host_unavailable);
+}
+
+/// `parse_str(data)` — immutable bytes as text, or absent when they are
+/// not valid UTF-8. The successful result owns its storage independently
+/// of the source bytes.
+pub fn parseStr(runtime: *Runtime, held: Value) Error!Value {
+    if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
+    const encoded = held.asBytes();
+    if (!isValid(encoded)) return Value.none;
+    return runtime.ownValue(Value.ofStr(encoded));
+}
+
 /// True when `index` is either the end of `held` or the first byte of a
 /// UTF-8 sequence.  Slicing anywhere else would produce a String that
 /// is not valid UTF-8.
@@ -33,17 +66,34 @@ pub fn isStringBoundary(held: []const u8, index: usize) bool {
 /// `left + right`, in fresh owned storage — inside the value when the
 /// result fits there, which costs the join nothing and the release
 /// nothing (docs/STRINGS.md).
-pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Value {
-    const length = std.math.add(usize, left.len, right.len) catch
+pub fn concat(runtime: *Runtime, left: Value, right: Value) Error!Value {
+    if (left.tag != right.tag) return runtime.fail(.not_owned);
+    const tag = left.tag;
+    const left_bytes, const right_bytes = switch (tag) {
+        .str => blk: {
+            if (!left.hasValidStringRepresentation() or !right.hasValidStringRepresentation()) {
+                return runtime.fail(.not_owned);
+            }
+            break :blk .{ left.asStr(), right.asStr() };
+        },
+        .bytes => blk: {
+            if (!left.hasValidBytesRepresentation() or !right.hasValidBytesRepresentation()) {
+                return runtime.fail(.not_owned);
+            }
+            break :blk .{ left.asBytes(), right.asBytes() };
+        },
+        else => return runtime.fail(.not_owned),
+    };
+    const joined_length = std.math.add(usize, left_bytes.len, right_bytes.len) catch
         return error.OutOfMemory;
-    if (length == 0) return Value.ofStr("");
-    if (Value.fitsInline(length)) {
+    if (joined_length == 0) return Value.ofOutside(tag, "");
+    if (Value.fitsInline(joined_length)) {
         var joined: [value.inline_capacity]u8 = undefined;
-        @memcpy(joined[0..left.len], left);
-        @memcpy(joined[left.len..length], right);
-        return Value.ofInlineText(.str, joined[0..length]);
+        @memcpy(joined[0..left_bytes.len], left_bytes);
+        @memcpy(joined[left_bytes.len..joined_length], right_bytes);
+        return Value.ofInlineText(tag, joined[0..joined_length]);
     }
-    return Value.ofStr(try std.mem.concat(runtime.objects, u8, &.{ left, right }));
+    return Value.ofOutside(tag, try std.mem.concat(runtime.objects, u8, &.{ left_bytes, right_bytes }));
 }
 
 /// `s[start:end]` — a borrow of the original bytes, checked twice: in
@@ -56,17 +106,80 @@ pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Valu
 /// `held` is a copy of the caller's, so a view of it would be a view of
 /// something about to go (docs/STRINGS.md).
 pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
-    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-    const text = held.asStr();
-    if (start < 0 or end < start or end > text.len) return runtime.fail(.string_bounds);
-    const start_index: usize = @intCast(start);
-    const end_index: usize = @intCast(end);
-    if (!isStringBoundary(text, start_index) or !isStringBoundary(text, end_index)) {
-        return runtime.fail(.string_boundary);
-    }
-    const wanted = text[start_index..end_index];
+    if (start < 0 or end < start) return runtime.fail(.string_bounds);
+    const source_bytes: []const u8, const start_index: usize, const end_index: usize = switch (held.tag) {
+        .str => blk: {
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+            const text = held.asStr();
+            const first = scalarOffset(text, @intCast(start)) orelse return runtime.fail(.string_bounds);
+            const last = scalarOffset(text, @intCast(end)) orelse return runtime.fail(.string_bounds);
+            break :blk .{ text, first, last };
+        },
+        .bytes => blk: {
+            if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
+            const data = held.asBytes();
+            if (end > data.len) return runtime.fail(.string_bounds);
+            break :blk .{ data, @intCast(start), @intCast(end) };
+        },
+        else => return runtime.fail(.not_owned),
+    };
+    const wanted = source_bytes[start_index..end_index];
     if (held.textIsInline()) return Value.ofInlineText(held.tag, wanted);
-    return Value.ofStr(wanted);
+    return Value.ofOutside(held.tag, wanted);
+}
+
+pub fn length(runtime: *Runtime, held: Value) Error!Value {
+    return switch (held.tag) {
+        .str => blk: {
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+            break :blk Value.ofI64(@intCast(scalarCount(held.asStr())));
+        },
+        .bytes => blk: {
+            if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
+            break :blk Value.ofI64(@intCast(held.asBytes().len));
+        },
+        else => runtime.fail(.not_owned),
+    };
+}
+
+pub fn at(runtime: *Runtime, held: Value, index: i64) Error!Value {
+    if (index < 0) return runtime.fail(.string_bounds);
+    return switch (held.tag) {
+        .str => blk: {
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+            const text = held.asStr();
+            const first = scalarOffset(text, @intCast(index)) orelse return runtime.fail(.string_bounds);
+            if (first == text.len) return runtime.fail(.string_bounds);
+            const scalar_length = std.unicode.utf8ByteSequenceLength(text[first]) catch unreachable;
+            break :blk Value.ofChar(std.unicode.utf8Decode(text[first..][0..scalar_length]) catch unreachable);
+        },
+        .bytes => blk: {
+            if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
+            const data = held.asBytes();
+            if (index >= data.len) return runtime.fail(.string_bounds);
+            break :blk Value.ofU8(data[@intCast(index)]);
+        },
+        else => runtime.fail(.not_owned),
+    };
+}
+
+fn scalarCount(text: []const u8) usize {
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (offset < text.len) : (count += 1) {
+        offset += std.unicode.utf8ByteSequenceLength(text[offset]) catch unreachable;
+    }
+    return count;
+}
+
+fn scalarOffset(text: []const u8, wanted: usize) ?usize {
+    var scalar: usize = 0;
+    var offset: usize = 0;
+    while (scalar < wanted) : (scalar += 1) {
+        if (offset >= text.len) return null;
+        offset += std.unicode.utf8ByteSequenceLength(text[offset]) catch return null;
+    }
+    return offset;
 }
 
 /// `s.byte_at(i)` — one raw byte, below the UTF-8 layer on purpose.
@@ -86,9 +199,9 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
     if (byte < 0 or byte > 0xFF) return runtime.fail(.bad_codepoint);
     if (start < 0 or start > text.len) return runtime.fail(.string_bounds);
     const from: usize = @intCast(start);
-    const at = std.mem.indexOfScalarPos(u8, text, from, @intCast(byte)) orelse
+    const found_at = std.mem.indexOfScalarPos(u8, text, from, @intCast(byte)) orelse
         return Value.ofI64(-1);
-    return Value.ofI64(@intCast(at));
+    return Value.ofI64(@intCast(found_at));
 }
 
 // ---------------------------------------------------------------------------
@@ -109,9 +222,19 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         // number's text always fits inside the value and `string(i)` in
         // a loop allocates nothing at all.
         .u8 => |number| return digitsOf(number),
+        .u16 => |number| return digitsOf(number),
+        .u32 => |number| return digitsOf(number),
+        .u64 => |number| return digitsOf(number),
+        .i8 => |number| return digitsOf(number),
         .i16 => |number| return digitsOf(number),
         .i32 => |number| return digitsOf(number),
         .i64 => |number| return digitsOf(number),
+        .char => |scalar| {
+            var buffer: [4]u8 = undefined;
+            const encoded_length = std.unicode.utf8Encode(@intCast(scalar), &buffer) catch
+                return runtime.fail(.bad_codepoint);
+            return Value.ofInlineText(.str, buffer[0..encoded_length]);
+        },
         // `{d}` on a float is the shortest representation that round
         // trips **at its own width** — Zig's Ryū-derived formatter,
         // which is width-generic, so `string(float(1.0) / float(3.0))`
@@ -133,6 +256,31 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         },
         else => return runtime.fail(.not_owned),
     }
+}
+
+/// `bytes(value)` copies a textual or packed-u8 sequence into an
+/// immutable binary value.  It never aliases a mutable list or array:
+/// the conversion is the boundary at which later container writes stop
+/// affecting the bytes that were produced.
+pub fn bytes(runtime: *Runtime, held: Value) Error!Value {
+    const source: []const u8 = switch (held.tag) {
+        .str => blk: {
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+            break :blk held.asStr();
+        },
+        .object => blk: {
+            const object = try runtime.resolve(held);
+            switch (object.data) {
+                .list => {},
+                .array => if (object.dims.len != 1) return runtime.fail(.not_owned),
+                .map, .builder, .file, .task => return runtime.fail(.not_owned),
+            }
+            if (object.elements.kind != .u8) return runtime.fail(.not_owned);
+            break :blk object.elements.cells(u8);
+        },
+        else => return runtime.fail(.not_owned),
+    };
+    return runtime.ownValue(Value.ofBytes(source));
 }
 
 /// An integer's digits, at either width.  The text always fits inside
@@ -194,10 +342,10 @@ pub fn chr(runtime: *Runtime, code: i64) Error!Value {
     if (code < 0 or code > 0x10FFFF) return runtime.fail(.bad_codepoint);
     const codepoint: u21 = @intCast(code);
     var buffer: [4]u8 = undefined;
-    const length = std.unicode.utf8Encode(codepoint, &buffer) catch
+    const encoded_length = std.unicode.utf8Encode(codepoint, &buffer) catch
         return runtime.fail(.bad_codepoint);
     // Four bytes at the most, so a codepoint always fits in the value.
-    return Value.ofInlineText(.str, buffer[0..length]);
+    return Value.ofInlineText(.str, buffer[0..encoded_length]);
 }
 
 /// `ord(s)` — the first codepoint of `s`, or a trap when there is none
@@ -206,10 +354,10 @@ pub fn ord(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asStr();
     if (text.len == 0) return runtime.fail(.bad_codepoint);
-    const length = std.unicode.utf8ByteSequenceLength(text[0]) catch
+    const scalar_length = std.unicode.utf8ByteSequenceLength(text[0]) catch
         return runtime.fail(.bad_codepoint);
-    if (text.len < length) return runtime.fail(.bad_codepoint);
-    const codepoint = std.unicode.utf8Decode(text[0..length]) catch
+    if (text.len < scalar_length) return runtime.fail(.bad_codepoint);
+    const codepoint = std.unicode.utf8Decode(text[0..scalar_length]) catch
         return runtime.fail(.bad_codepoint);
     return Value.ofI64(codepoint);
 }

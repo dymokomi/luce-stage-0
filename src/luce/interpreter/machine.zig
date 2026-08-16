@@ -717,6 +717,7 @@ pub const Machine = struct {
                 .i16 => .ofI16(@intCast(held)),
                 .i32 => .ofI32(@intCast(held)),
                 .i64 => .ofI64(@intCast(held)),
+                .char => .ofChar(@intCast(held)),
                 else => unreachable,
             },
             .float => |held| switch (landed) {
@@ -724,9 +725,10 @@ pub const Machine = struct {
                 .f32 => .ofF32(@floatCast(held)),
                 else => .ofF64(held),
             },
-            .str => |index| self.runtime.ownValue(
-                .ofStr(self.program.constants[index]),
-            ),
+            .str => |index| self.runtime.ownValue(if (landed == .bytes)
+                .ofBytes(self.program.constants[index])
+            else
+                .ofStr(self.program.constants[index])),
             .strukt => |held| self.constantStruct(held),
             .absent => .none,
         };
@@ -929,6 +931,7 @@ pub const Machine = struct {
                         .i16 => .ofI16(@intCast(value)),
                         .i32 => .ofI32(@intCast(value)),
                         .i64 => .ofI64(@intCast(value)),
+                        .char => .ofChar(@intCast(value)),
                         else => unreachable,
                     },
                     .const_float => |value| registers[item] = switch (function.result_types[item]) {
@@ -937,7 +940,10 @@ pub const Machine = struct {
                         else => .ofF64(value),
                     },
                     .const_str => |constant| {
-                        registers[item] = .ofStr(self.program.constants[constant]);
+                        registers[item] = if (function.result_types[item] == .bytes)
+                            .ofBytes(self.program.constants[constant])
+                        else
+                            .ofStr(self.program.constants[constant]);
                     },
                     .const_container => |constant| {
                         registers[item] = self.runtime.constant(constant);
@@ -1353,7 +1359,9 @@ pub const Machine = struct {
             .f16 => .ofF16(0.0),
             .f32 => .ofF32(0.0),
             .f64 => .ofF64(0.0),
+            .char => .ofChar(0),
             .str => .ofStr(""),
+            .bytes => .ofBytes(""),
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
@@ -1682,6 +1690,7 @@ pub const Machine = struct {
                 return .none;
             },
             .str_value => return text.str(&self.runtime, registers[arguments[0]]),
+            .bytes_value => return text.bytes(&self.runtime, registers[arguments[0]]),
             // `string(f)` — the name out of the program's own function
             // table (docs/FUNCTIONS.md D3).  Borrowed, not allocated:
             // the name lives as long as the program does, which is what
@@ -1693,7 +1702,7 @@ pub const Machine = struct {
             },
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
-            .parse_string => return files.parseString(&self.runtime, registers[arguments[0]]),
+            .parse_str => return text.parseStr(&self.runtime, registers[arguments[0]]),
             .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asI64()),
             .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
             .string_slice => return text.slice(
@@ -1835,7 +1844,7 @@ pub const Machine = struct {
                 // (docs/FAILURE.md).
                 const line = (try callback(host.context, self.arena, prompt)) orelse
                     return .none;
-                return self.runtime.ownValue(.ofStr(line));
+                return text.ownHost(&self.runtime, line);
             },
             .print_error => {
                 const host = try self.service();
@@ -1891,7 +1900,7 @@ pub const Machine = struct {
                 const name = registers[arguments[0]].asStr();
                 const found = (try callback(host.context, self.arena, name)) orelse
                     return .none;
-                return self.runtime.ownValue(.ofStr(found));
+                return text.ownHost(&self.runtime, found);
             },
             .shell_run => {
                 const host = try self.service();
@@ -1902,7 +1911,7 @@ pub const Machine = struct {
                     self.runtime.raiseIo(.run, command, self.placeOf(site));
                     return .ofStr("");
                 };
-                return self.runtime.ownValue(.ofStr(output));
+                return text.ownHost(&self.runtime, output);
             },
             .term_event_data => {
                 const screen = try self.terminal();
@@ -2054,8 +2063,9 @@ pub const Machine = struct {
                     try self.runtime.setKeyText("");
                     return .none;
                 };
+                try text.requireHost(&self.runtime, event.text);
                 try self.runtime.setKeyText(event.text);
-                return self.runtime.ownValue(.ofStr(event.name));
+                return text.ownHost(&self.runtime, event.name);
             },
             .key_text => return .ofStr(self.runtime.last_key_text),
 
@@ -2165,6 +2175,7 @@ pub const Machine = struct {
 fn emptyValue(of: types.Type) RuntimeValue {
     return switch (of) {
         .str => .ofStr(""),
+        .bytes => .ofBytes(""),
         // A union value's run empties exactly as a struct's does
         // (docs/UNION.md D8): the same tag and no run, which a
         // release walks past.

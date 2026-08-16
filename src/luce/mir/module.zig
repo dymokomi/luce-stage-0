@@ -182,7 +182,13 @@ pub const magic = "LUCE";
 /// `types.Type` gains four integer tags, every integer constant widens from
 /// i64 to i128 on the wire so it can represent the full u64 range, and enum
 /// backing tags grow to all eight integer widths.
-pub const format_version: u32 = 48;
+///
+/// 49 — the explicit text vocabulary is complete. `char` and `bytes` join
+/// `types.Type`, character literals produce scalar constants, `bytes_value`
+/// joins the intrinsic set, and `parse_string` is replaced by `parse_str`
+/// over immutable bytes. A 48 module cannot describe these values and must
+/// be refused rather than interpreted with the new tag ordinals.
+pub const format_version: u32 = 49;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -675,7 +681,9 @@ const Reader = struct {
             .f16 => .f16,
             .f32 => .f32,
             .f64 => .f64,
+            .char => .char,
             .str => .str,
+            .bytes => .bytes,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
             .variant => .{ .variant = try self.int(u32) },
@@ -1917,8 +1925,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 46 -> 47: ARC arrives — the `retain` and `release` intrinsics are
     // appended after `term_event_data`, so the hash moves with the two new
     // names and no tag before them renumbers.
-    try testing.expectEqual(@as(u32, 48), format_version);
-    try testing.expectEqual(@as(u64, 3532110430299157339), hasher.final());
+    // 48 -> 49: `char` and `bytes` join `types.Type`, `bytes_value` is
+    // appended to `Intrinsic`, and `parse_string` is renamed `parse_str`.
+    try testing.expectEqual(@as(u32, 49), format_version);
+    try testing.expectEqual(@as(u64, 9292062166991129096), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

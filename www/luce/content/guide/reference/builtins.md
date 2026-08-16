@@ -9,29 +9,28 @@ enabled compilation and may report `host_unavailable` at run time.
 
 | Signature | Notes |
 |---|---|
-| `len(value) -> long` | `string` bytes; list, map, builder or rank-1 array length; an `array`'s dimension 0 |
-| `print(text: string)` | host-gated |
-| `range(low: long, high: long)` | `for` only; excludes `high` |
+| `len(value) -> i64` | Unicode scalars in `str`; bytes in `bytes`; elements in a list, map, builder, or rank-1 array; an `array`'s dimension 0 |
+| `print(text: str)` | host-gated |
+| `range(low: i64, high: i64)` | `for` only; excludes `high` |
 | `assert(condition: bool)` | traps `assertion_failed` |
-| `trap(message: string)` | never returns; traps `explicit_trap` |
-| `error(message: string)` | never returns; raises `user_error` |
+| `trap(message: str)` | never returns; traps `explicit_trap` |
+| `error(message: str)` | never returns; raises `user_error` |
 | `abs(value)` | any number; answers its operand's type |
 | `min(a, b)`, `max(a, b)` | any two numbers of the same type |
 | `clamp(value, low, high)` | any three numbers of the same type |
-| `sqrt(value)` | a `float` or a `double`, and **the same width back** |
+| `sqrt(value)` | `f16`, `f32`, or `f64`, and **the same width back** |
 | `floor(value)`, `ceil(value)` | ″ |
 | `trunc(value)` | ″; toward zero, and `math.round` is the fourth |
-| `chr(code: long) -> string` | traps `bad_codepoint` on an invalid codepoint |
-| `ord(text: string) -> long` | first codepoint; traps on empty |
-| `parse_int(text: string) -> long?` | `none` when the text is not an integer |
-| `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `u8(x)`, `i16(x)`, `i32(x)`, `i64(x)`, `f16(x)`, `f32(x)`, `f64(x)`, `str(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `str(x)` accepts numbers, `bool`, strings, enums, unions (answering the member's name, never the payload) and function values, and refuses container objects, resources and structs |
+| `parse_int(text: str) -> i64?` | `none` when the text is not an integer |
+| `parse_float(text: str) -> f64?` | `none` when the text is not a number |
+| `parse_str(data: bytes) -> str?` | decoded text, or `none` when the bytes are not valid UTF-8 |
+| `u8(x)`, `u16(x)`, `u32(x)`, `u64(x)`, `i8(x)`, `i16(x)`, `i32(x)`, `i64(x)`, `f16(x)`, `f32(x)`, `f64(x)` | explicit numeric conversions. Float to integer truncates toward zero; integer conversion checks range; float narrowing rounds to nearest, ties to even, and may reach infinity |
+| `char(x)`, `str(x)`, `bytes(x)` | checked Unicode scalar conversion, textual rendering, and immutable binary copying |
 
-The four numeric builtins that answer their operand's own type land
-their arguments where the whole call lands, so `let x: double =
+The numeric builtins that answer their operand's own type land
+their arguments where the whole call lands, so `let x: f64 =
 sqrt(2.0)` reads `2.0` at binary64 rather than widening binary32's
-answer into it. Unannotated, a float literal is a `float`, which is
-what the fourth line below prints.
+answer into it. Unannotated, a float literal is an `f64`.
 
 ```luce run
 func main():
@@ -43,8 +42,8 @@ func main():
     print(str(sqrt(two)))
     print(str(floor(-2.5)) + " " + str(ceil(-2.5)) + " " + str(trunc(-2.5)))
     print(str(i64(2.5)) + " " + str(i64(-2.5)) + " " + str(i64(2.4)))
-    print(chr(9731))
-    print(str(ord("A")))
+    print(str(char(9731)))
+    print(str(u32('A')))
     print(str(parse_int("17") else -1))
     print(str(parse_float("nope") else -1.0))
 ```
@@ -53,10 +52,10 @@ func main():
 7
 3 9
 10
-1.4142135
+1.4142135623730951
 1.4142135623730951
 -3 -2 -2
-3 -3 2
+2 -2 2
 ☃
 65
 17
@@ -74,9 +73,9 @@ whose normal result can be absent use `T?`; operations that can fail use
 
 | Signature | Notes |
 |---|---|
-| `print(text: string)` | a line to standard output, unsanitized — it is the program's own channel and may be a pipe |
-| `print_error(text: string)` | a line to standard error, **always sanitized**: that channel is shared with the runner, so a program may not scribble on a frame it does not own |
-| `read_line(prompt: string) -> string?` | writes the prompt, reads one line without its newline; `none` at end of input. Hands the terminal back its line discipline first, so a line read and a raw key loop never fight over standard input |
+| `print(text: str)` | a line to standard output, unsanitized — it is the program's own channel and may be a pipe |
+| `print_error(text: str)` | a line to standard error, **always sanitized**: that channel is shared with the runner, so a program may not scribble on a frame it does not own |
+| `read_line(prompt: str) -> str?` | writes the prompt, reads one line without its newline; `none` at end of input. Hands the terminal back its line discipline first, so a line read and a raw key loop never fight over standard input |
 
 At end of input, `read_line` returns `none`; use `read_line("> ") else
 ""` to supply a fallback.
@@ -85,16 +84,16 @@ At end of input, `read_line` returns `none`; use `read_line("> ") else
 
 | Signature | Notes |
 |---|---|
-| `env(name: string) -> string?` | one environment variable; `none` when it is unset. There is no setter and no way to read the whole environment |
+| `env(name: str) -> str?` | one environment variable; `none` when it is unset. There is no setter and no way to read the whole environment |
 
-The command line is `main`'s optional `list(string)` parameter, not a builtin
+The command line is `main`'s optional `list[str]` parameter, not a builtin
 ([entry forms](../statements/#entry)).
 
 ### Shell
 
 | Signature | Notes |
 |---|---|
-| `shell_run(command: string) -> string!` | runs one command through the host shell, captures standard output and standard error, and appends the exit status. The returned text is a transcript, not a separate status value; quote paths and other arguments for the shell. |
+| `shell_run(command: str) -> str!` | runs one command through the host shell, captures standard output and standard error, and appends the exit status. The returned text is a transcript, not a separate status value; quote paths and other arguments for the shell. |
 
 Use [`std.os.shell.run`](/library/os/) for this operation. It is a host
 shell interface, not a portable process API. A failed launch is an
@@ -104,9 +103,9 @@ shell interface, not a portable process API. A failed launch is an
 
 | Signature | Notes |
 |---|---|
-| `clock_ms() -> long` | a **monotonic** reading in milliseconds; only differences mean anything, and it is not a wall clock or a calendar |
-| `epoch_ms() -> long` | milliseconds since the Unix epoch — **what time it is**, which the monotonic clock cannot say |
-| `sleep_ms(milliseconds: long)` | waits at least that long; presents the pending frame first, as `key_read` does |
+| `clock_ms() -> i64` | a **monotonic** reading in milliseconds; only differences mean anything, and it is not a wall clock or a calendar |
+| `epoch_ms() -> i64` | milliseconds since the Unix epoch — **what time it is**, which the monotonic clock cannot say |
+| `sleep_ms(milliseconds: i64)` | waits at least that long; presents the pending frame first, as `key_read` does |
 
 Use `clock_ms` for elapsed-time measurements: subtract two readings.
 It is monotonic and has no defined epoch. Use `epoch_ms` for a Unix
@@ -119,7 +118,7 @@ durations.
 
 | Signature | Notes |
 |---|---|
-| `exit(status: long)` | the program's chosen end — the fourth way a run stops, beside finishing, trapping, and an uncaught error. It never returns: the run unwinds, nothing after the call executes, and the host carries the status — on POSIX, the low eight bits of the process's exit code |
+| `exit(status: i64)` | the program's chosen end — the fourth way a run stops, beside finishing, trapping, and an uncaught error. It never returns: the run unwinds, nothing after the call executes, and the host carries the status — on POSIX, the low eight bits of the process's exit code |
 
 `exit` is a normal termination, not a trap or error. It is host-gated;
 an unsupported host raises `host_unavailable`.
@@ -159,9 +158,9 @@ elapsed is never negative: true
 
 | Signature | Notes |
 |---|---|
-| `os_total_memory() -> long` | bytes of physical memory the machine has; fixed for the life of the run |
-| `os_available_memory() -> long` | bytes it could still hand out. This one **moves**: ask twice and expect two answers |
-| `os_cpu_count() -> long` | how many processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads |
+| `os_total_memory() -> i64` | bytes of physical memory the machine has; fixed for the life of the run |
+| `os_available_memory() -> i64` | bytes it could still hand out. This one **moves**: ask twice and expect two answers |
+| `os_cpu_count() -> i64` | how many processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads |
 
 These are also exposed by [`std.os`](/library/os/). The values are numbers;
 an unsupported host raises `host_unavailable` rather than returning a
@@ -176,12 +175,12 @@ changing these signatures.
 
 | Signature | Notes |
 |---|---|
-| `gpu_backend() -> long` | backend code: 0 Metal, 1 Vulkan, 2 headless; an unknown code traps |
-| `ui_window_open(title: string, width: long, height: long) -> file!` | opens an ARC-managed window handle |
+| `gpu_backend() -> i64` | backend code: 0 Metal, 1 Vulkan, 2 headless; an unknown code traps |
+| `ui_window_open(title: str, width: i64, height: i64) -> file!` | opens an ARC-managed window handle |
 | `ui_window_surface(window: file) -> file!` | creates an ARC-managed GPU surface for the window |
-| `gpu_surface_size(surface: file, axis: long) -> long!` | axis 0 is width, 1 is height |
-| `gpu_surface_clear(surface: file, red: long, green: long, blue: long, alpha: long) -> !` | clears the surface with an RGBA colour |
-| `gpu_surface_fill_rect(surface: file, x: long, y: long, width: long, height: long, red: long, green: long, blue: long, alpha: long) -> !` | fills a rectangle |
+| `gpu_surface_size(surface: file, axis: i64) -> i64!` | axis 0 is width, 1 is height |
+| `gpu_surface_clear(surface: file, red: i64, green: i64, blue: i64, alpha: i64) -> !` | clears the surface with an RGBA colour |
+| `gpu_surface_fill_rect(surface: file, x: i64, y: i64, width: i64, height: i64, red: i64, green: i64, blue: i64, alpha: i64) -> !` | fills a rectangle |
 | `gpu_surface_present(surface: file) -> !` | presents the completed surface |
 
 Use [`std.gpu`](/library/gpu/) and [`std.ui`](/library/ui/) rather than these
@@ -192,15 +191,15 @@ higher-level package.
 
 | Signature | Notes |
 |---|---|
-| `file_read(path: string) -> string!` | the whole file; 64 MiB ceiling |
-| `file_write(path: string, content: string) -> !` | truncates or creates |
-| `file_append(path: string, content: string) -> !` | adds to the end, creating the file if it is not there |
-| `file_delete(path: string) -> !` | an absent path is `io_failed`, not a quiet success |
-| `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
-| `path_kind(path: string) -> long!` | what is at the path: 0 nothing, 1 a file, 2 a directory, 3 something else. Links are followed. `!` is the world **refusing to say** — a parent nobody may search — which is a different fact from "nothing is there". You write [`files.kind`](/library/files/), which gives the four codes their names |
-| `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. Returns a fresh list |
-| `dir_create(path: string) -> !` | makes a directory **and every directory leading to it**. A directory already there is success; a *file* holding the name is `io_failed` |
-| `file_open(path: string, mode: long) -> file!` | an ARC-managed handle. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/library/files/), [`files.create`](/library/files/) or [`files.append_to`](/library/files/) rather than a number |
+| `file_read(path: str) -> str!` | the whole text file; 64 MiB ceiling |
+| `file_write(path: str, content: str) -> !` | truncates or creates |
+| `file_append(path: str, content: str) -> !` | adds to the end, creating the file if it is not there |
+| `file_delete(path: str) -> !` | an absent path is `io_failed`, not a quiet success |
+| `file_rename(from: str, to: str) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
+| `path_kind(path: str) -> i64!` | what is at the path: 0 nothing, 1 a file, 2 a directory, 3 something else. Links are followed. `!` is the world **refusing to say** — a parent nobody may search — which is a different fact from "nothing is there". You write [`files.kind`](/library/files/), which gives the four codes their names |
+| `dir_list(path: str) -> list[str]!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. Returns a fresh list |
+| `dir_create(path: str) -> !` | makes a directory **and every directory leading to it**. A directory already there is success; a *file* holding the name is `io_failed` |
+| `file_open(path: str, mode: i64) -> file!` | an ARC-managed handle. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/library/files/), [`files.create`](/library/files/) or [`files.append_to`](/library/files/) rather than a number |
 
 All file operations are fallible. `path_kind` returns 0 for absence, 1
 for a file, 2 for a directory, and 3 for another entry kind; inability
@@ -219,7 +218,7 @@ func main() -> !:
     # And saying it again is success, not an error.
     try files.make_directory("store/packages")
     try files.write("store/packages/geo-1.2.0/luce.json", "{}\n")
-    let names = try files.list["store/packages"]
+    let names = try files.list("store/packages")
     for name in names:
         print(name)
 ```
@@ -232,24 +231,23 @@ geo-1.2.0
 
 | Signature | Notes |
 |---|---|
-| `parse_string(bytes: list(byte)) -> string?` | those bytes as text, or absent when they are not valid UTF-8 |
+| `parse_str(data: bytes) -> str?` | those bytes as text, or absent when they are not valid UTF-8 |
 
-`parse_string` returns `none` for invalid UTF-8. Use
-[`strings.from_bytes`](/library/strings/) for the standard-library wrapper;
-`strings.to_bytes` is the total reverse operation.
+`parse_str` returns `none` for invalid UTF-8. `bytes(text)` is the total
+reverse operation.
 
 ### Terminal
 
 | Signature | Notes |
 |---|---|
-| `term_rows() -> long`, `term_cols() -> long` | |
+| `term_rows() -> i64`, `term_cols() -> i64` | |
 | `term_clear()`, `term_move(row, column)` | |
 | `term_style(fg, bg = -1, bold = false)` | 256-color SGR; `-1`, the default, is the terminal's own color |
-| `term_write(text: string)` | sanitized; a program cannot emit a control sequence |
+| `term_write(text: str)` | sanitized; a program cannot emit a control sequence |
 | `term_flush()` | |
-| `key_read() -> string?` | presents the pending frame, then blocks; a stable name, or `none` at end of input |
-| `key_text() -> string` | the payload when the last `key_read` returned `"text"` |
-| `term_event_data(field: long) -> long` | numeric data for the most recent terminal event: row, column, button, modifiers or wheel value; used by `std.os.term.io` |
+| `key_read() -> str?` | presents the pending frame, then blocks; a stable name, or `none` at end of input |
+| `key_text() -> str` | the payload when the last `key_read` returned `"text"` |
+| `term_event_data(field: i64) -> i64` | numeric data for the most recent terminal event: row, column, button, modifiers or wheel value; used by `std.os.term.io` |
 
 `key_read` returns `none` when its input reaches end-of-file. Until then
 it returns the event name; `key_text` returns the text payload of the
@@ -266,7 +264,7 @@ Paths are passed to the operating system unchanged: relative paths use
 the process working directory, and absolute paths are allowed. The
 `file_read` 64 MiB limit still applies.
 
-## list(T)
+## list[T]
 
 | Method | Notes |
 |---|---|
@@ -274,10 +272,10 @@ the process working directory, and absolute paths are allowed. The
 | `insert(index, value)` | |
 | `remove(index)` | removes the element and releases any reference it held |
 | `pop() -> T` | removes and returns the final element; traps `empty_collection` when empty |
-| `sort()` | in place, **stable**, O(n log n); `long`, `double` or `string` elements |
+| `sort()` | in place, **stable**, O(n log n); ordered numeric, `char`, or `str` elements |
 | `sort_by(before: func(T, T) -> bool)` | in place, **stable**, O(n log n); every element type; requires `import std.lists` |
 | `reverse()` | in place |
-| `find(value) -> long?` | absence when not found; `xs.find(v) else -1` is the sentinel form |
+| `find(value) -> i64?` | absence when not found; `xs.find(v) else -1` is the sentinel form |
 | `contains(value) -> bool` | |
 | `clear()` | removes every element and releases their references |
 
@@ -287,7 +285,7 @@ list and the source therefore share any referenced objects.
 `sort_by` accepts a named function or capture-free lambda. Sorting rearranges
 the existing elements without changing their ARC lifetimes.
 
-## map(K, V)
+## map[K, V]
 
 | Method | Notes |
 |---|---|
@@ -306,11 +304,11 @@ defines a missing key at `V`'s zero value and then applies.
 struct values are deep-copied, so their complete type graph must be
 resource-free.
 
-## array(T, ...)
+## array[T, ...]
 
 | Method | Notes |
 |---|---|
-| `dim(axis) -> long` | the size of one axis |
+| `dim(axis) -> i64` | the size of one axis |
 | `fill(value)` | every element at any rank; **non-handle value elements only** |
 | `sort()`, `reverse()`, `find(v)`, `contains(v)` | rank-1 only |
 
@@ -335,21 +333,21 @@ func main():
 
 | Method | Notes |
 |---|---|
-| `append(text: string)` | |
-| `append_ascii(code: long)` | one ASCII byte; traps `bad_codepoint` outside 0..127 |
-| `build() -> string` | the bytes so far, as a string; the builder stays usable |
+| `append(text: str)` | |
+| `append_ascii(code: i64)` | one ASCII byte; traps `bad_codepoint` outside 0..127 |
+| `build() -> str` | the text so far; the builder stays usable |
 | `clear()` | |
 
 Plus `len`. A `builder` is a heap object, so its text comes out through
-`build()` rather than through `string(...)`, which accepts only the
+`build()` rather than through `str(...)`, which accepts only the
 explicit value families listed in the conversions table.
 
 ## file
 
 | Method | Notes |
 |---|---|
-| `read(into: array(byte, _)) -> long!` | fill the buffer and answer how many bytes landed; **zero is the end of the file**, not a refusal |
-| `write(from: array(byte, _), count: long) -> long!` | write the first `count` bytes and answer how many landed, which may be fewer than you offered |
+| `read(into: array[u8, _]) -> i64!` | fill the buffer and answer how many bytes landed; **zero is the end of the file**, not a refusal |
+| `write(from: array[u8, _], count: i64) -> i64!` | write the first `count` bytes and answer how many landed, which may be fewer than you offered |
 | `flush() -> !` | everything written so far is on the device |
 
 All three are fallible: the world decides. There is deliberately no `close`.
@@ -374,7 +372,7 @@ joiner's. ARC joins a task whose last reference is released without a wait and
 discards its answer. See the [`task`
 type](/guide/reference/types/#task).
 
-## string
+## str
 
 The language keeps only these:
 
@@ -383,18 +381,19 @@ The language keeps only these:
 | `"..."`, `f"..."` | literals |
 | `+` | concatenation |
 | `== != < <= > >=` | comparison and ordering |
-| `s[a:b]` | slice; checks UTF-8 boundaries |
-| `len(s)` | in bytes |
-| `s.byte_at(index) -> byte` | raw byte. The one builtin that answers a `byte`, because its result is definitionally one; it reaches a `long` parameter or a comparison with nothing written down |
-| `s.find_byte(byte, start) -> long` | offset of the first `byte` at or after `start`, or `-1`; the byte looked for is a `byte`, so "outside 0..255" is refused where it is written rather than trapping where it is read. Traps if `start` is outside the string |
+| `s[index] -> char` | Unicode scalar at a scalar position |
+| `s[a:b]` | scalar-position slice |
+| `len(s)` | Unicode scalar count |
+| `s.byte_at(index) -> u8` | raw UTF-8 byte at a byte position |
+| `s.find_byte(byte, start) -> i64` | raw byte offset or `-1`; `byte` is `u8` and `start` is a byte position |
 
-Every other string method routes to [`std.strings`](/library/strings/) and
+Every other `str` method routes to [`std.strings`](/library/strings/) and
 needs `import std.strings` in scope.
 
 ```luce run
 func main():
     let s = "hello, Luce"
-    print(f"{len(s)} bytes")
+    print(f"{len(s)} scalars")
     print(s[7:11])
     print(str(s.byte_at(0)))
     print(str(s.find_byte(44, 0)))
@@ -402,7 +401,7 @@ func main():
 ```
 
 ```output
-11 bytes
+11 scalars
 Luce
 104
 5

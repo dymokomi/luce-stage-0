@@ -146,13 +146,13 @@ private func pieces(text: str) -> list[str]:
     return text.split("|")
 
 private func first_word(line: str) -> str:
-    let space = line.find_byte(32, 0)
+    let space = strings.find(line, " ") else -1
     if space < 0:
         return line
     return line[0:space]
 
 private func after_first(line: str) -> str:
-    let space = line.find_byte(32, 0)
+    let space = strings.find(line, " ") else -1
     if space < 0:
         return ""
     return line[space + 1:len(line)].trim()

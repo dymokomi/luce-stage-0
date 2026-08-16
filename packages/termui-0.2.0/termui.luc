@@ -31,7 +31,7 @@ struct Style:
     bold: bool = false
 
     static func of(colour: Color) -> Style:
-        return Style(foreground = i32(colour))
+        return Style(foreground = i64(colour))
 
 # A rectangle of terminal cells.  Every operation is total: a split
 # past the edge answers an empty rectangle rather than trapping,

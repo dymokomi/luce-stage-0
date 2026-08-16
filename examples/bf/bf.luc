@@ -1,5 +1,5 @@
 # A Brainfuck interpreter in Luce: the u8 tape is a real array,
-# output accumulates in a builder, and chr() maps cell values to text.
+# output accumulates in a builder, and `char` maps cell values to text.
 #
 #   loom luce examples/bf/bf.luc
 
@@ -8,9 +8,9 @@ func matching_forward(code: str, pc: i64) -> i64:
     var at = pc
     while depth > 0:
         at = at + 1
-        if code.byte_at(at) == 91:
+        if code[at] == '[':
             depth = depth + 1
-        elif code.byte_at(at) == 93:
+        elif code[at] == ']':
             depth = depth - 1
     return at
 
@@ -19,9 +19,9 @@ func matching_backward(code: str, pc: i64) -> i64:
     var at = pc
     while depth > 0:
         at = at - 1
-        if code.byte_at(at) == 93:
+        if code[at] == ']':
             depth = depth + 1
-        elif code.byte_at(at) == 91:
+        elif code[at] == '[':
             depth = depth - 1
     return at
 
@@ -34,25 +34,27 @@ func interpret(code: str, cells: i64) -> str:
     var pc: i64 = 0
     var out = new builder
     while pc < len(code):
-        let op = code.byte_at(pc)
-        if op == 62:
+        let op = code[pc]
+        if op == '>':
             pointer = pointer + 1
-        elif op == 60:
+        elif op == '<':
             pointer = pointer - 1
-        elif op == 43:
-            # `%` floors, so a cell stepping below zero wraps to 255
-            # rather than going negative — which is what leaves the
-            # arithmetic (an `i32`, because a `u8` never does any)
-            # inside the range `u8()` will accept.
-            tape[pointer] = u8((tape[pointer] + 1) % 256)
-        elif op == 45:
-            tape[pointer] = u8((tape[pointer] - 1) % 256)
-        elif op == 46:
-            out.append(chr(tape[pointer]))
-        elif op == 91:
+        elif op == '+':
+            if tape[pointer] == u8(255):
+                tape[pointer] = u8(0)
+            else:
+                tape[pointer] += u8(1)
+        elif op == '-':
+            if tape[pointer] == u8(0):
+                tape[pointer] = u8(255)
+            else:
+                tape[pointer] -= u8(1)
+        elif op == '.':
+            out.append(str(char(tape[pointer])))
+        elif op == '[':
             if tape[pointer] == 0:
                 pc = matching_forward(code, pc)
-        elif op == 93:
+        elif op == ']':
             if tape[pointer] != 0:
                 pc = matching_backward(code, pc)
         pc = pc + 1

@@ -3117,6 +3117,7 @@ pub fn describe(kind: Kind) []const u8 {
 
         .int_literal => "a number",
         .float_literal => "a number",
+        .char_literal => "a character",
         .string_literal => "a string",
         .fstring => "an f-string",
 

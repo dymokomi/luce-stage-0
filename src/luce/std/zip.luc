@@ -67,7 +67,7 @@ import std.strings
 # are one honest absence: "not UTF-8" is the same fact every time.
 
 # The UTF-8 bytes a str is made of.
-func bytes(content: str) -> list[u8]:
+func to_bytes(content: str) -> list[u8]:
     return strings.to_bytes(content)
 
 # The str those bytes spell, or absent when they spell none.
@@ -121,7 +121,7 @@ private const crc_table: array[i64, _] = [
 func crc32(data: list[u8]) -> i64:
     var checksum: i64 = 0xFFFF_FFFF
     for value in data:
-        checksum = crc_table[(checksum ^ value) & 0xFF] ^ checksum >> 8
+        checksum = crc_table[(checksum ^ i64(value)) & 0xFF] ^ checksum >> 8
     return checksum ^ 0xFFFF_FFFF
 
 # --- little-endian fields --------------------------------------------
@@ -134,14 +134,12 @@ func crc32(data: list[u8]) -> i64:
 private func read_u16(data: list[u8], at: i64) -> i64!:
     if at < 0 or at + 2 > len(data):
         error("zip: the archive is truncated")
-    return data[at] | data[at + 1] << 8
+    return i64(data[at]) | i64(data[at + 1]) << 8
 
-# **The widths are written out here, and they have to be.**  A `u8`
-# is storage, so an operator widens it to `i32` (docs/TYPES.md D5) —
-# and `255 << 24` at `i32` lands in the sign bit.  A `u16` field is
-# safe at that width and a `u32` field is not, so the four bytes of one
-# are lifted to `i64` before they are shifted.  Nothing above this
-# line can tell, which is exactly why it is said here.
+# **The widths are written out here, and they have to be.** A `u8`
+# computes at its own width, while these fields are assembled into an
+# `i64` used by the archive API. Each byte crosses that boundary before
+# shifting, so no bit is discarded.
 private func read_u32(data: list[u8], at: i64) -> i64!:
     if at < 0 or at + 4 > len(data):
         error("zip: the archive is truncated")
@@ -158,15 +156,16 @@ private func put_u32(out: list[u8], value: i64):
     out.append(u8(value >> 24 & 0xFF))
 
 private func put_text(out: list[u8], content: str):
-    for at in range(0, len(content)):
-        out.append(content.byte_at(at))
+    let encoded = bytes(content)
+    for value in encoded:
+        out.append(value)
 
 # Bit 11 of an entry's flags says the name is UTF-8.  An ASCII name
 # means the same thing either way; anything else has to say so, or a
 # reader is entitled to read the bytes as code page 437.
 private func name_flags(name: str) -> i64:
-    for at in range(0, len(name)):
-        if name.byte_at(at) >= 0x80:
+    for scalar in name:
+        if u32(scalar) >= 0x80:
             return 0x0800
     return 0
 
@@ -175,7 +174,7 @@ private func name_flags(name: str) -> i64:
 # The compression methods this module has, by the numbers APPNOTE
 # 4.4.5 gives them.  Every other number in that field is a method zip
 # cannot read, which is what `Method(n)` answering `Method?` says.
-private enum Method(i16):
+private enum Method(u16):
     stored = 0
     deflated = 8
 
@@ -215,7 +214,7 @@ struct Entry:
     # cannot read still has to be named in a message; the comparison
     # says which number by name.
     func deflated() -> bool:
-        return self.method == i32(Method.deflated)
+        return self.method == i64(u16(Method.deflated))
 
 # The offset of the end-of-central-directory record (APPNOTE 4.3.16),
 # found the way every reader finds it: from the back, because the
@@ -311,7 +310,7 @@ func extract(archive: list[u8], entry: Entry) -> list[u8]!:
     let stop = start + entry.packed_size
     if stop > len(archive):
         error("zip: " + entry.path + " runs past the end of the archive")
-    let method = Method(entry.method)
+    let method = Method(u16(entry.method))
     if method == none:
         error("zip: " + entry.path + " uses compression method " + str(entry.method) + ", which zip cannot read")
     match method:
@@ -345,7 +344,7 @@ struct Writer:
     func add(name: str, data: list[u8], compress: bool = false) -> !:
         if len(name) == 0:
             error("zip: an entry needs a name")
-        if len(name) > 65535:
+        if len(bytes(name)) > 65535:
             error("zip: the name " + name + " does not fit an archive's name field")
         if len(self.written) >= 65535:
             error("zip: an archive holds at most 65535 entries")
@@ -365,18 +364,18 @@ struct Writer:
         put_u32(self.out, 0x0403_4B50)
         put_u16(self.out, version_for(method))
         put_u16(self.out, name_flags(name))
-        put_u16(self.out, i32(method))
+        put_u16(self.out, i64(u16(method)))
         put_u16(self.out, 0)
         put_u16(self.out, 0x0021)
         put_u32(self.out, checksum)
         put_u32(self.out, len(packed))
         put_u32(self.out, plain_size)
-        put_u16(self.out, len(name))
+        put_u16(self.out, len(bytes(name)))
         put_u16(self.out, 0)
         put_text(self.out, name)
         for value in packed:
             self.out.append(value)
-        self.written.append(Entry(path = name, method = i32(method), checksum = checksum, packed_size = len(packed), plain_size = plain_size, header_at = header))
+        self.written.append(Entry(path = name, method = i64(u16(method)), checksum = checksum, packed_size = len(packed), plain_size = plain_size, header_at = header))
 
     # The whole archive: everything added, then the central directory
     # over it.  A fresh list every time, so the writer stays usable.
@@ -393,7 +392,7 @@ struct Writer:
             put_u16(archive, 20)
             # Every entry in `written` was written by `put_entry`, so
             # its method is one of the two this module has.
-            let method = Method(entry.method) else Method.stored
+            let method = Method(u16(entry.method)) else Method.stored
             put_u16(archive, version_for(method))
             put_u16(archive, name_flags(entry.path))
             put_u16(archive, entry.method)
@@ -402,7 +401,7 @@ struct Writer:
             put_u32(archive, entry.checksum)
             put_u32(archive, entry.packed_size)
             put_u32(archive, entry.plain_size)
-            put_u16(archive, len(entry.path))
+            put_u16(archive, len(bytes(entry.path)))
             put_u16(archive, 0)
             put_u16(archive, 0)
             put_u16(archive, 0)
@@ -533,7 +532,7 @@ struct Stream:
             let index = self.position >> 3
             if index >= len(data):
                 error("zip: the compressed stream ends in the middle of a code")
-            let bit = data[index] >> (self.position & 7) & 1
+            let bit = i64(data[index]) >> (self.position & 7) & 1
             value = value | bit << taken
             self.position += 1
             taken += 1
@@ -568,8 +567,8 @@ struct Stream:
         let at = self.position >> 3
         if at + 4 > len(data):
             error("zip: a stored block with no header")
-        let length = data[at] | data[at + 1] << 8
-        let complement = data[at + 2] | data[at + 3] << 8
+        let length = i64(data[at]) | i64(data[at + 1]) << 8
+        let complement = i64(data[at + 2]) | i64(data[at + 3]) << 8
         if length + complement != 65535:
             error("zip: a stored block whose length does not check out")
         if at + 4 + length > len(data):
@@ -713,7 +712,7 @@ func inflate(data: list[u8]) -> list[u8]!:
     var last: i64 = 0
     while last == 0:
         last = try reader.take(data, 1)
-        let kind = Block(try reader.take(data, 2))
+        let kind = Block(u8(try reader.take(data, 2)))
         if kind == none:
             error("zip: the compressed stream has a block of an unknown kind")
         match kind:
@@ -800,7 +799,7 @@ func deflate(data: list[u8]) -> list[u8]:
         var best_length: i64 = 0
         var best_distance: i64 = 0
         if at + 3 <= len(data):
-            let key = data[at] << 16 | data[at + 1] << 8 | data[at + 2]
+            let key = i64(data[at]) << 16 | i64(data[at + 1]) << 8 | i64(data[at + 2])
             var candidate = recent.get(key) else -1
             var tries: i64 = 0
             while candidate >= 0 and tries < 24:
@@ -829,12 +828,13 @@ func deflate(data: list[u8]) -> list[u8]:
             for step in range(1, best_length):
                 let position = at + step
                 if position + 3 <= len(data):
-                    let key = data[position] << 16 | data[position + 1] << 8 | data[position + 2]
+                    let key = i64(data[position]) << 16 | i64(data[position + 1]) << 8 | i64(data[position + 2])
                     earlier[position] = recent.get(key) else -1
                     recent[key] = position
             at += best_length
         else:
-            packer.put_code(out, fixed_code(data[at]), fixed_bits(data[at]))
+            let literal = i64(data[at])
+            packer.put_code(out, fixed_code(literal), fixed_bits(literal))
             at += 1
     packer.put_code(out, fixed_code(256), fixed_bits(256))
     packer.flush(out)
@@ -860,7 +860,7 @@ func read(path: str) -> list[u8]!:
 # building one and saving it is two sentences:
 #
 #     var w = zip.writer()
-#     try w.add("a.txt", zip.bytes("hello\n"))
+#     try w.add("a.txt", zip.to_bytes("hello\n"))
 #     try zip.write("out.zip", w.finish())
 func write(path: str, archive: list[u8]) -> !:
     try files.write_bytes(path, archive)
