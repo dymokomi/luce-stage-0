@@ -1755,7 +1755,7 @@ pub const Runtime = struct {
     ///
     /// **Consumes `to`**, like every other store site.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
-        if (held.tag != .strukt or !held.hasValidRepresentation()) {
+        if (!held.hasValidRepresentation() or held.tag != .strukt) {
             return self.fail(.not_owned);
         }
         const source = held.asStruct();

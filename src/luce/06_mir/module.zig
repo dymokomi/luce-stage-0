@@ -1124,6 +1124,28 @@ test "constant container rows are exhaustively verified after decode" {
     try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
 }
 
+test "constant struct shapes are rejected before execution" {
+    var program = try constantContainerProgram();
+    defer program.deinit();
+
+    const held = &program.container_constants[0].payload.sequence[0].strukt;
+    const declared_fields = held.fields;
+    held.fields = declared_fields[0 .. declared_fields.len - 1];
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    const short_module = try encode(testing.allocator, &program);
+    defer testing.allocator.free(short_module);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, short_module));
+
+    held.fields = declared_fields;
+    const declared_layout = held.layout;
+    held.layout = std.math.maxInt(u32);
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    const unknown_layout_module = try encode(testing.allocator, &program);
+    defer testing.allocator.free(unknown_layout_module);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, unknown_layout_module));
+    held.layout = declared_layout;
+}
+
 test "constant value decode depth is bounded" {
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(testing.allocator);
@@ -1686,26 +1708,7 @@ fn forwardOnly(program: *const mir.Program) bool {
     return true;
 }
 
-/// Sub-cut B: the ARC runtime surgery is mid-flight — reference counting
-/// **Known totality gap in the in-flight memory-model pivot — a tracked
-/// robustness debt, NOT something ARC retain/release closes on its own.**
-/// The damage sweep below flips each byte of a valid module and requires
-/// every result to be rejected or run clean, never crash.  Two paths in
-/// the current tree still panic on a damaged module: a byte-flipped `Value`
-/// tag reaches `hasValidRepresentation` through `dropStorage` (a corrupt
-/// enum discriminant in a `switch`), and a struct constant whose decoded
-/// `layout`/`field_count` disagree with the struct table yields a short
-/// struct run that `struct_get` reads past.  The fix is decoder/verifier
-/// validation of decoded values against the type tables (the trust
-/// boundary this test guards), which the value-representation rewrite this
-/// pivot is mid-way through must restore — it does not fall out of the
-/// retain/release wiring.  A `var` so the guard is not comptime-folded
-/// into an unreachable-code error; flip to `false` when that validation
-/// lands and the value walk is total against a damaged module again.
-var totality_hardening_pending: bool = true;
-
 test "single-byte damage is rejected or runs to a clean outcome — never a crash" {
-    if (totality_hardening_pending) return error.SkipZigTest; // TRACKED: damaged-module totality gap (decoder/verifier value validation), not fixed by ARC emission
     var program = try compileScript(mutation_source);
     defer program.deinit();
     const encoded = try encode(testing.allocator, &program);

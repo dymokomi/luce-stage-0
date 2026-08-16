@@ -209,6 +209,20 @@ pub fn build(b: *std.Build) void {
     test_hardening_step.dependOn(&run_luce_fuzz_tests.step);
     test_hardening_step.dependOn(&run_luce_stress_tests.step);
 
+    const module_hardening_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{
+            "single-byte damage is rejected or runs to a clean outcome",
+            "constant struct shapes are rejected before execution",
+            "unknown ABI tag is invalid data",
+        },
+    });
+    const test_module_hardening_step = b.step(
+        "test-module-hardening",
+        "Run serialized-module mutation totality regression",
+    );
+    test_module_hardening_step.dependOn(&b.addRunArtifact(module_hardening_tests).step);
+
     // Sanitizer lanes intentionally build a fresh root module instead of
     // relying on a command-line flag being inherited by imported modules.
     // That makes the step's name truthful and keeps the ownership corpus

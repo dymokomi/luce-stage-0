@@ -317,13 +317,23 @@ pub const Value = extern struct {
         return self.textOf();
     }
 
+    /// The tag byte after crossing an untrusted ABI boundary.  Reading an
+    /// invalid value through the enum field is already undefined in Zig, so
+    /// validators inspect the byte representation before they let any switch
+    /// or comparison see a `Tag`.
+    fn validTag(self: *const Value) ?Tag {
+        const raw = std.mem.asBytes(self)[@offsetOf(Value, "tag")];
+        return std.enums.fromInt(Tag, raw);
+    }
+
     /// Whether the String representation can be read without leaving the
     /// value's declared storage.  The tag is not enough at the C/MIR seam:
     /// an invalid inline length would slice past the value, and a non-empty
     /// outside String with a null pointer would turn a borrowed payload into
     /// a native memory fault.
     pub fn hasValidStringRepresentation(self: Value) bool {
-        if (self.tag != .string) return false;
+        const tag = self.validTag() orelse return false;
+        if (tag != .string) return false;
         if (self.inline_length == text_outside) {
             return self.hasValidByteRun();
         }
@@ -347,7 +357,8 @@ pub const Value = extern struct {
     /// ownership boundaries still reject the impossible null, alignment,
     /// and overflow cases before any walk.
     pub fn hasValidRepresentation(self: Value) bool {
-        return switch (self.tag) {
+        const tag = self.validTag() orelse return false;
+        return switch (tag) {
             .string => self.hasValidStringRepresentation(),
             .strukt => self.hasValidFieldRun(),
             // An unwritten function slot is a valid null function: its
@@ -380,7 +391,8 @@ pub const Value = extern struct {
     /// question `dropStorage` and `ownValue` both turn on.  Inline
     /// text answers false: the bytes are the value.
     pub fn ownsStorage(self: Value) bool {
-        return switch (self.tag) {
+        const tag = self.validTag() orelse return false;
+        return switch (tag) {
             .string => !self.textIsInline() and self.bits != 0 and self.length != 0,
             .strukt, .function => self.bits != 0 and self.length != 0,
             else => false,
@@ -502,8 +514,10 @@ pub const View = union(enum) {
 /// is why the runtime learned nothing when enums became keys, and why
 /// this switch has two arms rather than five.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
-    if (left.tag != right.tag) return false;
-    return switch (left.tag) {
+    const left_tag = left.validTag() orelse return false;
+    const right_tag = right.validTag() orelse return false;
+    if (left_tag != right_tag) return false;
+    return switch (left_tag) {
         .long => left.asLong() == right.asLong(),
         .string => if (left.hasValidStringRepresentation() and right.hasValidStringRepresentation())
             std.mem.eql(u8, left.asString(), right.asString())
@@ -525,6 +539,15 @@ test "the value layout is the one generated code assumes" {
     // of the slot: `inline_head` and both payload words, contiguous.
     try std.testing.expectEqual(inline_at, @offsetOf(Value, "inline_head"));
     try std.testing.expectEqual(@sizeOf(Value), inline_at + inline_capacity);
+}
+
+test "an unknown ABI tag is invalid data, not a native enum panic" {
+    var held = Value.none;
+    std.mem.asBytes(&held)[@offsetOf(Value, "tag")] = 0xff;
+    try std.testing.expect(!held.hasValidRepresentation());
+    try std.testing.expect(!held.hasValidStringRepresentation());
+    try std.testing.expect(!held.ownsStorage());
+    try std.testing.expect(!keyEquals(&held, &held));
 }
 
 test "every payload survives a round trip" {
