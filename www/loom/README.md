@@ -96,7 +96,7 @@ reader of `build.sh` can see the whole page from one place.
 It builds (which is what checks the links), then hands `www/loom/out`
 to `www/deploy/publish.sh`, which mirrors it to the static root and
 curls the live URL afterwards.  `LOOM_SITE_ROOT` overrides the static
-root; the host and the key are shared with the other two sites and are
+root; the host and the key are shared with the other sites and are
 `LUCIAOS_EDGE_HOST` and `LUCIAOS_EDGE_KEY`.
 
 **The default target is a single host** — the same instance

@@ -22,7 +22,7 @@ that answers the requests — see its own README.
 
 ## Deploying
 
-All three land on the same server, one host serving each static root
+All four land on the same server, one host serving each static root
 with Caddy, which takes the certificates itself.  There is no
 infrastructure-as-code for it and no record of the Caddy configuration
 here — moving a site means editing the one line that names the host
@@ -40,8 +40,9 @@ Each site's `deploy.sh` is a thin caller of it, and keeps only what it
 cannot share: how the site is built, what counts as built (it refuses
 to publish an unbuilt tree), where it lands, and the URL that proves
 it arrived.  `LUCIAOS_EDGE_HOST` and `LUCIAOS_EDGE_KEY` override the
-server and the key for all three; `LUCE_SITE_ROOT`, `LOOM_SITE_ROOT`
-and `LUCIAOS_HOME_ROOT` override one site's static root each.
+server and the key for all four; `LUCE_SITE_ROOT`, `LOOM_SITE_ROOT`,
+`LUCIAOS_HOME_ROOT`, and `LUCIAOS_STATS_ROOT` override one site's static
+root each.
 
 ## Layout
 

@@ -86,8 +86,8 @@ what actually happened.
 It refuses to publish an unbuilt tree, then hands `www/luce/out` to
 `www/deploy/publish.sh`, which mirrors it to `/opt/apps/luce_docs` on
 the edge server and curls the live URL afterwards.  `LUCE_SITE_ROOT`
-overrides the static root; the host and the key are shared with the
-other two sites and are `LUCIAOS_EDGE_HOST` and `LUCIAOS_EDGE_KEY`.
+overrides the static root; the host and the key are shared with the other
+sites and are `LUCIAOS_EDGE_HOST` and `LUCIAOS_EDGE_KEY`.
 
 **The default target is a single host**, named in
 `www/deploy/publish.sh` and nowhere else — see `www/README.md`.  There

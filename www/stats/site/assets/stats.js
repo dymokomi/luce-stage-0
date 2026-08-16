@@ -1,7 +1,7 @@
 /* The page's one script: read data/stats.json, draw it, and nothing else.
  *
  * It loads no library, fetches nothing but its own data file, and
- * stores nothing but the theme the family's other two sites already
+ * stores nothing but the theme the family's other sites already
  * store.  Charts are drawn as SVG at the container's real pixel size
  * rather than scaled from a fixed viewBox, so a 2px line is 2px and
  * a 12px label is 12px on every screen — the whole reason there is a

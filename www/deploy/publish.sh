@@ -3,10 +3,10 @@
 #
 #   www/deploy/publish.sh DIRECTORY REMOTE-PATH URL [rsync-option...]
 #
-# All three sites in this tree — luce.luciaos.com, loom.luciaos.com and
-# luciaos.com — are one host, one key and one rsync away from being
-# published.  That was written out three times; it is written here
-# once, so moving the server is one edit rather than three, and the
+# All four sites in this tree — luce.luciaos.com, loom.luciaos.com,
+# luciaos.com, and stats.luciaos.com — are one host, one key and one rsync
+# away from being published. That shared operation is written here once,
+# so moving the server is one edit rather than four, and the
 # address of the machine appears in exactly one file.
 #
 # What each site keeps for itself is what it cannot share: how it is

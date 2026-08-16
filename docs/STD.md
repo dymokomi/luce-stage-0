@@ -55,9 +55,9 @@ leave the channel absent and report `host_unavailable`.
 `std.gpu` is the backend-neutral surface API. `gpu.backend()` reports the
 host's selected backend (`Backend.metal`, `Backend.vulkan`, or
 `Backend.headless`). A `gpu.Surface` is obtained from `ui.Window.surface()`;
-the surface holds its native resource. Releasing that resource at the last
-strong reference is part of the unfinished ARC release gate described in
-[`MEMORY.md`](MEMORY.md).
+the surface holds its native resource. The completed ARC contract releases
+that resource at the last strong reference, through the same deterministic
+lifecycle rule as files and tasks ([`MEMORY.md`](MEMORY.md)).
 
 ```text
 import std.gpu

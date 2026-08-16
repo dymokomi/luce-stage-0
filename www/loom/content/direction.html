@@ -36,19 +36,18 @@ references break cycles. Resources close at the last strong release. Workers
 never share object identity.</p>
 </blockquote>
 
-<p>The source language has already removed its manual ownership operations and
-ordinary references now share. The conversion is not finished: several
-last-release, file-lifecycle, bound-receiver, collection, worker-transfer, and
-hardening paths are still gated or failing. That work comes before a new
-feature.</p>
+<p>The source language has removed its manual ownership operations. Ordinary
+references share, last release reclaims containers and resources, bound
+receivers retain their graphs, and worker snapshots preserve aliases without
+sharing identity. Both execution paths prove that ARC foundation before new
+type-system work begins.</p>
 
 <h2 id="order">The ordered language work</h2>
 
 <ol>
-<li><span class="ahead">ahead</span><strong>Finish ARC.</strong> Remove every
-feature skip, restore exact leak censuses, make files and tasks finish exactly
-once, retain bound receivers, repair worker argument transfer, and close the
-damaged-module panic paths.</li>
+<li><strong>ARC foundation — complete.</strong> Exact leak censuses, deterministic
+file and task lifecycles, retained bound receivers, ownership-safe worker
+transfer, and damaged-module hardening are release gates now.</li>
 <li><span class="ahead">ahead</span><strong>Adopt explicit type names.</strong>
 Move atomically to <code>u8</code>…<code>u64</code>,
 <code>i8</code>…<code>i64</code>, <code>f16</code>/<code>f32</code>/<code>f64</code>,
@@ -110,7 +109,7 @@ the work.</li>
 
 <ul>
 <li><code>docs/ROADMAP.md</code> — the step-by-step plan and acceptance matrix.</li>
-<li><code>docs/MEMORY.md</code> — current ARC gaps and the completed contract.</li>
+<li><code>docs/MEMORY.md</code> — the current ARC contract and its cycle boundary.</li>
 <li><code>docs/V2.md</code> — the product north star.</li>
 <li><code>docs/ENGINE.md</code> and <code>docs/CODEGEN.md</code> — why loom stays
 small and how artifacts meet the host.</li>

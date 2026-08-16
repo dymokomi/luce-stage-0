@@ -10,7 +10,7 @@
 #   ./www/loom/deploy.sh --fast   publish what is already in www/loom/out
 #
 # `LOOM_SITE_ROOT` overrides where it lands; the host and the key are
-# `www/deploy/publish.sh`'s, and shared with the other two sites.
+# `www/deploy/publish.sh`'s, and shared with the other sites.
 set -e
 
 here=$(cd "$(dirname "$0")" && pwd)

@@ -8,7 +8,7 @@
 #   ./www/luciaos/deploy.sh
 #
 # `LUCIAOS_HOME_ROOT` overrides where it lands; the host and the key
-# are `www/deploy/publish.sh`'s, and shared with the other two sites.
+# are `www/deploy/publish.sh`'s, and shared with the other sites.
 set -e
 
 here=$(cd "$(dirname "$0")" && pwd)

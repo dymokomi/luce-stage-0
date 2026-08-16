@@ -225,7 +225,9 @@ www/                      everything published to the web, one folder
   loom/                   loom.luciaos.com: the tool's own pages, one
                           HTML fragment each, links and anchors checked
   luciaos/                the luciaos.com landing page, hand-written
-  deploy/                 publish.sh: the one rsync all three go out by
+  stats/                  stats.luciaos.com: private-by-design log counts
+                          and the collector that produces them
+  deploy/                 publish.sh: the one rsync all four go out by
 tools/vscode-luce/        VS Code highlighting and brace-aware indentation;
                           the grammar is generated from compiler tables by
                           `zig build grammar` and pinned by a test

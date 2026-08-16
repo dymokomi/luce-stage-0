@@ -50,11 +50,10 @@ decides whether an operation succeeds. Luce code must use <code>try</code> or
 race-free.</p>
 
 <p>Text reads validate UTF-8. Binary reads use byte collections and make no text
-claim. Open <code>file</code> values are shared resource references. Their
-completed ARC contract closes the native handle at the last strong release,
-but release 0.18 still has gated function-exit lifecycle tests. The public
-<a href="https://luce.luciaos.com/status/">Status</a> page names that boundary
-instead of pretending cleanup is finished.</p>
+claim. Open <code>file</code> values are shared resource references. Their ARC
+contract closes the native handle at the last strong release. Function exits,
+error propagation, shared handles, and runtime teardown all exercise that same
+path on both engines.</p>
 
 <h2 id="terminal">The terminal belongs behind the host</h2>
 
