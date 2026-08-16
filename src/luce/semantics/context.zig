@@ -48,19 +48,19 @@ pub const Error = error{OutOfMemory};
 /// mistake about arithmetic, they made one about a width, and the fix
 /// is a word (docs/TYPES.md §11).
 pub const byte_range_message =
-    "integer literal out of range; byte holds 0 to 255 — write the place as a short";
+    "integer literal out of range; u8 holds 0 to 255 — write the place as i16";
 pub const short_range_message =
-    "integer literal out of range; short holds -32768 to 32767 — write the place as an int";
+    "integer literal out of range; i16 holds -32768 to 32767 — write the place as i32";
 pub const int_range_message =
-    "integer literal out of range; int holds -2147483648 to 2147483647 — write the place as a long";
+    "integer literal out of range; i32 holds -2147483648 to 2147483647 — write the place as i64";
 pub const long_range_message =
-    "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807";
+    "integer literal out of range; i64 holds -9223372036854775808 to 9223372036854775807";
 pub const half_range_message =
-    "float literal is not a finite half; half holds up to about 65504 — write the place as a float";
+    "float literal is not a finite f16; f16 holds up to about 65504 — write the place as f32";
 pub const float_range_message =
-    "float literal is not a finite float; float holds up to about 3.4e38 — write the place as a double";
+    "float literal is not a finite f32; f32 holds up to about 3.4e38 — write the place as f64";
 pub const double_range_message =
-    "float literal is not a finite number; double holds up to about 1.8e308";
+    "float literal is not a finite number; f64 holds up to about 1.8e308";
 
 /// The sentence for a literal that did not fit the type it landed on.
 ///
@@ -215,29 +215,47 @@ pub fn writeMissingFields(
 /// is answered, this paragraph is the answer to "why can I write
 /// `func sort` and not `func has`".
 pub const reserved_names = [_][]const u8{
-    // The three conversion constructors (docs/TYPES.md D8).  The
-    // container names are deliberately *not* here: `list` and `map`
-    // are answers only in type position, where `resolveBase` decides
-    // and a struct of that name is refused where it is declared —
-    // reserving them as callables buys nothing and costs `files.list`,
-    // which is the right name for what it does.
-    "range",                 "long",                "double",              "string",           "None",
-    "abs",                   "min",                 "max",                 "clamp",            "sqrt",
-    "floor",                 "ceil",                "trunc",               "len",              "byte_at",
-    "assert",                "trap",                "parse_int",           "parse_float",      "chr",
-    "ord",                   "append",              "pop",                 "insert",           "remove",
-    "has",                   "dim",                 "print",               "file_read",        "file_write",
-    "path_kind",             "key_read",            "key_text",            "error",            "read_line",
-    "print_error",           "clock_ms",            "sleep_ms",            "env",              "file_append",
-    "file_delete",           "file_rename",         "dir_list",            "term_rows",        "term_cols",
-    "term_clear",            "term_move",           "term_style",          "term_write",       "term_flush",
-    "exit",                  "os_total_memory",     "os_available_memory", "os_cpu_count",     "file_open",
-    "parse_string",          "shell_run",           "term_event_data",     "dir_create",       "epoch_ms",
-    "gpu_backend",           "ui_window_open",      "ui_window_surface",   "gpu_surface_size", "gpu_surface_clear",
+    // Scalar conversion constructors are reserved through
+    // `types.conversionNamed` in `isReserved`, directly from the one
+    // builtin table that dispatches them. Container names deliberately
+    // are not callable reservations: `files.list` is an ordinary and
+    // useful function name.
+    "range",                 "None",
+    "abs",                   "min",
+    "max",                   "clamp",
+    "sqrt",                  "floor",
+    "ceil",                  "trunc",
+    "len",                   "byte_at",
+    "assert",                "trap",
+    "parse_int",             "parse_float",
+    "chr",                   "ord",
+    "append",                "pop",
+    "insert",                "remove",
+    "has",                   "dim",
+    "print",                 "file_read",
+    "file_write",            "path_kind",
+    "key_read",              "key_text",
+    "error",                 "read_line",
+    "print_error",           "clock_ms",
+    "sleep_ms",              "env",
+    "file_append",           "file_delete",
+    "file_rename",           "dir_list",
+    "term_rows",             "term_cols",
+    "term_clear",            "term_move",
+    "term_style",            "term_write",
+    "term_flush",            "exit",
+    "os_total_memory",       "os_available_memory",
+    "os_cpu_count",          "file_open",
+    "parse_string",          "shell_run",
+    "term_event_data",       "dir_create",
+    "epoch_ms",              "gpu_backend",
+    "ui_window_open",        "ui_window_surface",
+    "gpu_surface_size",      "gpu_surface_clear",
     "gpu_surface_fill_rect", "gpu_surface_present",
 };
 
 pub fn isReserved(name: []const u8) bool {
+    if (types.conversionNamed(name) != null) return true;
     for (reserved_names) |reserved| {
         if (std.mem.eql(u8, name, reserved)) return true;
     }

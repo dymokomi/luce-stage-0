@@ -287,11 +287,11 @@ All five are parse rules, under `luce.parse.*`.
 ```luce fail
 struct Box:
     private:
-        private value: long
+        private value: i64
 
 func main():
     var b = Box(value = 1)
-    print(string(b.value))
+    print(str(b.value))
 ```
 
 ```output
@@ -339,16 +339,16 @@ because a value lives in the name.
 
 ```luce run
 struct Cell:
-    value: long
+    value: i64
 
-func bump(cells: list(Cell)):
+func bump(cells: list[Cell]):
     cells[0].value += 1
 
 func main():
-    let cells: list(Cell) = [Cell(value = 1)]
+    let cells: list[Cell] = [Cell(value = 1)]
     cells[0].value = 10
     bump(cells)
-    print(string(cells[0].value))
+    print(str(cells[0].value))
 ```
 
 ```output
@@ -407,7 +407,7 @@ and then applied to; a list or array index out of range still traps.
 
 ```luce run
 func main():
-    var counts = new map(string, long)
+    var counts = new map[str, i64]
     counts["a"] += 5
     var text = "x"
     text += "y"

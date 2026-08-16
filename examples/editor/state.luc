@@ -37,27 +37,27 @@ enum Drag:
     output
 
 struct Editor:
-    buffers: list(document.Buffer)
-    histories: list(history.Stacks)
-    names: list(string)
-    search_matches: list(long)
+    buffers: list[document.Buffer]
+    histories: list[history.Stacks]
+    names: list[str]
+    search_matches: list[i64]
     files: rows.Rows = rows.Rows()
-    path: string = ""
-    content: string = ""
-    message: string = ""
-    directory: string = "."
-    output: string = ""
-    search_query: string = ""
-    active: long = 0
-    cursor: long = 0
-    scroll: long = 0
-    output_scroll: long = 0
-    search_current: long = -1
-    last_draft_ms: long = 0
+    path: str = ""
+    content: str = ""
+    message: str = ""
+    directory: str = "."
+    output: str = ""
+    search_query: str = ""
+    active: i64 = 0
+    cursor: i64 = 0
+    scroll: i64 = 0
+    output_scroll: i64 = 0
+    search_current: i64 = -1
+    last_draft_ms: i64 = 0
     # The sizes a person has dragged the pane dividers to; zero is the
     # auto default the layout picks (editor/layout.luc).
-    files_width: long = 0
-    output_height: long = 0
+    files_width: i64 = 0
+    output_height: i64 = 0
     dragging: Drag = Drag.idle
     file_pane: bool = false
     output_pane: bool = false
@@ -95,7 +95,7 @@ struct Editor:
         self.last_draft_ms = 0
 
     # The provider the file pane reads its labels through.
-    func name_at(index: long) -> string:
+    func name_at(index: i64) -> str:
         if index < 0 or index >= len(self.names):
             return ""
         return self.names[index]
@@ -113,13 +113,13 @@ struct Editor:
     # Keep the file pane's scroll window on its selection, and persist it
     # on `self.files` — the frame and a mouse click both read `top` from
     # there, so it cannot be recomputed on a throwaway copy each frame.
-    func adjust_files(height: long):
+    func adjust_files(height: i64):
         var pane = self.files
         pane.count = len(self.names)
         pane.adjust(height)
         self.files = pane
 
-    func open_row(index: long):
+    func open_row(index: i64):
         if index < 0 or index >= len(self.names):
             return
         match browser.classify(self.names[index], self.directory):
@@ -130,7 +130,7 @@ struct Editor:
             file(path):
                 self.open_file(path)
 
-    func open_file(path: string):
+    func open_file(path: str):
         if path == self.path:
             self.focus = focus.Focus.editor
             return
@@ -147,7 +147,7 @@ struct Editor:
         # so Ctrl-Z discards the recovery.
         let loaded = session.load(path)
         self.buffers.append(loaded.buffer)
-        self.histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
+        self.histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
         if loaded.recovered:
             self.histories[len(self.histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
         self.active = len(self.buffers) - 1
@@ -210,14 +210,14 @@ struct Editor:
         else:
             self.search_current = -1
 
-    func jump_match(direction: long):
+    func jump_match(direction: i64):
         let next = search.step(len(self.search_matches), self.search_current, direction)
         if next < 0:
             return
         self.search_current = next
         self.cursor = self.search_matches[next]
 
-    func search_key(intent: keymap.Intent, inserted: string):
+    func search_key(intent: keymap.Intent, inserted: str):
         if intent == keymap.Intent.escape:
             self.close_search()
         elif intent == keymap.Intent.newline or intent == keymap.Intent.move_down or intent == keymap.Intent.move_right:
@@ -377,9 +377,9 @@ struct Editor:
         # fresh one rather than coalescing across the saved boundary.
         self.coalescing = false
 
-    # Write a draft when the buffer has been dirty past a short idle, so
+    # Write a draft when the buffer has been dirty past a i16 idle, so
     # a crash loses at most a second or two of edits.
-    func autosave(now: long):
+    func autosave(now: i64):
         if not self.dirty:
             return
         if now - self.last_draft_ms < 1500:
@@ -389,14 +389,14 @@ struct Editor:
 
     # --- scrolling ---------------------------------------------------
 
-    func adjust(visible: long):
+    func adjust(visible: i64):
         let cursor_line = document.line_of(self.content, self.cursor)
         if cursor_line < self.scroll:
             self.scroll = cursor_line
         elif cursor_line >= self.scroll + visible:
             self.scroll = cursor_line - visible + 1
 
-    func vertical(target_line: long):
+    func vertical(target_line: i64):
         let total = document.count_lines(self.content)
         let wanted = document.column_of(self.content, self.cursor)
         let landing = clamp(target_line, 0, total - 1)
@@ -405,7 +405,7 @@ struct Editor:
 
     # --- the keystroke router ----------------------------------------
 
-    func key(intent: keymap.Intent, inserted: string, visible: long):
+    func key(intent: keymap.Intent, inserted: str, visible: i64):
         if intent == keymap.Intent.quit:
             if self.dirty and not self.quit_pending:
                 self.quit_pending = true
@@ -460,7 +460,7 @@ struct Editor:
 
     # The editor pane's own keys.  Movement breaks an insert run; each
     # text change records undo first.
-    func edit(intent: keymap.Intent, inserted: string, visible: long):
+    func edit(intent: keymap.Intent, inserted: str, visible: i64):
         let line = document.line_of(self.content, self.cursor)
         self.quit_pending = false
         if len(self.message) > 0:

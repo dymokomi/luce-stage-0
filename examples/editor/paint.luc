@@ -21,8 +21,8 @@ import termui.rows as rows
 import termui.view as views
 
 # Build one highlighted source line as styled spans.
-func source_line(content: string, from: long, to: long) -> text.Line:
-    var spans = new list(text.Span)
+func source_line(content: str, from: i64, to: i64) -> text.Line:
+    var spans = new list[text.Span]
     for token in highlight.tokens(content, from, to):
         spans.append(text.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
     return text.Line(spans = spans)
@@ -33,7 +33,7 @@ func pane_style(active: bool) -> termui.Style:
     return theme.palette.pane_border
 
 # Where the terminal's own cursor belongs after the frame.
-func cursor_at(app: state.Editor, view: panes.Layout) -> (long, long):
+func cursor_at(app: state.Editor, view: panes.Layout) -> (i64, i64):
     if app.focus == focus.Focus.files:
         return clamp(app.files.selected - app.files.top + 1, 0, max(view.files.rows - 1, 0)), 0
     if app.focus == focus.Focus.output:
@@ -70,7 +70,7 @@ func paint_text(app: state.Editor, view: surface.Surface, layout: panes.Layout):
         var gutter_style = theme.palette.gutter
         if line_index == cursor_line and active:
             gutter_style = theme.palette.gutter_current
-        view.write(layout.text, row, 0, strings.pad_left(string(line_index + 1), 4) + " ", gutter_style)
+        view.write(layout.text, row, 0, strings.pad_left(str(line_index + 1), 4) + " ", gutter_style)
         let start = document.line_at(app.content, line_index)
         let finish = document.line_end(app.content, start)
         let line = source_line(app.content, start, finish)
@@ -116,7 +116,7 @@ func paint_output(app: state.Editor, view: surface.Surface, layout: panes.Layout
         let finish = document.line_end(app.output, start)
         view.write(interior, row, 0, app.output[start:finish], theme.palette.plain)
 
-func focus_label(where: focus.Focus) -> string:
+func focus_label(where: focus.Focus) -> str:
     match where:
         editor:
             return "  [editor]"

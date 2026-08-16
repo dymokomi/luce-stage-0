@@ -54,52 +54,52 @@ const unthreaded: agree.Provided = row: {
 
 test "a worker's long crosses the join" {
     try agree.prints(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
         \\    let t = spawn twice(21)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , "42\n");
 }
 
 test "every scalar width crosses a join intact" {
     try agree.prints(
-        \\func a() -> byte:
-        \\    return byte(200)
-        \\func b() -> short:
-        \\    return short(-30000)
-        \\func c() -> int:
+        \\func a() -> u8:
+        \\    return u8(200)
+        \\func b() -> i16:
+        \\    return i16(-30000)
+        \\func c() -> i32:
         \\    return 2000000000
-        \\func d() -> long:
+        \\func d() -> i64:
         \\    return 9000000000
-        \\func e() -> half:
-        \\    return half(0.5)
-        \\func f() -> float:
-        \\    return float(0.25)
-        \\func g() -> double:
+        \\func e() -> f16:
+        \\    return f16(0.5)
+        \\func f() -> f32:
+        \\    return f32(0.25)
+        \\func g() -> f64:
         \\    return 0.125
         \\func h() -> bool:
         \\    return true
         \\
         \\func main():
         \\    let ta = spawn a()
-        \\    print(string(int(ta.wait())))
+        \\    print(str(i32(ta.wait())))
         \\    let tb = spawn b()
-        \\    print(string(int(tb.wait())))
+        \\    print(str(i32(tb.wait())))
         \\    let tc = spawn c()
-        \\    print(string(tc.wait()))
+        \\    print(str(tc.wait()))
         \\    let td = spawn d()
-        \\    print(string(td.wait()))
+        \\    print(str(td.wait()))
         \\    let te = spawn e()
-        \\    print(string(double(te.wait())))
+        \\    print(str(f64(te.wait())))
         \\    let tf = spawn f()
-        \\    print(string(double(tf.wait())))
+        \\    print(str(f64(tf.wait())))
         \\    let tg = spawn g()
-        \\    print(string(tg.wait()))
+        \\    print(str(tg.wait()))
         \\    let th = spawn h()
-        \\    print(string(th.wait()))
+        \\    print(str(th.wait()))
         \\
     , "200\n-30000\n2000000000\n9000000000\n0.5\n0.25\n0.125\ntrue\n");
 }
@@ -110,18 +110,18 @@ test "a worker's string crosses the join, short and long" {
     // into the joiner's, and the long one is the case that would leak
     // or dangle if they were not (docs/STRINGS.md).
     try agree.prints(
-        \\func brief() -> string:
+        \\func brief() -> str:
         \\    return "hi"
-        \\func lengthy() -> string:
+        \\func lengthy() -> str:
         \\    return "a string comfortably longer than any value can hold inline"
         \\
         \\func main():
-        \\    let short = spawn brief()
-        \\    print(short.wait())
+        \\    let small = spawn brief()
+        \\    print(small.wait())
         \\    let big = spawn lengthy()
         \\    let held = big.wait()
         \\    print(held)
-        \\    print(string(len(held)))
+        \\    print(str(len(held)))
         \\
     ,
         "hi\na string comfortably longer than any value can hold inline\n58\n",
@@ -130,8 +130,8 @@ test "a worker's string crosses the join, short and long" {
 
 test "a worker's list crosses the join and the joiner owns it" {
     try agree.prints(
-        \\func build(n: long) -> list(long):
-        \\    var made = new list(long)
+        \\func build(n: i64) -> list[i64]:
+        \\    var made = new list[i64]
         \\    for i in range(0, n):
         \\        made.append(i * i)
         \\    return made
@@ -139,18 +139,18 @@ test "a worker's list crosses the join and the joiner owns it" {
         \\func main():
         \\    let t = spawn build(5)
         \\    var squares = t.wait()
-        \\    print(string(len(squares)))
-        \\    print(string(squares[4]))
+        \\    print(str(len(squares)))
+        \\    print(str(squares[4]))
         \\    squares.append(99)
-        \\    print(string(squares[5]))
+        \\    print(str(squares[5]))
         \\
     , "5\n16\n99\n");
 }
 
 test "a worker's nested object crosses whole" {
     try agree.prints(
-        \\func build() -> map(string, list(long)):
-        \\    var made = new map(string, list(long))
+        \\func build() -> map[str, list[i64]]:
+        \\    var made = new map[str, list[i64]]
         \\    made["a comfortably long key, longer than inline"] = [1, 2, 3]
         \\    made["b"] = [4]
         \\    return made
@@ -158,9 +158,9 @@ test "a worker's nested object crosses whole" {
         \\func main():
         \\    let t = spawn build()
         \\    let held = t.wait()
-        \\    print(string(len(held)))
-        \\    print(string(len(held["a comfortably long key, longer than inline"])))
-        \\    print(string(held["b"][0]))
+        \\    print(str(len(held)))
+        \\    print(str(len(held["a comfortably long key, longer than inline"])))
+        \\    print(str(held["b"][0]))
         \\
     , "2\n3\n4\n");
 }
@@ -168,8 +168,8 @@ test "a worker's nested object crosses whole" {
 test "a worker's struct crosses, and a struct carrying a list with it" {
     try agree.prints(
         \\struct Report:
-        \\    label: string
-        \\    total: long
+        \\    label: str
+        \\    total: i64
         \\
         \\func measure() -> Report:
         \\    return Report(label = "a label longer than a value holds", total = 7)
@@ -178,7 +178,7 @@ test "a worker's struct crosses, and a struct carrying a list with it" {
         \\    let t = spawn measure()
         \\    let made = t.wait()
         \\    print(made.label)
-        \\    print(string(made.total))
+        \\    print(str(made.total))
         \\
     , "a label longer than a value holds\n7\n");
 }
@@ -202,47 +202,47 @@ test "a worker that answers nothing is a bare task" {
 
 test "values copy across a spawn and the caller keeps its own" {
     try agree.prints(
-        \\func describe(label: string, n: long) -> string:
-        \\    return label + ":" + string(n)
+        \\func describe(label: str, n: i64) -> str:
+        \\    return label + ":" + str(n)
         \\
         \\func main():
         \\    let name = "a label longer than a value can hold inline"
         \\    let t = spawn describe(name, 3)
         \\    print(t.wait())
-        \\    print(string(len(name)))
+        \\    print(str(len(name)))
         \\
     , "a label longer than a value can hold inline:3\n43\n");
 }
 
 test "a container argument is an independent worker snapshot" {
     try agree.prints(
-        \\func extend(values: list(long)) -> long:
+        \\func extend(values: list[i64]) -> i64:
         \\    values.append(99)
         \\    return len(values)
         \\
         \\func main():
-        \\    var original: list(long) = [1, 2]
+        \\    var original: list[i64] = [1, 2]
         \\    let task = spawn extend(original)
         \\    original.append(3)
-        \\    print(string(len(original)))
-        \\    print(string(task.wait()))
-        \\    print(string(original[2]))
+        \\    print(str(len(original)))
+        \\    print(str(task.wait()))
+        \\    print(str(original[2]))
         \\
     , "3\n3\n3\n");
 }
 
 test "worker arguments preserve aliases across parameter roots" {
     try agree.prints(
-        \\func extend(first: list(long), second: list(long)) -> long:
+        \\func extend(first: list[i64], second: list[i64]) -> i64:
         \\    first.append(9)
         \\    return len(second)
         \\
         \\func main():
-        \\    var shared: list(long) = [1]
+        \\    var shared: list[i64] = [1]
         \\    let task = spawn extend(shared, shared)
         \\    shared.append(2)
-        \\    print(string(task.wait()))
-        \\    print(string(len(shared)))
+        \\    print(str(task.wait()))
+        \\    print(str(len(shared)))
         \\
     , "2\n2\n");
 }
@@ -257,7 +257,7 @@ test "an unwaited task joins at its last release and discards the result" {
     // which is D4's fire-and-forget, and the census is zero because a
     // worker's runtime dies whole.
     try agree.printsGiven(
-        \\func note() -> long:
+        \\func note() -> i64:
         \\    file_write("worked.txt", "yes") catch:
         \\        return 0
         \\    return 1
@@ -272,10 +272,10 @@ test "an unwaited task joins at its last release and discards the result" {
 test "an unwaited nested union result is discarded with its owned graph" {
     try agree.prints(
         \\union Job:
-        \\    run(items: list(long))
+        \\    run(items: list[i64])
         \\
         \\func build() -> Job:
-        \\    var items: list(long) = [6, 7]
+        \\    var items: list[i64] = [6, 7]
         \\    return Job.run(items = items)
         \\
         \\func main():
@@ -288,10 +288,10 @@ test "an unwaited nested union result is discarded with its owned graph" {
 test "discarding a worker error still joins and closes its owned graph" {
     try agree.prints(
         \\union Packet:
-        \\    payload(items: list(long), label: string)
+        \\    payload(items: list[i64], label: str)
         \\
-        \\func fail() -> long!:
-        \\    var items: list(long) = [10, 11, 12]
+        \\func fail() -> i64!:
+        \\    var items: list[i64] = [10, 11, 12]
         \\    let packet = Packet.payload(items = items, label = "discarded")
         \\    error("ignored")
         \\
@@ -304,15 +304,15 @@ test "discarding a worker error still joins and closes its owned graph" {
 
 test "a task returned from a function is the caller's to wait on" {
     try agree.prints(
-        \\func work(n: long) -> long:
+        \\func work(n: i64) -> i64:
         \\    return n * 3
         \\
-        \\func start(n: long) -> task(long):
+        \\func start(n: i64) -> task[i64]:
         \\    return spawn work(n)
         \\
         \\func main():
         \\    let t = start(5)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , "15\n");
 }
@@ -321,24 +321,24 @@ test "a struct composes a union optional task callback and recursive children" {
     try agree.prints(
         \\union Job:
         \\    idle
-        \\    running(task: task(long)?)
+        \\    running(task: task[i64]?)
         \\
         \\struct Envelope:
         \\    job: Job
-        \\    callback: (func(long) -> long)?
-        \\    children: list(Envelope)
+        \\    callback: (func(i64) -> i64)?
+        \\    children: list[Envelope]
         \\
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 21
         \\
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
-        \\func apply(callback: (func(long) -> long)?, value: long) -> long:
+        \\func apply(callback: (func(i64) -> i64)?, value: i64) -> i64:
         \\    let chosen = callback else twice
         \\    return chosen(value)
         \\
-        \\func consume(packet: Envelope) -> long:
+        \\func consume(packet: Envelope) -> i64:
         \\    match packet.job:
         \\        idle:
         \\            return 0
@@ -351,9 +351,9 @@ test "a struct composes a union optional task callback and recursive children" {
         \\    let packet = Envelope(
         \\        job = Job.running(task = spawn work()),
         \\        callback = twice,
-        \\        children = new list(Envelope),
+        \\        children = new list[Envelope],
         \\    )
-        \\    print(string(consume(packet)))
+        \\    print(str(consume(packet)))
         \\
     , "42\n");
 }
@@ -361,30 +361,30 @@ test "a struct composes a union optional task callback and recursive children" {
 test "a resource graph survives union optional container give return and failure" {
     try agree.prints(
         \\union Parcel:
-        \\    loaded(tasks: list(task(long)), extra: task(long)?)
+        \\    loaded(tasks: list[task[i64]], extra: task[i64]?)
         \\
         \\struct Crate:
         \\    parcel: Parcel
-        \\    callback: (func(long) -> long)?
-        \\    contents: map(string, long)
-        \\    grid: array(long, _)
+        \\    callback: (func(i64) -> i64)?
+        \\    contents: map[str, i64]
+        \\    grid: array[i64, _]
         \\
-        \\func work(value: long) -> long:
+        \\func work(value: i64) -> i64:
         \\    return value
         \\
-        \\func identity(value: long) -> long:
+        \\func identity(value: i64) -> i64:
         \\    return value
         \\
-        \\func bump(value: long) -> long:
+        \\func bump(value: i64) -> i64:
         \\    return value + 1
         \\
         \\func route(crate: Crate) -> Crate:
         \\    return crate
         \\
-        \\func finish(parcel: Parcel, callback: (func(long) -> long)?, fail: bool) -> Crate!:
-        \\    var contents = new map(string, long)
+        \\func finish(parcel: Parcel, callback: (func(i64) -> i64)?, fail: bool) -> Crate!:
+        \\    var contents = new map[str, i64]
         \\    contents["kind"] = 1
-        \\    var grid = new array(long, 2)
+        \\    var grid = new array[i64](2)
         \\    grid.fill(7)
         \\    let crate = Crate(
         \\        parcel = parcel,
@@ -397,18 +397,18 @@ test "a resource graph survives union optional container give return and failure
         \\    return route(crate)
         \\
         \\func absent(fail: bool) -> Crate!:
-        \\    var tasks = new list(task(long))
+        \\    var tasks = new list[task[i64]]
         \\    tasks.append(spawn work(2))
         \\    let parcel = Parcel.loaded(tasks = tasks, extra = none)
         \\    return try finish(parcel, none, fail)
         \\
         \\func present(fail: bool) -> Crate!:
-        \\    var tasks = new list(task(long))
+        \\    var tasks = new list[task[i64]]
         \\    tasks.append(spawn work(2))
         \\    let parcel = Parcel.loaded(tasks = tasks, extra = spawn work(3))
         \\    return try finish(parcel, bump, fail)
         \\
-        \\func consume(crate: Crate) -> long:
+        \\func consume(crate: Crate) -> i64:
         \\    let chosen = crate.callback else identity
         \\    var total = crate.contents["kind"] + crate.grid[0]
         \\    match crate.parcel:
@@ -421,9 +421,9 @@ test "a resource graph survives union optional container give return and failure
         \\
         \\func main() -> !:
         \\    let without_extra = try absent(false)
-        \\    print(string(consume(without_extra)))
+        \\    print(str(consume(without_extra)))
         \\    let with_extra = try present(false)
-        \\    print(string(consume(with_extra)))
+        \\    print(str(consume(with_extra)))
         \\    var failed_absent: Crate? = none
         \\    failed_absent = absent(true) catch reason:
         \\        print("caught: " + reason)
@@ -437,9 +437,9 @@ test "a resource graph survives union optional container give return and failure
 test "a task is consumed exactly once through a union optional field" {
     try agree.prints(
         \\union Slot:
-        \\    running(task: task(long)?)
+        \\    running(task: task[i64]?)
         \\
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 4
         \\
         \\func main():
@@ -448,37 +448,37 @@ test "a task is consumed exactly once through a union optional field" {
         \\    match slot:
         \\        running(task):
         \\            if task != none:
-        \\                print(string(task.wait()))
+        \\                print(str(task.wait()))
         \\
     , "4\n");
 }
 
 test "a list slice retains resource elements after the source releases them" {
     try agree.prints(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 17
         \\
         \\func main():
-        \\    var running = new list(task(long))
+        \\    var running = new list[task[i64]]
         \\    running.append(spawn work())
         \\    let kept = running[0:1]
         \\    running.clear()
-        \\    print(string(kept[0].wait()))
+        \\    print(str(kept[0].wait()))
         \\
     , "17\n");
 }
 
 test "map values retain resource elements after the map releases them" {
     try agree.prints(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 23
         \\
         \\func main():
-        \\    var running = new map(string, task(long))
+        \\    var running = new map[str, task[i64]]
         \\    running["job"] = spawn work()
         \\    let kept = running.values()
         \\    running.clear()
-        \\    print(string(kept[0].wait()))
+        \\    print(str(kept[0].wait()))
         \\
     , "23\n");
 }
@@ -487,17 +487,17 @@ test "tasks in a list are joined in the order the list holds them" {
     // N workers, joined in loop order — deterministic by shape, which
     // is the discipline the whole suite is written under.
     try agree.prints(
-        \\func square(n: long) -> long:
+        \\func square(n: i64) -> i64:
         \\    return n * n
         \\
         \\func main():
-        \\    var tasks = new list(task(long))
+        \\    var tasks = new list[task[i64]]
         \\    for i in range(1, 5):
         \\        tasks.append(spawn square(i))
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for t in tasks:
         \\        total = total + t.wait()
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     , "30\n");
 }
@@ -508,30 +508,30 @@ test "tasks in a list are joined in the order the list holds them" {
 
 test "a worker's error crosses whole and can be caught at the join" {
     try agree.prints(
-        \\func risky(n: long) -> long!:
+        \\func risky(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative input")
         \\    return n
         \\
         \\func main() -> !:
         \\    var bad = spawn risky(-1)
-        \\    var answered: long = 0
+        \\    var answered: i64 = 0
         \\    answered = bad.wait() catch reason:
         \\        print("caught: " + reason)
         \\    let good = spawn risky(7)
-        \\    print(string(try good.wait()))
+        \\    print(str(try good.wait()))
         \\
     , "caught: negative input\n7\n");
 }
 
 test "a worker's error nobody catches ends the program with its words" {
     try agree.errors(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    error("the worker said no")
         \\
         \\func main() -> !:
         \\    let t = spawn risky()
-        \\    print(string(try t.wait()))
+        \\    print(str(try t.wait()))
         \\
     , .{}, .user_error, "the worker said no");
 }
@@ -542,20 +542,20 @@ test "nested worker errors unwind owned graphs at both joins" {
     // the main runtime.  Both task rows must be consumed exactly once.
     try agree.prints(
         \\union Packet:
-        \\    payload(items: list(long), label: string)
+        \\    payload(items: list[i64], label: str)
         \\
-        \\func leaf() -> long!:
-        \\    var items: list(long) = [1, 2, 3]
+        \\func leaf() -> i64!:
+        \\    var items: list[i64] = [1, 2, 3]
         \\    let packet = Packet.payload(items = items, label = "nested")
         \\    error("nested failure")
         \\
-        \\func branch() -> long!:
+        \\func branch() -> i64!:
         \\    let child = spawn leaf()
         \\    return try child.wait()
         \\
         \\func main() -> !:
         \\    let outer = spawn branch()
-        \\    var answer: long = 0
+        \\    var answer: i64 = 0
         \\    answer = outer.wait() catch reason:
         \\        print("caught: " + reason)
         \\    print("after")
@@ -565,13 +565,13 @@ test "nested worker errors unwind owned graphs at both joins" {
 
 test "a trap in a worker is a trap at the join" {
     try agree.trap(
-        \\func divide(n: long) -> long:
-        \\    var zero: long = 0
+        \\func divide(n: i64) -> i64:
+        \\    var zero: i64 = 0
         \\    return n // zero
         \\
         \\func main():
         \\    let t = spawn divide(1)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , .divide_by_zero);
 }
@@ -579,12 +579,12 @@ test "a trap in a worker is a trap at the join" {
 test "a worker trap unwinds a nested union graph before the join" {
     try agree.trap(
         \\union Job:
-        \\    run(items: list(long), label: string)
+        \\    run(items: list[i64], label: str)
         \\
-        \\func boom() -> long:
-        \\    var items: list(long) = [4, 5, 6]
+        \\func boom() -> i64:
+        \\    var items: list[i64] = [4, 5, 6]
         \\    let job = Job.run(items = items, label = "worker")
-        \\    var zero: long = 0
+        \\    var zero: i64 = 0
         \\    return 1 // zero
         \\
         \\func main():
@@ -601,7 +601,7 @@ test "a worker's own words cross the join whole" {
     // one every trap takes (`heap.failMessage`), taken while the child
     // is still open.
     try agree.trapSays(
-        \\func risky(name: string):
+        \\func risky(name: str):
         \\    trap("worker " + name + " gave up")
         \\
         \\func main():
@@ -613,16 +613,16 @@ test "a worker's own words cross the join whole" {
 
 test "a trapped worker's trace names the worker's own frames first" {
     var session = try agree.compare(
-        \\func inner(n: long) -> long:
-        \\    var zero: long = 0
+        \\func inner(n: i64) -> i64:
+        \\    var zero: i64 = 0
         \\    return n // zero
         \\
-        \\func outer(n: long) -> long:
+        \\func outer(n: i64) -> i64:
         \\    return inner(n)
         \\
         \\func main():
         \\    let t = spawn outer(1)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , .{});
     defer session.deinit();
@@ -652,19 +652,19 @@ test "a worker gets a fresh depth budget rather than its spawner's" {
         break :row provided;
     };
     try agree.printsGiven(
-        \\func countdown(n: long) -> long:
+        \\func countdown(n: i64) -> i64:
         \\    if n <= 0:
         \\        let t = spawn depth(10)
         \\        return t.wait()
         \\    return countdown(n - 1)
         \\
-        \\func depth(n: long) -> long:
+        \\func depth(n: i64) -> i64:
         \\    if n <= 0:
         \\        return 0
         \\    return 1 + depth(n - 1)
         \\
         \\func main():
-        \\    print(string(countdown(15)))
+        \\    print(str(countdown(15)))
         \\
     , shallow, "10\n");
 }
@@ -676,28 +676,28 @@ test "a worker's own recursion is refused at its own budget" {
         break :row provided;
     };
     try agree.trapGiven(
-        \\func forever(n: long) -> long:
+        \\func forever(n: i64) -> i64:
         \\    return forever(n + 1)
         \\
         \\func main():
         \\    let t = spawn forever(0)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , shallow, .call_depth_exceeded);
 }
 
 test "a worker may spawn a worker" {
     try agree.prints(
-        \\func leaf(n: long) -> long:
+        \\func leaf(n: i64) -> i64:
         \\    return n + 1
         \\
-        \\func branch(n: long) -> long:
+        \\func branch(n: i64) -> i64:
         \\    let inner = spawn leaf(n)
         \\    return inner.wait() * 10
         \\
         \\func main():
         \\    let t = spawn branch(4)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , "50\n");
 }
@@ -708,21 +708,21 @@ test "sibling workers may each spawn and join a child" {
     // deterministic while both hosts exercise concurrent publication
     // in their worker registries.
     try agree.prints(
-        \\func leaf(n: long) -> long:
+        \\func leaf(n: i64) -> i64:
         \\    return n + 1
         \\
-        \\func branch(n: long) -> long:
+        \\func branch(n: i64) -> i64:
         \\    let inner = spawn leaf(n)
         \\    return inner.wait() * 10
         \\
         \\func main():
-        \\    var tasks = new list(task(long))
+        \\    var tasks = new list[task[i64]]
         \\    for i in range(1, 9):
         \\        tasks.append(spawn branch(i))
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for t in tasks:
         \\        total = total + t.wait()
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     , "440\n");
 }
@@ -737,14 +737,14 @@ test "a worker that leaks is counted in this program's census" {
     // object when it stops, and the number reaching the host is the
     // program's — both runtimes' — rather than the root's alone.
     var session = try agree.compare(
-        \\func leaky() -> long:
+        \\func leaky() -> i64:
         \\    var kept = [1, 2, 3]
-        \\    var zero: long = 0
+        \\    var zero: i64 = 0
         \\    return 1 // zero
         \\
         \\func main():
         \\    let t = spawn leaky()
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , .{});
     defer session.deinit();
@@ -753,14 +753,14 @@ test "a worker that leaks is counted in this program's census" {
 
 test "a program that spawns and joins leaves nothing alive" {
     try agree.ok(
-        \\func build(n: long) -> list(long):
-        \\    var made = new list(long)
+        \\func build(n: i64) -> list[i64]:
+        \\    var made = new list[i64]
         \\    for i in range(0, n):
         \\        made.append(i)
         \\    return made
         \\
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for round in range(0, 4):
         \\        let t = spawn build(round + 1)
         \\        let held = t.wait()
@@ -776,12 +776,12 @@ test "a program that spawns and joins leaves nothing alive" {
 
 test "a host that cannot thread refuses the spawn, having touched nothing" {
     try agree.trapGiven(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 1
         \\
         \\func main():
         \\    let t = spawn work()
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     , unthreaded, .host_unavailable);
 }
@@ -795,8 +795,8 @@ test "a worker may print, and its line arrives whole" {
     // worker reaches the host at all and that its line is not torn,
     // not who wins a race.
     try agree.prints(
-        \\func announce(n: long) -> long:
-        \\    print("worker " + string(n))
+        \\func announce(n: i64) -> i64:
+        \\    print("worker " + str(n))
         \\    return n
         \\
         \\func main():
@@ -804,20 +804,20 @@ test "a worker may print, and its line arrives whole" {
         \\    let a = first.wait()
         \\    let second = spawn announce(2)
         \\    let b = second.wait()
-        \\    print("main " + string(a + b))
+        \\    print("main " + str(a + b))
         \\
     , "worker 1\nworker 2\nmain 3\n");
 }
 
 test "a worker may reach the file channel" {
     try agree.printsGiven(
-        \\func save(text: string) -> long!:
+        \\func save(text: str) -> i64!:
         \\    try file_write("notes.txt", text)
         \\    return len(text)
         \\
         \\func main() -> !:
         \\    let t = spawn save("written by a worker")
-        \\    print(string(try t.wait()))
+        \\    print(str(try t.wait()))
         \\
     , .{}, "19\n");
 }
@@ -828,12 +828,12 @@ test "a worker may reach the file channel" {
 
 test "exit inside a worker stops the program at the join, carrying its status" {
     try agree.exits(
-        \\func bail() -> long:
+        \\func bail() -> i64:
         \\    exit(3)
         \\
         \\func main():
         \\    let t = spawn bail()
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\    print("never")
         \\
     , .{}, 3);
@@ -842,10 +842,10 @@ test "exit inside a worker stops the program at the join, carrying its status" {
 test "worker exit unwinds a nested union graph before the join" {
     try agree.exits(
         \\union Job:
-        \\    run(items: list(long), label: string)
+        \\    run(items: list[i64], label: str)
         \\
-        \\func bail() -> long:
-        \\    var items: list(long) = [7, 8, 9]
+        \\func bail() -> i64:
+        \\    var items: list[i64] = [7, 8, 9]
         \\    let job = Job.run(items = items, label = "worker")
         \\    exit(11)
         \\

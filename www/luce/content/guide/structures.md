@@ -36,10 +36,10 @@ sequence of field writes to every caller.
 
 ```luce run
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 
-    func length() -> double:
+    func length() -> f64:
         return sqrt(self.x * self.x + self.y * self.y)
 
     static func plus(a: Point, b: Point) -> Point:
@@ -48,7 +48,7 @@ struct Point:
 func main():
     let a = Point(x = 3.0, y = 4.0)
     let b = Point(x = 1.0, y = 2.0)
-    print(string(a.length()))
+    print(str(a.length()))
     let sum = Point.plus(a, b)
     print(f"({sum.x}, {sum.y}) has length {sum.length()}")
 ```
@@ -100,10 +100,10 @@ compound assignment evaluates it once:
 
 ```luce run
 struct Inner:
-    value: long
+    value: i64
 
 struct Outer:
-    label: string
+    label: str
     inner: Inner
 
 func main():

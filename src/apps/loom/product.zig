@@ -174,10 +174,10 @@ fn calls(install: *const Install, gpa: Allocator) !usize {
 
 const greeting =
     \\func main():
-    \\    var total: long = 0
+    \\    var total: i64 = 0
     \\    for index in range(0, 5):
     \\        total = total + index * index
-    \\    print("total " + string(total))
+    \\    print("total " + str(total))
     \\
 ;
 
@@ -222,7 +222,7 @@ test "the macOS loom supplies std.ui and std.gpu" {
     try install.write("window.luc",
         \\import std.ui
         \\
-        \\func main(args: list(string)) -> !:
+        \\func main(args: list[str]) -> !:
         \\    let window = try ui.open("test", 320, 240)
         \\    let surface = try window.surface()
         \\    try surface.clear(10, 20, 30)
@@ -255,7 +255,7 @@ test "shell services find the installed loom beside the running host" {
     try install.write("shell.luc",
         \\import std.os
         \\
-        \\func main(args: list(string)) -> !:
+        \\func main(args: list[str]) -> !:
         \\    print(try os.shell.run("loom --version"))
         \\
     );
@@ -302,7 +302,7 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
         \\
         \\func main():
         \\    let r = shapes.Rect(width = 2, height = 3)
-        \\    print("area " + string(geo.area(r)))
+        \\    print("area " + str(geo.area(r)))
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/luce.yaml",
@@ -314,18 +314,18 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
         \\import shapes
         \\import util
         \\
-        \\func area(r: shapes.Rect) -> long:
+        \\func area(r: shapes.Rect) -> i64:
         \\    return util.scale(r.width * r.height)
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/shapes.luc",
         \\struct Rect:
-        \\    width: long
-        \\    height: long
+        \\    width: i64
+        \\    height: i64
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/util.luc",
-        \\func scale(v: long) -> long:
+        \\func scale(v: i64) -> i64:
         \\    return v * 10
         \\
     );
@@ -385,7 +385,7 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
     // however many times it changes.
     try install.scratch.dir.rename("luce.away", install.scratch.dir, "luce", io);
     try install.write("project/.luce/packages/geo-1.2.0/util.luc",
-        \\func scale(v: long) -> long:
+        \\func scale(v: i64) -> i64:
         \\    return v * 11
         \\
     );
@@ -665,7 +665,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
             \\func main():
             \\    var xs = [1, 2, 3]
             \\    print("before")
-            \\    print(string(xs[7]))
+            \\    print(str(xs[7]))
             \\
             ,
             .status = 1,
@@ -711,8 +711,8 @@ test "the words after a program are the program's, not loom's" {
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("echo.luc",
-        \\func main(args: list(string)):
-        \\    print(string(len(args)))
+        \\func main(args: list[str]):
+        \\    print(str(len(args)))
         \\    for word in args:
         \\        print(word)
         \\

@@ -146,10 +146,10 @@ its seed:
 import std.math
 
 func main():
-    var rng = math.rng(42)           # any long seed
-    let f = rng.real()               # double in (0, 1)
-    let roll = rng.in_range(1, 7)    # long in [low, high)
-    print(string(f) + " " + string(roll))
+    var rng = math.rng(42)           # any i64 seed
+    let f = rng.real()               # f64 in (0, 1)
+    let roll = rng.in_range(1, 7)    # i64 in [low, high)
+    print(str(f) + " " + str(roll))
 ```
 
 Period 2^31 − 2; games and shuffles, never secrets.
@@ -163,11 +163,11 @@ imported:
 ```luce
 import std.lists
 
-func descending(a: long, b: long) -> bool:
+func descending(a: i64, b: i64) -> bool:
     return a > b
 
 func main():
-    var values: list(long) = [3, 1, 4, 1, 5]
+    var values: list[i64] = [3, 1, 4, 1, 5]
     values.sort_by(descending)
     values.sort_by((a, b) -> a < b)
 ```

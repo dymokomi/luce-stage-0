@@ -12,7 +12,7 @@ import std.strings
 
 # The directory one level up from `here`.  `..` rather than a lexical
 # parent, because a lexical one is wrong across a symbolic link.
-func parent_of(here: string) -> string:
+func parent_of(here: str) -> str:
     if here == ".":
         return ".."
     if paths.base(here) == "..":
@@ -21,7 +21,7 @@ func parent_of(here: string) -> string:
 
 # `name`, as a path, from a pane showing `here`.  The bare name at the
 # start directory, so "./notes.txt" and "notes.txt" stay one file.
-func under(here: string, name: string) -> string:
+func under(here: str, name: str) -> str:
     if here == ".":
         return name
     return paths.join(here, name)
@@ -30,9 +30,9 @@ func under(here: string, name: string) -> string:
 # "/", a ".." row when not at the top, and the active file even when it
 # is new and not yet on disk (but only while its directory is shown).
 # Answers an error message, or none.
-func refresh(names: list(string), directory: string, active_path: string) -> string?:
+func refresh(names: list[str], directory: str, active_path: str) -> str?:
     names.clear()
-    var found = new list(files.Entry)
+    var found = new list[files.Entry]
     found = files.entries(directory) catch reason:
         return reason
     if directory != ".":
@@ -50,7 +50,7 @@ func refresh(names: list(string), directory: string, active_path: string) -> str
     return none
 
 # The row that names `path`, or 0 when it is not in the listing.
-func select_index(names: list(string), directory: string, path: string) -> long:
+func select_index(names: list[str], directory: str, path: str) -> i64:
     for index in range(0, len(names)):
         if under(directory, names[index]) == path:
             return index
@@ -58,10 +58,10 @@ func select_index(names: list(string), directory: string, path: string) -> long:
 
 # What opening a row means: walking into a directory, or a file to open.
 union Opened:
-    entered(directory: string)
-    file(path: string)
+    entered(directory: str)
+    file(path: str)
 
-func classify(row: string, directory: string) -> Opened:
+func classify(row: str, directory: str) -> Opened:
     if strings.ends_with(row, "/"):
         if row == "../":
             return Opened.entered(directory = parent_of(directory))

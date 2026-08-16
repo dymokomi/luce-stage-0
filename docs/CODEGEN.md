@@ -906,12 +906,12 @@ is **present** and traps `null_object` when used — and a program can
 put one inside a `T?` without a diagnostic:
 
 ```luce
-func look(xs: list(long)?) -> bool:
+func look(xs: list[i64]?) -> bool:
     return xs == none
 
 func main():
-    var raw: list(long)          # the null handle
-    print(string(look(raw)))       # interpreter: false — it is *there*
+    var raw: list[i64]          # the null handle
+    print(str(look(raw)))       # interpreter: false — it is *there*
 ```
 
 Absence on the interpreter is `Value.Tag.none`, a tag beside the

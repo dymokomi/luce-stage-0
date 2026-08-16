@@ -34,12 +34,12 @@ import std.strings
 # Where `save` and `load` with no name of their own go.
 const save_file = "adventure.sav"
 
-# The player: where they are, how long they have been at it, and
+# The player: where they are, how i64 they have been at it, and
 # whether the story is over.  A turn writes those value fields through
 # its implied receiver, while the whole realm is borrowed beside it.
 struct Play:
-    at: long
-    moves: long = 0
+    at: i64
+    moves: i64 = 0
     done: bool = false
 
     # One turn.
@@ -100,7 +100,7 @@ struct Play:
     func look(realm: world.Realm):
         print(realm.look(self.at))
 
-    func travel(realm: world.Realm, direction: string):
+    func travel(realm: world.Realm, direction: str):
         if len(direction) == 0:
             print("Go where?")
             return
@@ -120,7 +120,7 @@ struct Play:
         realm.visit(self.at)
         print(realm.look(self.at, brief = not arriving))
 
-    func take(realm: world.Realm, name: string):
+    func take(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Take what?")
             return
@@ -136,7 +136,7 @@ struct Play:
         else:
             print("The " + name + " is not going anywhere.")
 
-    func put_down(realm: world.Realm, name: string):
+    func put_down(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Drop what?")
             return
@@ -145,7 +145,7 @@ struct Play:
         else:
             print("You are not carrying a " + name + ".")
 
-    func examine(realm: world.Realm, name: string):
+    func examine(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Examine what?")
             return
@@ -164,13 +164,13 @@ struct Play:
 
 # "1 room", "4 rooms".  English needs the count and both words, and
 # there is nowhere better to keep them than the sentence that asks.
-private func counted(count: long, one: string, many: string) -> string:
+private func counted(count: i64, one: str, many: str) -> str:
     if count == 1:
         return f"{count} {one}"
     return f"{count} {many}"
 
-func help() -> string:
-    var lines = new builder()
+func help() -> str:
+    var lines = new builder
     lines.append("look                  what is here\n")
     lines.append("north south east      or n s e w, up, down — walking\n")
     lines.append("west up down          a bare direction is a step\n")
@@ -182,7 +182,7 @@ func help() -> string:
     lines.append("quit                  stop playing")
     return lines.build()
 
-func main(args: list(string)) -> !:
+func main(args: list[str]) -> !:
     var realm = story.build()
     var play = Play(at = story.start(realm))
 
@@ -199,7 +199,7 @@ func main(args: list(string)) -> !:
     play.look(realm)
 
     while not play.done:
-        # `read_line` answers `string?`, and `none` is the end of
+        # `read_line` answers `str?`, and `none` is the end of
         # input — a pipe that ran dry, or Ctrl-D at a terminal.  There
         # is nobody left to ask what to do, so the game stops without
         # a word about it.

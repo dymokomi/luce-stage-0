@@ -43,7 +43,7 @@ answer whenever both operands are `bool`.
 func main():
     let a = true
     let b = false
-    print(string(not a == b))
+    print(str(not a == b))
 ```
 
 ```output
@@ -60,7 +60,7 @@ neither: the comparisons are non-associative.
 
 ```luce fail
 func main():
-    print(string(1 < 2 < 3))
+    print(str(1 < 2 < 3))
 ```
 
 ```output
@@ -159,16 +159,16 @@ declared function. A call through a function value is positional: its
 type carries parameter types, but no names or defaults.
 
 ```luce run
-func grown(base: long, step: long = 5, twice: bool = false) -> long:
+func grown(base: i64, step: i64 = 5, twice: bool = false) -> i64:
     var total = base + step
     if twice:
         total = total * 2
     return total
 
 func main():
-    print(string(grown(1)))
-    print(string(grown(1, twice = true)))
-    print(string(grown(step = 0, base = 2)))
+    print(str(grown(1)))
+    print(str(grown(1, twice = true)))
+    print(str(grown(step = 0, base = 2)))
 ```
 
 ```output
@@ -180,7 +180,7 @@ func main():
 A positional argument may not follow a named one:
 
 ```luce fail
-func size(width: long, height: long) -> long:
+func size(width: i64, height: i64) -> i64:
     return width * height
 
 func main():
@@ -252,17 +252,17 @@ A call is a **postfix suffix**, level 8 in the table above, so
 an element read out of a map, a value in parentheses.
 
 ```luce run
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
-func chooser() -> func(long) -> long:
+func chooser() -> func(i64) -> i64:
     return twice
 
 func main():
-    var actions = new map(string, func(long) -> long)
+    var actions = new map[str, func(i64) -> i64]
     actions["double"] = twice
-    print(string(chooser()(21)))
-    print(string(actions["double"](21)))
+    print(str(chooser()(21)))
+    print(str(actions["double"](21)))
 ```
 
 ```output
@@ -278,10 +278,10 @@ writes out.
 
 ```luce fail
 struct Rows:
-    render: (func(long) -> string)?
+    render: (func(i64) -> str)?
 
-func label(index: long) -> string:
-    return string(index)
+func label(index: i64) -> str:
+    return str(index)
 
 func main():
     let rows = Rows(render = label)
@@ -354,7 +354,7 @@ and both counts:
 
 ```luce fail
 func main():
-    var xs = new list(long)
+    var xs = new list[i64]
     xs.append(1, 2)
 ```
 
@@ -371,7 +371,7 @@ rather than at the call:
 
 ```luce fail
 func main():
-    var xs = new list(long)
+    var xs = new list[i64]
     xs.append("hello")
 ```
 
@@ -387,7 +387,7 @@ a spelling when one is close enough:
 
 ```luce fail
 func main():
-    var xs = new list(long)
+    var xs = new list[i64]
     let found = xs.has(1)
 ```
 

@@ -11,15 +11,15 @@ import termui
 import termui.input as input
 
 func fresh() -> state.Editor:
-    var buffers = new list(document.Buffer)
+    var buffers = new list[document.Buffer]
     buffers.append(document.Buffer(path = "f.luc"))
-    var histories = new list(history.Stacks)
-    histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
+    var histories = new list[history.Stacks]
+    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
     return state.Editor(
         buffers = buffers,
         histories = histories,
-        names = new list(string),
-        search_matches = new list(long),
+        names = new list[str],
+        search_matches = new list[i64],
         path = "f.luc",
     )
 
@@ -92,7 +92,7 @@ func test_search_starts_a_fresh_undo_group():
 func test_adjust_files_persists_the_scroll_window():
     var ed = fresh()
     for i in range(0, 20):
-        ed.names.append("file" + string(i))
+        ed.names.append("file" + str(i))
     ed.files.count = 20
     ed.files.selected = 15
     ed.adjust_files(5)

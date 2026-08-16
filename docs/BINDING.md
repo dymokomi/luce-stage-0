@@ -25,19 +25,19 @@ value by landing (`docs/FUNCTIONS.md`).
 
 ```luce
 struct Scale:
-    factor: long
+    factor: i64
 
-    func times(n: long) -> long:
+    func times(n: i64) -> i64:
         return n * self.factor
 
-func apply(n: long, f: func(long) -> long) -> long:
+func apply(n: i64, f: func(i64) -> i64) -> i64:
     return f(n)
 
 func main():
     let s = Scale(factor = 3)
-    let f: func(long) -> long = s.times
-    print(string(apply(5, f)))
-    print(string(f(10)))
+    let f: func(i64) -> i64 = s.times
+    print(str(apply(5, f)))
+    print(str(f(10)))
 ```
 
 `Scale.times` is declared `func times(n: long) -> long` with an implied
@@ -83,17 +83,17 @@ the zero `T?` already means:
 
 ```luce
 struct Button:
-    label: string
-    on_click: (func(long) -> long)?
+    label: str
+    on_click: (func(i64) -> i64)?
 
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
 func main():
     let b = Button(label = "ok", on_click = twice)
     let handler = b.on_click
     if handler != none:
-        print(string(handler(21)))
+        print(str(handler(21)))
 ```
 
 ### The grammar rule: a parenthesized type is that type
@@ -145,12 +145,12 @@ A bare map value is callable where it is read — the receiver rides in the
 value, so calling it in place calls it on the state it carries:
 
 ```luce
-func scale(n: long) -> long:
+func scale(n: i64) -> i64:
     return n * 2
 
 func main():
-    var actions: map(string, func(long) -> long) = {"double": scale}
-    print(string(actions["double"](21)))
+    var actions: map[str, func(i64) -> i64] = {"double": scale}
+    print(str(actions["double"](21)))
 ```
 
 The four optional slots are **not** callable in place. Narrowing is
@@ -172,10 +172,10 @@ function is:
 
 ```luce
 union Msg:
-    query_changed(query: string)
+    query_changed(query: str)
     quit
 
-func build(f: func(string) -> Msg) -> Msg:
+func build(f: func(str) -> Msg) -> Msg:
     return f("hi")
 
 func main():

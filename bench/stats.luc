@@ -1,11 +1,11 @@
 # Vector statistics through std math — sum, extrema, dot, norm,
-# variance over two million-element double arrays.  The
+# variance over two million-element f64 arrays.  The
 # std-is-written-in-Luce bet measured on numeric code; the C twin is
 # bench/stats.c.
 #
 # The sums accumulate strictly left to right on both sides, which is
 # what makes the printed integers bit-identical and what stops either
-# compiler vectorizing an accumulation: clang will not reorder a float
+# compiler vectorizing an accumulation: clang will not reorder a f32
 # reduction without fast-math, and Luce never will.  Both do vectorize
 # the elementwise work underneath one — the multiply in dot, the
 # subtract in variance — and sqrt is IEEE-exact on both.
@@ -21,17 +21,17 @@ import std.math
 
 func main():
     let n = 2000000
-    var a = new array(double, n)
-    var b = new array(double, n)
+    var a = new array[f64](n)
+    var b = new array[f64](n)
     for i in range(0, n):
-        a[i] = double((i * 7) % 32) * 0.25
-        b[i] = double((i * 13) % 32) * 0.25
-    var checksum: double = 0.0
+        a[i] = f64((i * 7) % 32) * 0.25
+        b[i] = f64((i * 13) % 32) * 0.25
+    var checksum: f64 = 0.0
     for r in range(0, 6):
         checksum += math.dot(a, b)
         checksum += math.variance(a) else 0.0
         checksum += math.norm(b)
     let smallest, largest = math.minmax(b)
-    let low = long(trunc((smallest else 0.0) * 4.0))
-    let high = long(trunc((largest else 0.0) * 4.0))
-    print(f"{long(trunc(math.sum(a)))} {low} {high} {long(trunc(checksum))}")
+    let low = i64(trunc((smallest else 0.0) * 4.0))
+    let high = i64(trunc((largest else 0.0) * 4.0))
+    print(f"{i64(trunc(math.sum(a)))} {low} {high} {i64(trunc(checksum))}")

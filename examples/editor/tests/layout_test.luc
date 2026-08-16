@@ -4,7 +4,7 @@ import layout as panes
 import focus
 import termui
 
-func screen_of(rows: long, columns: long) -> termui.Rect:
+func screen_of(rows: i64, columns: i64) -> termui.Rect:
     return termui.Rect(rows = rows, columns = columns)
 
 func test_a_bare_terminal_is_text_and_a_status_bar():
@@ -46,9 +46,9 @@ func test_the_output_pane_is_a_third_of_the_height_between_3_and_8():
     let ordinary = panes.Layout.of(screen_of(24, 80), false, true)
     assert(ordinary.output.rows == 8)
     assert(ordinary.text.rows == 15)
-    let short = panes.Layout.of(screen_of(9, 80), false, true)
-    assert(short.output.rows == 3)
-    assert(short.text.rows == 5)
+    let compact = panes.Layout.of(screen_of(9, 80), false, true)
+    assert(compact.output.rows == 3)
+    assert(compact.text.rows == 5)
 
 func test_a_window_too_small_for_a_pane_is_a_resize_and_not_a_bug():
     let tiny = panes.Layout.of(screen_of(2, 40), true, true)
@@ -68,7 +68,7 @@ func test_both_panes_share_the_frame():
     assert(view.text.column == 21)
     assert(view.split_column() == 20)
 
-func pane_name(where: focus.Focus?) -> string:
+func pane_name(where: focus.Focus?) -> str:
     if where == none:
         return "none"
     match where:

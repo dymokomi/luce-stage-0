@@ -11,24 +11,24 @@ import std.math
 import std.files
 import std.strings
 
-func bar(count: long) -> string:
+func bar(count: i64) -> str:
     return "#".repeat(count)
 
-func main(args: list(string)) -> !:
-    var seed: long = 2026
-    var count: long = 20
+func main(args: list[str]) -> !:
+    var seed: i64 = 2026
+    var count: i64 = 20
     if len(args) > 0:
         seed = parse_int(args[0]) else seed
     if len(args) > 1:
         count = parse_int(args[1]) else count
 
     var rng = math.rng(seed)
-    var rolls: list(string) = []
-    var histogram = new array(long, 7)
-    var total: long = 0
+    var rolls: list[str] = []
+    var histogram = new array[i64](7)
+    var total: i64 = 0
     for i in range(0, count):
         let roll = rng.in_range(1, 7)
-        rolls.append(string(roll))
+        rolls.append(str(roll))
         histogram[roll] += 1
         total += roll
 

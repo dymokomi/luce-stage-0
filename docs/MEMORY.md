@@ -47,7 +47,7 @@ func main():
     let first = [1, 2]
     let second = first
     second.append(3)
-    print(string(len(first)))
+    print(str(len(first)))
 ```
 
 A struct remains a value when it contains a reference. Copying the struct

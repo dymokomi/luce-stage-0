@@ -344,7 +344,7 @@ test "the registry owns what it holds and hands back identity" {
     defer sources.deinit();
 
     const root = try addText(&sources, .root, "", "editor.luc", "func main():\n    return\n");
-    const geo = try addText(&sources, .imported, "geo", "geo.luc", "func area() -> long:\n    return 4\n");
+    const geo = try addText(&sources, .imported, "geo", "geo.luc", "func area() -> i64:\n    return 4\n");
 
     try testing.expectEqual(root_file, root);
     try testing.expectEqual(@as(FileId, 1), geo);
@@ -365,9 +365,9 @@ test "one name under two roots is two modules, found by the pair" {
     var sources = Sources.init(testing.allocator);
     defer sources.deinit();
 
-    const project_text = try testing.allocator.dupe(u8, "func here() -> long:\n    return 1\n");
+    const project_text = try testing.allocator.dupe(u8, "func here() -> i64:\n    return 1\n");
     const ours = try sources.add(.imported, "", "util", "util", "util.luc", project_text);
-    const package_text = try testing.allocator.dupe(u8, "func there() -> long:\n    return 2\n");
+    const package_text = try testing.allocator.dupe(u8, "func there() -> i64:\n    return 2\n");
     const theirs = try sources.add(.imported, "pkg", "util", "util", "pkg/util.luc", package_text);
 
     try testing.expect(ours != theirs);
@@ -386,7 +386,7 @@ test "a binding is its own key: an aliased module is found by either question" {
     var sources = Sources.init(testing.allocator);
     defer sources.deinit();
 
-    const text = try testing.allocator.dupe(u8, "func area() -> long:\n    return 4\n");
+    const text = try testing.allocator.dupe(u8, "func area() -> i64:\n    return 4\n");
     const shapes = try sources.add(.imported, "", "geo.shapes", "gs", "geo/shapes.luc", text);
     try sources.recordClaim("", "geo.shapes", shapes);
 
@@ -411,7 +411,7 @@ test "a claim remembers a resolution; one file may be claimed from two namespace
     var sources = Sources.init(testing.allocator);
     defer sources.deinit();
 
-    const text = try testing.allocator.dupe(u8, "func area() -> long:\n    return 4\n");
+    const text = try testing.allocator.dupe(u8, "func area() -> i64:\n    return 4\n");
     const shapes = try sources.add(.imported, "geo-1.2.0", "geo.shapes", "shapes", ".luce/packages/geo-1.2.0/shapes.luc", text);
     try sources.recordClaim("", "geo.shapes", shapes);
     try sources.recordClaim("geo-1.2.0", "shapes", shapes);
@@ -454,7 +454,7 @@ test "place agrees with the reference scan on every offset" {
     // Blank lines, a line without a newline at the end, and the two
     // texts that differ only in their terminator.
     for ([_][]const u8{
-        "func main():\n\n    let a = 1\n    print(string(a))\nlast line, no newline",
+        "func main():\n\n    let a = 1\n    print(str(a))\nlast line, no newline",
         "func main():\n\n    return\n",
         "",
         "\n",
@@ -476,7 +476,7 @@ test "lineText and place agree: the line of an offset contains that offset" {
     var sources = Sources.init(testing.allocator);
     defer sources.deinit();
     for ([_][]const u8{
-        "func main():\n\n    let a = 1\n    print(string(a))\nlast line, no newline",
+        "func main():\n\n    let a = 1\n    print(str(a))\nlast line, no newline",
         "one\r\ntwo\r\n", // registered as prepared text would never be, on purpose
         "\n\n\n",
         "no newline at all",

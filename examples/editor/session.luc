@@ -9,7 +9,7 @@
 import std.files
 import document
 
-func draft_path(path: string) -> string:
+func draft_path(path: str) -> str:
     return path + ".draft"
 
 # What `load` answers: the buffer to open, the file's on-disk content,
@@ -19,7 +19,7 @@ func draft_path(path: string) -> string:
 # offered but not wanted.
 struct Loaded:
     buffer: document.Buffer
-    base: string
+    base: str
     recovered: bool
 
 # Open `path`.  A file that will not read is a new file, not an error.
@@ -31,7 +31,7 @@ struct Loaded:
 # by being reversible (`base` seeds undo) rather than by guessing which
 # is newer; a real "newer than the file" test waits on a host mtime
 # service.
-func load(path: string) -> Loaded:
+func load(path: str) -> Loaded:
     var content = ""
     var message = ""
     content = files.read(path) catch:
@@ -60,7 +60,7 @@ func load(path: string) -> Loaded:
 # destroy the previous good one — the rename is atomic on one
 # filesystem.  A draft that cannot be written is silently skipped: it is
 # a safety net, not the save itself.
-func save_draft(path: string, content: string):
+func save_draft(path: str, content: str):
     let draft = draft_path(path)
     let temporary = draft + ".tmp"
     files.write(temporary, content) catch:
@@ -68,6 +68,6 @@ func save_draft(path: string, content: string):
     files.rename(temporary, draft) catch:
         return
 
-func discard_draft(path: string):
+func discard_draft(path: str):
     files.delete(draft_path(path)) catch:
         return

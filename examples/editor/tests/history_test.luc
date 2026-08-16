@@ -3,8 +3,8 @@
 import history
 
 func test_undo_returns_the_prior_revision():
-    var past = new list(history.Revision)
-    var future = new list(history.Revision)
+    var past = new list[history.Revision]
+    var future = new list[history.Revision]
     # Record the state before typing " world".
     history.record(past, future, "hello", 5)
     # Now the live state is the edited one; undo hands back the prior.
@@ -23,14 +23,14 @@ func test_undo_returns_the_prior_revision():
     assert(ahead.cursor == 11)
 
 func test_undo_on_an_empty_stack_answers_none():
-    var past = new list(history.Revision)
-    var future = new list(history.Revision)
+    var past = new list[history.Revision]
+    var future = new list[history.Revision]
     assert(history.undo(past, future, "x", 1) == none)
     assert(history.redo(past, future, "x", 1) == none)
 
 func test_a_new_edit_invalidates_redo():
-    var past = new list(history.Revision)
-    var future = new list(history.Revision)
+    var past = new list[history.Revision]
+    var future = new list[history.Revision]
     history.record(past, future, "a", 1)
     let undone = history.undo(past, future, "ab", 2)
     assert(undone != none)
@@ -40,10 +40,10 @@ func test_a_new_edit_invalidates_redo():
     assert(len(future) == 0)
 
 func test_the_stack_is_bounded():
-    var past = new list(history.Revision)
-    var future = new list(history.Revision)
+    var past = new list[history.Revision]
+    var future = new list[history.Revision]
     for i in range(0, history.depth + 50):
-        history.record(past, future, "s" + string(i), i)
+        history.record(past, future, "s" + str(i), i)
     assert(len(past) == history.depth)
     # The oldest went first, so the bottom is revision 50, not 0.
     assert(past[0].cursor == 50)

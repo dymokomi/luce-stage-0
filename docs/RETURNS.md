@@ -5,7 +5,7 @@ A function may answer more than one value. The shape is written after
 with a destructuring bind or a parallel assignment.
 
 ```luce
-func minmax(xs: array(double, _)) -> (double, double):
+func minmax(xs: array[f64, _]) -> (f64, f64):
     var low = xs[0]
     var high = xs[0]
     for i in range(1, len(xs)):
@@ -14,7 +14,7 @@ func minmax(xs: array(double, _)) -> (double, double):
     return low, high
 
 func main():
-    let data: array(double, _) = [3.0, 1.0, 2.0]
+    let data: array[f64, _] = [3.0, 1.0, 2.0]
     let low, high = minmax(data)
     print(f"{low} {high}")
 ```
@@ -141,7 +141,7 @@ in its own channel, the values in theirs, so `try` composes with no new
 mechanism:
 
 ```luce
-func read_pair(path: string) -> (long, long)!:
+func read_pair(path: str) -> (i64, i64)!:
     let text = try file_read(path)
     return len(text), 0
 
@@ -187,9 +187,9 @@ are exactly what the caller receives.
 
 ```luce
 struct Rng:
-    state: long
+    state: i64
 
-    func next() -> long:
+    func next() -> i64:
         self.state = self.state * 48271 % 2147483647
         return self.state
 

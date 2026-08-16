@@ -13,10 +13,10 @@ from importers:
 ```luce module file=tally.luc
 import std.strings
 
-private func clean(word: string) -> string:
+private func clean(word: str) -> str:
     return strings.lower(strings.trim(word))
 
-func count(text: string, wanted: string) -> long:
+func count(text: str, wanted: str) -> i64:
     let words = strings.split(text, " ")
     let target = clean(wanted)
     var found = 0
@@ -30,7 +30,7 @@ func count(text: string, wanted: string) -> long:
 import tally
 
 func main():
-    print(string(tally.count("Bee bee BEE tree", "bee")))
+    print(str(tally.count("Bee bee BEE tree", "bee")))
 ```
 
 ```output
@@ -60,19 +60,19 @@ member outside a region uses the public default.
 
 ```luce module file=gauge.luc
 struct Gauge:
-    label: string
+    label: str
 
     private:
-        reading: long
-        scale: long
+        reading: i64
+        scale: i64
 
-    func show() -> string:
+    func show() -> str:
         return f"{self.label}: {self.reading * self.scale}"
 
-    func add(amount: long):
+    func add(amount: i64):
         self.reading = self.reading + amount
 
-func open(label: string, scale: long) -> Gauge:
+func open(label: str, scale: i64) -> Gauge:
     return Gauge(label = label, reading = 0, scale = scale)
 ```
 
@@ -118,7 +118,7 @@ import gauge
 
 func main():
     var g = gauge.open("power", 10)
-    print(string(g.reading))
+    print(str(g.reading))
 ```
 
 ```output
@@ -139,14 +139,14 @@ state its public API explicitly:
 ```luce run
 public const width = 40
 
-public func banner(title: string) -> string:
+public func banner(title: str) -> str:
     return title
 
 public struct Line:
-    public text: string
+    public text: str
 
     private:
-        marker: long
+        marker: i64
 
     func mark():
         self.marker = self.marker + 1
@@ -180,7 +180,7 @@ bindings:
 ```luce fail
 func main():
     private let limit = 10
-    print(string(limit))
+    print(str(limit))
 ```
 
 ```output
@@ -197,7 +197,7 @@ private:
     const limit = 10
 
 func main():
-    print(string(limit))
+    print(str(limit))
 ```
 
 ```output

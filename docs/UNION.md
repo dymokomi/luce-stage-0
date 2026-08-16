@@ -10,10 +10,10 @@ than checked.
 ```luce
 union Shape:
     empty
-    circle(radius: double)
-    rect(width: double, height: double)
+    circle(radius: f64)
+    rect(width: f64, height: f64)
 
-func area(s: Shape) -> double:
+func area(s: Shape) -> f64:
     match s:
         empty:
             return 0.0
@@ -42,9 +42,9 @@ available through the same checker:
 ```luce
 union Shape:
     empty
-    rect(width: double, height: double = 2.0)
+    rect(width: f64, height: f64 = 2.0)
 
-func area(s: Shape) -> double:
+func area(s: Shape) -> f64:
     match s:
         empty:
             return 0.0
@@ -72,14 +72,14 @@ written with no parentheses, because parentheses mean a payload:
 ```luce
 union Json:
     null
-    number(value: double)
-    array(items: list(Json))
+    number(value: f64)
+    array(items: list[Json])
 
 func main():
     let a = Json.null
     let b = Json.number(value = 3.0)
     let c = Json.array(items = [b])
-    assert(string(a) == "null")
+    assert(str(a) == "null")
 ```
 
 Writing `Json.number` bare where a payload is expected is a construction
@@ -94,15 +94,15 @@ the fields it wants to bind, each by the field's own name:
 ```luce
 union Reading:
     missing
-    scalar(value: double)
-    labeled(value: string)
+    scalar(value: f64)
+    labeled(value: str)
 
-func describe(r: Reading) -> string:
+func describe(r: Reading) -> str:
     match r:
         missing:
             return "missing"
         scalar(value):
-            return string(value)
+            return str(value)
         labeled(value):
             return value
 
@@ -117,9 +117,9 @@ which member it is:
 ```luce
 union Shape:
     empty
-    circle(radius: double)
+    circle(radius: f64)
 
-func kind(s: Shape) -> long:
+func kind(s: Shape) -> i64:
     match s:
         empty:
             return 0
@@ -161,7 +161,7 @@ whoever else holds it:
 ```luce
 union Json:
     null
-    array(items: list(long))
+    array(items: list[i64])
 
 func main():
     let doc = Json.array(items = [1, 2])
@@ -193,23 +193,23 @@ keyword, no arena, no tracing collector:
 ```luce
 union Json:
     null
-    number(value: double)
-    array(items: list(Json))
-    object(fields: map(string, Json))
+    number(value: f64)
+    array(items: list[Json])
+    object(fields: map[str, Json])
 
-func total(j: Json) -> double:
+func total(j: Json) -> f64:
     match j:
         null:
             return 0.0
         number(value):
             return value
         array(items):
-            var sum: double = 0.0
+            var sum: f64 = 0.0
             for item in items:
                 sum = sum + total(item)
             return sum
         object(fields):
-            var sum: double = 0.0
+            var sum: f64 = 0.0
             for key in fields.keys():
                 let item = fields.get(key)
                 if item != none:
@@ -217,7 +217,7 @@ func total(j: Json) -> double:
             return sum
 
 func main():
-    var items = new list(Json)
+    var items = new list[Json]
     items.append(Json.number(value = 1.5))
     items.append(Json.number(value = 2.5))
     let doc = Json.array(items = items)
@@ -241,10 +241,10 @@ carrying:
 ```luce
 union Shape:
     empty
-    circle(radius: double)
+    circle(radius: f64)
 
 union Reading:
-    sample(value: double, count: long)
+    sample(value: f64, count: i64)
     missing
 
 func main():
@@ -277,14 +277,14 @@ payload is a separate concern and is not what `string` does here:
 union Json:
     null
     boolean(value: bool)
-    number(value: double)
-    text(value: string)
+    number(value: f64)
+    text(value: str)
 
 func main():
-    assert(string(Json.null) == "null")
-    assert(string(Json.boolean(value = true)) == "boolean")
-    assert(string(Json.number(value = 3.0)) == "number")
-    assert(string(Json.text(value = "words")) == "text")
+    assert(str(Json.null) == "null")
+    assert(str(Json.boolean(value = true)) == "boolean")
+    assert(str(Json.number(value = 3.0)) == "number")
+    assert(str(Json.text(value = "words")) == "text")
 ```
 
 ## Equality is not available
@@ -307,8 +307,8 @@ enum Kind:
     square
 
 union Shape:
-    circle(radius: double)
-    square(side: double)
+    circle(radius: f64)
+    square(side: f64)
 
 func kindOf(s: Shape) -> Kind:
     match s:
@@ -318,10 +318,10 @@ func kindOf(s: Shape) -> Kind:
             return Kind.square
 
 func main():
-    var shapes = new list(Shape)
+    var shapes = new list[Shape]
     shapes.append(Shape.circle(radius = 1.0))
     shapes.append(Shape.square(side = 2.0))
-    var kinds = new list(Kind)
+    var kinds = new list[Kind]
     for s in shapes:
         kinds.append(kindOf(s))
     assert(kinds.contains(Kind.square))
@@ -345,12 +345,12 @@ payload field may be a function value, stored as `(func(...) -> R)?`:
 ```luce
 union Job:
     empty
-    action(run: (func(long) -> long)?, label: string)
+    action(run: (func(i64) -> i64)?, label: str)
 
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
-func apply(job: Job, n: long) -> long:
+func apply(job: Job, n: i64) -> i64:
     match job:
         empty:
             return -1

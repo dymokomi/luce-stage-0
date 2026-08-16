@@ -1771,7 +1771,7 @@ pub const FunctionBuilder = struct {
                 try self.fail(
                     "luce.sema.absent",
                     literal.span,
-                    "none needs a type here; write it into something declared T? (var x: long? = none), or compare with a T? (x == none)",
+                    "none needs a type here; write it into something declared T? (var x: i64? = none), or compare with a T? (x == none)",
                     .{},
                 );
                 return null;

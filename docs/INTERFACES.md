@@ -10,20 +10,20 @@ struct that does not list the interface does not conform.
 
 ```luce
 interface UIElement:
-    func render(value: long) -> long
-    func label() -> string
+    func render(value: i64) -> i64
+    func label() -> str
 
 struct Button: UIElement:
-    text: string
+    text: str
 
-    func render(value: long) -> long:
+    func render(value: i64) -> i64:
         return value + 1
 
-    func label() -> string:
+    func label() -> str:
         return self.text
 
-func describe(item: UIElement) -> string:
-    return item.label() + ":" + string(item.render(41))
+func describe(item: UIElement) -> str:
+    return item.label() + ":" + str(item.render(41))
 
 func main():
     print(describe(Button(text = "ok")))
@@ -57,20 +57,20 @@ ordinary return-shape rules and must be received by a destructuring `let`,
 
 ```luce
 interface Measured:
-    func span(value: long) -> (long, long)
+    func span(value: i64) -> (i64, i64)
 
 struct Range: Measured:
-    width: long
+    width: i64
 
-    func span(value: long) -> (long, long):
+    func span(value: i64) -> (i64, i64):
         return value, value + self.width
 
-func total(item: Measured) -> long:
+func total(item: Measured) -> i64:
     let low, high = item.span(10)
     return low + high
 
 func main():
-    print(string(total(Range(width = 7))))
+    print(str(total(Range(width = 7))))
 ```
 
 ## Read-only dispatch is a current limitation
@@ -100,22 +100,22 @@ it.
 
 ```luce
 interface Named:
-    func name() -> string
+    func name() -> str
 
 struct First: Named:
-    marker: long
+    marker: i64
 
-    func name() -> string:
+    func name() -> str:
         return "first"
 
 struct Second: Named:
-    marker: long
+    marker: i64
 
-    func name() -> string:
+    func name() -> str:
         return "second"
 
 func main():
-    var values = new list(Named)
+    var values = new list[Named]
     values.append(First(marker = 1))
     values.append(Second(marker = 2))
     print(values[0].name())

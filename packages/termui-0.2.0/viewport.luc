@@ -11,29 +11,29 @@ import surface
 import view as views
 
 struct Viewport:
-    top: long = 0
-    total: long = 0
+    top: i64 = 0
+    total: i64 = 0
 
     # Move the window, keeping it on the content.  A line index rather
     # than a page is the unit; the caller decides how far a key scrolls.
-    func scroll_by(steps: long):
+    func scroll_by(steps: i64):
         self.top = clamp(self.top + steps, 0, max(self.total - 1, 0))
 
-    func to(line: long):
+    func to(line: i64):
         self.top = clamp(line, 0, max(self.total - 1, 0))
 
 # The read-only projection.  The provider answers line `index`; the view
 # paints the window `[top, top + rows)` in one style.
 struct ViewportView: views.View:
-    render: (func(long) -> string)?
-    top: long = 0
-    total: long = 0
+    render: (func(i64) -> str)?
+    top: i64 = 0
+    total: i64 = 0
     style: termui.Style = termui.Style()
 
-    func measure(area: termui.Rect) -> (long, long):
+    func measure(area: termui.Rect) -> (i64, i64):
         return min(max(self.total, 0), max(area.rows, 0)), max(area.columns, 0)
 
-    func line(index: long) -> string:
+    func line(index: i64) -> str:
         let provider = self.render
         if provider == none:
             return ""

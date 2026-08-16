@@ -67,10 +67,10 @@ construction, and the `s.method(...)` string sugar that routes to
 | `geo.helperr`, a typo near a marked name | `unknown function helperr` — and no suggestion names a private one |
 
 ```luce module file=geo.luc
-private func helper() -> long:
+private func helper() -> i64:
     return 41
 
-func visible() -> long:
+func visible() -> i64:
     return helper() + 1
 
 private const seed = 41
@@ -81,7 +81,7 @@ const answer = seed + 1
 import geo
 
 func main():
-    print(string(geo.helper()))
+    print(str(geo.helper()))
 ```
 
 ```output
@@ -99,8 +99,8 @@ name:
 import geo
 
 func main():
-    print(string(geo.visible()))
-    print(string(geo.answer))
+    print(str(geo.visible()))
+    print(str(geo.answer))
 ```
 
 ```output
@@ -115,11 +115,11 @@ factory pattern, named in the diagnostic.
 
 ```luce module file=session.luc
 struct Session:
-    name: string
-    private id: long
-    private token: long = 0
+    name: str
+    private id: i64
+    private token: i64 = 0
 
-func open(name: string) -> Session:
+func open(name: str) -> Session:
     return Session(name = name, id = 7)
 ```
 
@@ -175,13 +175,13 @@ file.
 
 ```luce fail
 private struct Inner:
-    n: long
+    n: i64
 
 func read() -> Inner:
     return Inner(n = 1)
 
 func main():
-    print(string(read().n))
+    print(str(read().n))
 ```
 
 ```output
@@ -281,13 +281,13 @@ The modules are [`math`](/library/math/), [`strings`](/library/strings/),
 const unit = 1.0
 
 struct Rect:
-    width: double
-    height: double
+    width: f64
+    height: f64
 
-    static func area(r: Rect) -> double:
+    static func area(r: Rect) -> f64:
         return r.width * r.height
 
-func square(side: double) -> Rect:
+func square(side: f64) -> Rect:
     return Rect(width = side, height = side)
 ```
 
@@ -327,7 +327,7 @@ dotted import is refused by name.
 import geo.shapes
 
 func main():
-    print(string(shapes.area(3.0, 4.0)))
+    print(str(shapes.area(3.0, 4.0)))
 ```
 
 ```output
@@ -345,7 +345,7 @@ version: 0.1.0
 ```
 
 ```luce module file=geo/shapes.luc
-func area(width: double, height: double) -> double:
+func area(width: f64, height: f64) -> f64:
     return width * height
 ```
 
@@ -353,7 +353,7 @@ func area(width: double, height: double) -> double:
 import geo.shapes
 
 func main():
-    print(string(shapes.area(3.0, 4.0)))
+    print(str(shapes.area(3.0, 4.0)))
 ```
 
 ```output
@@ -370,7 +370,7 @@ modules.  That is `luce.import.collision`, and the remedy is in the
 message: **`as`** binds a module under a name of your choosing.
 
 ```luce module file=blocks/shapes.luc
-func volume(edge: double) -> double:
+func volume(edge: f64) -> f64:
     return edge * edge * edge
 ```
 
@@ -379,7 +379,7 @@ import geo.shapes
 import blocks.shapes
 
 func main():
-    print(string(shapes.area(3.0, 4.0)))
+    print(str(shapes.area(3.0, 4.0)))
 ```
 
 ```output
@@ -394,8 +394,8 @@ import geo.shapes
 import blocks.shapes as blocks
 
 func main():
-    print(string(shapes.area(3.0, 4.0)))
-    print(string(blocks.volume(2.0)))
+    print(str(shapes.area(3.0, 4.0)))
+    print(str(blocks.volume(2.0)))
 ```
 
 ```output
@@ -488,18 +488,18 @@ version: 0.3.0
 import brushes
 import util
 
-func area(r: brushes.Rect) -> long:
+func area(r: brushes.Rect) -> i64:
     return util.scale(r.width * r.height)
 ```
 
 ```luce module file=.luce/packages/paint-0.3.0/brushes.luc
 struct Rect:
-    width: long
-    height: long
+    width: i64
+    height: i64
 ```
 
 ```luce module file=.luce/packages/paint-0.3.0/util.luc
-func scale(v: long) -> long:
+func scale(v: i64) -> i64:
     return v * 10
 ```
 
@@ -509,7 +509,7 @@ import paint.brushes
 
 func main():
     let r = brushes.Rect(width = 2, height = 3)
-    print("area " + string(paint.area(r)))
+    print("area " + str(paint.area(r)))
 ```
 
 ```output
@@ -556,7 +556,7 @@ packages:
 ```luce module file=.luce/packages/tint-1.2.0/tint.luc
 import mixer
 
-func area(w: long, h: long) -> long:
+func area(w: i64, h: i64) -> i64:
     return mixer.mul(w, h)
 ```
 
@@ -569,7 +569,7 @@ packages:
 ```
 
 ```luce module file=.luce/packages/easel-0.4.1/easel.luc
-func escape() -> long:
+func escape() -> i64:
     return 27
 ```
 
@@ -579,7 +579,7 @@ version: 1.1.0
 ```
 
 ```luce module file=.luce/packages/mixer-1.1.0/mixer.luc
-func mul(a: long, b: long) -> long:
+func mul(a: i64, b: i64) -> i64:
     return a * b
 ```
 
@@ -587,7 +587,7 @@ func mul(a: long, b: long) -> long:
 import tint
 
 func main():
-    print(string(tint.area(2, 3)))
+    print(str(tint.area(2, 3)))
 ```
 
 ```output

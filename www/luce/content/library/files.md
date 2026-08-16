@@ -50,7 +50,7 @@ func main() -> !:
     try files.write("notes.txt", "one\ntwo\n")
     try files.append_lines("notes.txt", ["three"])
     let lines = try files.read_lines("notes.txt")
-    print(string(len(lines)))
+    print(str(len(lines)))
 
     try files.make_directory("archive")
     for entry in try files.entries("."):
@@ -99,10 +99,10 @@ import std.files
 import std.strings
 
 func main() -> !:
-    var bytes: list(byte) = [0, 255, 128]
+    var bytes: list[u8] = [0, 255, 128]
     try files.write_bytes("data.bin", bytes)
     let loaded = try files.read_bytes("data.bin")
-    print(string(len(loaded)))
+    print(str(len(loaded)))
     print(strings.from_bytes(loaded) else "(not text)")
     try files.delete("data.bin")
 ```

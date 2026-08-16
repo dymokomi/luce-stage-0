@@ -7,15 +7,15 @@ import termui
 import view as views
 
 struct Names:
-    names: list(string)
+    names: list[str]
 
-    func at(index: long) -> string:
+    func at(index: i64) -> str:
         return self.names[index]
 
-func names_of(count: long) -> Names:
-    var held = Names(names = new list(string))
+func names_of(count: i64) -> Names:
+    var held = Names(names = new list[str])
     for i in range(0, count):
-        held.names.append("file" + string(i))
+        held.names.append("file" + str(i))
     return held
 
 func test_moving_answers_where_it_landed_and_stops_at_the_ends():

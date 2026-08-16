@@ -487,14 +487,14 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
 /// `alias Id = long; Id(value)` behaves exactly like `long(value)`.
 pub fn lowerAliasConvert(self: *FunctionBuilder, call: ast.Call, target: Type) Error!?Typed {
     const produces: types.Builtin = switch (target) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .string => .string,
+        .byte => .u8,
+        .short => .i16,
+        .int => .i32,
+        .long => .i64,
+        .half => .f16,
+        .float => .f32,
+        .double => .f64,
+        .string => .str,
         else => unreachable, // the alias-call dispatcher admits only these
     };
     return lowerConvertAs(self, call, produces);
@@ -516,14 +516,14 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // that nobody wrote.  A literal has no type until it meets one
     // (docs/TYPES.md §1), and here it meets the constructor's.
     self.wanted = switch (produces) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .boolean, .string, .list, .map, .array, .builder, .file, .task => null,
+        .u8 => .byte,
+        .i16 => .short,
+        .i32 => .int,
+        .i64 => .long,
+        .f16 => .half,
+        .f32 => .float,
+        .f64 => .double,
+        .boolean, .str, .list, .map, .array, .builder, .file, .task => null,
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
@@ -532,7 +532,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // which is a different act from printing a number, and the one
     // an f-string hole performs for a reader who wrote none.
     if (value.value_type == .enumeration) {
-        if (produces == .string) return lowerEnumName(self, value, call.span);
+        if (produces == .str) return lowerEnumName(self, value, call.span);
         return lowerEnumToNumber(self, call, value, produces);
     }
     // `string(u)` is the member's **name**, by the enum mechanism
@@ -540,7 +540,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // formatted: that is a formatting protocol, which is a
     // different feature, refused here by being absent.
     if (value.value_type == .variant) {
-        if (produces == .string) return lowerVariantName(self, value, call.span);
+        if (produces == .str) return lowerVariantName(self, value, call.span);
         return failConvert(self, call, value, produces);
     }
     // `string(f)` is the function's **name** (docs/FUNCTIONS.md
@@ -550,7 +550,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // resolved to, not as a `.conversion`: the name is a
     // borrowless constant of the program, where conversion to
     // string means fresh bytes (the section comment above).
-    if (value.value_type == .function and produces == .string) {
+    if (value.value_type == .function and produces == .str) {
         return .{
             .node = try recorder.recordCallNode(
                 self,
@@ -564,7 +564,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
             .value_type = .string,
         };
     }
-    if (produces == .string) {
+    if (produces == .str) {
         switch (value.value_type) {
             // The identity: `string(s)` emits nothing and answers
             // the operand whole, node included — no call node, so
@@ -578,7 +578,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
                     try self.fail(
                         "luce.sema.convert",
                         call.span,
-                        "string() converts a number, a bool, a string, an enum, a union member, or a function value; a builder hands over its text with .build()",
+                        "str() converts a number, a bool, a str, an enum, a union member, or a function value; a builder hands over its text with .build()",
                         .{},
                     );
                     return null;
@@ -611,14 +611,14 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     // widen without an operator to hang it on, so a redundant one
     // is not a mistake to report.
     const target: Type = switch (produces) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .u8 => .byte,
+        .i16 => .short,
+        .i32 => .int,
+        .i64 => .long,
+        .f16 => .half,
+        .f32 => .float,
+        .f64 => .double,
+        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
@@ -654,14 +654,14 @@ fn lowerEnumToNumber(
     produces: types.Builtin,
 ) Error!?Typed {
     const target: Type = switch (produces) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
+        .u8 => .byte,
+        .i16 => .short,
+        .i32 => .int,
+        .i64 => .long,
+        .f16 => .half,
+        .f32 => .float,
+        .f64 => .double,
+        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
     };
     return .{
         // The same node shape as the numeric constructors: one
@@ -762,8 +762,8 @@ fn failConvert(
     // types now and there will be seven (docs/TYPES.md §11), and
     // a message that enumerates them is a message that goes stale
     // every time the ladder grows a rung.
-    const takes: []const u8 = if (produces == .string)
-        "a number, a bool, a string, an enum, a union member, or a function value"
+    const takes: []const u8 = if (produces == .str)
+        "a number, a bool, a str, an enum, a union member, or a function value"
     else
         "a number";
     try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
@@ -917,7 +917,7 @@ pub fn lowerIntrinsic(
             // — so there is nothing to buy by widening and a
             // diagnostic to pay for it with.
             if (!arguments[0].value_type.isFloating())
-                return failIntrinsic(self, call, "this builtin takes a float or a double");
+                return failIntrinsic(self, call, "this builtin takes f32 or f64");
             // A `half` arrives promoted to a `float`, so there is
             // no binary16 square root to ask any target for (D5).
             arguments[0] = try self.promoted(arguments[0]);
@@ -948,18 +948,18 @@ pub fn lowerIntrinsic(
                     try self.fail(
                         "luce.sema.type",
                         call.span,
-                        "len takes a string, list, map, array, or builder; {s} is a resource, not a container, and has no length",
+                        "len takes a str, list, map, array, or builder; {s} is a resource, not a container, and has no length",
                         .{try self.analyzer.typeName(arguments[0].value_type)},
                     );
                     return .failed;
                 }
-                return failIntrinsic(self, call, "len takes a string, list, map, array, or builder");
+                return failIntrinsic(self, call, "len takes a str, list, map, array, or builder");
             }
             result = .long;
         },
         .parse_int, .parse_float => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "this builtin parses a string");
+                return failIntrinsic(self, call, "this builtin parses a str");
             // "Not a number" is the same reason every time and the
             // name already implies it, so the answer is absence
             // rather than a trap (docs/FAILURE.md).
@@ -973,17 +973,17 @@ pub fn lowerIntrinsic(
         .parse_string => {
             const buffer = try resolve.internHeapType(self.analyzer, .{ .list = .byte });
             if (!arguments[0].value_type.eql(buffer))
-                return failIntrinsic(self, call, "parse_string takes a list(byte)");
+                return failIntrinsic(self, call, "parse_string takes a list[u8]");
             result = .{ .optional = .string };
         },
         .chr_code => {
             if (!try self.widensInto(&arguments[0], .long))
-                return failIntrinsic(self, call, "chr takes a long codepoint");
+                return failIntrinsic(self, call, "chr takes an i64 codepoint");
             result = .string;
         },
         .ord_text => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "ord takes a string");
+                return failIntrinsic(self, call, "ord takes a str");
             result = .long;
         },
         // Lowered from syntax or method calls, never from bare names.
@@ -1042,34 +1042,34 @@ pub fn lowerIntrinsic(
         },
         .trap_message => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "trap takes a string message");
+                return failIntrinsic(self, call, "trap takes a str message");
             result = .none;
         },
         .raise_error => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "error takes a string message");
+                return failIntrinsic(self, call, "error takes a str message");
             result = .none;
         },
         // Emitted by `try` and `catch`; never written by a reader.
         .errored, .error_message, .forget => unreachable,
         .print, .term_write => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "this builtin takes a string");
+                return failIntrinsic(self, call, "this builtin takes a str");
             result = .none;
         },
         .shell_run => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "shell_run takes a string command");
+                return failIntrinsic(self, call, "shell_run takes a str command");
             result = .string;
         },
         .file_read => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "file_read takes a string path");
+                return failIntrinsic(self, call, "file_read takes a str path");
             result = .string;
         },
         .file_write => {
             if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                return failIntrinsic(self, call, "file_write takes (path string, content string)");
+                return failIntrinsic(self, call, "file_write takes (path str, content str)");
             // The world decided, so a failed write is news and not
             // a bool nobody looked at (docs/FAILURE.md).  It
             // answers nothing and every call site says which of
@@ -1083,7 +1083,7 @@ pub fn lowerIntrinsic(
         // (docs/FILESYSTEM.md D11).
         .path_kind => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "path_kind takes a string path");
+                return failIntrinsic(self, call, "path_kind takes a str path");
             result = .long;
         },
         .gpu_backend => {
@@ -1093,7 +1093,7 @@ pub fn lowerIntrinsic(
             if (arguments[0].value_type != .string or
                 !try self.widensInto(&arguments[1], .long) or
                 !try self.widensInto(&arguments[2], .long))
-                return failIntrinsic(self, call, "ui_window_open takes (title string, width long, height long)");
+                return failIntrinsic(self, call, "ui_window_open takes (title str, width i64, height i64)");
             result = try resolve.internHeapType(self.analyzer, .file);
         },
         .ui_window_surface => {
@@ -1106,7 +1106,7 @@ pub fn lowerIntrinsic(
             const file_type = try resolve.internHeapType(self.analyzer, .file);
             if (!arguments[0].value_type.eql(file_type) or
                 !try self.widensInto(&arguments[1], .long))
-                return failIntrinsic(self, call, "gpu_surface_size takes (surface file, axis long)");
+                return failIntrinsic(self, call, "gpu_surface_size takes (surface file, axis i64)");
             result = .long;
         },
         .gpu_surface_clear => {
@@ -1116,7 +1116,7 @@ pub fn lowerIntrinsic(
                 !try self.widensInto(&arguments[2], .long) or
                 !try self.widensInto(&arguments[3], .long) or
                 !try self.widensInto(&arguments[4], .long))
-                return failIntrinsic(self, call, "gpu_surface_clear takes (surface file, red long, green long, blue long, alpha long)");
+                return failIntrinsic(self, call, "gpu_surface_clear takes (surface file, red i64, green i64, blue i64, alpha i64)");
             result = .none;
         },
         .gpu_surface_fill_rect => {
@@ -1125,7 +1125,7 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "gpu_surface_fill_rect takes a surface first");
             inline for (1..9) |index| {
                 if (!try self.widensInto(&arguments[index], .long))
-                    return failIntrinsic(self, call, "gpu_surface_fill_rect takes long coordinates, dimensions, and colors");
+                    return failIntrinsic(self, call, "gpu_surface_fill_rect takes i64 coordinates, dimensions, and colors");
             }
             result = .none;
         },
@@ -1140,7 +1140,7 @@ pub fn lowerIntrinsic(
         },
         .term_event_data => {
             if (!try self.widensInto(&arguments[0], .long))
-                return failIntrinsic(self, call, "term_event_data takes a long field");
+                return failIntrinsic(self, call, "term_event_data takes an i64 field");
             result = .long;
         },
         .term_clear, .term_flush => {
@@ -1149,14 +1149,14 @@ pub fn lowerIntrinsic(
         .term_move => {
             if (!try self.widensInto(&arguments[0], .long) or
                 !try self.widensInto(&arguments[1], .long))
-                return failIntrinsic(self, call, "term_move takes (row long, column long)");
+                return failIntrinsic(self, call, "term_move takes (row i64, column i64)");
             result = .none;
         },
         .term_style => {
             if (!try self.widensInto(&arguments[0], .long) or
                 !try self.widensInto(&arguments[1], .long) or
                 arguments[2].value_type != .boolean)
-                return failIntrinsic(self, call, "term_style takes (foreground long, background long, bold bool)");
+                return failIntrinsic(self, call, "term_style takes (foreground i64, background i64, bold bool)");
             result = .none;
         },
         .key_read => {
@@ -1173,7 +1173,7 @@ pub fn lowerIntrinsic(
         },
         .read_line => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "read_line takes a string prompt");
+                return failIntrinsic(self, call, "read_line takes a str prompt");
             // End of input is absence, not failure: `string?`, and
             // `read_line("> ") else ""` is the whole handling
             // (docs/FAILURE.md).
@@ -1181,7 +1181,7 @@ pub fn lowerIntrinsic(
         },
         .print_error => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "print_error takes a string");
+                return failIntrinsic(self, call, "print_error takes a str");
             result = .none;
         },
         // Two clocks, and the name is what tells them apart: `clock_ms`
@@ -1200,27 +1200,27 @@ pub fn lowerIntrinsic(
         },
         .sleep_ms => {
             if (!try self.widensInto(&arguments[0], .long))
-                return failIntrinsic(self, call, "sleep_ms takes a long of milliseconds");
+                return failIntrinsic(self, call, "sleep_ms takes an i64 of milliseconds");
             result = .none;
         },
         .exit_program => {
             if (!try self.widensInto(&arguments[0], .long))
-                return failIntrinsic(self, call, "exit takes a long status");
+                return failIntrinsic(self, call, "exit takes an i64 status");
             result = .none;
         },
         .env_get => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "env takes a string name");
+                return failIntrinsic(self, call, "env takes a str name");
             result = .{ .optional = .string };
         },
         .file_append => {
             if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                return failIntrinsic(self, call, "file_append takes (path string, content string)");
+                return failIntrinsic(self, call, "file_append takes (path str, content str)");
             result = .none;
         },
         .file_delete => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "file_delete takes a string path");
+                return failIntrinsic(self, call, "file_delete takes a str path");
             result = .none;
         },
         // Making a directory answers nothing for the reason a write
@@ -1229,17 +1229,17 @@ pub fn lowerIntrinsic(
         // `catch` it means (docs/FAILURE.md).
         .dir_create => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "dir_create takes a string path");
+                return failIntrinsic(self, call, "dir_create takes a str path");
             result = .none;
         },
         .file_rename => {
             if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                return failIntrinsic(self, call, "file_rename takes (from string, to string)");
+                return failIntrinsic(self, call, "file_rename takes (from str, to str)");
             result = .none;
         },
         .dir_list => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "dir_list takes a string path");
+                return failIntrinsic(self, call, "dir_list takes a str path");
             result = try resolve.internHeapType(self.analyzer, .{ .list = .string });
         },
         // The byte channel's door (docs/BYTES.md R5).  The mode is
@@ -1248,9 +1248,9 @@ pub fn lowerIntrinsic(
         // slot speaks, and the library is where it gets a name.
         .file_open => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "file_open takes (path string, mode long)");
+                return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
             if (!try self.widensInto(&arguments[1], .long))
-                return failIntrinsic(self, call, "file_open takes (path string, mode long)");
+                return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
             result = try resolve.internHeapType(self.analyzer, .file);
         },
         // Reached through `f.read(buffer)` and its two siblings,

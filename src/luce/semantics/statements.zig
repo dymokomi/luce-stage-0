@@ -1207,7 +1207,7 @@ fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
     // an `int` reaches a `long` loop by widening, and the counted
     // loop the IR opens is a `long` one (docs/TYPES.md §2).
     if (!try self.widensInto(&bounds[0], .long) or !try self.widensInto(&bounds[1], .long)) {
-        try self.fail("luce.sema.type", loop.span, "range bounds must be long", .{});
+        try self.fail("luce.sema.type", loop.span, "range bounds must be i64", .{});
         return;
     }
     const start = bounds[0];

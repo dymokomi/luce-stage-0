@@ -1,9 +1,9 @@
-# A Brainfuck interpreter in Luce: the byte tape is a real array,
+# A Brainfuck interpreter in Luce: the u8 tape is a real array,
 # output accumulates in a builder, and chr() maps cell values to text.
 #
 #   loom luce examples/bf/bf.luc
 
-func matching_forward(code: string, pc: long) -> long:
+func matching_forward(code: str, pc: i64) -> i64:
     var depth = 1
     var at = pc
     while depth > 0:
@@ -14,7 +14,7 @@ func matching_forward(code: string, pc: long) -> long:
             depth = depth - 1
     return at
 
-func matching_backward(code: string, pc: long) -> long:
+func matching_backward(code: str, pc: i64) -> i64:
     var depth = 1
     var at = pc
     while depth > 0:
@@ -25,14 +25,14 @@ func matching_backward(code: string, pc: long) -> long:
             depth = depth - 1
     return at
 
-func interpret(code: string, cells: long) -> string:
-    # A Brainfuck cell *is* a byte, so the tape says so: one byte an
+func interpret(code: str, cells: i64) -> str:
+    # A Brainfuck cell *is* a u8, so the tape says so: one u8 an
     # element instead of eight, and the type now carries the range the
     # `% 256` below used to be the only evidence of.
-    var tape = new array(byte, cells)
+    var tape = new array[u8](cells)
     var pointer = 0
-    var pc: long = 0
-    var out = new builder()
+    var pc: i64 = 0
+    var out = new builder
     while pc < len(code):
         let op = code.byte_at(pc)
         if op == 62:
@@ -42,11 +42,11 @@ func interpret(code: string, cells: long) -> string:
         elif op == 43:
             # `%` floors, so a cell stepping below zero wraps to 255
             # rather than going negative — which is what leaves the
-            # arithmetic (an `int`, because a `byte` never does any)
-            # inside the range `byte()` will accept.
-            tape[pointer] = byte((tape[pointer] + 1) % 256)
+            # arithmetic (an `i32`, because a `u8` never does any)
+            # inside the range `u8()` will accept.
+            tape[pointer] = u8((tape[pointer] + 1) % 256)
         elif op == 45:
-            tape[pointer] = byte((tape[pointer] - 1) % 256)
+            tape[pointer] = u8((tape[pointer] - 1) % 256)
         elif op == 46:
             out.append(chr(tape[pointer]))
         elif op == 91:

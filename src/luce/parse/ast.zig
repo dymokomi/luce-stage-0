@@ -14,8 +14,8 @@ const Span = source_mod.Span;
 
 /// A type as written in source; resolution happens in analysis.
 /// Scalar and struct types are a bare name; composite types carry
-/// arguments (`list(long)`, `map(string, long)`), and an array's shape
-/// is spelled with `_` wildcards (`array(long, _, _)`), counted here.
+/// arguments (`list[i64]`, `map[str, i64]`), and an array's rank is
+/// spelled with `_` wildcards (`array[i64, _, _]`), counted here.
 /// A trailing `?` makes it optional; there is no second level, so one
 /// flag says all there is to say.
 pub const TypeName = struct {

@@ -23,10 +23,10 @@ remainder that pairs with it.
 
 ```luce run
 func main():
-    print(string(1 / 2))
-    print(string(7 // 2) + " " + string(7 % 2))
-    print(string(-7 // 3) + " " + string(-7 % 3))
-    print(string(-1 % 256))
+    print(str(1 / 2))
+    print(str(7 // 2) + " " + str(7 % 2))
+    print(str(-7 // 3) + " " + str(-7 % 3))
+    print(str(-1 % 256))
 ```
 
 ```output
@@ -42,10 +42,10 @@ value.
 
 ```luce trap
 func main():
-    var n: long = 9223372036854775807
+    var n: i64 = 9223372036854775807
     print("about to add one")
     n += 1
-    print(string(n))
+    print(str(n))
 ```
 
 ```output
@@ -66,10 +66,10 @@ exact integer value being compared.
 
 ```luce run
 func main():
-    let after: long = 9007199254740993
-    let rounded: double = 9007199254740992.0
-    print(string(1 < 1.5))
-    print(string(after == rounded))
+    let after: i64 = 9007199254740993
+    let rounded: f64 = 9007199254740992.0
+    print(str(1 < 1.5))
+    print(str(after == rounded))
 ```
 
 ```output
@@ -85,7 +85,7 @@ func main():
     let a = 1
     let b = 2
     let c = 3
-    print(string(a < b < c))
+    print(str(a < b < c))
 ```
 
 ```output
@@ -101,12 +101,12 @@ main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
 the right operand is evaluated only when it can affect the result.
 
 ```luce run
-func valid_port(value: long) -> bool:
+func valid_port(value: i64) -> bool:
     return value >= 1 and value <= 65535
 
 func main():
-    print(string(valid_port(8080)))
-    print(string(not valid_port(70000)))
+    print(str(valid_port(8080)))
+    print(str(not valid_port(70000)))
 ```
 
 ```output
@@ -125,7 +125,7 @@ func main():
     var total = 4
     total *= 3
 
-    var counts = new map(string, long)
+    var counts = new map[str, i64]
     counts["pear"] = 1
     counts["pear"] += 1
     print(f"{total} {counts["pear"]}")

@@ -916,7 +916,7 @@ test "the reference keeps function value and lambda syntax visible" {
 
     const types = try describedCode(repository, "guide/reference/types.md");
     defer gpa.free(types);
-    try std.testing.expect(std.mem.indexOf(u8, types, "func(long, long) -> bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, types, "func(i64, i64) -> bool") != null);
 
     const expressions = try describedCode(repository, "guide/reference/expressions.md");
     defer gpa.free(expressions);

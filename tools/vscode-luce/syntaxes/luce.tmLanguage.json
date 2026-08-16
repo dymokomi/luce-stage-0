@@ -451,7 +451,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|byte|short|int|long|half|float|double|string|list|map|array|builder|file|task|None)\\b"
+          "match": "\\b(?:bool|u8|i16|i32|i64|f16|f32|f64|str|list|map|array|builder|file|task|None)\\b"
         },
         {
           "name": "entity.name.type.luce",

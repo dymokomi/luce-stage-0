@@ -9,19 +9,19 @@ const agree = @import("agree.zig");
 test "a conforming struct is passed by interface and dispatches its method" {
     try agree.prints(
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: string
-        \\    func render(value: long) -> long:
+        \\    label: str
+        \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
-        \\func draw(element: UIElement, value: long) -> long:
+        \\func draw(element: UIElement, value: i64) -> i64:
         \\    return element.render(value)
         \\
         \\func main():
         \\    let button = UIButton(label = "ok")
-        \\    print(string(draw(button, 41)))
+        \\    print(str(draw(button, 41)))
         \\
     , "42\n");
 }
@@ -29,31 +29,31 @@ test "a conforming struct is passed by interface and dispatches its method" {
 test "lists and maps store different concrete implementations behind one interface" {
     try agree.prints(
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct AddOne: UIElement:
-        \\    label: string
-        \\    func render(value: long) -> long:
+        \\    label: str
+        \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
         \\struct AddTwo: UIElement:
-        \\    label: string
-        \\    func render(value: long) -> long:
+        \\    label: str
+        \\    func render(value: i64) -> i64:
         \\        return value + 2
         \\
         \\func main():
         \\    let one = AddOne(label = "one")
         \\    let two = AddTwo(label = "two")
-        \\    var items = new list(UIElement)
+        \\    var items = new list[UIElement]
         \\    items.append(one)
         \\    items.append(two)
-        \\    var table = new map(string, UIElement)
+        \\    var table = new map[str, UIElement]
         \\    table["one"] = one
         \\    table["two"] = two
         \\    let from_list = items[1]
         \\    let from_map = table.get("one") else two
-        \\    print(string(from_list.render(40)))
-        \\    print(string(from_map.render(40)))
+        \\    print(str(from_list.render(40)))
+        \\    print(str(from_map.render(40)))
         \\
     , "42\n41\n");
 }
@@ -61,19 +61,19 @@ test "lists and maps store different concrete implementations behind one interfa
 test "a non-fallible witness can satisfy a fallible interface requirement" {
     try agree.prints(
         \\interface Reader:
-        \\    func read(value: long) -> long!
+        \\    func read(value: i64) -> i64!
         \\
         \\struct Buffer: Reader:
-        \\    marker: long
-        \\    func read(value: long) -> long:
+        \\    marker: i64
+        \\    func read(value: i64) -> i64:
         \\        return value + 1
         \\
-        \\func use(reader: Reader) -> long!:
+        \\func use(reader: Reader) -> i64!:
         \\    return try reader.read(41)
         \\
         \\func main() -> !:
         \\    let buffer = Buffer(marker = 0)
-        \\    print(string(try use(buffer)))
+        \\    print(str(try use(buffer)))
         \\
     , "42\n");
 }
@@ -81,20 +81,20 @@ test "a non-fallible witness can satisfy a fallible interface requirement" {
 test "a fallible multi-value interface method can be received with try" {
     try agree.prints(
         \\interface Bounds:
-        \\    func limits(value: long) -> (long, long)!
+        \\    func limits(value: i64) -> (i64, i64)!
         \\
         \\struct Window: Bounds:
-        \\    width: long
-        \\    func limits(value: long) -> (long, long):
+        \\    width: i64
+        \\    func limits(value: i64) -> (i64, i64):
         \\        return value, value + self.width
         \\
-        \\func total(item: Bounds) -> long!:
+        \\func total(item: Bounds) -> i64!:
         \\    let low, high = try item.limits(10)
         \\    return low + high
         \\
         \\func main() -> !:
         \\    let window = Window(width = 7)
-        \\    print(string(try total(window)))
+        \\    print(str(try total(window)))
         \\
     , "27\n");
 }
@@ -102,11 +102,11 @@ test "a fallible multi-value interface method can be received with try" {
 test "a multi-value interface answer can transfer an owned result field" {
     try agree.ok(
         \\interface Producer:
-        \\    func produce(seed: long) -> (list(long), long)
+        \\    func produce(seed: i64) -> (list[i64], i64)
         \\
         \\struct Source: Producer:
-        \\    marker: long
-        \\    func produce(seed: long) -> (list(long), long):
+        \\    marker: i64
+        \\    func produce(seed: i64) -> (list[i64], i64):
         \\        var values = [seed, seed + 1]
         \\        return values, len(values)
         \\
@@ -122,19 +122,19 @@ test "a multi-value interface answer can transfer an owned result field" {
 test "a multi-method interface dispatches every contract slot" {
     try agree.prints(
         \\interface Drawable:
-        \\    func render(value: long) -> long
-        \\    func label() -> string
+        \\    func render(value: i64) -> i64
+        \\    func label() -> str
         \\
         \\struct Button: Drawable:
-        \\    caption: string
-        \\    offset: long
-        \\    func render(value: long) -> long:
+        \\    caption: str
+        \\    offset: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + self.offset
-        \\    func label() -> string:
+        \\    func label() -> str:
         \\        return self.caption
         \\
-        \\func describe(item: Drawable) -> string:
-        \\    return item.label() + ":" + string(item.render(value = 40))
+        \\func describe(item: Drawable) -> str:
+        \\    return item.label() + ":" + str(item.render(value = 40))
         \\
         \\func main():
         \\    let button = Button(caption = "ok", offset = 2)
@@ -149,30 +149,30 @@ test "a multi-method interface dispatches every contract slot" {
 test "an interface conversion before a nested carrying argument preserves local order" {
     try agree.prints(
         \\interface Drawable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: long
-        \\    func render(value: long) -> long:
+        \\    offset: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
         \\union Outcome:
-        \\    okay(value: long)
-        \\    failed(message: string)
+        \\    okay(value: i64)
+        \\    failed(message: str)
         \\
-        \\func read(answer: Outcome) -> long:
+        \\func read(answer: Outcome) -> i64:
         \\    match answer:
         \\        okay(value):
         \\            return value
         \\        failed(message):
         \\            return len(message)
         \\
-        \\func draw(item: Drawable, value: long) -> long:
+        \\func draw(item: Drawable, value: i64) -> i64:
         \\    return item.render(value)
         \\
         \\func main():
         \\    let button = Button(offset = 1)
-        \\    print(string(draw(button, read(Outcome.okay(value = 41)))))
+        \\    print(str(draw(button, read(Outcome.okay(value = 41)))))
         \\
     , "42\n");
 }
@@ -180,29 +180,29 @@ test "an interface conversion before a nested carrying argument preserves local 
 test "a multi-value method does not invalidate a later method with a carrying argument" {
     try agree.prints(
         \\struct Grid:
-        \\    cells: list(long)
-        \\    func area() -> long:
+        \\    cells: list[i64]
+        \\    func area() -> i64:
         \\        return len(self.cells)
         \\
         \\interface View:
-        \\    func measure(size: long) -> (long, long)
-        \\    func draw(into: Grid) -> long
+        \\    func measure(size: i64) -> (i64, i64)
+        \\    func draw(into: Grid) -> i64
         \\
         \\struct Label: View:
-        \\    width: long
-        \\    func measure(size: long) -> (long, long):
+        \\    width: i64
+        \\    func measure(size: i64) -> (i64, i64):
         \\        return size, self.width
-        \\    func draw(into: Grid) -> long:
+        \\    func draw(into: Grid) -> i64:
         \\        return len(into.cells) + self.width
         \\
-        \\func render(item: View, grid: Grid) -> long:
+        \\func render(item: View, grid: Grid) -> i64:
         \\    let rows, columns = item.measure(grid.area())
         \\    return item.draw(grid) + rows + columns
         \\
         \\func main():
         \\    let grid = Grid(cells = [1, 2, 3])
         \\    let label: View = Label(width = 4)
-        \\    print(string(render(label, grid)))
+        \\    print(str(render(label, grid)))
         \\
     , "14\n");
 }
@@ -210,24 +210,24 @@ test "a multi-value method does not invalidate a later method with a carrying ar
 test "a multi-value interface method uses the ordinary return shape" {
     try agree.prints(
         \\interface Measured:
-        \\    func span(value: long) -> (long, long)
+        \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    width: long
-        \\    func span(value: long) -> (long, long):
+        \\    width: i64
+        \\    func span(value: i64) -> (i64, i64):
         \\        return value, value + self.width
         \\
-        \\func total(item: Measured) -> long:
+        \\func total(item: Measured) -> i64:
         \\    let low, high = item.span(10)
         \\    return low + high
         \\
         \\func main():
         \\    let measurement = Range(width = 7)
-        \\    var low: long = 0
-        \\    var high: long = 0
+        \\    var low: i64 = 0
+        \\    var high: i64 = 0
         \\    low, high = measurement.span(10)
-        \\    print(string(total(measurement)))
-        \\    print(string(low + high))
+        \\    print(str(total(measurement)))
+        \\    print(str(low + high))
         \\
     , "27\n27\n");
 }
@@ -235,29 +235,29 @@ test "a multi-value interface method uses the ordinary return shape" {
 test "one struct may satisfy multiple interfaces" {
     try agree.prints(
         \\interface Named:
-        \\    func name() -> string
+        \\    func name() -> str
         \\
         \\interface Sized:
-        \\    func size() -> long
+        \\    func size() -> i64
         \\
         \\struct Item: Named, Sized:
-        \\    title: string
-        \\    amount: long
-        \\    func name() -> string:
+        \\    title: str
+        \\    amount: i64
+        \\    func name() -> str:
         \\        return self.title
-        \\    func size() -> long:
+        \\    func size() -> i64:
         \\        return self.amount
         \\
-        \\func show_name(item: Named) -> string:
+        \\func show_name(item: Named) -> str:
         \\    return item.name()
         \\
-        \\func show_size(item: Sized) -> long:
+        \\func show_size(item: Sized) -> i64:
         \\    return item.size()
         \\
         \\func main():
         \\    let item = Item(title = "box", amount = 3)
         \\    print(show_name(item))
-        \\    print(string(show_size(item)))
+        \\    print(str(show_size(item)))
         \\
     , "box\n3\n");
 }
@@ -265,12 +265,12 @@ test "one struct may satisfy multiple interfaces" {
 test "an interface method may answer no value and still dispatch" {
     try agree.prints(
         \\interface Sink:
-        \\    func write(value: long)
+        \\    func write(value: i64)
         \\
         \\struct Recorder: Sink:
-        \\    marker: long
-        \\    func write(value: long):
-        \\        print(string(value + self.marker))
+        \\    marker: i64
+        \\    func write(value: i64):
+        \\        print(str(value + self.marker))
         \\
         \\func main():
         \\    let sink: Sink = Recorder(marker = 2)
@@ -282,11 +282,11 @@ test "an interface method may answer no value and still dispatch" {
 test "arrays and struct fields store interface values" {
     try agree.prints(
         \\interface Drawable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: long
-        \\    func render(value: long) -> long:
+        \\    offset: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
         \\struct Panel:
@@ -296,11 +296,11 @@ test "arrays and struct fields store interface values" {
         \\    let one = Button(offset = 1)
         \\    let two = Button(offset = 2)
         \\    let panel = Panel(element = one)
-        \\    var items = new array(Drawable, 2)
+        \\    var items = new array[Drawable](2)
         \\    items[0] = one
         \\    items[1] = two
-        \\    print(string(panel.element.render(40)))
-        \\    print(string(items[1].render(40)))
+        \\    print(str(panel.element.render(40)))
+        \\    print(str(items[1].render(40)))
         \\
     , "41\n42\n");
 }
@@ -308,11 +308,11 @@ test "arrays and struct fields store interface values" {
 test "interface values can be returned and narrowed through an optional" {
     try agree.prints(
         \\interface Drawable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: long
-        \\    func render(value: long) -> long:
+        \\    offset: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
         \\func make() -> Drawable:
@@ -327,7 +327,7 @@ test "interface values can be returned and narrowed through an optional" {
         \\func main():
         \\    let maybe = optional_item(true)
         \\    if maybe != none:
-        \\        print(string(maybe.render(40)))
+        \\        print(str(maybe.render(40)))
         \\
     , "42\n");
 }
@@ -335,19 +335,19 @@ test "interface values can be returned and narrowed through an optional" {
 test "interface methods take object arguments" {
     try agree.prints(
         \\interface Sink:
-        \\    func accept(value: list(long)) -> long
+        \\    func accept(value: list[i64]) -> i64
         \\
         \\struct Collector: Sink:
-        \\    marker: long
-        \\    func accept(value: list(long)) -> long:
+        \\    marker: i64
+        \\    func accept(value: list[i64]) -> i64:
         \\        return len(value)
         \\
         \\func main():
         \\    let sink = Collector(marker = 0)
-        \\    var values = new list(long)
+        \\    var values = new list[i64]
         \\    values.append(1)
         \\    values.append(2)
-        \\    print(string(sink.accept(values)))
+        \\    print(str(sink.accept(values)))
         \\
     , "2\n");
 }
@@ -355,18 +355,18 @@ test "interface methods take object arguments" {
 test "a named carrying receiver can live behind an interface while its owner lives" {
     try agree.prints(
         \\interface Sized:
-        \\    func size() -> long
+        \\    func size() -> i64
         \\
         \\struct Box: Sized:
-        \\    values: list(long)
-        \\    func size() -> long:
+        \\    values: list[i64]
+        \\    func size() -> i64:
         \\        return len(self.values)
         \\
         \\func main():
         \\    var box = Box(values = [1, 2, 3])
-        \\    var views = new list(Sized)
+        \\    var views = new list[Sized]
         \\    views.append(box)
-        \\    print(string(views[0].size()))
+        \\    print(str(views[0].size()))
         \\
     , "3\n");
 }

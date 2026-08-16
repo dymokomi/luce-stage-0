@@ -115,7 +115,7 @@ Functions can call themselves. A recursion limit turns runaway recursion
 into a reported trap instead of an uncontrolled native-stack failure.
 
 ```luce run
-func factorial(n: long) -> long:
+func factorial(n: i64) -> i64:
     if n <= 1:
         return 1
     return n * factorial(n - 1)

@@ -1,8 +1,8 @@
 # The text buffer and the pure arithmetic over it.
 #
 # Everything here is pure — no host, no terminal, no editing state —
-# so it is the half of the editor a test drives directly.  A cursor is
-# a **byte** offset into UTF-8 content; how wide a string *draws* is
+# so it is the f16 of the editor a test drives directly.  A cursor is
+# a **u8** offset into UTF-8 content; how wide a str *draws* is
 # `strings.width`, a display question this file never asks.  The
 # functions move a cursor between boundaries, find line starts and
 # columns, and splice or erase text, each answering a value the caller
@@ -15,19 +15,19 @@
 # one's fields can be cached and restored (OWNERSHIP.md S22 forbids
 # editing a carrying element through its index).
 struct Buffer:
-    path: string = ""
-    content: string = ""
-    message: string = ""
-    cursor: long = 0
-    scroll: long = 0
+    path: str = ""
+    content: str = ""
+    message: str = ""
+    cursor: i64 = 0
+    scroll: i64 = 0
     dirty: bool = false
 
 # --- cursor motion over UTF-8 boundaries -----------------------------
 
-func continuation(byte: byte) -> bool:
-    return byte >= 128 and byte < 192
+func continuation(code: u8) -> bool:
+    return code >= 128 and code < 192
 
-func previous_boundary(value: string, cursor: long) -> long:
+func previous_boundary(value: str, cursor: i64) -> i64:
     if cursor <= 0:
         return 0
     var at = cursor - 1
@@ -35,7 +35,7 @@ func previous_boundary(value: string, cursor: long) -> long:
         at = at - 1
     return at
 
-func next_boundary(value: string, cursor: long) -> long:
+func next_boundary(value: str, cursor: i64) -> i64:
     if cursor >= len(value):
         return len(value)
     var at = cursor + 1
@@ -45,29 +45,29 @@ func next_boundary(value: string, cursor: long) -> long:
 
 # --- lines and columns -----------------------------------------------
 
-func line_start(value: string, cursor: long) -> long:
+func line_start(value: str, cursor: i64) -> i64:
     var at = cursor
     while at > 0 and value.byte_at(at - 1) != 10:
         at = at - 1
     return at
 
-func line_end(value: string, cursor: long) -> long:
+func line_end(value: str, cursor: i64) -> i64:
     var at = cursor
     while at < len(value) and value.byte_at(at) != 10:
         at = at + 1
     return at
 
-func line_of(value: string, cursor: long) -> long:
+func line_of(value: str, cursor: i64) -> i64:
     var line = 0
     for at in range(0, cursor):
         if value.byte_at(at) == 10:
             line = line + 1
     return line
 
-func count_lines(value: string) -> long:
+func count_lines(value: str) -> i64:
     return line_of(value, len(value)) + 1
 
-func column_of(value: string, cursor: long) -> long:
+func column_of(value: str, cursor: i64) -> i64:
     var at = line_start(value, cursor)
     var column = 0
     while at < cursor:
@@ -75,8 +75,8 @@ func column_of(value: string, cursor: long) -> long:
         column = column + 1
     return column
 
-# The byte offset where line `wanted` begins.
-func line_at(value: string, wanted: long) -> long:
+# The u8 offset where line `wanted` begins.
+func line_at(value: str, wanted: i64) -> i64:
     var at = 0
     var line = 0
     while line < wanted and at < len(value):
@@ -85,8 +85,8 @@ func line_at(value: string, wanted: long) -> long:
         at = at + 1
     return at
 
-# The byte offset at display `column` in the line beginning at `start`.
-func at_column(value: string, start: long, column: long) -> long:
+# The u8 offset at display `column` in the line beginning at `start`.
+func at_column(value: str, start: i64, column: i64) -> i64:
     var at = start
     var current = 0
     let finish = line_end(value, start)
@@ -99,12 +99,12 @@ func at_column(value: string, start: long, column: long) -> long:
 
 # The leading whitespace of the line at the cursor, borrowed from
 # `value` and safe to use while the caller decides the next line.
-func indentation(value: string, cursor: long) -> string:
+func indentation(value: str, cursor: i64) -> str:
     let start = line_start(value, cursor)
     var at = start
     while at < cursor:
-        let byte = value.byte_at(at)
-        if byte != 32 and byte != 9:
+        let code = value.byte_at(at)
+        if code != 32 and code != 9:
             break
         at = at + 1
     return value[start:at]
@@ -112,39 +112,39 @@ func indentation(value: string, cursor: long) -> string:
 # Whether the code before the cursor opens an indented block.  A small
 # lexical scan is enough: comments and quoted strings are not layout,
 # but a colon before a trailing comment is.
-func opens_block(value: string, cursor: long) -> bool:
+func opens_block(value: str, cursor: i64) -> bool:
     let start = line_start(value, cursor)
     var at = start
     var quoted = false
     var escaped = false
-    var last: byte = 0
+    var last: u8 = 0
     while at < cursor:
-        let byte = value.byte_at(at)
+        let code = value.byte_at(at)
         if quoted:
             if escaped:
                 escaped = false
-            elif byte == 92:
+            elif code == 92:
                 escaped = true
-            elif byte == 34:
+            elif code == 34:
                 quoted = false
-        elif byte == 35:
+        elif code == 35:
             break
-        elif byte == 34:
+        elif code == 34:
             quoted = true
-        elif byte != 32 and byte != 9:
-            last = byte
+        elif code != 32 and code != 9:
+            last = code
         at = at + 1
     return not quoted and last == 58
 
-# --- editing (string in, string out) ---------------------------------
+# --- editing (str in, str out) ---------------------------------
 
-func splice(value: string, cursor: long, extra: string) -> string:
+func splice(value: str, cursor: i64, extra: str) -> str:
     return value[0:cursor] + extra + value[cursor:len(value)]
 
-func erase_before(value: string, cursor: long) -> string:
+func erase_before(value: str, cursor: i64) -> str:
     let before = previous_boundary(value, cursor)
     return value[0:before] + value[cursor:len(value)]
 
-func erase_at(value: string, cursor: long) -> string:
+func erase_at(value: str, cursor: i64) -> str:
     let after = next_boundary(value, cursor)
     return value[0:cursor] + value[after:len(value)]

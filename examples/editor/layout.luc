@@ -22,13 +22,13 @@ struct Layout:
     output: termui.Rect
     status: termui.Rect
     # The line-number column, inside `text`.
-    gutter: long = 5
+    gutter: i64 = 5
 
     # `files_width` and `output_height` are the sizes a person has
     # dragged the dividers to; zero means "auto", the default a fresh
     # session opens with.  Either way the size is clamped here, in one
     # place, so a drag can never starve the gutter or the text.
-    static func of(area: termui.Rect, files_shown: bool, output_shown: bool, files_width: long = 0, output_height: long = 0) -> Layout:
+    static func of(area: termui.Rect, files_shown: bool, output_shown: bool, files_width: i64 = 0, output_height: i64 = 0) -> Layout:
         var status, body = area.split_bottom(1)
         # The output pane is taken from the full width first, so it spans
         # the whole bottom and the file pane's rule meets its top edge.
@@ -37,7 +37,7 @@ struct Layout:
         if output_shown:
             var height = output_height
             if height == 0:
-                height = clamp(long(floor(area.rows / 3)), 3, 8)
+                height = clamp(i64(floor(area.rows / 3)), 3, 8)
             # At least three rows for the pane, and always two left for
             # the text above it and its status bar.
             height = clamp(height, 3, max(area.rows - 3, 3))
@@ -48,7 +48,7 @@ struct Layout:
         if files_shown:
             var width = files_width
             if width == 0:
-                width = clamp(long(floor(area.columns / 4)), 18, 24)
+                width = clamp(i64(floor(area.columns / 4)), 18, 24)
             # A dragged pane may be wider or narrower than the default,
             # but the pane gives way rather than the text: a usable
             # minimum below, and above it the room the shared rule and
@@ -65,12 +65,12 @@ struct Layout:
 
     # The screen column the source starts at, which a mouse click is
     # measured from.
-    func text_start() -> long:
+    func text_start() -> i64:
         return self.text.column + self.gutter
 
     # The column the file pane's rule stands in, or 0 when hidden — the
     # junction the output pane's top edge has to meet.
-    func split_column() -> long:
+    func split_column() -> i64:
         if self.files.is_empty():
             return 0
         return self.files.columns - 1
@@ -103,7 +103,7 @@ struct Layout:
     # Which pane a click landed in, or `none` for the status bar.  The
     # file pane owns its columns for the whole height; the output pane
     # owns the rows below the text.
-    func pane_at(row: long, column: long) -> focus.Focus?:
+    func pane_at(row: i64, column: i64) -> focus.Focus?:
         if row < 0 or row >= self.status.row:
             return none
         if not self.files.is_empty() and column >= 0 and column < self.files.columns - 1:

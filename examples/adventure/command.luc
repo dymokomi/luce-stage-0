@@ -15,15 +15,15 @@ import std.strings
 
 # One parsed line: what to do, and what to do it to.
 struct Order:
-    verb: string
-    noun: string = ""
+    verb: str
+    noun: str = ""
 
     private:
         # What the player actually typed, case and all, kept for the
         # one message that has to quote it back.
-        typed: string = ""
+        typed: str = ""
 
-    static func make(verb: string, noun: string = "", typed: string = "") -> Order:
+    static func make(verb: str, noun: str = "", typed: str = "") -> Order:
         return Order(verb = verb, noun = noun, typed = typed)
 
     # Nothing was typed but the return key.
@@ -31,14 +31,14 @@ struct Order:
         return len(self.verb) == 0
 
     # The line as it was written, for "I do not know how to …".
-    func said() -> string:
+    func said() -> str:
         return self.typed
 
 # Read one line of typing.  The verb comes back canonical, the noun
 # comes back as the words that were left after the little words were
 # dropped, and a bare direction — "north", or just "n" — is the `go`
 # it plainly means.
-func parse(text: string) -> Order:
+func parse(text: str) -> Order:
     let line = text.trim()
     let words = line.lower().split("")
     if len(words) == 0:
@@ -48,7 +48,7 @@ func parse(text: string) -> Order:
     if is_direction(head):
         return Order.make(verb = "go", noun = head, typed = line)
 
-    var rest: list(string) = []
+    var rest: list[str] = []
     for i, word in words:
         if i > 0 and not is_noise(word):
             rest.append(word)
@@ -59,7 +59,7 @@ func parse(text: string) -> Order:
 
 # The verb a word means.  Anything unrecognized comes back as itself,
 # so the engine's "I do not know how to fly" quotes the player.
-private func canonical(word: string) -> string:
+private func canonical(word: str) -> str:
     if word == "n" or word == "north":
         return "north"
     if word == "s" or word == "south":
@@ -90,7 +90,7 @@ private func canonical(word: string) -> string:
         return "help"
     return word
 
-private func is_direction(word: string) -> bool:
+private func is_direction(word: str) -> bool:
     if word == "north" or word == "south" or word == "east" or word == "west":
         return true
     return word == "up" or word == "down"
@@ -98,7 +98,7 @@ private func is_direction(word: string) -> bool:
 # The words that carry no meaning here.  "take the brass key" and
 # "take brass key" are one order, and the noun the engine matches on
 # is the thing's own name either way.
-private func is_noise(word: string) -> bool:
+private func is_noise(word: str) -> bool:
     if word == "the" or word == "a" or word == "an":
         return true
     return word == "at" or word == "to" or word == "into" or word == "toward"

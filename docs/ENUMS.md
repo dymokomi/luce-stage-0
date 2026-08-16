@@ -14,7 +14,7 @@ enum Method:
 
 func main():
     let m = Method.deflated
-    print(string(m))          # deflated
+    print(str(m))          # deflated
 ```
 
 ## Declaring an enum
@@ -44,8 +44,8 @@ enum Mixed:
     e          # -1
 
 func main():
-    assert(int(Mixed.c) == 11)
-    assert(int(Mixed.e) == -1)
+    assert(i32(Mixed.c) == 11)
+    assert(i32(Mixed.e) == -1)
 ```
 
 Because a member value is an ordinary constant expression, it may be built
@@ -62,8 +62,8 @@ enum Flag:
     eight = base * 2
 
 func main():
-    assert(int(Flag.two) == 2)
-    assert(int(Flag.eight) == 8)
+    assert(i32(Flag.two) == 2)
+    assert(i32(Flag.eight) == 8)
 ```
 
 Two members may not share one value; a duplicate is refused by name. (An
@@ -112,9 +112,9 @@ enum Method:
 
 func main():
     let m = Method.deflated
-    assert(int(m) == 8)
-    assert(long(m) == 8)
-    assert(double(m) == 8.0)
+    assert(i32(m) == 8)
+    assert(i64(m) == 8)
+    assert(f64(m) == 8.0)
 ```
 
 A narrowing conversion whose member does not fit the destination traps
@@ -122,14 +122,14 @@ A narrowing conversion whose member does not fit the destination traps
 would:
 
 ```luce
-enum Big(long):
+enum Big(i64):
     small = 1
     huge = 300
 
 func main():
     var m = Big.small
     m = Big.huge
-    print(string(byte(m)))    # traps conversion_range before it prints
+    print(str(u8(m)))    # traps conversion_range before it prints
 ```
 
 **`string(m)` answers the member's name** — the name, not the number — and
@@ -137,15 +137,15 @@ an f-string hole follows, because a hole is a `string(...)` the reader did
 not write:
 
 ```luce
-enum Method(byte):
+enum Method(u8):
     stored = 0
     shrunk = 1
     deflated = 8
 
 func main():
-    print(string(Method.deflated))     # deflated
+    print(str(Method.deflated))     # deflated
     var m = Method.shrunk
-    print(f"{m} is {int(m)}")          # shrunk is 1
+    print(f"{m} is {i32(m)}")          # shrunk is 1
 ```
 
 **Number to enum is the fallible direction.** `Method(n)` answers
@@ -158,11 +158,11 @@ enum Method:
     stored = 0
     deflated = 8
 
-func read(raw: long) -> string:
+func read(raw: i64) -> str:
     let m = Method(raw)
     if m == none:
         return "unknown"
-    return string(m)
+    return str(m)
 
 func main():
     assert(read(0) == "stored")
@@ -175,7 +175,7 @@ number that would not fit the backing width, so a narrow enum asked about
 an out-of-range value is `none` rather than a trap:
 
 ```luce
-enum Small(byte):
+enum Small(u8):
     off = 0
     on = 200
 
@@ -196,7 +196,7 @@ by a sentence naming `int(m)`: an enum is a set of names, not a number
 line, so code that means the number says the number.
 
 ```luce
-enum Method(byte):
+enum Method(u8):
     stored = 0
     deflated = 8
 
@@ -218,7 +218,7 @@ enum Colour:
     green
     blue
 
-func name(c: Colour) -> string:
+func name(c: Colour) -> str:
     match c:
         red:
             return "red"
@@ -245,7 +245,7 @@ enum Colour:
     green
     blue
 
-func describe(c: Colour) -> string:
+func describe(c: Colour) -> str:
     match c:
         green:
             return "green"
@@ -279,7 +279,7 @@ enum Light:
             green:
                 self = Light.red
 
-    static func of(raw: long) -> Light:
+    static func of(raw: i64) -> Light:
         return Light(raw) else Light.red
 
 func main():
@@ -303,10 +303,10 @@ enum Method:
     deflated = 8
 
 const default_method = Method.deflated
-const default_name = string(Method.deflated)
+const default_name = str(Method.deflated)
 
 struct Entry:
-    size: long
+    size: i64
     method: Method = Method.stored
 
 func made(method: Method = Method.deflated) -> Method:
@@ -352,7 +352,7 @@ func main():
     assert(intent(Key.left) == Intent.move_left)
     assert(intent(Key.up) == Intent.nothing)
     for k in bindings:
-        print(f"{string(k)} {string(bindings[k])}")
+        print(f"{str(k)} {str(bindings[k])}")
 ```
 
 Two enum types never collide as a key, and neither do an enum and a

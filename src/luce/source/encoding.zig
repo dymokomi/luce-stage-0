@@ -217,7 +217,7 @@ test "CRLF collapses to LF and keeps every line and column" {
     try expectText("\xEF\xBB\xBFfunc main():\r\n", "func main():\n");
 }
 
-test "a stray carriage return is refused, naming the byte" {
+test "a stray carriage return is refused, naming the u8" {
     try expectRejected("a\rb\n", .{ .stray_carriage_return = 1 });
     try expectRejected("a\r", .{ .stray_carriage_return = 1 });
     // Offsets count from the start of the file, BOM included.

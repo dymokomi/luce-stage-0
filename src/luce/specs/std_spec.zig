@@ -96,7 +96,7 @@ test "math: exp and ln are accurate and inverse" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: double, b: double) -> bool:
+        \\func close(a: f64, b: f64) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -129,7 +129,7 @@ test "math: pow covers the sign and zero cases" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: double, b: double) -> bool:
+        \\func close(a: f64, b: f64) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -147,8 +147,8 @@ test "math: pow covers the sign and zero cases" {
         \\import std.math
         \\
         \\func main():
-        \\    var half = 0.5
-        \\    let bad = math.pow(-2.0, half)
+        \\    var exponent = 0.5
+        \\    let bad = math.pow(-2.0, exponent)
         \\
     , .explicit_trap);
 }
@@ -181,7 +181,7 @@ test "math: trig against known values, across periods" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: double, b: double) -> bool:
+        \\func close(a: f64, b: f64) -> bool:
         \\    return abs(a - b) < 0.0000000001
         \\
         \\func main():
@@ -230,7 +230,7 @@ test "math: log2 and log10" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: double, b: double) -> bool:
+        \\func close(a: f64, b: f64) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -247,25 +247,25 @@ test "math: vector operations compute exactly on exact inputs" {
         \\import std.math
         \\
         \\func main():
-        \\    var xs = new array(double, 5)
+        \\    var xs = new array[f64](5)
         \\    for i in range(0, 5):
-        \\        xs[i] = double(i) * 0.5
+        \\        xs[i] = f64(i) * 0.5
         \\    assert(math.sum(xs) == 5.0)
         \\    assert((math.mean(xs) else -1.0) == 1.0)
         \\    assert((math.vmin(xs) else -1.0) == 0.0)
         \\    assert((math.vmax(xs) else -1.0) == 2.0)
-        \\    var ys = new array(double, 5)
+        \\    var ys = new array[f64](5)
         \\    math.fill(ys, 2.0)
         \\    assert(math.sum(ys) == 10.0)
         \\    assert(math.dot(xs, ys) == 10.0)
-        \\    let twenty: double = 20.0
+        \\    let twenty: f64 = 20.0
         \\    assert(math.norm(ys) == sqrt(twenty))
         \\    math.scale(ys, 0.5)
         \\    assert(math.sum(ys) == 5.0)
         \\    math.axpy(ys, 2.0, xs)
         \\    assert(ys[4] == 5.0)
         \\    assert((math.variance(ys) else -1.0) == 2.0)
-        \\    let two: double = 2.0
+        \\    let two: f64 = 2.0
         \\    assert((math.stddev(ys) else -1.0) == sqrt(two))
         \\
     );
@@ -279,7 +279,7 @@ test "math: a reduction over an empty array is absent, not a trap" {
         \\import std.math
         \\
         \\func main():
-        \\    var empty = new array(double, 0)
+        \\    var empty = new array[f64](0)
         \\    assert(math.mean(empty) == none)
         \\    assert(math.vmin(empty) == none)
         \\    assert(math.vmax(empty) == none)
@@ -294,8 +294,8 @@ test "math: a shape mismatch is still a trap, because the caller could have chec
         \\import std.math
         \\
         \\func main():
-        \\    var a = new array(double, 2)
-        \\    var b = new array(double, 3)
+        \\    var a = new array[f64](2)
+        \\    var b = new array[f64](3)
         \\    let d = math.dot(a, b)
         \\
     , .explicit_trap);
@@ -313,7 +313,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\    var negative_seed = math.rng(-7)
         \\    assert(negative_seed.next() >= 1)
         \\    var die = math.rng(2026)
-        \\    var seen = new map(long, bool)
+        \\    var seen = new map[i64, bool]
         \\    for i in range(0, 200):
         \\        let roll = die.in_range(1, 7)
         \\        assert(roll >= 1 and roll <= 6)
@@ -347,14 +347,14 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\import std.lists
         \\
         \\struct Player:
-        \\    score: long
-        \\    order: long
+        \\    score: i64
+        \\    order: i64
         \\
         \\func by_score(a: Player, b: Player) -> bool:
         \\    return a.score < b.score
         \\
         \\func main():
-        \\    var empty = new list(Player)
+        \\    var empty = new list[Player]
         \\    empty.sort_by(by_score)
         \\    assert(len(empty) == 0)
         \\    var one = [Player(score = 7, order = 9)]
@@ -380,7 +380,7 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\    assert(players[2].score == 20)
         \\    assert(players[2].order == 2)
         \\    assert(players[3].score == 10)
-        \\    var numbers: list(long) = [3, 1, 2]
+        \\    var numbers: list[i64] = [3, 1, 2]
         \\    numbers.sort_by((a, b) -> a < b)
         \\    assert(numbers[0] == 1)
         \\    assert(numbers[1] == 2)
@@ -393,11 +393,11 @@ test "lists: sort_by moves object elements without copying them" {
     try agreeOk(
         \\import std.lists
         \\
-        \\func row_before(a: list(long), b: list(long)) -> bool:
+        \\func row_before(a: list[i64], b: list[i64]) -> bool:
         \\    return a[0] < b[0]
         \\
         \\func main():
-        \\    var rows = new list(list(long))
+        \\    var rows = new list[list[i64]]
         \\    rows.append([3])
         \\    rows.append([1])
         \\    rows.append([2])
@@ -413,21 +413,21 @@ test "lists: sort_by moves task resources and keeps equivalent elements stable" 
     try agree.printsGiven(
         \\import std.lists
         \\
-        \\func answer(n: long) -> long:
+        \\func answer(n: i64) -> i64:
         \\    return n
         \\
-        \\func equivalent(a: task(long), b: task(long)) -> bool:
+        \\func equivalent(a: task[i64], b: task[i64]) -> bool:
         \\    return false
         \\
         \\func main():
-        \\    var tasks = new list(task(long))
+        \\    var tasks = new list[task[i64]]
         \\    tasks.append(spawn answer(1))
         \\    tasks.append(spawn answer(2))
         \\    tasks.sort_by(equivalent)
-        \\    var joined: long = 0
+        \\    var joined: i64 = 0
         \\    for work in tasks:
         \\        joined = joined * 10 + work.wait()
-        \\    print(string(joined))
+        \\    print(str(joined))
         \\
     , budget, "12\n");
 }
@@ -488,7 +488,7 @@ test "strings: the ASCII character classes answer bytes, not codepoints" {
         \\    assert(strings.is_space(s.byte_at(5)))
         \\    assert(not strings.is_alnum(s.byte_at(4)))
         \\    assert(not strings.is_space(s.byte_at(4)))
-        \\    # A UTF-8 lead byte is not a letter: the classes are ASCII.
+        \\    # A UTF-8 lead u8 is not a letter: the classes are ASCII.
         \\    assert(not strings.is_alpha(s.byte_at(6)))
         \\    assert(not strings.is_alnum(s.byte_at(6)))
         \\
@@ -563,7 +563,7 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
         \\    assert(words[0] == "the" and words[1] == "quick" and words[2] == "brown")
         \\    let blanks = strings.split("   ", "")
         \\    assert(len(blanks) == 0)
-        \\    let empty: list(string) = []
+        \\    let empty: list[str] = []
         \\    assert(strings.join(empty, ", ") == "")
         \\    assert(strings.join(["only"], ", ") == "only")
         \\
@@ -611,12 +611,12 @@ test "strings: take cuts on a character boundary, at the end, and below zero" {
         \\    let word = "héllo"
         \\    assert(len(word) == 6)
         \\    # The boundary case: two cells is three bytes, and a
-        \\    # byte-counted prefix would have cut é in half.
+        \\    # u8-counted prefix would have cut é in f16.
         \\    assert(strings.take(word, 2) == "hé")
         \\    assert(len(strings.take(word, 2)) == 3)
         \\    assert(strings.take(word, 1) == "h")
         \\    assert(strings.take(word, 5) == word)
-        \\    # Past the end is the whole string, not a trap.
+        \\    # Past the end is the whole str, not a trap.
         \\    assert(strings.take(word, 99) == word)
         \\    assert(strings.take(word, 0) == "")
         \\    assert(strings.take(word, -4) == "")
@@ -671,7 +671,7 @@ test "strings: malformed UTF-8 is answered, never trapped" {
         \\import std.strings
         \\
         \\func main():
-        \\    # A stray continuation byte belongs to the character
+        \\    # A stray continuation u8 belongs to the character
         \\    # before it, so "a\x80" is one character and "b" is another.
         \\    let inside = read_line("") else ""
         \\    assert(len(inside) == 3)
@@ -831,7 +831,7 @@ test "paths: joined folds join, and an empty list answers the empty path" {
         \\import std.paths
         \\
         \\func main():
-        \\    print("[" + paths.joined(new list(string)) + "]")
+        \\    print("[" + paths.joined(new list[str]) + "]")
         \\    print(paths.joined(["only"]))
         \\    print(paths.joined(["a", "b", "c.luc"]))
         \\    # An absolute part starts again, exactly as join does.
@@ -939,7 +939,7 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\func main() -> !:
         \\    try files.append_text("log.txt", "one line\n")
         \\    try files.append_lines("log.txt", ["two", "three"])
-        \\    try files.append_lines("log.txt", new list(string))
+        \\    try files.append_lines("log.txt", new list[str])
         \\    print(try files.read("log.txt"))
         \\    try files.rename("log.txt", "kept.txt")
         \\    assert((try files.exists("kept.txt")) and not try files.exists("log.txt"))
@@ -973,7 +973,7 @@ test "files: kind answers each member, and none for a name nothing holds" {
     var session = try agree.compare(
         \\import std.files
         \\
-        \\func name_of(path: string) -> string!:
+        \\func name_of(path: str) -> str!:
         \\    let what = try files.kind(path)
         \\    if what == none:
         \\        return "nothing"
@@ -1010,15 +1010,15 @@ test "files: exists, is_file and is_dir answer bool! and let a refusal through" 
         \\import std.files
         \\
         \\func main() -> !:
-        \\    print(string(try files.exists("notes.txt")))
-        \\    print(string(try files.is_file("notes.txt")))
-        \\    print(string(try files.is_dir("notes.txt")))
-        \\    print(string(try files.is_dir("papers")))
-        \\    print(string(try files.is_file("papers")))
-        \\    print(string(try files.exists("ghost.txt")))
+        \\    print(str(try files.exists("notes.txt")))
+        \\    print(str(try files.is_file("notes.txt")))
+        \\    print(str(try files.is_dir("notes.txt")))
+        \\    print(str(try files.is_dir("papers")))
+        \\    print(str(try files.is_file("papers")))
+        \\    print(str(try files.exists("ghost.txt")))
         \\    files.exists("locked/inside.txt") catch reason:
         \\        print(reason)
-        \\    print(string(files.exists("locked/inside.txt") catch false))
+        \\    print(str(files.exists("locked/inside.txt") catch false))
         \\
     , provided);
     defer session.deinit();
@@ -1069,7 +1069,7 @@ test "files: list answers names alone, while entries carries kinds" {
         \\    let names = try files.list(".")
         \\    print(names.join(","))
         \\    let listed = try files.entries(".")
-        \\    print(string(len(listed)))
+        \\    print(str(len(listed)))
         \\
     , budget);
     defer session.deinit();
@@ -1189,7 +1189,7 @@ test "os: a host with no machine slots refuses, and touches nothing" {
         \\import std.os
         \\
         \\func main():
-        \\    print(string(os.total_memory()))
+        \\    print(str(os.total_memory()))
         \\
     , blind, .host_unavailable);
 }
@@ -1205,14 +1205,14 @@ test "os: a host that has the slots and cannot tell refuses the same way" {
         \\import std.os
         \\
         \\func main():
-        \\    print(string(os.available_memory()))
+        \\    print(str(os.available_memory()))
         \\
     , unmeasurable, .host_unavailable);
     try agree.trapGiven(
         \\import std.os
         \\
         \\func main():
-        \\    print(string(os.cpu_count()))
+        \\    print(str(os.cpu_count()))
         \\
     , unmeasurable, .host_unavailable);
 }

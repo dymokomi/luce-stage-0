@@ -4,17 +4,17 @@
 
 import std.files
 
-func is_word_byte(byte: byte) -> bool:
-    if byte >= 97 and byte <= 122:
+func is_word_byte(code: u8) -> bool:
+    if code >= 97 and code <= 122:
         return true
-    if byte >= 65 and byte <= 90:
+    if code >= 65 and code <= 90:
         return true
-    if byte >= 48 and byte <= 57:
+    if code >= 48 and code <= 57:
         return true
-    return byte == 95 or byte >= 128
+    return code == 95 or code >= 128
 
 # Collect every word of `content` into the counts map.
-func count_words(content: string, counts: map(string, long)):
+func count_words(content: str, counts: map[str, i64]):
     var at = 0
     while at < len(content):
         if is_word_byte(content.byte_at(at)):
@@ -34,21 +34,21 @@ func count_words(content: string, counts: map(string, long)):
 # The most frequent remaining word, and how often (first seen wins
 # ties).  It computed both and could answer only one, so every caller
 # did a second hash lookup for the count this already had.
-func heaviest(counts: map(string, long)) -> (string, long):
+func heaviest(counts: map[str, i64]) -> (str, i64):
     var best = ""
-    var best_count: long = 0
+    var best_count: i64 = 0
     for word in counts:
         if counts[word] > best_count:
             best = word
             best_count = counts[word]
     return best, best_count
 
-func main(args: list(string)) -> !:
+func main(args: list[str]) -> !:
     if len(args) == 0:
         print("usage: wordcount FILE [TOP_N]")
         return
     let path = args[0]
-    var top: long = 5
+    var top: i64 = 5
     if len(args) > 1:
         top = parse_int(args[1]) else top
 
@@ -56,16 +56,16 @@ func main(args: list(string)) -> !:
     # read this used to write had a window between the two calls that
     # nothing could close, and it could not tell "not there" from
     # "would not open" either (docs/FAILURE.md).
-    var counts = new map(string, long)
+    var counts = new map[str, i64]
     count_words(try files.read(path), counts)
-    print(string(len(counts)) + " distinct words in " + path)
+    print(str(len(counts)) + " distinct words in " + path)
 
     var shown = 0
     while shown < top and len(counts) > 0:
         let word, count = heaviest(counts)
-        var line = new builder()
+        var line = new builder
         line.append("  ")
-        line.append(string(count))
+        line.append(str(count))
         line.append("  ")
         line.append(word)
         print(line.build())

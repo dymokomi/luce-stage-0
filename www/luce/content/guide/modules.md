@@ -6,12 +6,12 @@ using another file's declarations.
 
 ```luce module file=geometry.luc
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 
 const unit = 1.0
 
-func distance(a: Point, b: Point) -> double:
+func distance(a: Point, b: Point) -> f64:
     let dx = a.x - b.x
     let dy = a.y - b.y
     return sqrt(dx * dx + dy * dy)
@@ -23,8 +23,8 @@ import geometry
 func main():
     let a = geometry.Point(x = 0.0, y = 0.0)
     let b = geometry.Point(x = 3.0, y = 4.0)
-    print(string(geometry.distance(a, b)))
-    print(string(geometry.unit))
+    print(str(geometry.distance(a, b)))
+    print(str(geometry.unit))
 ```
 
 ```output
@@ -49,7 +49,7 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 5))
-    print(string(math.ipow(2, 10)))
+    print(str(math.ipow(2, 10)))
     print(strings.format_float(math.ln(math.e), 1))
 
     var rng = math.rng(42)
@@ -107,7 +107,7 @@ version: 0.1.0
 ```
 
 ```luce module file=geo/shapes.luc
-func area(width: double, height: double) -> double:
+func area(width: f64, height: f64) -> f64:
     return width * height
 ```
 
@@ -115,7 +115,7 @@ func area(width: double, height: double) -> double:
 import geo.shapes as gs
 
 func main():
-    print(string(gs.area(3.0, 4.0)))
+    print(str(gs.area(3.0, 4.0)))
 ```
 
 ```output

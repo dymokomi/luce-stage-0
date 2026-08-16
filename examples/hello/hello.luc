@@ -3,7 +3,7 @@
 #   luce build examples/hello/hello.luc
 #   ./examples/hello/hello you
 
-func main(args: list(string)):
+func main(args: list[str]):
     var name = "loom"
     if len(args) > 0:
         name = args[0]

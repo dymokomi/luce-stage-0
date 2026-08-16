@@ -22,7 +22,7 @@ func main():
 After a test the name *is* its payload. There is no unwrap operator.
 
 ```luce run
-func classify(text: string) -> string:
+func classify(text: str) -> str:
     let n = parse_int(text)
     if n == none:
         return f"{text} is not a number"
@@ -46,13 +46,13 @@ An early-exit guard narrows everything below it, which is the shape
 most real code takes.
 
 ```luce run args=17
-func main(args: list(string)):
+func main(args: list[str]):
     let raw = args[0]
     let n = parse_int(raw)
     if n == none:
         print(f"not a number: {raw}")
         return
-    print(f"{n} squared is {n * n}")     # n is long from here down
+    print(f"{n} squared is {n * n}")     # n is i64 from here down
 ```
 
 ```output
@@ -67,11 +67,11 @@ right and stops at the first one that is there.
 ```luce run
 func main():
     let first = parse_int("x") else parse_int("y") else parse_int("3") else 0
-    print(string(first))
+    print(str(first))
 
     let n = parse_int("10")
-    print(string(n else 0 > 5))     # else binds tighter than comparison
-    print(string((n else 0) + 1))
+    print(str(n else 0 > 5))     # else binds tighter than comparison
+    print(str((n else 0) + 1))
 ```
 
 ```output
@@ -84,10 +84,10 @@ true
 
 ```luce run
 struct Setting:
-    name: string
-    limit: long?
+    name: str
+    limit: i64?
 
-func describe(setting: Setting) -> string:
+func describe(setting: Setting) -> str:
     let limit = setting.limit
     if limit == none:
         return f"{setting.name}: unlimited"
@@ -116,7 +116,7 @@ and is greppable.
 func main():
     let config = "port=notanumber"
     let port = parse_int(config[5:len(config)]) else trap("bad port in config")
-    print(string(port))
+    print(str(port))
 ```
 
 ```output

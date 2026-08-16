@@ -1123,7 +1123,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
     defer testing.allocator.free(directory);
     const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo.luc", .{directory});
     defer testing.allocator.free(geo_path);
-    try writeWhole(io, geo_path, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, geo_path, "func area() -> i64:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1157,7 +1157,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     defer testing.allocator.free(directory);
     const wrong_case = try std.fmt.allocPrint(testing.allocator, "{s}/Geo.luc", .{directory});
     defer testing.allocator.free(wrong_case);
-    try writeWhole(io, wrong_case, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, wrong_case, "func area() -> i64:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1177,7 +1177,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     // as geo.luc, which is exactly the trap being guarded against.)
     const exact_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{directory});
     defer testing.allocator.free(exact_path);
-    try writeWhole(io, exact_path, "func twice(v: long) -> long:\n    return v * 2\n");
+    try writeWhole(io, exact_path, "func twice(v: i64) -> i64:\n    return v * 2\n");
     const exact = try resolver.load(resolver.context, arena.allocator(), "util", "");
     try testing.expect(exact == .text);
     try testing.expect(std.mem.indexOf(u8, exact.text.bytes, "v * 2") != null);
@@ -1197,10 +1197,10 @@ test "under a project root, dots map to folders and every import is root-relativ
     try tmp.dir.createDir(io, "src", .default_dir);
     const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo/shapes.luc", .{root});
     defer testing.allocator.free(shapes_path);
-    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, shapes_path, "func area() -> i64:\n    return 4\n");
     const util_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{root});
     defer testing.allocator.free(util_path);
-    try writeWhole(io, util_path, "func twice(v: long) -> long:\n    return v * 2\n");
+    try writeWhole(io, util_path, "func twice(v: i64) -> i64:\n    return v * 2\n");
 
     // The root file lives in src/, which holds neither module.
     const nested = try std.fmt.allocPrint(testing.allocator, "{s}/src", .{root});
@@ -1242,7 +1242,7 @@ test "a dotted import checks the folder's case at every level" {
     try tmp.dir.createDir(io, "Geo", .default_dir);
     const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/Geo/shapes.luc", .{root});
     defer testing.allocator.free(shapes_path);
-    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, shapes_path, "func area() -> i64:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = root, .project_root = root };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1268,7 +1268,7 @@ test "a dotted import without a project root is refused, naming luce.yaml" {
     try tmp.dir.createDir(io, "geo", .default_dir);
     const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo/shapes.luc", .{directory});
     defer testing.allocator.free(shapes_path);
-    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, shapes_path, "func area() -> i64:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1382,7 +1382,7 @@ test "the loader answers modules under the root token it was handed" {
     defer testing.allocator.free(directory);
     const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo.luc", .{directory});
     defer testing.allocator.free(geo_path);
-    try writeWhole(io, geo_path, "func area() -> long:\n    return 4\n");
+    try writeWhole(io, geo_path, "func area() -> i64:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1554,7 +1554,7 @@ fn makeFixture(manifest_text: []const u8, with_geo_in_store: bool) !Fixture {
     errdefer testing.allocator.free(root);
 
     try writeUnder(root, "luce.yaml", manifest_text);
-    try writeUnder(root, "main.luc", "import geo\n\nfunc main():\n    print(string(geo.area(2.0, 3.0)))\n");
+    try writeUnder(root, "main.luc", "import geo\n\nfunc main():\n    print(str(geo.area(2.0, 3.0)))\n");
     if (with_geo_in_store) try placeGeo(root, ".luce/packages/geo-1.2.0");
 
     var manifest_arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1573,9 +1573,9 @@ fn placeGeo(root: []const u8, home: []const u8) !void {
     const base = try std.fs.path.join(testing.allocator, &.{ root, home });
     defer testing.allocator.free(base);
     try writeUnder(base, "luce.yaml", "name: geo\nversion: 1.2.0\n");
-    try writeUnder(base, "geo.luc", "import util\n\nfunc area(w: double, h: double) -> double:\n    return util.scale(w * h)\n");
-    try writeUnder(base, "shapes.luc", "struct Rect:\n    width: double\n    height: double\n");
-    try writeUnder(base, "util.luc", "func scale(v: double) -> double:\n    return v * 10.0\n");
+    try writeUnder(base, "geo.luc", "import util\n\nfunc area(w: f64, h: f64) -> f64:\n    return util.scale(w * h)\n");
+    try writeUnder(base, "shapes.luc", "struct Rect:\n    width: f64\n    height: f64\n");
+    try writeUnder(base, "util.luc", "func scale(v: f64) -> f64:\n    return v * 10.0\n");
 }
 
 fn writeUnder(base: []const u8, relative: []const u8, content: []const u8) !void {
@@ -1633,7 +1633,7 @@ test "the package anchor wins over the consumer's tree for package-internal impo
     // see it (D4), and the consumer's must not see the package's.
     var fixture = try makeFixture(want_geo, true);
     defer fixture.deinit();
-    try writeUnder(fixture.root, "util.luc", "func scale(v: double) -> double:\n    return v\n");
+    try writeUnder(fixture.root, "util.luc", "func scale(v: f64) -> f64:\n    return v\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);
@@ -1656,7 +1656,7 @@ test "a package not in the want list is unresolvable from any store" {
     const base = try std.fs.path.join(testing.allocator, &.{ fixture.root, ".luce/packages/ansi-0.4.1" });
     defer testing.allocator.free(base);
     try writeUnder(base, "luce.yaml", "name: ansi\nversion: 0.4.1\n");
-    try writeUnder(base, "ansi.luc", "func code() -> long:\n    return 27\n");
+    try writeUnder(base, "ansi.luc", "func code() -> i64:\n    return 27\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);
@@ -1669,7 +1669,7 @@ test "a package not in the want list is unresolvable from any store" {
 test "a project file and a declared package answering together is ambiguous" {
     var fixture = try makeFixture(want_geo, true);
     defer fixture.deinit();
-    try writeUnder(fixture.root, "geo.luc", "func area(w: double, h: double) -> double:\n    return w * h\n");
+    try writeUnder(fixture.root, "geo.luc", "func area(w: f64, h: f64) -> f64:\n    return w * h\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);
@@ -1722,7 +1722,7 @@ test "a store package whose manifest disagrees is refused with both identities n
     const base = try std.fs.path.join(testing.allocator, &.{ fixture.root, ".luce/packages/geo-1.2.0" });
     defer testing.allocator.free(base);
     try writeUnder(base, "luce.yaml", "name: geo\nversion: 1.3.0\n");
-    try writeUnder(base, "geo.luc", "func area(w: double, h: double) -> double:\n    return w * h\n");
+    try writeUnder(base, "geo.luc", "func area(w: f64, h: f64) -> f64:\n    return w * h\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);
@@ -1740,7 +1740,7 @@ test "a store package with no manifest at all is refused by name" {
     defer fixture.deinit();
     const base = try std.fs.path.join(testing.allocator, &.{ fixture.root, ".luce/packages/geo-1.2.0" });
     defer testing.allocator.free(base);
-    try writeUnder(base, "geo.luc", "func area(w: double, h: double) -> double:\n    return w * h\n");
+    try writeUnder(base, "geo.luc", "func area(w: f64, h: f64) -> f64:\n    return w * h\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);
@@ -1820,11 +1820,11 @@ test "a diamond is refused naming both edges; override: in the root resolves it"
     const geo_base = try std.fs.path.join(testing.allocator, &.{ fixture.root, store, "geo-1.2.0" });
     defer testing.allocator.free(geo_base);
     try writeUnder(geo_base, "luce.yaml", "name: geo\nversion: 1.2.0\npackages:\n  mathx: 1.1.0\n");
-    try writeUnder(geo_base, "geo.luc", "import mathx\n\nfunc area(w: double, h: double) -> double:\n    return mathx.mul(w, h)\n");
+    try writeUnder(geo_base, "geo.luc", "import mathx\n\nfunc area(w: f64, h: f64) -> f64:\n    return mathx.mul(w, h)\n");
     const ansi_base = try std.fs.path.join(testing.allocator, &.{ fixture.root, store, "ansi-0.4.1" });
     defer testing.allocator.free(ansi_base);
     try writeUnder(ansi_base, "luce.yaml", "name: ansi\nversion: 0.4.1\npackages:\n  mathx: 1.2.0\n");
-    try writeUnder(ansi_base, "ansi.luc", "func code() -> long:\n    return 27\n");
+    try writeUnder(ansi_base, "ansi.luc", "func code() -> i64:\n    return 27\n");
     for ([_][]const u8{ "mathx-1.1.0", "mathx-1.2.0" }) |dashed| {
         const base = try std.fs.path.join(testing.allocator, &.{ fixture.root, store, dashed });
         defer testing.allocator.free(base);
@@ -1832,7 +1832,7 @@ test "a diamond is refused naming both edges; override: in the root resolves it"
         const text = try std.fmt.allocPrint(testing.allocator, "name: mathx\nversion: {s}\n", .{version});
         defer testing.allocator.free(text);
         try writeUnder(base, "luce.yaml", text);
-        try writeUnder(base, "mathx.luc", "func mul(a: double, b: double) -> double:\n    return a * b\n");
+        try writeUnder(base, "mathx.luc", "func mul(a: f64, b: f64) -> f64:\n    return a * b\n");
     }
 
     {
@@ -1941,9 +1941,9 @@ test "the directory hash moves with content, name, and layout — and with nothi
     defer arena.deinit();
 
     try writeUnder(root, "one/luce.yaml", "name: geo\nversion: 1.2.0\n");
-    try writeUnder(root, "one/geo.luc", "func f() -> long:\n    return 1\n");
+    try writeUnder(root, "one/geo.luc", "func f() -> i64:\n    return 1\n");
     try writeUnder(root, "two/luce.yaml", "name: geo\nversion: 1.2.0\n");
-    try writeUnder(root, "two/geo.luc", "func f() -> long:\n    return 1\n");
+    try writeUnder(root, "two/geo.luc", "func f() -> i64:\n    return 1\n");
 
     const one = try std.fs.path.join(arena.allocator(), &.{ root, "one" });
     const two = try std.fs.path.join(arena.allocator(), &.{ root, "two" });
@@ -1952,13 +1952,13 @@ test "the directory hash moves with content, name, and layout — and with nothi
     try testing.expectEqualStrings(&first, &same);
 
     // Edited content moves it.
-    try writeUnder(root, "two/geo.luc", "func f() -> long:\n    return 2\n");
+    try writeUnder(root, "two/geo.luc", "func f() -> i64:\n    return 2\n");
     const edited = try hashPackageDirectory(io, arena.allocator(), two);
     try testing.expect(!std.mem.eql(u8, &first, &edited));
 
     // A renamed file moves it even with identical bytes.
-    try writeUnder(root, "two/geo.luc", "func f() -> long:\n    return 1\n");
-    try writeUnder(root, "two/sub/extra.luc", "func g() -> long:\n    return 3\n");
+    try writeUnder(root, "two/geo.luc", "func f() -> i64:\n    return 1\n");
+    try writeUnder(root, "two/sub/extra.luc", "func g() -> i64:\n    return 3\n");
     const grown = try hashPackageDirectory(io, arena.allocator(), two);
     try testing.expect(!std.mem.eql(u8, &first, &grown));
 }
@@ -1969,8 +1969,8 @@ test "a case variant inside a package is refused naming the real spelling" {
     const base = try std.fs.path.join(testing.allocator, &.{ fixture.root, ".luce/packages/geo-1.2.0" });
     defer testing.allocator.free(base);
     try writeUnder(base, "luce.yaml", "name: geo\nversion: 1.2.0\n");
-    try writeUnder(base, "Geo.luc", "func area(w: double, h: double) -> double:\n    return w * h\n");
-    try writeUnder(base, "Shapes.luc", "struct Rect:\n    width: double\n    height: double\n");
+    try writeUnder(base, "Geo.luc", "func area(w: f64, h: f64) -> f64:\n    return w * h\n");
+    try writeUnder(base, "Shapes.luc", "struct Rect:\n    width: f64\n    height: f64\n");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var loader = fixture.loaderOf(null);

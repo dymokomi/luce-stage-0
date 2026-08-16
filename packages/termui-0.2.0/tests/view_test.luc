@@ -8,7 +8,7 @@ import view
 func test_a_text_view_measures_and_draws_styled_lines():
     var s = surface.Surface.of(3, 10)
     s.clear()
-    var lines = new list(text.Line)
+    var lines = new list[text.Line]
     lines.append(text.plain("hello", termui.Style(foreground = 3)))
     lines.append(text.plain("world", termui.Style(foreground = 3)))
     let block = view.Text(lines = lines)

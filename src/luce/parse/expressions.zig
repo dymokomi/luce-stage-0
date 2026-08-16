@@ -244,7 +244,7 @@ fn foreignPair(first: Kind, second: Kind) ?Foreign {
             else => null,
         },
         .star => switch (second) {
-            .star => .{ .written = "**", .instead = "import std.math and call math.pow(x, y), or math.ipow(x, y) for long" },
+            .star => .{ .written = "**", .instead = "import std.math and call math.pow(x, y), or math.ipow(x, y) for i64" },
             else => null,
         },
         .equal => switch (second) {
@@ -868,7 +868,7 @@ fn mapLiteral(self: *Parser) Error!?*ast.Expression {
         try self.report(
             "luce.parse.expression",
             .{ .start = opener.span.start, .end = closing.span.end },
-            "an empty map has no literal; write 'new map(K, V)' so its key and value types are explicit",
+            "an empty map has no literal; write 'new map[K, V]' so its key and value types are explicit",
             .{},
         );
         return null;
@@ -897,81 +897,30 @@ fn mapLiteral(self: *Parser) Error!?*ast.Expression {
     } });
 }
 
-/// new list(long) | new map(string, long) | new array(long, DIM...) |
-/// new builder().  Type arguments come first; an array's trailing
-/// arguments are runtime dimension expressions.
+/// `new TYPE` or `new TYPE(dimensions...)`. Square brackets inside TYPE
+/// carry type arguments; parentheses carry only construction values. The
+/// analyzer decides which resolved heap shape accepts dimensions.
 fn newObject(self: *Parser) Error!?*ast.Expression {
     const start = self.advance(); // new
-    // The kind is read without consuming it: list and map hand the
-    // whole `Name(args...)` to typeName, which must see the name.
     if (self.peekKind() != .identifier) {
         _ = try self.expect(.identifier, "list, map, array, or builder after new");
         return null;
     }
-    const name = self.peek();
-    const kind = self.text(name);
-    var written: ast.TypeName = .{ .name = kind, .span = name.span };
+    const written = (try self.constructionTypeName()) orelse return null;
     var dims: std.ArrayList(*ast.Expression) = .empty;
     defer dims.deinit(self.arena);
-
-    var closing_end = name.span.end;
-    const builtin = types.builtinNamed(kind);
-    if (builtin == .builder) {
-        _ = self.advance();
-        if (self.accept(.left_paren)) |opener| {
-            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
-            closing_end = closing.span.end;
-        }
-    } else if (builtin == .list or builtin == .map) {
-        written = (try self.typeName()) orelse return null;
-        closing_end = written.span.end;
-    } else if (builtin == .array) {
-        _ = self.advance();
-        const opener = (try self.expect(.left_paren, "'(' after array")) orelse return null;
-        const element = (try self.typeName()) orelse return null;
-        const arguments = try self.arena.alloc(ast.TypeName, 1);
-        arguments[0] = element;
-        written.arguments = arguments;
-        var previous_end = element.span.end;
-        while (self.accept(.comma) != null) {
-            if (ranOut(self.peekKind())) break;
+    var closing_end = written.span.end;
+    if (self.accept(.left_paren)) |opener| {
+        var previous_end = opener.span.end;
+        while (!endsList(self.peekKind(), .right_paren)) {
             const dimension = (try expression(self)) orelse return null;
             try dims.append(self.arena, dimension);
             previous_end = dimension.span().end;
+            if (self.accept(.comma) == null) break;
         }
         if (try self.missingSeparator(previous_end)) return null;
         const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
         closing_end = closing.span.end;
-    } else if (builtin == .file or builtin == .task) {
-        // Parsed, then refused by name in stage 4 (docs/BYTES.md R5,
-        // docs/THREADS.md D3).  The sentence a reader needs here is
-        // "a file is opened, not made — write files.open(path)", or
-        // "a task is spawned, not made — write spawn f(…)", and both
-        // belong where the language's types are known rather than
-        // where a `(` is being looked for.  The two resources go
-        // together because the reason is one reason: neither has a
-        // state with nothing behind it, so neither has a `new`.
-        _ = self.advance();
-        // `new task(long)` carries a type argument the `file` arm
-        // never sees; consuming it keeps the refusal below about the
-        // `new` rather than about a stray `(`.
-        if (self.peekKind() == .left_paren) {
-            const opener = self.advance();
-            while (!endsList(self.peekKind(), .right_paren)) {
-                _ = self.advance();
-            }
-            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
-            closing_end = closing.span.end;
-        }
-    } else {
-        // A transparent alias can name list, map, or builder, and the parser
-        // deliberately does not carry a symbol table.  Preserve the written
-        // type and let stage 4 decide whether it resolves to a constructible
-        // heap shape.  This also moves `new Point()` to the semantic `new`
-        // diagnostic, where the compiler can name Point as a struct rather
-        // than guessing from its spelling here.
-        written = (try self.typeName()) orelse return null;
-        closing_end = written.span.end;
     }
 
     return make(self, .{ .new_object = .{
@@ -993,14 +942,14 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
 
 /// Expand f"...{expr}..." into a string-typed concatenation:
 /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
-/// each `{expr}` wrapped in `string(expr)`.  A hole is sub-parsed
+/// each `{expr}` wrapped in `str(expr)`.  A hole is sub-parsed
 /// against the real source with absolute spans, so diagnostics
 /// inside interpolations point at the right bytes.
 ///
 /// This is the one place stage 3 desugars rather than records; the
 /// structured form belongs in stage 5 (docs/PIPELINE.md).
 // ---------------------------------------------------------------------------
-// F-strings, desugared here into `+` and `string(...)`
+// F-strings, desugared here into `+` and `str(...)`
 // ---------------------------------------------------------------------------
 
 fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
@@ -1052,17 +1001,17 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
                     try self.report(
                         "luce.parse.fstring",
                         .{ .start = hole_start + at, .end = hole_start + whole_hole.len },
-                        "unknown format spec ':{s}'; the one form is ':.Nf' — N decimal places of a double",
+                        "unknown format spec ':{s}'; the one form is ':.Nf' — N decimal places of an f64",
                         .{spec},
                     );
                     return null;
                 };
                 break :blk try wrapFormat(self, hole_expr, digits, hole_expr.span());
             } else
-                // The synthesized `string(...)` takes the *hole's*
+                // The synthesized `str(...)` takes the *hole's*
                 // span, not the whole f-string's.  Everything stage 4
                 // says about this call is about what the reader wrote
-                // between the braces — `string() converts long, double,
+                // between the braces — `str()` converts numbers,
                 // bool, or string` for a list in a hole — and
                 // underlining the entire literal makes a reader with
                 // four holes in one line check all four.
@@ -1141,11 +1090,11 @@ fn concat(self: *Parser, left: ?*ast.Expression, right: *ast.Expression) Error!*
     } });
 }
 
-/// string(expr) — the interpolation converts each hole to text.
+/// `str(expr)` — interpolation converts each hole to text.
 fn wrapStr(self: *Parser, expr: *ast.Expression, span: Span) Error!*ast.Expression {
     const arguments = try self.arena.alloc(ast.Argument, 1);
     arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
-    return make(self, .{ .call = .{ .callee = "string", .arguments = arguments, .span = span } });
+    return make(self, .{ .call = .{ .callee = "str", .arguments = arguments, .span = span } });
 }
 
 /// `strings.format_float(expr, decimals)` — what `{x:.2f}` means.

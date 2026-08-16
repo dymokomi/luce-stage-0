@@ -65,11 +65,11 @@ enum Pointer:
 # right=2 and -1 for a wheel; wheel is +1 up and -1 down.
 struct Mouse:
     kind: Pointer = Pointer.move
-    row: long = 0
-    column: long = 0
-    button: long = 0
-    modifiers: long = 0
-    wheel: long = 0
+    row: i64 = 0
+    column: i64 = 0
+    button: i64 = 0
+    modifiers: i64 = 0
+    wheel: i64 = 0
 
     func has_shift() -> bool:
         return (self.modifiers & 1) != 0
@@ -84,14 +84,14 @@ union Event:
     closed
     resize
     key(pressed: Key)
-    text(typed: string)
+    text(typed: str)
     mouse(pointer: Mouse)
 
 # The input stream.  `last_name` is the escape hatch: a key this
 # version does not name still arrives, as `Key.unknown`, and a program
 # that wants the raw spelling can ask.
 struct Events:
-    last_name: string = ""
+    last_name: str = ""
 
     func next() -> Event:
         let name = term.io.read()
@@ -114,7 +114,7 @@ struct Events:
             ))
         return Event.key(pressed = Events.key_of(name))
 
-    static func pointer_of(name: string) -> Pointer?:
+    static func pointer_of(name: str) -> Pointer?:
         if name == "mouse_press":
             return Pointer.press
         if name == "mouse_release":
@@ -127,10 +127,10 @@ struct Events:
             return Pointer.wheel
         return none
 
-    # The one place a key name is a string.  Every other name in the
+    # The one place a key name is a str.  Every other name in the
     # host's vocabulary is a member of `Key`, so the table below is a
     # transcription and a name it does not know is `Key.unknown`.
-    static func key_of(name: string) -> Key:
+    static func key_of(name: str) -> Key:
         let named = NAMES.get(name)
         if named == none:
             return Key.unknown

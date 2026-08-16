@@ -3,7 +3,7 @@
 import search
 
 func test_scan_finds_every_occurrence():
-    var matches = new list(long)
+    var matches = new list[i64]
     search.scan(matches, "the cat sat on the mat", "at")
     # "cat", "sat", "mat" — the 'at' at bytes 5, 9, 20.
     assert(len(matches) == 3)
@@ -12,19 +12,19 @@ func test_scan_finds_every_occurrence():
     assert(matches[2] == 20)
 
 func test_scan_counts_overlapping_matches():
-    var matches = new list(long)
+    var matches = new list[i64]
     search.scan(matches, "aaa", "aa")
     assert(len(matches) == 2)
     assert(matches[0] == 0)
     assert(matches[1] == 1)
 
 func test_an_empty_query_matches_nothing():
-    var matches = new list(long)
+    var matches = new list[i64]
     search.scan(matches, "anything", "")
     assert(len(matches) == 0)
 
 func test_no_match_leaves_an_empty_list():
-    var matches = new list(long)
+    var matches = new list[i64]
     search.scan(matches, "hello", "zzz")
     assert(len(matches) == 0)
 

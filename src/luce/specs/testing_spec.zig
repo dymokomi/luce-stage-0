@@ -1,7 +1,7 @@
 //! The synthesized test entry (docs/TESTING.md D3).
 //!
 //! `luce test` does not run a program a person wrote: it runs one the
-//! compiler wrote, `func main(args: list(string)) -> !`, whose body
+//! compiler wrote, `func main(args: list[str]) -> !`, whose body
 //! reads one name out of `args` and calls that test by direct call.
 //! That entry is built as ordinary AST and collected as an ordinary
 //! signature, and the claim these specs make is that it is therefore an
@@ -45,7 +45,7 @@ fn call(
 }
 
 const two_tests =
-    \\func helper(value: long) -> long:
+    \\func helper(value: i64) -> i64:
     \\    return value * 2
     \\
     \\func test_doubling():
@@ -54,7 +54,7 @@ const two_tests =
     \\
     \\func test_lists():
     \\    print("lists")
-    \\    var xs: list(long) = [1, 2, 3]
+    \\    var xs: list[i64] = [1, 2, 3]
     \\    assert(len(xs) == 3)
     \\
 ;
@@ -81,9 +81,9 @@ test "a test that traps reports the trap, with its own frame in the trace" {
     // line rather than about the entry that called it.
     var session = try call(
         \\func test_bounds():
-        \\    var xs: list(long) = [1, 2, 3]
+        \\    var xs: list[i64] = [1, 2, 3]
         \\    var index = 7
-        \\    print(string(xs[index]))
+        \\    print(str(xs[index]))
         \\
     , &.{"test_bounds"}, "test_bounds");
     defer session.deinit();

@@ -1,6 +1,6 @@
-# double arithmetic: a mandelbrot membership count.  Pure * + -
+# f64 arithmetic: a mandelbrot membership count.  Pure * + -
 # comparisons — no library calls in either language, so this measures
-# raw float work.  The C twin is bench/math.c.
+# raw f32 work.  The C twin is bench/math.c.
 
 func main():
     let size = 2236
@@ -8,10 +8,10 @@ func main():
     var inside = 0
     for py in range(0, size):
         for px in range(0, size):
-            let x0 = double(px) * (3.0 / double(size)) - 2.25
-            let y0 = double(py) * (2.5 / double(size)) - 1.25
-            var x: double = 0.0
-            var y: double = 0.0
+            let x0 = f64(px) * (3.0 / f64(size)) - 2.25
+            let y0 = f64(py) * (2.5 / f64(size)) - 1.25
+            var x: f64 = 0.0
+            var y: f64 = 0.0
             var iter = 0
             while iter < max_iter and x * x + y * y <= 4.0:
                 let next_x = x * x - y * y + x0
@@ -20,4 +20,4 @@ func main():
                 iter += 1
             if iter == max_iter:
                 inside += 1
-    print(string(inside))
+    print(str(inside))

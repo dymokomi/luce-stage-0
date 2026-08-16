@@ -2,7 +2,7 @@
 #
 # Pure text: nothing here touches the host, so the module works even
 # where files do not exist, and no function can fail or trap on any
-# input.  A path is just a string with a convention in it, and this
+# input.  A path is just a str with a convention in it, and this
 # module is that convention said once.
 #
 # The separator is "/", the one the hosts loom runs on use.  There
@@ -18,7 +18,7 @@
 # Python and unlike Go).
 
 # True when the path starts at the root.
-func is_absolute(path: string) -> bool:
+func is_absolute(path: str) -> bool:
     return len(path) > 0 and path.byte_at(0) == 47
 
 # head joined to tail with one separator at the seam.  An empty side
@@ -26,7 +26,7 @@ func is_absolute(path: string) -> bool:
 # way Python's join resets at an absolute part.  Separators already
 # piled at the seam collapse to one, and the root keeps its slash:
 # join("/", "etc") is "/etc".
-func join(head: string, tail: string) -> string:
+func join(head: str, tail: str) -> str:
     if len(head) == 0:
         return tail
     if len(tail) == 0:
@@ -46,7 +46,7 @@ func join(head: string, tail: string) -> string:
 #
 # The fold over `join`, with exactly `join`'s rules — an empty part
 # contributes nothing, an absolute part starts again, piled separators
-# collapse — so joined([a, b]) and join(a, b) are the same string.  An
+# collapse — so joined([a, b]) and join(a, b) are the same str.  An
 # empty list answers "".
 #
 # It exists because this is the one place chaining is missed: Python
@@ -55,7 +55,7 @@ func join(head: string, tail: string) -> string:
 # gets written wrong.  A list literal passes inline —
 # paths.joined([root, "build", name + ".out"]) — and is released after
 # the call.
-func joined(parts: list(string)) -> string:
+func joined(parts: list[str]) -> str:
     var whole = ""
     for part in parts:
         whole = join(whole, part)
@@ -64,7 +64,7 @@ func joined(parts: list(string)) -> string:
 # The last element: base("a/b.luc") is "b.luc".  Trailing separators
 # do not count — base("a/b/") is still "b" — the root's name is "/",
 # and the empty path's is "".
-func base(path: string) -> string:
+func base(path: str) -> str:
     if len(path) == 0:
         return ""
     var end = len(path)
@@ -81,7 +81,7 @@ func base(path: string) -> string:
 # name has no directory written down, and the honest answer that is
 # still a usable path is "." — join(dir(p), base(p)) names the same
 # file p does.  The root is its own directory.
-func dir(path: string) -> string:
+func dir(path: str) -> str:
     if len(path) == 0:
         return "."
     var end = len(path)
@@ -104,7 +104,7 @@ func dir(path: string) -> string:
 # The extension of the last element, dot included: ".luc" for
 # "main.luc", "" when there is none.  A leading dot is a hidden
 # file's name, not an extension — extension(".bashrc") is "".
-func extension(path: string) -> string:
+func extension(path: str) -> str:
     let name = base(path)
     var at = len(name)
     while at > 0 and name.byte_at(at - 1) != 46:
@@ -116,7 +116,7 @@ func extension(path: string) -> string:
 # The last element without its extension: stem("a/main.luc") is
 # "main".  The pair puts a name back together: stem(p) +
 # extension(p) is always base(p).
-func stem(path: string) -> string:
+func stem(path: str) -> str:
     let name = base(path)
     let suffix = extension(path)
     return name[0:len(name) - len(suffix)]

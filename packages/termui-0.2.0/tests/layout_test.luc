@@ -4,14 +4,14 @@
 import termui
 import layout
 
-func sum(sizes: list(long)) -> long:
-    var total: long = 0
+func sum(sizes: list[i64]) -> i64:
+    var total: i64 = 0
     for size in sizes:
         total = total + size
     return total
 
 func test_cells_are_exact_and_grow_takes_the_rest():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.cells(count = 5))
     items.append(layout.Length.grow(weight = 1))
     let sizes = layout.resolve(80, 0, items)
@@ -20,7 +20,7 @@ func test_cells_are_exact_and_grow_takes_the_rest():
     assert(sum(sizes) == 80)
 
 func test_grow_splits_leftover_by_weight_and_fills_exactly():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.grow(weight = 1))
     items.append(layout.Length.grow(weight = 3))
     let sizes = layout.resolve(41, 0, items)
@@ -31,7 +31,7 @@ func test_grow_splits_leftover_by_weight_and_fills_exactly():
     assert(sum(sizes) == 41)
 
 func test_between_clamps_its_ratio():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     # A quarter of 80 is 20, inside [18, 24], so it stays 20.
     items.append(layout.Length.between(low = 18, high = 24, ratio = 25))
     items.append(layout.Length.grow(weight = 1))
@@ -44,7 +44,7 @@ func test_between_clamps_its_ratio():
     assert(narrow[1] == 22)
 
 func test_gaps_come_out_of_the_usable_space():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.grow(weight = 1))
     items.append(layout.Length.grow(weight = 1))
     # Two grows over 21 with a gap of 1 share 20: 10 and 10.
@@ -54,7 +54,7 @@ func test_gaps_come_out_of_the_usable_space():
     assert(sum(sizes) == 20)
 
 func test_oversubscription_shrinks_between_toward_its_floor():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.cells(count = 5))
     items.append(layout.Length.between(low = 18, high = 24, ratio = 25))
     items.append(layout.Length.grow(weight = 1))
@@ -66,7 +66,7 @@ func test_oversubscription_shrinks_between_toward_its_floor():
     assert(sizes[0] >= 0 and sizes[1] >= 0 and sizes[2] >= 0)
 
 func test_the_solve_is_total_at_zero_width():
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.cells(count = 5))
     items.append(layout.Length.grow(weight = 1))
     let sizes = layout.resolve(0, 0, items)
@@ -75,7 +75,7 @@ func test_the_solve_is_total_at_zero_width():
 
 func test_row_places_rectangles_left_to_right():
     let area = termui.Rect(row = 0, column = 0, rows = 24, columns = 80)
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.cells(count = 20))
     items.append(layout.Length.grow(weight = 1))
     let rects = layout.Row.solve(area, 0, items)
@@ -85,7 +85,7 @@ func test_row_places_rectangles_left_to_right():
 
 func test_column_places_rectangles_top_to_bottom():
     let area = termui.Rect(row = 0, column = 0, rows = 24, columns = 80)
-    var items = new list(layout.Length)
+    var items = new list[layout.Length]
     items.append(layout.Length.grow(weight = 1))
     items.append(layout.Length.cells(count = 1))
     let rects = layout.Column.solve(area, 0, items)

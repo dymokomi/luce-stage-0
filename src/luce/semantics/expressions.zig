@@ -201,33 +201,28 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
 
 pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
     var object_type: Type = undefined;
-    // The recorded dimension run — empty for everything but an
-    // array.
     var recorded_dims: []nodes.Operand = &.{};
     if (types.builtinNamed(new.type_name.name) == .array) {
-        if (new.dims.len == 0 or new.dims.len > 4) {
-            try self.fail("luce.sema.new", new.span, "new array takes 1 to 4 dimension sizes: new array(long, 5, 5)", .{});
+        // A direct construction writes only the element type. Runtime
+        // dimension values establish the rank; `_` belongs to an array
+        // type annotation or an alias, not beside the values that make it.
+        if (new.type_name.arguments.len != 1 or new.type_name.wildcards != 0) {
+            try self.fail(
+                "luce.sema.container.type",
+                new.type_name.span,
+                "new array writes one element type, then its sizes: new array[i64](5, 5)",
+                .{},
+            );
             return null;
         }
         const element = (try resolve.resolveType(self.analyzer, self.module, new.type_name.arguments[0])) orelse return null;
-        // `new array(T, n)` spells its shape with expressions, so
-        // it interns the heap type here rather than through the
-        // written-type path — and needs the same refusal.
         if (try resolve.refuseOptionalPart(self.analyzer, element, new.type_name.arguments[0], "array element")) {
             return null;
         }
+        recorded_dims = (try lowerArrayDimensions(self, new, null)) orelse return null;
         object_type = try resolve.internHeapType(self.analyzer, .{
             .array = .{ .element = element, .rank = @intCast(new.dims.len) },
         });
-        const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
-        const dimensions = run.values;
-        for (dimensions, new.dims) |*dimension, expression| {
-            if (!try self.widensInto(dimension, .long)) {
-                try self.fail("luce.sema.new", expression.span(), "array dimensions are long", .{});
-                return null;
-            }
-        }
-        recorded_dims = try recorder.recordOperandRun(self, dimensions, run.copied);
     } else {
         object_type = (try resolve.resolveType(self.analyzer, self.module, new.type_name)) orelse return null;
         if (object_type != .heap) {
@@ -263,6 +258,18 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
             );
             return null;
         }
+        const descriptor = self.analyzer.heap_types.items[object_type.heap];
+        if (descriptor == .array) {
+            recorded_dims = (try lowerArrayDimensions(self, new, descriptor.array.rank)) orelse return null;
+        } else if (new.dims.len != 0) {
+            try self.fail(
+                "luce.sema.container.type",
+                new.span,
+                "new {s} takes no construction values; write new {s}",
+                .{ try self.analyzer.typeName(object_type), new.type_name.name },
+            );
+            return null;
+        }
     }
     return .{
         .node = try recorder.recordNode(self, .{ .new_object = .{
@@ -273,6 +280,45 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         } }),
         .value_type = object_type,
     };
+}
+
+/// Check and record the runtime extents of an array construction.
+/// `rank` is known for an alias and absent for direct `new array[T](...)`,
+/// whose value count establishes it.
+fn lowerArrayDimensions(
+    self: *FunctionBuilder,
+    new: ast.NewObject,
+    rank: ?u8,
+) Error!?[]nodes.Operand {
+    if (new.dims.len == 0 or new.dims.len > 4) {
+        try self.fail(
+            "luce.sema.container.type",
+            new.span,
+            "new array takes 1 to 4 dimension sizes: new array[i64](5, 5)",
+            .{},
+        );
+        return null;
+    }
+    if (rank) |expected| {
+        if (new.dims.len != expected) {
+            try self.fail(
+                "luce.sema.container.type",
+                new.span,
+                "new {s} needs {d} dimension sizes, got {d}",
+                .{ new.type_name.name, expected, new.dims.len },
+            );
+            return null;
+        }
+    }
+    const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
+    const dimensions = run.values;
+    for (dimensions, new.dims) |*dimension, expression| {
+        if (!try self.widensInto(dimension, .long)) {
+            try self.fail("luce.sema.container.type", expression.span(), "array dimensions are i64", .{});
+            return null;
+        }
+    }
+    return @as(?[]nodes.Operand, try recorder.recordOperandRun(self, dimensions, run.copied));
 }
 
 /// `[a, b, c]`.  A list place keeps it a list; a rank-1 array place
@@ -301,7 +347,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         try self.fail(
             "luce.sema.type",
             literal.span,
-            "an empty [] needs a list(T) or array(T, _) annotation",
+            "an empty [] needs a list[T] or array[T, _] annotation",
             .{},
         );
         return null;
@@ -408,7 +454,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
         // back out as a `Key` (docs/ENUMS.md, As built 2026-08-12).
         if (first == .enumeration) break :inferred first;
         if (first.isInteger()) break :inferred .long;
-        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are long, string or an enum, got {s}", .{
+        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are i64, str or an enum, got {s}", .{
             try self.analyzer.typeName(first),
         });
         return null;
@@ -515,7 +561,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     const is_string = target.value_type == .string;
     const descriptor = self.analyzer.heapOf(target.value_type);
     if (!is_string and (descriptor == null or descriptor.? != .list)) {
-        try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list and string", .{
+        try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list and str", .{
             try self.analyzer.typeName(target.value_type),
         });
         return null;
@@ -523,7 +569,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     const lowered_bounds = sequence[1..];
     for (lowered_bounds) |*value| {
         if (!try self.widensInto(value, .long)) {
-            try self.fail("luce.sema.type", slice.span, "slice bounds are long", .{});
+            try self.fail("luce.sema.type", slice.span, "slice bounds are i64", .{});
             return null;
         }
     }
@@ -1104,7 +1150,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
                     try self.fail(
                         "luce.sema.type",
                         binary.span,
-                        "{s} works on int and long; {s} has no bits a program may see",
+                        "{s} works on integers; {s} has no bits a program may see",
                         .{
                             context.operatorText(binary.op),
                             try self.analyzer.typeName(operand_type),
@@ -1120,7 +1166,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             try self.fail(
                 "luce.sema.type",
                 binary.span,
-                "string does not support '%'; use an f-string such as f\"hello {{name}}\" for interpolation",
+                "str does not support '%'; use an f-string such as f\"hello {{name}}\" for interpolation",
                 .{},
             );
             return null;
@@ -1156,7 +1202,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             try self.fail(
                 "luce.sema.type",
                 binary.span,
-                "{s} is a set of names and has no order; write int({s}) {s} int({s}) to compare the numbers behind them",
+                "{s} is a set of names and has no order; write i64({s}) {s} i64({s}) to compare the numbers behind them",
                 .{
                     try self.analyzer.typeName(operand_type),
                     try calls.writtenTarget(self, binary.left),
@@ -1174,7 +1220,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             try self.fail(
                 "luce.sema.type",
                 binary.span,
-                "a function value has no order, and no equality either; compare string(f) if the name is what you meant",
+                "a function value has no order, and no equality either; compare str(f) if the name is what you meant",
                 .{},
             );
             return null;
@@ -1522,7 +1568,7 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
             // complements at its arithmetic type, like every other
             // operator (docs/TYPES.md D5).
             if (!operand.value_type.isNumeric() or operand.value_type.isFloating()) {
-                try self.fail("luce.sema.type", unary.span, "~ works on int and long; {s} has no bits a program may see", .{
+                try self.fail("luce.sema.type", unary.span, "~ works on integers; {s} has no bits a program may see", .{
                     try self.analyzer.typeName(operand.value_type),
                 });
                 return null;

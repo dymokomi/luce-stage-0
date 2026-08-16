@@ -5,7 +5,7 @@
 # list of constraints into rectangles is `termui.layout`, and it is
 # built out of these operations.
 
-# The sixteen names a program reaches for; the fields stay `long`
+# The sixteen names a program reaches for; the fields stay `i64`
 # because 256-colour terminals are why `term_style` takes a number.
 enum Color:
     black
@@ -26,26 +26,26 @@ enum Color:
     bright_white
 
 struct Style:
-    foreground: long = 7
-    background: long = -1
+    foreground: i64 = 7
+    background: i64 = -1
     bold: bool = false
 
     static func of(colour: Color) -> Style:
-        return Style(foreground = int(colour))
+        return Style(foreground = i32(colour))
 
 # A rectangle of terminal cells.  Every operation is total: a split
 # past the edge answers an empty rectangle rather than trapping,
 # because a small window is a resize and not a bug.
 struct Rect:
-    row: long = 0
-    column: long = 0
-    rows: long = 0
-    columns: long = 0
+    row: i64 = 0
+    column: i64 = 0
+    rows: i64 = 0
+    columns: i64 = 0
 
     func is_empty() -> bool:
         return self.rows <= 0 or self.columns <= 0
 
-    func split_top(height: long) -> (Rect, Rect):
+    func split_top(height: i64) -> (Rect, Rect):
         let taken = clamp(height, 0, self.rows)
         let top = Rect(row = self.row, column = self.column, rows = taken, columns = self.columns)
         let rest = Rect(
@@ -56,7 +56,7 @@ struct Rect:
         )
         return top, rest
 
-    func split_bottom(height: long) -> (Rect, Rect):
+    func split_bottom(height: i64) -> (Rect, Rect):
         let taken = clamp(height, 0, self.rows)
         let rest = Rect(
             row = self.row,
@@ -72,7 +72,7 @@ struct Rect:
         )
         return bottom, rest
 
-    func split_left(width: long) -> (Rect, Rect):
+    func split_left(width: i64) -> (Rect, Rect):
         let taken = clamp(width, 0, self.columns)
         let left = Rect(row = self.row, column = self.column, rows = self.rows, columns = taken)
         let rest = Rect(
@@ -83,7 +83,7 @@ struct Rect:
         )
         return left, rest
 
-    func split_right(width: long) -> (Rect, Rect):
+    func split_right(width: i64) -> (Rect, Rect):
         let taken = clamp(width, 0, self.columns)
         let rest = Rect(
             row = self.row,
@@ -99,7 +99,7 @@ struct Rect:
         )
         return right, rest
 
-    func inset(amount: long) -> Rect:
+    func inset(amount: i64) -> Rect:
         return Rect(
             row = self.row + amount,
             column = self.column + amount,

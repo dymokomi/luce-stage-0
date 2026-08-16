@@ -157,9 +157,9 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     // which is a sentence about a struct nobody declared.
     if (types.retiredSpelling(written.name)) |now| {
         try self.fail(
-            "luce.sema.type",
+            "luce.sema.type.retired",
             written.span,
-            "the builtin types are lowercase: {s} is written {s}",
+            "{s} is retired; write {s}",
             .{ written.name, now },
         );
         return null;
@@ -172,27 +172,27 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         return resolveSignature(self, module, written);
     }
     if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
-        .boolean, .byte, .short, .int, .long, .half, .float, .double, .string => {
+        .boolean, .u8, .i16, .i32, .i64, .f16, .f32, .f64, .str => {
             if (written.arguments.len != 0 or written.wildcards != 0) {
                 try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
                 return null;
             }
             return switch (builtin) {
                 .boolean => .boolean,
-                .byte => .byte,
-                .short => .short,
-                .int => .int,
-                .long => .long,
-                .half => .half,
-                .float => .float,
-                .double => .double,
-                .string => .string,
+                .u8 => .byte,
+                .i16 => .short,
+                .i32 => .int,
+                .i64 => .long,
+                .f16 => .half,
+                .f32 => .float,
+                .f64 => .double,
+                .str => .string,
                 .list, .map, .array, .builder, .file, .task => unreachable, // answered by the outer switch
             };
         },
         .list => {
             if (written.arguments.len != 1 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "list takes one element type: list(long)", .{});
+                try self.fail("luce.sema.container.type", written.span, "list takes one element type: list[i64]", .{});
                 return null;
             }
             const element = (try resolveType(self, module, written.arguments[0])) orelse return null;
@@ -202,7 +202,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         },
         .map => {
             if (written.arguments.len != 2 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "map takes key and value types: map(string, long)", .{});
+                try self.fail("luce.sema.container.type", written.span, "map takes key and value types: map[str, i64]", .{});
                 return null;
             }
             const key = (try resolveType(self, module, written.arguments[0])) orelse return null;
@@ -220,7 +220,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                     try self.fail(
                         "luce.sema.type",
                         written.arguments[0].span,
-                        "map keys are long, string or an enum; a union has no key form — keep {s} in the value and key by what identifies it",
+                        "map keys are i64, str or an enum; a union has no key form — keep {s} in the value and key by what identifies it",
                         .{try self.typeName(key)},
                     );
                     return null;
@@ -228,7 +228,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 try self.fail(
                     "luce.sema.type",
                     written.arguments[0].span,
-                    "map keys are long, string or an enum, got {s}",
+                    "map keys are i64, str or an enum, got {s}",
                     .{try self.typeName(key)},
                 );
                 return null;
@@ -261,7 +261,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 try self.fail(
                     "luce.sema.type",
                     written.span,
-                    "array spells element and shape: array(long, _) up to array(long, _, _, _, _)",
+                    "array spells element and rank: array[i64, _] up to array[i64, _, _, _, _]",
                     .{},
                 );
                 return null;
@@ -294,7 +294,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         // exactly as `Function.fallible` leaves it untouched.
         .task => {
             if (written.wildcards != 0 or written.arguments.len > 1) {
-                try self.fail("luce.sema.type", written.span, "task holds one answer: task(T), task(T!), task(!), or task", .{});
+                try self.fail("luce.sema.container.type", written.span, "task holds one answer: task[T], task[T!], task[!], or task", .{});
                 return null;
             }
             var answered: Type = .none;
@@ -447,16 +447,13 @@ pub fn refuseFunctionPart(
 /// see.  A misremembered `Str` or `Bolean` is the commonest of all
 /// type errors and the cheapest to answer well.
 fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
-    // A name the language used to answer to gets told what it is
-    // called now, by name.  Edit distance cannot find `long` from
-    // `Int`, and a reader whose only mistake is remembering an
-    // older spelling is owed the new one rather than "unknown
-    // type" (docs/TYPES.md D8).
+    // A name the language used to answer to gets its exact replacement,
+    // never an edit-distance guess.
     if (types.retiredSpelling(written.name)) |now| {
         try self.fail(
-            "luce.sema.type",
+            "luce.sema.type.retired",
             written.span,
-            "the builtin types are lowercase: {s} is written {s}",
+            "{s} is retired; write {s}",
             .{ written.name, now },
         );
         return;

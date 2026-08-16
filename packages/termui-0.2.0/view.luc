@@ -11,16 +11,16 @@ import termui
 import text
 
 interface View:
-    func measure(area: termui.Rect) -> (long, long)
+    func measure(area: termui.Rect) -> (i64, i64)
     func draw(into: surface.Surface, area: termui.Rect)
 
 # A block of styled lines.  Backed by `text.Line`, so one line may carry
 # many styles (a highlighted source row), not one style for the block.
 struct Text: View:
-    lines: list(text.Line)
+    lines: list[text.Line]
 
-    func measure(area: termui.Rect) -> (long, long):
-        var columns: long = 0
+    func measure(area: termui.Rect) -> (i64, i64):
+        var columns: i64 = 0
         for line in self.lines:
             columns = max(columns, line.width())
         return min(len(self.lines), max(area.rows, 0)), min(columns, max(area.columns, 0))
@@ -33,10 +33,10 @@ struct Text: View:
 
 # A rectangle of one repeated cell — a selection bar, a cleared pane.
 struct Fill: View:
-    glyph: string = " "
+    glyph: str = " "
     style: termui.Style = termui.Style()
 
-    func measure(area: termui.Rect) -> (long, long):
+    func measure(area: termui.Rect) -> (i64, i64):
         return max(area.rows, 0), max(area.columns, 0)
 
     func draw(into: surface.Surface, area: termui.Rect):

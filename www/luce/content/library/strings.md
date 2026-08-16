@@ -37,9 +37,9 @@ import std.strings
 
 func main():
     let text = "alpha;beta;gamma"
-    print(string(text.find(";", 2) else -1))
+    print(str(text.find(";", 2) else -1))
     print(f"{text.contains("beta")} {text.starts_with("alpha")}")
-    print(string(text.count(";")))
+    print(str(text.count(";")))
 ```
 
 ```output
@@ -69,7 +69,7 @@ import std.strings
 
 func main():
     let words = "  one   two  three ".split("")
-    print(string(len(words)))
+    print(str(len(words)))
     print("a,,b".split(",").join("|"))
     print("AbC".lower())
     print("ha".repeat(3))
@@ -106,7 +106,7 @@ func main():
     print(f"{len(word)} bytes, {word.width()} characters")
     print(f"[{word.pad_left(6)}]")
     print(f"[{word.take(3)}]")
-    print(string(len(word.characters())))
+    print(str(len(word.characters())))
 ```
 
 ```output
@@ -154,10 +154,10 @@ import std.strings
 
 func main():
     let bytes = strings.to_bytes("hé")
-    print(string(len(bytes)))
+    print(str(len(bytes)))
     print(strings.from_bytes(bytes) else "(invalid)")
 
-    var bad: list(byte) = [255]
+    var bad: list[u8] = [255]
     print(strings.from_bytes(bad) else "(invalid)")
 ```
 

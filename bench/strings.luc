@@ -1,4 +1,4 @@
-# string manipulation: build a big text with a builder, then split,
+# str manipulation: build a big text with a builder, then split,
 # count, case-fold, and replace over it — all through std strings,
 # which is pure Luce over byte_at and slices.  The C twin is
 # bench/strings.c; both print the same numbers.
@@ -6,15 +6,15 @@
 import std.strings
 
 func main():
-    var b = new builder()
+    var b = new builder
     for i in range(0, 400000):
         b.append("item-")
-        b.append(string(i))
+        b.append(str(i))
         b.append(";")
     let text = b.build()
 
     let pieces = text.split(";")
-    var total_len: long = 0
+    var total_len: i64 = 0
     for piece in pieces:
         total_len += len(piece)
 

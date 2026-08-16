@@ -9,7 +9,7 @@ const agree = @import("agree.zig");
 
 test "scalar chains are interchangeable with their target at every boundary" {
     try agree.prints(
-        \\alias Id = long
+        \\alias Id = i64
         \\alias UserId = Id
         \\alias MaybeId = UserId?
         \\
@@ -20,66 +20,66 @@ test "scalar chains are interchangeable with their target at every boundary" {
         \\    return value else 0
         \\
         \\func main():
-        \\    let raw: long = UserId(41.4)
+        \\    let raw: i64 = UserId(41.4)
         \\    let named: UserId = identity(raw)
-        \\    let back: long = named
-        \\    print(string(present(back) + 1))
+        \\    let back: i64 = named
+        \\    print(str(present(back) + 1))
         \\
     , "42\n");
 }
 
 test "container aliases resolve recursively and may be constructed with new" {
     try agree.prints(
-        \\alias UserId = long
-        \\alias Users = list(UserId)
-        \\alias UserIndex = map(string, UserId)
-        \\alias Grid = array(UserId, _, _)
+        \\alias UserId = i64
+        \\alias Users = list[UserId]
+        \\alias UserIndex = map[str, UserId]
+        \\alias Grid = array[UserId, _, _]
         \\
         \\func main():
         \\    var users: Users = new Users
         \\    users.append(40)
         \\    var index: UserIndex = new UserIndex
         \\    index["answer"] = users[0] + 2
-        \\    let grid: Grid = new array(long, 1, 1)
+        \\    let grid: Grid = new Grid(1, 1)
         \\    grid[0, 0] = index["answer"]
-        \\    print(string(grid[0, 0]))
+        \\    print(str(grid[0, 0]))
         \\
     , "42\n");
 }
 
 test "a function alias is the same callable type" {
     try agree.prints(
-        \\alias Transform = func(long) -> long
+        \\alias Transform = func(i64) -> i64
         \\
-        \\func bump(value: long) -> long:
+        \\func bump(value: i64) -> i64:
         \\    return value + 1
         \\
-        \\func apply(transform: Transform, value: long) -> long:
+        \\func apply(transform: Transform, value: i64) -> i64:
         \\    return transform(value)
         \\
         \\func main():
         \\    let transform: Transform = bump
-        \\    print(string(apply(transform, 41)))
+        \\    print(str(apply(transform, 41)))
         \\
     , "42\n");
 }
 
 test "aliases preserve enum storage widths and task resource lifetimes" {
     try agree.prints(
-        \\alias Width = byte
-        \\alias Work = task(long)
+        \\alias Width = u8
+        \\alias Work = task[i64]
         \\
         \\enum Small(Width):
         \\    answer = 42
         \\
-        \\func compute() -> long:
-        \\    return long(Small.answer)
+        \\func compute() -> i64:
+        \\    return i64(Small.answer)
         \\
         \\func main():
         \\    let value: Small = Small.answer
         \\    let work: Work = spawn compute()
-        \\    print(string(value))
-        \\    print(string(work.wait()))
+        \\    print(str(value))
+        \\    print(str(work.wait()))
         \\
     , "answer\n42\n");
 }
@@ -92,14 +92,14 @@ test "forward aliases name structs enums unions and interfaces" {
         \\alias View = Drawable
         \\
         \\interface Drawable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: View:
-        \\    offset: long
-        \\    static func shifted(offset: long) -> Button:
+        \\    offset: i64
+        \\    static func shifted(offset: i64) -> Button:
         \\        return Button(offset = offset)
         \\
-        \\    func render(value: long) -> long:
+        \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
         \\enum Method:
@@ -107,13 +107,13 @@ test "forward aliases name structs enums unions and interfaces" {
         \\    post
         \\
         \\union Outcome:
-        \\    okay(value: long)
-        \\    failed(message: string)
+        \\    okay(value: i64)
+        \\    failed(message: str)
         \\
-        \\func draw(item: View, value: long) -> long:
+        \\func draw(item: View, value: i64) -> i64:
         \\    return item.render(value)
         \\
-        \\func read(answer: Answer) -> long:
+        \\func read(answer: Answer) -> i64:
         \\    match answer:
         \\        okay(value):
         \\            return value
@@ -121,19 +121,19 @@ test "forward aliases name structs enums unions and interfaces" {
         \\            return len(message)
         \\
         \\func main():
-        \\    let shift: func(long) -> Item = Item.shifted
-        \\    let make_answer: func(long) -> Answer = Answer.okay
+        \\    let shift: func(i64) -> Item = Item.shifted
+        \\    let make_answer: func(i64) -> Answer = Answer.okay
         \\    let button: Item = shift(1)
         \\    let method: Kind = Kind.get
         \\    assert(method == Kind.get)
-        \\    print(string(draw(button, read(make_answer(41)))))
+        \\    print(str(draw(button, read(make_answer(41)))))
         \\
     , "42\n");
 }
 
 test "aliases are transparent while file-scope constants fold" {
     try agree.prints(
-        \\alias Count = long
+        \\alias Count = i64
         \\alias Position = Point
         \\alias Choice = Method
         \\
@@ -148,7 +148,7 @@ test "aliases are transparent while file-scope constants fold" {
         \\const SELECTED: Choice = Choice.answer
         \\
         \\func main():
-        \\    print(string(ORIGIN.x + long(SELECTED) - 41))
+        \\    print(str(ORIGIN.x + i64(SELECTED) - 41))
         \\
     , "42\n");
 }
@@ -156,20 +156,20 @@ test "aliases are transparent while file-scope constants fold" {
 test "an interface alias keeps heterogeneous list and map dispatch" {
     try agree.prints(
         \\alias Element = UIElement
-        \\alias Elements = list(Element)
-        \\alias ElementMap = map(string, Element)
+        \\alias Elements = list[Element]
+        \\alias ElementMap = map[str, Element]
         \\
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct AddOne: Element:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
         \\struct AddTwo: Element:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + 2
         \\
         \\func main():
@@ -179,15 +179,15 @@ test "an interface alias keeps heterogeneous list and map dispatch" {
         \\    var by_name: ElementMap = new ElementMap
         \\    by_name["one"] = items[0]
         \\    by_name["two"] = items[1]
-        \\    print(string(by_name["two"].render(40)))
+        \\    print(str(by_name["two"].render(40)))
         \\
     , "42\n");
 }
 
 test "public aliases cross a module boundary without runtime identity" {
     const models: agree.File = .{ .name = "models", .source =
-        \\alias UserId = long
-        \\alias Users = list(UserId)
+        \\alias UserId = i64
+        \\alias Users = list[UserId]
         \\
         \\func answer() -> UserId:
         \\    return 42
@@ -210,7 +210,7 @@ test "public aliases cross a module boundary without runtime identity" {
 test "a public alias may re-export an imported nominal type" {
     const models: agree.File = .{ .name = "models", .source =
         \\struct User:
-        \\    id: long
+        \\    id: i64
         \\
     };
     const facade: agree.File = .{ .name = "facade", .source =

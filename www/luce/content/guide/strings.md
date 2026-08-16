@@ -34,7 +34,7 @@ import std.strings
 
 func main():
     let line = "  name , age , city  "
-    var fields: list(string) = []
+    var fields: list[str] = []
     for raw in line.split(","):
         fields.append(raw.trim())
     print(f"{len(fields)}: [{fields.join("][")}]")
@@ -54,11 +54,11 @@ usual shape for accumulating text:
 
 ```luce run
 func main():
-    var joined = new builder()
+    var joined = new builder
     for i in range(0, 4):
         if i > 0:
             joined.append(" ")
-        joined.append(string(i))
+        joined.append(str(i))
     print(joined.build())
 ```
 
@@ -82,9 +82,9 @@ import std.strings
 
 func main():
     let path = "src/luce/main.luc"
-    print(string(path.find("/", 4) else -1))
+    print(str(path.find("/", 4) else -1))
     print(f"{path.starts_with("src")} {path.ends_with(".luc")}")
-    print(string(path.count("/")))
+    print(str(path.count("/")))
 ```
 
 ```output
@@ -138,7 +138,7 @@ at valid UTF-8 boundaries.
 ```luce run
 func main():
     let text = "a,bb,ccc"
-    var start: long = 0
+    var start: i64 = 0
     while true:
         let comma = text.find_byte(44, start)
         if comma < 0:
@@ -194,9 +194,9 @@ fractional digits are no longer meaningful. An f-string format such as
 import std.strings
 
 func main():
-    print(string(1.0 / 3.0))
-    let wide: double = 1.0 / 3.0
-    print(string(wide))
+    print(str(1.0 / 3.0))
+    let wide: f64 = 1.0 / 3.0
+    print(str(wide))
     print(strings.format_float(wide, 4))
     print(strings.format_float(-2.345, 2))
 ```

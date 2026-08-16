@@ -121,10 +121,10 @@ fn hasCode(parsed: *const Parsed, code: []const u8) bool {
 test "the plan's scale example parses" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func scale_point(point: Point, factor: double) -> Point:
+        \\func scale_point(point: Point, factor: f64) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
@@ -159,13 +159,13 @@ test "every declaration form at file scope parses into its own list" {
         \\import geo
         \\
         \\const width = 80
-        \\const banner: string = "loom"
+        \\const banner: str = "loom"
         \\
         \\struct Theme:
-        \\    keyword: long
-        \\    comment: long
+        \\    keyword: i64
+        \\    comment: i64
         \\
-        \\    static func default() -> long:
+        \\    static func default() -> i64:
         \\        return 176
         \\
         \\func main():
@@ -183,7 +183,7 @@ test "every declaration form at file scope parses into its own list" {
     try testing.expectEqual(source_mod.Origin.sibling, parsed.program.imports[1].origin);
     try testing.expectEqual(@as(usize, 2), parsed.program.constants.len);
     try testing.expect(parsed.program.constants[0].annotation == null);
-    try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
+    try testing.expectEqualStrings("str", parsed.program.constants[1].annotation.?.name);
     try testing.expectEqual(@as(usize, 2), parsed.program.structs[0].fields.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
@@ -191,9 +191,9 @@ test "every declaration form at file scope parses into its own list" {
 
 test "type aliases parse their complete target and visibility" {
     var parsed = try expectClean(
-        \\alias UserId = long
-        \\private alias Names = list(string)
-        \\public alias Callback = func(UserId, Names) -> string
+        \\alias UserId = i64
+        \\private alias Names = list[str]
+        \\public alias Callback = func(UserId, Names) -> str
         \\alias MaybeCallback = Callback?
         \\
         \\func main():
@@ -204,34 +204,34 @@ test "type aliases parse their complete target and visibility" {
 
     try testing.expectEqual(@as(usize, 4), parsed.program.aliases.len);
     try testing.expectEqualStrings("UserId", parsed.program.aliases[0].name);
-    try testing.expectEqualStrings("long", parsed.program.aliases[0].target.name);
+    try testing.expectEqualStrings("i64", parsed.program.aliases[0].target.name);
     try testing.expectEqual(ast.Visibility.none, parsed.program.aliases[0].visibility);
 
     const names = parsed.program.aliases[1];
     try testing.expectEqual(ast.Visibility.private, names.visibility);
     try testing.expectEqualStrings("list", names.target.name);
-    try testing.expectEqualStrings("string", names.target.arguments[0].name);
+    try testing.expectEqualStrings("str", names.target.arguments[0].name);
 
     const callback = parsed.program.aliases[2];
     try testing.expectEqual(ast.Visibility.public, callback.visibility);
     try testing.expectEqualStrings("func", callback.target.name);
     try testing.expectEqual(@as(usize, 2), callback.target.arguments.len);
-    try testing.expectEqualStrings("string", callback.target.result.?.name);
+    try testing.expectEqualStrings("str", callback.target.result.?.name);
 
     try testing.expect(parsed.program.aliases[3].target.optional);
 }
 
 test "type aliases require a name, equals, target, and file scope" {
-    try expectDiagnostics("alias = long\n", &.{
+    try expectDiagnostics("alias = i64\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 7, .contains = "alias name" },
     });
-    try expectDiagnostics("alias UserId long\n", &.{
+    try expectDiagnostics("alias UserId i64\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 14, .contains = "aliased type" },
     });
     try expectDiagnostics("alias UserId =\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "type name" },
     });
-    try expectDiagnostics("func main():\n    alias UserId = long\n", &.{
+    try expectDiagnostics("func main():\n    alias UserId = i64\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "file scope" },
     });
 }
@@ -272,7 +272,7 @@ test "as is a word, not a keyword: a binding named as still parses" {
     var parsed = try expectClean(
         \\func main():
         \\    let as = 2
-        \\    print(string(as))
+        \\    print(str(as))
         \\
     );
     defer parsed.deinit();
@@ -281,7 +281,7 @@ test "as is a word, not a keyword: a binding named as still parses" {
 
 test "return types and dotted type names parse" {
     var parsed = try expectClean(
-        \\func stash(index: map(string, list(long)), hits: list(long), origin: shapes.Point) -> list(long):
+        \\func stash(index: map[str, list[i64]], hits: list[i64], origin: shapes.Point) -> list[i64]:
         \\    return hits
         \\
         \\func main():
@@ -292,18 +292,18 @@ test "return types and dotted type names parse" {
     const stash = parsed.program.functions[0];
     try testing.expectEqualStrings("shapes.Point", stash.parameters[2].type_name.name);
     try testing.expectEqualStrings("list", stash.returns[0].name);
-    try testing.expectEqualStrings("long", stash.returns[0].arguments[0].name);
+    try testing.expectEqualStrings("i64", stash.returns[0].arguments[0].name);
 }
 
 test "struct bodies parse fields and static namespace functions" {
     var parsed = try expectClean(
         \\struct Helpers:
-        \\    value: long
-        \\    static func double(value: long) -> long:
+        \\    value: i64
+        \\    static func twice(value: i64) -> i64:
         \\        return value * 2
         \\
         \\func main():
-        \\    let value = Helpers.double(21)
+        \\    let value = Helpers.twice(21)
         \\
     );
     defer parsed.deinit();
@@ -313,14 +313,14 @@ test "struct bodies parse fields and static namespace functions" {
     // Dotted calls parse as method nodes; the analyzer decides whether
     // the chain names a namespace or a value.
     const dotted = parsed.program.functions[0].body.statements[0].let.value.method;
-    try testing.expectEqualStrings("double", dotted.name);
+    try testing.expectEqualStrings("twice", dotted.name);
     try testing.expectEqualStrings("Helpers", dotted.target.name.text);
 }
 
 test "const is file-scope, while let and var are function-scope" {
     var parsed = try expectClean(
         \\const width = 80
-        \\const banner: string = "loom " + version
+        \\const banner: str = "loom " + version
         \\const version = "2.0"
         \\
         \\func main():
@@ -331,7 +331,7 @@ test "const is file-scope, while let and var are function-scope" {
     try testing.expectEqual(@as(usize, 3), parsed.program.constants.len);
     try testing.expectEqualStrings("width", parsed.program.constants[0].name);
     try testing.expect(parsed.program.constants[0].annotation == null);
-    try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
+    try testing.expectEqualStrings("str", parsed.program.constants[1].annotation.?.name);
     try testing.expect(parsed.program.constants[1].value.* == .binary);
 
     try expectDiagnostics("let width = 80\n", &.{
@@ -355,21 +355,21 @@ test "visibility markers parse onto every declaration form, and unmarked stays n
         \\const quiet = 0
         \\
         \\private struct Inner:
-        \\    n: long
+        \\    n: i64
         \\
         \\struct Session:
-        \\    name: string
-        \\    private token: long = 0
-        \\    public func label() -> string:
+        \\    name: str
+        \\    private token: i64 = 0
+        \\    public func label() -> str:
         \\        return self.name
-        \\    private func stamp() -> long:
+        \\    private func stamp() -> i64:
         \\        return self.token
         \\
-        \\private func helper() -> long:
+        \\private func helper() -> i64:
         \\    return 1
         \\
         \\func main():
-        \\    print(string(helper()))
+        \\    print(str(helper()))
         \\
     );
     defer parsed.deinit();
@@ -394,9 +394,9 @@ test "a region dissolves onto its members, and equals the per-declaration marker
     var parsed = try expectClean(
         \\struct Rng:
         \\    private:
-        \\        state: long
+        \\        state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        return self.state
         \\
         \\func main():
@@ -412,12 +412,12 @@ test "a region dissolves onto its members, and equals the per-declaration marker
     var mixed = try expectClean(
         \\struct Handle:
         \\    private:
-        \\        slot: long
+        \\        slot: i64
         \\    public:
-        \\        label: string
+        \\        label: str
         \\    private:
-        \\        generation: long
-        \\        func raw() -> long:
+        \\        generation: i64
+        \\        func raw() -> i64:
         \\            return self.slot
         \\
         \\func main():
@@ -438,14 +438,14 @@ test "the visibility refusals land where the memo puts them" {
     try expectDiagnostics("func main():\n    public let x = 1\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = rule },
     });
-    try expectDiagnostics("func f(private x: long):\n    return\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("func f(private x: i64):\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = rule },
     });
     // One visibility word per declaration — file scope and struct alike.
     try expectDiagnostics("public private func f():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = "one visibility word" },
     });
-    try expectDiagnostics("struct P:\n    public public n: long\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("struct P:\n    public public n: i64\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 12, .contains = "one visibility word" },
     });
     // A region label at module level points at per-declaration markers.
@@ -454,7 +454,7 @@ test "the visibility refusals land where the memo puts them" {
     });
     // A marker inside a region: the block already said it.
     try expectDiagnostics(
-        "struct Rng:\n    private:\n        private state: long\n\nfunc main():\n    return\n",
+        "struct Rng:\n    private:\n        private state: i64\n\nfunc main():\n    return\n",
         &.{.{
             .code = "luce.parse.expected",
             .line = 3,
@@ -463,7 +463,7 @@ test "the visibility refusals land where the memo puts them" {
         }},
     );
     try expectDiagnostics(
-        "struct Rng:\n    private:\n        public func raw() -> long:\n            return 1\n\nfunc main():\n    return\n",
+        "struct Rng:\n    private:\n        public func raw() -> i64:\n            return 1\n\nfunc main():\n    return\n",
         &.{.{
             .code = "luce.parse.expected",
             .line = 3,
@@ -484,7 +484,7 @@ test "the visibility refusals land where the memo puts them" {
         }},
     );
     try expectDiagnostics(
-        "struct Rng:\n    private:\n    n: long\n\nfunc main():\n    return\n",
+        "struct Rng:\n    private:\n    n: i64\n\nfunc main():\n    return\n",
         &.{.{
             .code = "luce.parse.expected",
             .line = 3,
@@ -503,7 +503,7 @@ test "a marked member inside a region still parses, carrying the region's word" 
     // with the region's visibility, so recovery reads the struct the
     // author meant.
     var parsed = try parseText(
-        "struct Rng:\n    private:\n        private state: long\n\nfunc main():\n    return\n",
+        "struct Rng:\n    private:\n        private state: i64\n\nfunc main():\n    return\n",
     );
     defer parsed.deinit();
     try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
@@ -514,7 +514,7 @@ test "a marked member inside a region still parses, carrying the region's word" 
 
 test "array shape wildcards parse in annotations" {
     var parsed = try expectClean(
-        \\func total(grid: array(long, _, _)) -> long:
+        \\func total(grid: array[i64, _, _]) -> i64:
         \\    return dim(grid, 0)
         \\
         \\func main():
@@ -539,13 +539,13 @@ test "the bare underscore is refused as a declared name, everywhere one declares
     try expectDiagnostics("func _():\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = wildcard },
     });
-    try expectDiagnostics("struct _:\n    x: long\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("struct _:\n    x: i64\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
     });
-    try expectDiagnostics("struct P:\n    _: long\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("struct P:\n    _: i64\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = wildcard },
     });
-    try expectDiagnostics("func f(_: long):\n    return\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("func f(_: i64):\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
     });
     try expectDiagnostics("func main():\n    let _ = 1\n", &.{
@@ -570,9 +570,9 @@ test "late declarations parse: var with annotation only" {
     var parsed = try expectClean(
         \\func main():
         \\    var report: builder
-        \\    var grid: array(long, _, _)
-        \\    var count: long
-        \\    report = new builder()
+        \\    var grid: array[i64, _, _]
+        \\    var count: i64
+        \\    report = new builder
         \\
     );
     defer parsed.deinit();
@@ -583,8 +583,8 @@ test "late declarations parse: var with annotation only" {
     try testing.expect(body.statements[2].variable.value == null);
 
     // let never late-declares, and var needs a type or a value.
-    try expectDiagnostics("func main():\n    let frozen: long\n", &.{
-        .{ .code = "luce.parse.expected", .line = 2, .column = 21, .contains = "let always initializes" },
+    try expectDiagnostics("func main():\n    let frozen: i64\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "let always initializes" },
     });
     try expectDiagnostics("func main():\n    var untyped\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 16, .contains = "'=' with an initial value" },
@@ -596,7 +596,7 @@ test "every assignment place parses, nested and compound" {
         \\func main():
         \\    var n = 0
         \\    var p = Point(x = 1)
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    var cells = [Point(x = 1)]
         \\    n = 1
         \\    p.x = 2
@@ -657,7 +657,7 @@ test "every for form parses into the node its lowering needs" {
     var parsed = try expectClean(
         \\func main():
         \\    var xs = [1]
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    for i in range(0, 10):
         \\        print(i)
         \\    for x in xs:
@@ -738,7 +738,7 @@ test "return, break, and continue parse with and without a value" {
         \\        continue
         \\    return
         \\
-        \\func value() -> long:
+        \\func value() -> i64:
         \\    return 1 + 2
         \\
     );
@@ -1004,11 +1004,11 @@ test "every literal form parses" {
         \\    let g = "text"
         \\    let h = [1, 2, 3]
         \\    let i = []
-        \\    let j = new builder()
+        \\    let j = new builder
         \\    let k = new builder
-        \\    let l = new list(long)
-        \\    let m = new map(string, long)
-        \\    let n = new array(double, 4, 8)
+        \\    let l = new list[i64]
+        \\    let m = new map[str, i64]
+        \\    let n = new array[f64](4, 8)
         \\
     );
     defer parsed.deinit();
@@ -1024,14 +1024,14 @@ test "every literal form parses" {
     try testing.expectEqual(@as(usize, 0), body.statements[8].let.value.list_literal.elements.len);
     try testing.expectEqualStrings("builder", body.statements[9].let.value.new_object.type_name.name);
     try testing.expectEqualStrings("builder", body.statements[10].let.value.new_object.type_name.name);
-    try testing.expectEqualStrings("long", body.statements[11].let.value.new_object.type_name.arguments[0].name);
+    try testing.expectEqualStrings("i64", body.statements[11].let.value.new_object.type_name.arguments[0].name);
     try testing.expectEqualStrings("map", body.statements[12].let.value.new_object.type_name.name);
     try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.dims.len);
 }
 
 test "map literals parse in constant and runtime positions, across lines and with a trailing comma" {
     var parsed = try expectClean(
-        \\const months: map(string, long) = {
+        \\const months: map[str, i64] = {
         \\    "jan": 1,
         \\    "feb": 1 + 1,
         \\}
@@ -1068,7 +1068,7 @@ test "empty, malformed, and truncated map literals refuse once and recover" {
     defer empty.deinit();
     try testing.expectEqual(@as(usize, 1), empty.diagnostics.count());
     try testing.expectEqualStrings("luce.parse.expression", empty.diagnostics.at(0).?.code);
-    try testing.expect(std.mem.indexOf(u8, empty.diagnostics.at(0).?.message, "new map(K, V)") != null);
+    try testing.expect(std.mem.indexOf(u8, empty.diagnostics.at(0).?.message, "new map[K, V]") != null);
     try testing.expectEqual(@as(usize, 1), empty.program.functions[0].body.statements.len);
     try testing.expectEqualStrings("okay", empty.program.functions[0].body.statements[0].let.name);
 
@@ -1086,10 +1086,10 @@ test "empty, malformed, and truncated map literals refuse once and recover" {
 test "collections parse: types, new, literals, indexing, slices, for-in" {
     var parsed = try expectClean(
         \\func main():
-        \\    var xs: list(long) = [1, 2, 3]
-        \\    var m = new map(string, list(long))
-        \\    var grid = new array(double, 4, 8)
-        \\    var b = new builder()
+        \\    var xs: list[i64] = [1, 2, 3]
+        \\    var m = new map[str, list[i64]]
+        \\    var grid = new array[f64](4, 8)
+        \\    var b = new builder
         \\    xs[0] = 10
         \\    grid[1, 2] = 3.5
         \\    m["ones"] = xs
@@ -1098,7 +1098,7 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
         \\    let tail = xs[1:]
         \\    let whole = xs[:]
         \\    for x in xs:
-        \\        append(b, string(x))
+        \\        append(b, str(x))
         \\
     );
     defer parsed.deinit();
@@ -1106,7 +1106,7 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
 
     const annotated = body.statements[0].variable;
     try testing.expectEqualStrings("list", annotated.annotation.?.name);
-    try testing.expectEqualStrings("long", annotated.annotation.?.arguments[0].name);
+    try testing.expectEqualStrings("i64", annotated.annotation.?.arguments[0].name);
     try testing.expectEqual(@as(usize, 3), annotated.value.?.list_literal.elements.len);
 
     const map_new = body.statements[1].variable.value.?.new_object;
@@ -1192,7 +1192,7 @@ test "strings decode escapes" {
     try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
 }
 
-test "f-strings expand to string()-wrapped concatenation" {
+test "f-strings expand to str()-wrapped concatenation" {
     var parsed = try expectClean(
         \\func main():
         \\    let a = f"x = {x}, y = {y}"
@@ -1207,10 +1207,10 @@ test "f-strings expand to string()-wrapped concatenation" {
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
-    // "x = " + string(x) + ", y = " + string(y), left-associated.
+    // "x = " + str(x) + ", y = " + str(y), left-associated.
     const a = body.statements[0].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, a.op);
-    try testing.expectEqualStrings("string", a.right.call.callee);
+    try testing.expectEqualStrings("str", a.right.call.callee);
     try testing.expectEqualStrings("y", a.right.call.arguments[0].value.name.text);
     // Doubled braces are literal text, with no interpolation at all.
     try testing.expectEqualStrings("{literal}", body.statements[1].let.value.string_literal.decoded);
@@ -1259,7 +1259,7 @@ test "five unrelated mistakes yield five diagnostics, one each" {
         \\    let 3 = 4
         \\
         \\struct D
-        \\    x: long
+        \\    x: i64
         \\
         \\func e():
         \\    if q = 2:
@@ -1283,7 +1283,7 @@ test "a header that fails takes its orphaned body with it" {
     try expectDiagnostics("func main():\n    if x > 1\n        y = 2\n        z = 3\n    print(4)\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 13 },
     });
-    try expectDiagnostics("struct D\n    x: long\n    y: long\n", &.{
+    try expectDiagnostics("struct D\n    x: i64\n    y: i64\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9 },
     });
     // A header whose ':' is the *only* thing wrong is read on anyway:
@@ -1300,7 +1300,7 @@ test "a header that fails takes its orphaned body with it" {
         .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "':' to open the block" },
         .{ .code = "luce.parse.expression", .line = 3, .column = 12, .contains = "found end of line" },
     });
-    try expectDiagnostics("struct D\n    x: long\n    y:\n", &.{
+    try expectDiagnostics("struct D\n    x: i64\n    y:\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "':' after the struct name" },
         .{ .code = "luce.parse.expected", .line = 3, .column = 7, .contains = "a type name" },
     });
@@ -1318,7 +1318,7 @@ test "recovery resumes at the next declaration, not inside the last one" {
         \\    let ok = 1
         \\    var value = ok +
         \\
-        \\func helper() -> long:
+        \\func helper() -> i64:
         \\    return 2
         \\
     );
@@ -1382,7 +1382,7 @@ test "the ordinary mistakes name themselves and point at the offending token" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'else' has no matching 'if'" },
         },
         .{
-            .source = "func main():\n    struct S:\n        x: long\n",
+            .source = "func main():\n    struct S:\n        x: i64\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "belong at file scope" },
         },
         // A missing expression names what it found instead.
@@ -1557,24 +1557,24 @@ test "a missing comma is reported as a missing comma, in every list there is" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 17, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let m = new map(string long)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ',' before 'long'" },
+            .source = "func main():\n    let m = new map[str i64]\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 25, .contains = "missing ',' before 'i64'" },
         },
         .{
             .source = "func main():\n    let v = grid[1 2]\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let g = new array(long 2 3)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ','" },
+            .source = "func main():\n    let g = new array[i64](2 3)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 30, .contains = "missing ','" },
         },
         .{
-            .source = "func f(a: long b: long):\n    return\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 16, .contains = "missing ',' before 'b'" },
+            .source = "func f(a: i64 b: i64):\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "missing ',' before 'b'" },
         },
         .{
-            .source = "func main():\n    var x: map(string long) = new map(string, long)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 23, .contains = "missing ',' before 'long'" },
+            .source = "func main():\n    var x: map[str i64] = new map[str, i64]\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ',' before 'i64'" },
         },
     };
     for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});
@@ -1594,10 +1594,10 @@ test "a list that runs out of input blames the bracket, not the element that nev
     const cases = [_][]const u8{
         "func main():\n    let xs = [1, 2,\n",
         "func main():\n    let x = xs[0,\n",
-        "func main():\n    var x: list(long,\n",
-        "func main():\n    let g = new array(long, 2,\n",
+        "func main():\n    var x: list[i64,\n",
+        "func main():\n    let g = new array[i64](2,\n",
         "func main():\n    f(a,\n",
-        "func f(a: long,\n",
+        "func f(a: i64,\n",
         "func main():\n    let p = Point(x = 1,\n",
     };
     for (cases) |source| {
@@ -1730,7 +1730,7 @@ test "every recursive construct is bounded, and hitting the bound is one clean d
         .{ .name = "parentheses", .head = "func main():\n    let x = ", .unit = "(", .tail = "1\n" },
         .{ .name = "list literals", .head = "func main():\n    let x = ", .unit = "[", .tail = "1\n" },
         .{ .name = "calls", .head = "func main():\n    let x = ", .unit = "f(", .tail = "1\n" },
-        .{ .name = "type arguments", .head = "func main():\n    var x: ", .unit = "list(", .tail = "long\n" },
+        .{ .name = "type arguments", .head = "func main():\n    var x: ", .unit = "list[", .tail = "i64\n" },
     };
     for (cases) |case| {
         const text = try repeated(case.head, case.unit, 4000, case.tail);
@@ -1824,15 +1824,15 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\const width = 80
         \\
         \\struct Point:
-        \\    x: double
-        \\    func length() -> double:
+        \\    x: f64
+        \\    func length() -> f64:
         \\        return self.x
         \\    private static func origin() -> Point:
         \\        return Point(x = 0.0)
         \\
         \\func main():
         \\    var xs = [1, 2]
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    for i, x in xs:
         \\        if x % 2 == 0 and x > width:
         \\            m[f"k{i}"] += x
@@ -1861,16 +1861,16 @@ test "truncated input at every prefix terminates and stays inside the source" {
 /// the lexer and the outermost recovery; this exercises the grammar
 /// itself, which is where the recovery bugs live.
 const fragments = [_][]const u8{
-    "func main():",          "func f(a: long) -> long:", "static func make():",   "struct P:",
-    "import math",           "let x = ",                 "var y: long",           "return ",
-    "if ",                   "elif ",                    "else:",                 "while ",
-    "for i in range(0, 3):", "for x in xs:",             "break",                 "continue",
-    "print(x)",              "xs.append(",               "new map(string, long)", "new list(",
-    "new array(long, 2, 2)", "not ",                     "and ",                  "or ",
-    "==",                    "<",                        "+",                     "(",
-    ")",                     "[",                        "]",                     ",",
-    ":",                     ".",                        "=",                     "f\"{x}\"",
-    "\"text\"",              "1",                        "2.5",                   "true",
+    "func main():",          "func f(a: i64) -> i64:", "static func make():", "struct P:",
+    "import math",           "let x = ",               "var y: i64",          "return ",
+    "if ",                   "elif ",                  "else:",               "while ",
+    "for i in range(0, 3):", "for x in xs:",           "break",               "continue",
+    "print(x)",              "xs.append(",             "new map[str, i64]",   "new list(",
+    "new array[i64](2, 2)",  "not ",                   "and ",                "or ",
+    "==",                    "<",                      "+",                   "(",
+    ")",                     "[",                      "]",                   ",",
+    ":",                     ".",                      "=",                   "f\"{x}\"",
+    "\"text\"",              "1",                      "2.5",                 "true",
     "xs",                    "Point(x = 1)",
 };
 
@@ -1881,8 +1881,8 @@ const indents = [_][]const u8{ "", "    ", "        ", "            ", "  " };
 test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
         "func main():\n    let x = 1 + 2\n",
-        "func f(a: list(long)) -> long:\n    return len(a)\n",
-        "struct P:\n    x: double\n    static func zero() -> P:\n        return P(x = 0.0)\n",
+        "func f(a: list[i64]) -> i64:\n    return len(a)\n",
+        "struct P:\n    x: f64\n    static func zero() -> P:\n        return P(x = 0.0)\n",
         "enum Method:\n    stored\n    func compressed() -> bool:\n        return self != Method.stored\n",
         "let k = 3\n",
         "func main():\n    if x = 1:\n        for i in range(0, 2):\n            m[f\"{i}\"] += 1\n",
@@ -1986,10 +1986,10 @@ fn writeNearMiss(random: std.Random, text: *std.ArrayList(u8)) !void {
 test "a trailing ? makes a type optional, and there is no second one" {
     var parsed = try expectClean(
         \\struct Slot:
-        \\    held: string?
+        \\    held: str?
         \\
-        \\func find(key: map(string, long)?, fallback: long) -> long?:
-        \\    var seen: list(long)? = none
+        \\func find(key: map[str, i64]?, fallback: i64) -> i64?:
+        \\    var seen: list[i64]? = none
         \\    return fallback
         \\
     );
@@ -2006,12 +2006,12 @@ test "a trailing ? makes a type optional, and there is no second one" {
 
     try expectDiagnostics(
         \\func main():
-        \\    var n: long?? = none
+        \\    var n: i64?? = none
         \\
     , &.{.{
         .code = "luce.parse.type",
         .line = 2,
-        .column = 17,
+        .column = 16,
         .contains = "one '?' is all there is",
     }});
 }
@@ -2019,55 +2019,55 @@ test "a trailing ? makes a type optional, and there is no second one" {
 test "a parenthesized type is that type, and grouping is never required" {
     // The uniform rule (docs/BINDING.md D7): parentheses group a type
     // and change nothing about it.  What matters is what did *not*
-    // move — `long?` and `func(long) -> string?` parse exactly as they
+    // move — `i64?` and `func(i64) -> str?` parse exactly as they
     // always did, and the parenthesized spellings land on the same
     // shapes rather than on new ones.
     var parsed = try expectClean(
-        \\func f(bare: long?, grouped: (long)?, answering: func(long) -> string?, absent: (func(long) -> string)?) -> (long):
+        \\func f(bare: i64?, grouped: (i64)?, answering: func(i64) -> str?, absent: (func(i64) -> str)?) -> (i64):
         \\    return 1
         \\
     );
     defer parsed.deinit();
     const found = parsed.program.functions[0];
 
-    // `long?` and `(long)?` are one type written two ways.
-    try testing.expectEqualStrings("long", found.parameters[0].type_name.name);
+    // `i64?` and `(i64)?` are one type written two ways.
+    try testing.expectEqualStrings("i64", found.parameters[0].type_name.name);
     try testing.expect(found.parameters[0].type_name.optional);
-    try testing.expectEqualStrings("long", found.parameters[1].type_name.name);
+    try testing.expectEqualStrings("i64", found.parameters[1].type_name.name);
     try testing.expect(found.parameters[1].type_name.optional);
 
-    // `func(long) -> string?` still answers an optional string, and
+    // `func(i64) -> str?` still answers an optional string, and
     // the function type itself is present.
     const answering = found.parameters[2].type_name;
     try testing.expectEqualStrings("func", answering.name);
     try testing.expect(!answering.optional);
     try testing.expect(answering.result.?.optional);
 
-    // `(func(long) -> string)?` is the one thing newly writable: the
+    // `(func(i64) -> str)?` is the one thing newly writable: the
     // `?` lands on the function and the result keeps its own.
     const absent = found.parameters[3].type_name;
     try testing.expectEqualStrings("func", absent.name);
     try testing.expect(absent.optional);
     try testing.expect(!absent.result.?.optional);
 
-    // `-> (long)` is one type in parentheses, so it is `-> long` —
+    // `-> (i64)` is one type in parentheses, so it is `-> i64` —
     // the arity is what separates a parenthesized type from a return
     // shape, and one element is never a shape.
     try testing.expectEqual(@as(usize, 1), found.returns.len);
-    try testing.expectEqualStrings("long", found.returns[0].name);
+    try testing.expectEqualStrings("i64", found.returns[0].name);
 
     // A `?` inside the parentheses has taken the one level of absence
     // there is, wherever the parentheses stand.
-    try expectDiagnostics("func main():\n    var n: (long?)? = none\n", &.{.{
+    try expectDiagnostics("func main():\n    var n: (i64?)? = none\n", &.{.{
         .code = "luce.parse.type",
         .line = 2,
-        .column = 19,
+        .column = 18,
         .contains = "one '?' is all there is",
     }});
-    try expectDiagnostics("func f() -> (long?)?:\n    return none\n", &.{.{
+    try expectDiagnostics("func f() -> (i64?)?:\n    return none\n", &.{.{
         .code = "luce.parse.type",
         .line = 1,
-        .column = 20,
+        .column = 19,
         .contains = "one '?' is all there is",
     }});
 }
@@ -2123,15 +2123,15 @@ test "an else block still reads as a block, not as a fallback" {
 test "plain members imply self and static is an AST distinction" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: double
+        \\    x: f64
         \\
-        \\    func length() -> double:
+        \\    func length() -> f64:
         \\        return self.x
         \\
-        \\    func scale(factor: double):
+        \\    func scale(factor: f64):
         \\        self.x = self.x * factor
         \\
-        \\    static func origin(offset: double = 0.0) -> Point:
+        \\    static func origin(offset: f64 = 0.0) -> Point:
         \\        return Point(x = offset)
         \\
         \\func main():
@@ -2166,17 +2166,17 @@ test "plain members imply self and static is an AST distinction" {
 test "static composes with direct visibility, regions, and enums" {
     var parsed = try expectClean(
         \\struct Tools:
-        \\    private static func hidden(value: long) -> long:
+        \\    private static func hidden(value: i64) -> i64:
         \\        return value
         \\    public:
-        \\        static func shown() -> long:
+        \\        static func shown() -> i64:
         \\            return 1
-        \\        func read() -> long:
+        \\        func read() -> i64:
         \\            return 2
         \\
         \\enum Method:
         \\    stored
-        \\    private static func of(value: long) -> Method:
+        \\    private static func of(value: i64) -> Method:
         \\        return Method.stored
         \\    public func compressed() -> bool:
         \\        return self != Method.stored
@@ -2229,13 +2229,13 @@ test "written self parameters are refused with the migration" {
 
     try expectDiagnostics(
         \\struct Point:
-        \\    func f(a: long, self):
+        \\    func f(a: i64, self):
         \\        return
         \\
     , &.{.{
         .code = "luce.parse.self",
         .line = 2,
-        .column = 21,
+        .column = 20,
         .contains = teaching,
     }});
 
@@ -2253,7 +2253,7 @@ test "written self parameters are refused with the migration" {
     }});
 
     try expectDiagnostics(
-        \\func adjust(var value: long):
+        \\func adjust(var value: i64):
         \\    return
         \\
     , &.{.{
@@ -2284,7 +2284,7 @@ test "static is member-only, ordered, and recovers at the next declaration" {
         }},
     );
     try expectDiagnostics(
-        "struct Tools:\n    static value: long\n",
+        "struct Tools:\n    static value: i64\n",
         &.{.{
             .code = "luce.parse.static",
             .line = 2,
@@ -2321,7 +2321,7 @@ test "static is member-only, ordered, and recovers at the next declaration" {
     );
 
     var recovered = try parseText(
-        "struct Tools:\n    static value: long\n    static func okay():\n        return\n\nfunc main():\n    return\n",
+        "struct Tools:\n    static value: i64\n    static func okay():\n        return\n\nfunc main():\n    return\n",
     );
     defer recovered.deinit();
     try testing.expectEqual(@as(usize, 1), recovered.diagnostics.count());
@@ -2381,7 +2381,7 @@ test "every token kind has a name a diagnostic can print" {
 
 test "an enum declares members, a width, and the functions a struct declares" {
     var parsed = try expectClean(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored
         \\    deflated = 8
         \\
@@ -2397,7 +2397,7 @@ test "an enum declares members, a width, and the functions a struct declares" {
     try testing.expectEqual(@as(usize, 1), parsed.program.enums.len);
     const declared = parsed.program.enums[0];
     try testing.expectEqualStrings("Method", declared.name);
-    try testing.expectEqualStrings("byte", declared.backing.?.name);
+    try testing.expectEqualStrings("u8", declared.backing.?.name);
     try testing.expectEqual(@as(usize, 2), declared.members.len);
     try testing.expectEqualStrings("stored", declared.members[0].name);
     try testing.expect(declared.members[0].value == null);
@@ -2453,7 +2453,7 @@ test "an enum takes a visibility marker, and its members do not" {
 test "a member takes a value, not a type" {
     try expectDiagnostics(
         \\enum Method:
-        \\    stored: long
+        \\    stored: i64
         \\
         \\func main():
         \\    return
@@ -2470,8 +2470,8 @@ test "a union declares members, field lists, and the functions a struct declares
     var parsed = try expectClean(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double = 1.0)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64 = 1.0)
         \\
         \\    func wide() -> bool:
         \\        return true
@@ -2494,7 +2494,7 @@ test "a union declares members, field lists, and the functions a struct declares
     try testing.expectEqualStrings("circle", declared.members[1].name);
     try testing.expectEqual(@as(usize, 1), declared.members[1].fields.len);
     try testing.expectEqualStrings("radius", declared.members[1].fields[0].name);
-    try testing.expectEqualStrings("double", declared.members[1].fields[0].type_name.name);
+    try testing.expectEqualStrings("f64", declared.members[1].fields[0].type_name.name);
     try testing.expect(declared.members[1].fields[0].default == null);
     try testing.expectEqual(@as(usize, 2), declared.members[2].fields.len);
     try testing.expect(declared.members[2].fields[1].default != null);
@@ -2507,7 +2507,7 @@ test "a union declares members, field lists, and the functions a struct declares
 test "a union takes a visibility marker, and its members do not" {
     var parsed = try expectClean(
         \\private union Shape:
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    return
@@ -2520,7 +2520,7 @@ test "a union takes a visibility marker, and its members do not" {
     // the file it stands in cannot see.
     try expectDiagnostics(
         \\union Shape:
-        \\    private circle(radius: double)
+        \\    private circle(radius: f64)
         \\
         \\func main():
         \\    return
@@ -2534,7 +2534,7 @@ test "a union takes a visibility marker, and its members do not" {
     try expectDiagnostics(
         \\union Shape:
         \\    private:
-        \\        circle(radius: double)
+        \\        circle(radius: f64)
         \\
         \\func main():
         \\    return
@@ -2548,11 +2548,11 @@ test "a union takes a visibility marker, and its members do not" {
 }
 
 test "a union member's payload fields are named, always" {
-    // `circle(double)` is a tuple with a name in front of it
+    // `circle(f64)` is a tuple with a name in front of it
     // (docs/UNION.md D1, docs/RETURNS.md).
     try expectDiagnostics(
         \\union Shape:
-        \\    circle(double)
+        \\    circle(f64)
         \\
         \\func main():
         \\    return
@@ -2561,12 +2561,12 @@ test "a union member's payload fields are named, always" {
         .code = "luce.parse.expected",
         .line = 2,
         .column = 12,
-        .contains = "a payload field is named, always: write circle(name: double)",
+        .contains = "a payload field is named, always: write circle(name: f64)",
     }});
     // The struct field's colon, in the one body that parenthesizes.
     try expectDiagnostics(
         \\union Shape:
-        \\    circle: double
+        \\    circle: f64
         \\
         \\func main():
         \\    return
@@ -2608,7 +2608,7 @@ test "a union member's payload fields are named, always" {
     // Zig's tag reuse is not taken in this run (docs/UNION.md R2).
     try expectDiagnostics(
         \\union Shape(Kind):
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    return
@@ -2625,7 +2625,7 @@ test "a match arm binds payload fields by name alone" {
     var parsed = try expectClean(
         \\union Shape:
         \\    empty
-        \\    rect(width: double, height: double)
+        \\    rect(width: f64, height: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
@@ -2633,7 +2633,7 @@ test "a match arm binds payload fields by name alone" {
         \\        empty:
         \\            print("e")
         \\        rect(width, height):
-        \\            print(string(width + height))
+        \\            print(str(width + height))
         \\
     );
     defer parsed.deinit();
@@ -2662,7 +2662,7 @@ test "a match arm binds payload fields by name alone" {
     try expectDiagnostics(
         \\func main():
         \\    match s:
-        \\        circle(radius: double):
+        \\        circle(radius: f64):
         \\            return
         \\
     , &.{.{
@@ -2677,7 +2677,7 @@ test "union declares at file scope" {
     try expectDiagnostics(
         \\func main():
         \\    union Shape:
-        \\        circle(radius: double)
+        \\        circle(radius: f64)
         \\
     , &.{.{
         .code = "luce.parse.expected",

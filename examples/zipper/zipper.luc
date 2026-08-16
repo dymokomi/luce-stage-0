@@ -7,7 +7,7 @@
 # `std.zip` is the format and `std.files` is the disk; this program is
 # the two hundred lines between them, and it exists because a library
 # nobody can run is a claim rather than a capability.  Everything here
-# is ordinary Luce: `main(args)`, `try`, scope ownership, and the byte
+# is ordinary Luce: `main(args)`, `try`, scope ownership, and the u8
 # path `std.files` grew (docs/BYTES.md).
 #
 # **Names out of an archive are not trusted.**  An entry's name is
@@ -19,7 +19,7 @@
 # through the same gate: zipper will not author an archive it would
 # refuse to extract.
 #
-# **A bad name stops the run before anything is written; a bad byte
+# **A bad name stops the run before anything is written; a bad u8
 # stops it where it is.**  Every name is checked before the first file
 # is created, so a hostile archive leaves the disk as it found it.  A
 # checksum that fails is a different thing — it is found on the entry
@@ -42,10 +42,10 @@ const usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECT
 
 # How many, said the way a person says it.  "1 entries" is the kind of
 # small dishonesty that makes a tool feel machine-written.
-func counted(amount: long, one: string, many: string) -> string:
+func counted(amount: i64, one: str, many: str) -> str:
     if amount == 1:
         return "1 " + one
-    return string(amount) + " " + many
+    return str(amount) + " " + many
 
 # --- the name gate ---------------------------------------------------
 
@@ -58,7 +58,7 @@ func counted(amount: long, one: string, many: string) -> string:
 # the directory it was asked to go into.  The two facts are the same
 # fact, which is why one gate can be both the format check and the
 # security check.
-func safe_name(name: string) -> string!:
+func safe_name(name: str) -> str!:
     if len(name) == 0:
         error("zipper: an entry with no name")
     if paths.is_absolute(name):
@@ -73,28 +73,28 @@ func safe_name(name: string) -> string!:
             error("zipper: " + name + " climbs out of the directory it would be extracted into")
     return name
 
-func is_letter(value: byte) -> bool:
+func is_letter(value: u8) -> bool:
     if value >= 97 and value <= 122:
         return true
     return value >= 65 and value <= 90
 
 # --- list ------------------------------------------------------------
 
-func list_archive(path: string) -> !:
+func list_archive(path: str) -> !:
     let archive = try zip.read(path)
     let entries = try zip.entries(archive)
     print(counted(len(entries), "entry", "entries") + " in " + path + ", " + counted(len(archive), "byte", "bytes"))
     for entry in entries:
-        var line = new builder()
+        var line = new builder
         line.append("  ")
         line.append(strings.pad_right(method_of(entry), 9))
-        line.append(strings.pad_left(string(entry.size()), 10))
-        line.append(strings.pad_left(string(entry.packed()), 10))
+        line.append(strings.pad_left(str(entry.size()), 10))
+        line.append(strings.pad_left(str(entry.packed()), 10))
         line.append("  ")
         line.append(entry.name())
         print(line.build())
 
-func method_of(entry: zip.Entry) -> string:
+func method_of(entry: zip.Entry) -> str:
     if entry.deflated():
         return "deflated"
     return "stored"
@@ -104,13 +104,13 @@ func method_of(entry: zip.Entry) -> string:
 # Extract every entry into `into`, which must already be there.
 #
 # Two passes on purpose, and the first one still writes nothing: every
-# name in the archive goes through the gate before the first byte lands,
+# name in the archive goes through the gate before the first u8 lands,
 # so a hostile archive is refused whole and leaves the disk exactly as
 # it found it.  The second pass makes each entry's directory as it
 # reaches it — `make_directory` makes the parents and does not mind one
 # that is already there, so this is a call and not a bookkeeping
 # problem.
-func unzip_archive(path: string, into: string) -> !:
+func unzip_archive(path: str, into: str) -> !:
     let archive = try zip.read(path)
     let entries = try zip.entries(archive)
     # The question this gate actually asks is "is there a *directory*
@@ -121,12 +121,12 @@ func unzip_archive(path: string, into: string) -> !:
     if not try files.is_dir(into):
         error("zipper: " + into + " is not a directory to extract into")
 
-    var names: list(string) = []
+    var names: list[str] = []
     for entry in entries:
         let name = try safe_name(entry.name())
         names.append(name)
 
-    var written: long = 0
+    var written: i64 = 0
     for index, entry in entries:
         let name = names[index]
         let target = paths.join(into, name)
@@ -139,7 +139,7 @@ func unzip_archive(path: string, into: string) -> !:
             try files.make_directory(paths.dir(target))
             let data = try zip.extract(archive, entry)
             try files.write_bytes(target, data)
-            print("  " + strings.pad_left(string(len(data)), 10) + "  " + target)
+            print("  " + strings.pad_left(str(len(data)), 10) + "  " + target)
             written += 1
     print(counted(written, "file", "files") + " extracted into " + into)
 
@@ -151,22 +151,22 @@ func unzip_archive(path: string, into: string) -> !:
 #
 # Every entry is offered to DEFLATE and keeps whichever of the two is
 # smaller (`Writer.add`), so an entry never grows by being compressed.
-func zip_files(path: string, sources: list(string)) -> !:
+func zip_files(path: str, sources: list[str]) -> !:
     var maker = zip.writer()
-    var total: long = 0
+    var total: i64 = 0
     for source in sources:
         let name = try safe_name(source)
         let data = try files.read_bytes(source)
         try maker.add(name, data, true)
         total += len(data)
-        print("  " + strings.pad_left(string(len(data)), 10) + "  " + name)
+        print("  " + strings.pad_left(str(len(data)), 10) + "  " + name)
     let archive = maker.finish()
     try zip.write(path, archive)
     print(counted(len(sources), "file", "files") + " (" + counted(total, "byte", "bytes") + ") into " + path + ", " + counted(len(archive), "byte", "bytes"))
 
 # --- the command line ------------------------------------------------
 
-func main(args: list(string)) -> !:
+func main(args: list[str]) -> !:
     if len(args) == 0:
         print_error(usage)
         exit(2)
@@ -188,7 +188,7 @@ func main(args: list(string)) -> !:
         if len(args) < 3:
             print_error("usage: zipper zip ARCHIVE.zip FILE [FILE ...]")
             exit(2)
-        var sources: list(string) = []
+        var sources: list[str] = []
         for index in range(2, len(args)):
             sources.append(args[index])
         try zip_files(args[1], sources)

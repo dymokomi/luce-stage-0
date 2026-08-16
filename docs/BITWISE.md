@@ -21,12 +21,12 @@ fields are made of.
 func main():
     let flags = 0b1010
     let mask = 0b0110
-    print(string(flags & mask))   # 2
-    print(string(flags | mask))   # 14
-    print(string(flags ^ mask))   # 12
-    print(string(~flags))         # -11
-    print(string(flags << 2))     # 40
-    print(string(flags >> 1))     # 5
+    print(str(flags & mask))   # 2
+    print(str(flags | mask))   # 14
+    print(str(flags ^ mask))   # 12
+    print(str(~flags))         # -11
+    print(str(flags << 2))     # 40
+    print(str(flags >> 1))     # 5
 ```
 
 **Integers only.** `int` and `long` operate directly; `byte` and `short`
@@ -81,7 +81,7 @@ the count and the width), on both engines.
 func main():
     let width = 40
     let n = width - 8
-    print(string(1 << n))   # ok: 32 < 64 for a long shift
+    print(str(1 << n))   # ok: 32 < 64 for a i64 shift
 ```
 
 A `1 << 64` on a `long`, or a negative count, traps at run time. In a
@@ -107,7 +107,7 @@ func main():
     x ^= 0b0011
     x <<= 2
     x >>= 1
-    print(string(x))
+    print(str(x))
 ```
 
 ## Constant folding
@@ -117,11 +117,11 @@ semantics, the shift-count check included. A folded bitwise constant is
 a value that inlines wherever it is used:
 
 ```luce
-const read_mask: long = 0xFF
+const read_mask: i64 = 0xFF
 const write_flag = 1 << 4
 
 func main():
-    print(string(read_mask & write_flag))
+    print(str(read_mask & write_flag))
 ```
 
 ## Literals
@@ -143,7 +143,7 @@ func main():
     let a = 0xFF_FF
     let b = 0b1010_1010
     let c = 1_000_000
-    print(string(a + b + c))
+    print(str(a + b + c))
 ```
 
 `shift_out_of_range` is the one trap code these operators add, shared by

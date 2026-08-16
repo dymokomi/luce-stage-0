@@ -117,26 +117,26 @@ test "constants: values and every flat container shape materialize once" {
         \\    special = 8
         \\
         \\struct Cell:
-        \\    label: string
-        \\    value: long
-        \\    fallback: long?
+        \\    label: str
+        \\    value: i64
+        \\    fallback: i64?
         \\
         \\const TITLE = "constant text whose bytes live beyond an inline value"
-        \\const ANSWER: long = 40 + 2
+        \\const ANSWER: i64 = 40 + 2
         \\const CHOSEN = Kind.special
         \\const CELL = Cell(label = "row", value = ANSWER, fallback = none)
-        \\const NUMBERS: list(long) = [3, 1, 2]
+        \\const NUMBERS: list[i64] = [3, 1, 2]
         \\const NUMBERS_ALIAS = NUMBERS
-        \\const NUMBERS_EQUAL: list(long) = [3, 1, 2]
+        \\const NUMBERS_EQUAL: list[i64] = [3, 1, 2]
         \\const AGES = {"ada": 36, "alan": 41}
         \\const AGES_ALIAS = AGES
         \\const AGES_EQUAL = {"ada": 36, "alan": 41}
         \\const METHODS = {0: "stored", 8: "deflated"}
-        \\const ROW: array(long, _) = [7, 8, 9]
+        \\const ROW: array[i64, _] = [7, 8, 9]
         \\const ROW_ALIAS = ROW
-        \\const ROW_EQUAL: array(long, _) = [7, 8, 9]
-        \\const EMPTY_LIST: list(long) = []
-        \\const EMPTY_ROW: array(long, _) = []
+        \\const ROW_EQUAL: array[i64, _] = [7, 8, 9]
+        \\const EMPTY_LIST: list[i64] = []
+        \\const EMPTY_ROW: array[i64, _] = []
         \\
         \\func main():
         \\    assert(TITLE.contains("beyond"))
@@ -151,17 +151,17 @@ test "constants: values and every flat container shape materialize once" {
         \\    assert(ROW == ROW_ALIAS)
         \\    assert(ROW != ROW_EQUAL)
         \\    assert(len(EMPTY_LIST) == 0 and EMPTY_ROW.dim(0) == 0)
-        \\    var sum: long = 0
+        \\    var sum: i64 = 0
         \\    for index, value in NUMBERS:
         \\        sum += index + value
         \\    assert(sum == 9)
         \\    assert(AGES.has("ada") and AGES["alan"] == 41)
-        \\    var joined = new builder()
+        \\    var joined = new builder
         \\    for key, value in AGES:
-        \\        joined.append(key + string(value))
+        \\        joined.append(key + str(value))
         \\    assert(joined.build() == "ada36alan41")
         \\    assert(METHODS[0] == "stored" and METHODS[8] == "deflated")
-        \\    var row_total: long = 0
+        \\    var row_total: i64 = 0
         \\    for value in ROW:
         \\        row_total += value
         \\    assert(row_total == 24 and ROW.dim(0) == 3)
@@ -177,8 +177,8 @@ test "constants: values and every flat container shape materialize once" {
 
 test "constants: a runtime map literal is fresh, mutable, ordered, and owns values" {
     try agree.ok(
-        \\func key_total(values: map(long, string)) -> long:
-        \\    var total: long = 0
+        \\func key_total(values: map[i64, str]) -> i64:
+        \\    var total: i64 = 0
         \\    for key, value in values:
         \\        total += key
         \\    return total
@@ -188,22 +188,22 @@ test "constants: a runtime map literal is fresh, mutable, ordered, and owns valu
         \\    var same_shape = {1: "last", 2: "two"}
         \\    assert(len(numbers) == 2 and numbers[1] == "last")
         \\    assert(numbers != same_shape)
-        \\    var order = new builder()
+        \\    var order = new builder
         \\    for key, value in numbers:
-        \\        order.append(string(key) + value)
+        \\        order.append(str(key) + value)
         \\    assert(order.build() == "1last2two")
         \\    numbers[3] = "three"
         \\    numbers.remove(2)
         \\    assert(numbers.has(3) and not numbers.has(2) and key_total(numbers) == 4)
         \\    var mixed = {"whole": 1, "fraction": 2.5}
         \\    assert(mixed["whole"] == 1.0 and mixed["fraction"] == 2.5)
-        \\    var nested: map(string, list(long)) = {"row": [1, 2], "row": [7]}
+        \\    var nested: map[str, list[i64]] = {"row": [1, 2], "row": [7]}
         \\    nested["row"].append(8)
         \\    assert(len(nested) == 1)
         \\    assert(nested["row"][0] == 7 and nested["row"][1] == 8)
-        \\    var empty_list: list(long) = []
-        \\    var empty_row: array(long, _) = []
-        \\    var row: array(long, _) = [3, 1, 2]
+        \\    var empty_list: list[i64] = []
+        \\    var empty_row: array[i64, _] = []
+        \\    var row: array[i64, _] = [3, 1, 2]
         \\    row.sort()
         \\    empty_list.append(9)
         \\    assert(empty_list[0] == 9 and empty_row.dim(0) == 0)
@@ -217,8 +217,8 @@ test "constants: a runtime map literal is fresh, mutable, ordered, and owns valu
 test "constants: a fresh-only reassignment loop stays mutable" {
     try agree.ok(
         \\func main():
-        \\    var values: list(long) = [0]
-        \\    var turn: long = 0
+        \\    var values: list[i64] = [0]
+        \\    var turn: i64 = 0
         \\    while turn < 3:
         \\        values.append(turn)
         \\        values = [turn]
@@ -230,14 +230,14 @@ test "constants: a fresh-only reassignment loop stays mutable" {
 
 test "constants: aliases and defaults share a row; equal declarations do not" {
     try agree.ok(
-        \\const TABLE: list(long) = [5, 8]
+        \\const TABLE: list[i64] = [5, 8]
         \\const ALIAS = TABLE
-        \\const EQUAL: list(long) = [5, 8]
+        \\const EQUAL: list[i64] = [5, 8]
         \\
-        \\func sees_table(values: list(long) = TABLE) -> bool:
+        \\func sees_table(values: list[i64] = TABLE) -> bool:
         \\    return values == TABLE
         \\
-        \\func distinct_defaults(left: list(long) = [5, 8], right: list(long) = [5, 8]) -> bool:
+        \\func distinct_defaults(left: list[i64] = [5, 8], right: list[i64] = [5, 8]) -> bool:
         \\    return left != right
         \\
         \\func main():
@@ -252,13 +252,13 @@ test "constants: aliases and defaults share a row; equal declarations do not" {
 
 test "constants: a lambda may read a constant container" {
     try agree.ok(
-        \\const TABLE: list(long) = [4, 8]
+        \\const TABLE: list[i64] = [4, 8]
         \\
-        \\func apply(read: func() -> long) -> long:
+        \\func apply(read: func() -> i64) -> i64:
         \\    return read()
         \\
         \\func main():
-        \\    let last: func() -> long = () -> TABLE[1]
+        \\    let last: func() -> i64 = () -> TABLE[1]
         \\    assert(last() == 8)
         \\    assert(apply(() -> TABLE[0]) == 4)
         \\
@@ -267,18 +267,18 @@ test "constants: a lambda may read a constant container" {
 
 test "constants: unary elements keep arithmetic promotion widths" {
     try agree.ok(
-        \\const SMALL: byte = 1
-        \\const NARROW: short = 2
-        \\const FRACTION: half = 1.5
-        \\const INTEGERS: list(int) = [~SMALL, ~NARROW, -SMALL, -NARROW]
-        \\const FLOATS: list(float) = [-FRACTION]
+        \\const SMALL: u8 = 1
+        \\const NARROW: i16 = 2
+        \\const FRACTION: f16 = 1.5
+        \\const INTEGERS: list[i32] = [~SMALL, ~NARROW, -SMALL, -NARROW]
+        \\const FLOATS: list[f32] = [-FRACTION]
         \\
         \\func main():
         \\    assert(INTEGERS[0] == -2)
         \\    assert(INTEGERS[1] == -3)
         \\    assert(INTEGERS[2] == -1)
         \\    assert(INTEGERS[3] == -2)
-        \\    assert(FLOATS[0] == float(-1.5))
+        \\    assert(FLOATS[0] == f32(-1.5))
         \\
     );
 }
@@ -290,34 +290,34 @@ test "constants: every flat element value survives materialization" {
         \\    ready = 7
         \\
         \\struct Entry:
-        \\    label: string
-        \\    weight: double
+        \\    label: str
+        \\    weight: f64
         \\    enabled: bool
         \\    mode: Mode
-        \\    fallback: long?
+        \\    fallback: i64?
         \\
         \\struct NarrowEntry:
-        \\    small: byte?
-        \\    fraction: half?
+        \\    small: u8?
+        \\    fraction: f16?
         \\
         \\const FLAGS = [true, false, true]
-        \\const REALS: list(double) = [1, 2.5]
+        \\const REALS: list[f64] = [1, 2.5]
         \\const MODES = [Mode.idle, Mode.ready]
         \\const ENTRIES = [
         \\    Entry(label = "first", weight = 1.5, enabled = true, mode = Mode.idle, fallback = none),
-        \\    Entry(label = "second", weight = 2.5, enabled = false, mode = Mode.ready, fallback = long(9)),
+        \\    Entry(label = "second", weight = 2.5, enabled = false, mode = Mode.ready, fallback = i64(9)),
         \\]
         \\const BY_NUMBER = {
         \\    4: Entry(label = "mapped", weight = 3.5, enabled = true, mode = Mode.ready, fallback = none),
         \\}
         \\const NARROW = [NarrowEntry(small = 200, fraction = 1.5)]
-        \\const WORDS: array(string, _) = ["alpha", "a string longer than inline storage"]
+        \\const WORDS: array[str, _] = ["alpha", "a string longer than inline storage"]
         \\
-        \\func takes_byte(value: byte) -> bool:
-        \\    return value == byte(200)
+        \\func takes_byte(value: u8) -> bool:
+        \\    return value == u8(200)
         \\
-        \\func takes_half(value: half) -> bool:
-        \\    return value == half(1.5)
+        \\func takes_half(value: f16) -> bool:
+        \\    return value == f16(1.5)
         \\
         \\func main():
         \\    assert(FLAGS[0] and not FLAGS[1] and FLAGS[2])
@@ -344,7 +344,7 @@ test "constants: public imports keep identity and private constants stay inside"
         \\const PUBLIC = [1, 2, 3]
         \\const PUBLIC_ALIAS = PUBLIC
         \\
-        \\func secret_value() -> long:
+        \\func secret_value() -> i64:
         \\    return SECRET[0]
         \\
     };
@@ -378,7 +378,7 @@ test "constants: public imports keep identity and private constants stay inside"
 
     try expectRefusedAt(
         \\private struct Hidden:
-        \\    value: long
+        \\    value: i64
         \\
         \\const TABLE = [Hidden(value = 1)]
         \\
@@ -389,8 +389,8 @@ test "constants: public imports keep identity and private constants stay inside"
 }
 
 test "constants: equal same-named imports remain distinct pool rows" {
-    const left: agree.File = .{ .name = "left", .source = "const TABLE: list(long) = [1, 2]\n" };
-    const right: agree.File = .{ .name = "right", .source = "const TABLE: list(long) = [1, 2]\n" };
+    const left: agree.File = .{ .name = "left", .source = "const TABLE: list[i64] = [1, 2]\n" };
+    const right: agree.File = .{ .name = "right", .source = "const TABLE: list[i64] = [1, 2]\n" };
     var program = try agree.project(
         \\import left
         \\import right
@@ -405,13 +405,13 @@ test "constants: equal same-named imports remain distinct pool rows" {
 
 test "constants: a worker materializes its own constants and defaults" {
     try agree.ok(
-        \\const TABLE: list(long) = [11, 31]
+        \\const TABLE: list[i64] = [11, 31]
         \\
-        \\func from_default(values: list(long) = TABLE) -> long:
+        \\func from_default(values: list[i64] = TABLE) -> i64:
         \\    assert(values == TABLE)
         \\    return values[0]
         \\
-        \\func worker() -> long:
+        \\func worker() -> i64:
         \\    return TABLE[1] + from_default()
         \\
         \\func main():
@@ -447,13 +447,13 @@ test "constants: file scope is const, and constant maps reject duplicate keys" {
         \\const TWO = 1 + 1
         \\const BAD = {
         \\    TWO: 1,
-        \\    long(2): 2,
+        \\    i64(2): 2,
         \\}
         \\
         \\func main():
         \\    assert(len(BAD) == 2)
         \\
-    , "luce.sema.const", "map key 2 is duplicated; it was first written on line 3", "long(2)");
+    , "luce.sema.const", "map key 2 is duplicated; it was first written on line 3", "i64(2)");
 }
 
 test "constants: flatness and explicit empty shapes are compile-time contracts" {
@@ -465,7 +465,7 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[1]");
     try expectRefusedAt(
-        \\const MAYBE: int? = none
+        \\const MAYBE: i32? = none
         \\const BAD = [MAYBE]
         \\
         \\func main():
@@ -473,7 +473,7 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\
     , "luce.sema.const", "constant container elements cannot be optional; choose a present value, or put the optional inside an object-free struct", "MAYBE]");
     try expectRefusedAt(
-        \\const MAYBE: int? = none
+        \\const MAYBE: i32? = none
         \\const BAD = {"answer": MAYBE}
         \\
         \\func main():
@@ -481,37 +481,37 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\
     , "luce.sema.const", "constant map values cannot be optional; choose a present value, or put the optional inside an object-free struct", "MAYBE}");
     try expectRefusedAt(
-        \\const GRID: array(long, _, _) = [1, 2]
+        \\const GRID: array[i64, _, _] = [1, 2]
         \\
         \\func main():
         \\    assert(GRID.dim(0) == 2)
         \\
-    , "luce.sema.const", "a flat bracket constant builds a rank-1 array; array(long, _, _) has rank 2", "[1, 2]");
+    , "luce.sema.const", "a flat bracket constant builds a rank-1 array; array[i64, _, _] has rank 2", "[1, 2]");
     try expectRefusedAt(
         \\const EMPTY = []
         \\
         \\func main():
         \\    assert(len(EMPTY) == 0)
         \\
-    , "luce.sema.const", "an empty [] needs a list(T) or array(T, _) annotation", "[]");
+    , "luce.sema.const", "an empty [] needs a list[T] or array[T, _] annotation", "[]");
     // Flatness is a property of the annotated element type even when
     // the literal contains no elements to walk.
     try expectRefusedAt(
-        \\const TASKS: list(task(long)) = []
+        \\const TASKS: list[task[i64]] = []
         \\
         \\func main():
         \\    assert(len(TASKS) == 0)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
-        \\const TASKS: array(task(long), _) = []
+        \\const TASKS: array[task[i64], _] = []
         \\
         \\func main():
         \\    assert(TASKS.dim(0) == 0)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
-        \\const ROWS: list(list(long)) = []
+        \\const ROWS: list[list[i64]] = []
         \\
         \\func main():
         \\    assert(len(ROWS) == 0)
@@ -523,7 +523,7 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\func main():
         \\    assert(len(EMPTY) == 0)
         \\
-    , "luce.parse.expression", "an empty map has no literal; write 'new map(K, V)' so its key and value types are explicit", "{}");
+    , "luce.parse.expression", "an empty map has no literal; write 'new map[K, V]' so its key and value types are explicit", "{}");
 }
 
 // ---------------------------------------------------------------------------
@@ -532,9 +532,9 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
 
 test "constants: a hidden list append traps immutable_object" {
     try agree.trapSays(
-        \\const TABLE: list(long) = [1, 2]
+        \\const TABLE: list[i64] = [1, 2]
         \\
-        \\func mutate(values: list(long)):
+        \\func mutate(values: list[i64]):
         \\    values.append(3)
         \\
         \\func main():
@@ -543,9 +543,9 @@ test "constants: a hidden list append traps immutable_object" {
     , .immutable_object, "constant container is immutable");
 
     try agree.trap(
-        \\const TABLE: list(long) = [1, 2]
+        \\const TABLE: list[i64] = [1, 2]
         \\
-        \\func mutate(values: list(long) = TABLE):
+        \\func mutate(values: list[i64] = TABLE):
         \\    values.append(3)
         \\
         \\func main():
@@ -554,9 +554,9 @@ test "constants: a hidden list append traps immutable_object" {
     , .immutable_object);
 
     try agree.trap(
-        \\const TABLE: list(long) = [1, 2]
+        \\const TABLE: list[i64] = [1, 2]
         \\
-        \\func mutate(values: list(long)):
+        \\func mutate(values: list[i64]):
         \\    values[0] = 9
         \\
         \\func main():
@@ -567,9 +567,9 @@ test "constants: a hidden list append traps immutable_object" {
 
 test "constants: a worker's own root stays immutable through an unknown alias" {
     try agree.trapSays(
-        \\const TABLE: list(long) = [1, 2]
+        \\const TABLE: list[i64] = [1, 2]
         \\
-        \\func mutate(values: list(long)):
+        \\func mutate(values: list[i64]):
         \\    values[0] = 9
         \\
         \\func worker():
@@ -584,9 +584,9 @@ test "constants: a worker's own root stays immutable through an unknown alias" {
 
 test "constants: hidden map, array method, and inline index writes trap" {
     try agree.trap(
-        \\const TABLE: map(string, long) = {"a": 1}
+        \\const TABLE: map[str, i64] = {"a": 1}
         \\
-        \\func mutate(values: map(string, long)):
+        \\func mutate(values: map[str, i64]):
         \\    values["a"] = 2
         \\
         \\func main():
@@ -594,9 +594,9 @@ test "constants: hidden map, array method, and inline index writes trap" {
         \\
     , .immutable_object);
     try agree.trap(
-        \\const ROW: array(long, _) = [1, 2]
+        \\const ROW: array[i64, _] = [1, 2]
         \\
-        \\func mutate(values: array(long, _)):
+        \\func mutate(values: array[i64, _]):
         \\    values.fill(9)
         \\
         \\func main():
@@ -604,9 +604,9 @@ test "constants: hidden map, array method, and inline index writes trap" {
         \\
     , .immutable_object);
     try agree.trap(
-        \\const ROW: array(long, _) = [1, 2]
+        \\const ROW: array[i64, _] = [1, 2]
         \\
-        \\func mutate(values: array(long, _)):
+        \\func mutate(values: array[i64, _]):
         \\    values[0] = 9
         \\
         \\func main():
@@ -619,12 +619,12 @@ test "constants: hidden sort_by reaches the immutable backstop" {
     try agree.trap(
         \\import std.lists
         \\
-        \\const TABLE: list(long) = [3, 1, 2]
+        \\const TABLE: list[i64] = [3, 1, 2]
         \\
-        \\func before(left: long, right: long) -> bool:
+        \\func before(left: i64, right: i64) -> bool:
         \\    return left < right
         \\
-        \\func sort(values: list(long)):
+        \\func sort(values: list[i64]):
         \\    values.sort_by(before)
         \\
         \\func main():
@@ -638,15 +638,15 @@ test "constants: file.read through a parameter traps before changing the world" 
     var session = try agree.compare(
         \\import std.files
         \\
-        \\const BUFFER: array(byte, _) = [byte(0), byte(0), byte(0)]
+        \\const BUFFER: array[u8, _] = [u8(0), u8(0), u8(0)]
         \\
-        \\func read(file: file, into: array(byte, _)) -> long!:
+        \\func read(file: file, into: array[u8, _]) -> i64!:
         \\    return try file.read(into)
         \\
         \\func main() -> !:
         \\    var file = try files.open("notes.txt")
         \\    let count = try read(file, BUFFER)
-        \\    print(string(count))
+        \\    print(str(count))
         \\
     , .{ .world = world });
     defer session.deinit();

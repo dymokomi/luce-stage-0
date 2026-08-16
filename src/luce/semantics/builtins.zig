@@ -161,8 +161,8 @@ pub const retired_builtins = [_]struct {
     name: []const u8,
     instead: []const u8,
 }{
-    .{ .name = "arg", .instead = "declare func main(args: list(string)): and index args" },
-    .{ .name = "arg_count", .instead = "declare func main(args: list(string)): and write len(args)" },
+    .{ .name = "arg", .instead = "declare func main(args: list[str]): and index args" },
+    .{ .name = "arg_count", .instead = "declare func main(args: list[str]): and write len(args)" },
     // Retired at ABI 17 (docs/FILESYSTEM.md D13).  A row rather than
     // a plain unknown name for the reason the two above have one: it
     // was a published builtin for the whole of v2 and it is on the
@@ -184,7 +184,7 @@ pub const retired_builtins = [_]struct {
 pub fn isPure(callee: []const u8) bool {
     // `long(...)` and `double(...)` are conversions rather than
     // intrinsics, so they are not in the table above; both are pure.
-    if (conversionNamed(callee)) |produces| return produces != .string;
+    if (conversionNamed(callee)) |produces| return produces != .str;
     for (builtins) |builtin| {
         if (std.mem.eql(u8, callee, builtin.name)) return builtin.pure;
     }
@@ -263,6 +263,16 @@ test "every free builtin's name is reserved" {
                 "builtin '{s}' is dispatched but not in reserved_names\n",
                 .{builtin.name},
             );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "every scalar conversion's name is reserved" {
+    for (types.builtin_names) |name| {
+        if (types.conversionNamed(name) == null) continue;
+        if (!isReserved(name)) {
+            std.debug.print("conversion '{s}' is dispatched but not reserved\n", .{name});
             return error.TestUnexpectedResult;
         }
     }

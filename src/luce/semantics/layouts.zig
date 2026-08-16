@@ -124,7 +124,7 @@ fn collectEnumName(
             try self.fail(
                 "luce.sema.enum",
                 written.span,
-                "an enum is stored at an integer width: byte, short, int, or long — not {s}",
+                "an enum is stored at an integer width: u8, i16, i32, or i64 — not {s}",
                 .{try self.typeName(resolved)},
             );
             return;
@@ -354,7 +354,7 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
                 try self.fail(
                     "luce.sema.enum",
                     written.span,
-                    "{s} = {d} does not fit {s}, which holds {d} to {d}; write the enum's width wider — enum {s}(long):",
+                    "{s} = {d} does not fit {s}, which holds {d} to {d}; write the enum's width wider — enum {s}(i64):",
                     .{
                         written.name,
                         value,

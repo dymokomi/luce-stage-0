@@ -22,7 +22,7 @@ struct Strokes:
     down: bool = false
     left: bool = false
 
-    func glyph() -> string:
+    func glyph() -> str:
         return term.ui.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
 
     func merged(other: Strokes) -> Strokes:
@@ -57,14 +57,14 @@ const STROKES = {
     "╴": Strokes(left = true),
 }
 
-func strokes_of(glyph: string) -> Strokes:
+func strokes_of(glyph: str) -> Strokes:
     let found = STROKES.get(glyph)
     if found == none:
         return Strokes()
     return found
 
 struct Frame:
-    title: string = ""
+    title: str = ""
     style: termui.Style = termui.Style()
     top: bool = true
     right: bool = true
@@ -75,7 +75,7 @@ struct Frame:
     # merging with any box glyph already there.  Absolute placement and
     # bounds are the surface's job (`cell_at`/`put` both clip), so a
     # frame at the edge of the screen is a normal draw.
-    func stroke(into: surface.Surface, area: termui.Rect, row: long, column: long, add: Strokes):
+    func stroke(into: surface.Surface, area: termui.Rect, row: i64, column: i64, add: Strokes):
         if row < 0 or row >= area.rows or column < 0 or column >= area.columns:
             return
         let abs_row = area.row + row
@@ -104,10 +104,10 @@ struct Frame:
         # The title sits on the top edge, framed by a space each side and
         # clipped to what is left before the far corner.  It overwrites
         # the rule it sits on, which is exactly what a titled box shows.
-        # The framed string starts at column 2 and is `len + 2` wide, so
+        # The framed str starts at column 2 and is `len + 2` wide, so
         # `room` is four less than the width: one for the near edge it
         # starts after, two for its own spaces, and one to keep the far
-        # corner glyph — a title long enough to reach it would erase it.
+        # corner glyph — a title i64 enough to reach it would erase it.
         if self.top and self.title != "" and last_column > 4:
             let room = last_column - 4
             let shown = self.title.take(room)

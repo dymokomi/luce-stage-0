@@ -27,7 +27,7 @@ import std.zip
 
 func main():
     let data = zip.bytes("123456789")
-    print(string(zip.crc32(data)))
+    print(str(zip.crc32(data)))
     print(zip.text(data) else "(not text)")
 ```
 
@@ -80,7 +80,7 @@ func main() -> !:
     for entry in found:
         print(f"{entry.name()} {entry.size()} {entry.deflated()}")
     let contents = try zip.extract(archive, found[0])
-    print(string(len(contents)))
+    print(str(len(contents)))
 ```
 
 ```output
@@ -112,8 +112,8 @@ func main() -> !:
     let plain = zip.bytes("the quick brown fox")
     let packed = zip.deflate(plain)
     let restored = try zip.inflate(packed)
-    print(string(len(packed) < len(plain)))
-    print(string(len(restored)))
+    print(str(len(packed) < len(plain)))
+    print(str(len(restored)))
 ```
 
 ```output

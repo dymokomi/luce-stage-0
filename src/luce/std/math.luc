@@ -15,7 +15,7 @@
 # written back, not an object that is mutated through a borrow; no
 # hidden globals.
 
-# These five are annotated `double` on purpose, and it is the one
+# These five are annotated `f64` on purpose, and it is the one
 # annotation in this module that is load-bearing rather than tidy.
 # Each carries twenty or twenty-one significant digits so that it
 # rounds to the nearest binary64, and the module's accuracy promise
@@ -24,15 +24,15 @@
 # default is not this one; at binary32 the epsilon is 1.19e-7 and
 # every sentence at the top of this file becomes false (docs/TYPES.md,
 # the unannotated-site audit).
-const pi: double = 3.14159265358979323846
-const tau: double = 6.28318530717958647692
-const e: double = 2.71828182845904523536
+const pi: f64 = 3.14159265358979323846
+const tau: f64 = 6.28318530717958647692
+const e: f64 = 2.71828182845904523536
 
-private const ln2: double = 0.69314718055994530942
-private const ln10: double = 2.30258509299404568402
+private const ln2: f64 = 0.69314718055994530942
+private const ln10: f64 = 2.30258509299404568402
 
-# Round half away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
-# The same rounding long(x) does, which is the point — a language with
+# Round f16 away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
+# The same rounding i64(x) does, which is the point — a language with
 # two roundings that disagree has a bug in it (docs/NUMERICS.md).
 #
 # Not floor(x + 0.5), which is how this was written and how most
@@ -40,7 +40,7 @@ private const ln10: double = 2.30258509299404568402
 # exactly 1.0 in binary64, so the floor of it is 1 where the answer is
 # 0.  Splitting at trunc(x) instead is exact — the subtraction below
 # is exact for every x whose fraction is not already zero.
-func round(x: double) -> double:
+func round(x: f64) -> f64:
     let whole = trunc(x)
     let fraction = x - whole
     if fraction >= 0.5:
@@ -51,15 +51,15 @@ func round(x: double) -> double:
 
 # e raised to x.  Large x overflows to infinity, very negative x
 # underflows to 0.0 — IEEE semantics, no traps.
-func exp(x: double) -> double:
+func exp(x: f64) -> f64:
     # Reduce: x = k*ln2 + r with r in [-ln2/2, ln2/2], so the series
     # below converges in a few terms; then scale by 2^k.
-    let k = long(x / ln2)
-    let r = x - double(k) * ln2
-    var term: double = 1.0
-    var total: double = 1.0
+    let k = i64(x / ln2)
+    let r = x - f64(k) * ln2
+    var term: f64 = 1.0
+    var total: f64 = 1.0
     for i in range(1, 15):
-        term *= r / double(i)
+        term *= r / f64(i)
         total += term
     var factor = 1.0
     if k >= 0:
@@ -71,7 +71,7 @@ func exp(x: double) -> double:
     return total * factor
 
 # Natural logarithm.  Non-positive input is a bug, not a value: trap.
-func ln(x: double) -> double:
+func ln(x: f64) -> f64:
     if x <= 0.0:
         trap("ln of a non-positive number")
     # Reduce to m in [1, 2) with x = m * 2^k ...
@@ -90,19 +90,19 @@ func ln(x: double) -> double:
     var total = t
     for i in range(1, 14):
         term *= t2
-        total += term / double(2 * i + 1)
-    return 2.0 * total + double(k) * ln2
+        total += term / f64(2 * i + 1)
+    return 2.0 * total + f64(k) * ln2
 
-func log2(x: double) -> double:
+func log2(x: f64) -> f64:
     return ln(x) / ln2
 
-func log10(x: double) -> double:
+func log10(x: f64) -> f64:
     return ln(x) / ln10
 
 # x raised to y.  Negative x needs a whole-number y (otherwise the
 # result is not a real number: trap); 0^y is 0 for positive y, 1 for
 # y == 0, and a trap for negative y.
-func pow(x: double, y: double) -> double:
+func pow(x: f64, y: f64) -> f64:
     if x == 0.0:
         if y > 0.0:
             return 0.0
@@ -115,16 +115,16 @@ func pow(x: double, y: double) -> double:
         trap("pow: negative base needs a whole-number exponent")
     let magnitude = exp(y * ln(0.0 - x))
     # Odd whole exponents keep the sign.
-    if long(y) % 2 == 1:
+    if i64(y) % 2 == 1:
         return 0.0 - magnitude
     return magnitude
 
 # Integer power by squaring; arithmetic is checked, so a result past
-# i64 traps integer_overflow.  Negative exponents have no long answer.
-func ipow(base: long, exponent: long) -> long:
+# i64 traps integer_overflow.  Negative exponents have no i64 answer.
+func ipow(base: i64, exponent: i64) -> i64:
     if exponent < 0:
         trap("ipow needs a non-negative exponent")
-    var result: long = 1
+    var result: i64 = 1
     var square = base
     var left = exponent
     while left > 0:
@@ -136,64 +136,64 @@ func ipow(base: long, exponent: long) -> long:
     return result
 
 # Sine, by range reduction to (-pi, pi] and a Taylor series.  The
-# reduction is deliberately bounded: ordinary double arithmetic cannot
+# reduction is deliberately bounded: ordinary f64 arithmetic cannot
 # preserve enough low bits of a large revolution count to answer honestly.
-private const trig_limit: double = 10000.0
+private const trig_limit: f64 = 10000.0
 
-private func trig_in_domain(x: double) -> bool:
+private func trig_in_domain(x: f64) -> bool:
     # `x != x` is the IEEE NaN test; infinity fails the magnitude test.
     return x == x and abs(x) <= trig_limit
 
-private func sine_series(x: double) -> double:
+private func sine_series(x: f64) -> f64:
     var r = x - floor(x / tau) * tau
     if r > pi:
         r -= tau
     var term = r
     var total = r
     for i in range(1, 11):
-        term *= (0.0 - r * r) / double((2 * i) * (2 * i + 1))
+        term *= (0.0 - r * r) / f64((2 * i) * (2 * i + 1))
         total += term
     return total
 
-func sin(x: double) -> double:
+func sin(x: f64) -> f64:
     if not trig_in_domain(x):
         trap("math.sin supports finite angles with |x| <= 10000")
     return sine_series(x)
 
-func cos(x: double) -> double:
+func cos(x: f64) -> f64:
     if not trig_in_domain(x):
         trap("math.cos supports finite angles with |x| <= 10000")
     return sine_series(x + pi / 2.0)
 
 # Tangent; near odd multiples of pi/2 the true value diverges and the
-# result is a large float, as IEEE division dictates.
-func tan(x: double) -> double:
+# result is a large f32, as IEEE division dictates.
+func tan(x: f64) -> f64:
     return sin(x) / cos(x)
 
 # -- vectors and statistics --------------------------------------------
 #
-# Whole-array operations over array(double, _), the numeric vector
+# Whole-array operations over array[f64, _], the numeric vector
 # type.  Sums accumulate left to right — the same order both engines
 # and the C benchmark twins use, so results are bit-reproducible.
 # Empty arrays: sum is 0.0; the operations that have no empty answer
 # (mean, vmin, vmax, variance) answer `none`.
 
-func sum(xs: array(double, _)) -> double:
-    var total: double = 0.0
+func sum(xs: array[f64, _]) -> f64:
+    var total: f64 = 0.0
     for i in range(0, len(xs)):
         total += xs[i]
     return total
 
-# The reductions over an array answer `double?`: an empty array has no
+# The reductions over an array answer `f64?`: an empty array has no
 # mean, no smallest and no spread, and "there is nothing there" is the
 # same fact every time with no reason worth carrying (docs/FAILURE.md).
 # A caller that knows the array is non-empty writes `else` once.
-func mean(xs: array(double, _)) -> double?:
+func mean(xs: array[f64, _]) -> f64?:
     if len(xs) == 0:
         return none
-    return sum(xs) / double(len(xs))
+    return sum(xs) / f64(len(xs))
 
-func vmin(xs: array(double, _)) -> double?:
+func vmin(xs: array[f64, _]) -> f64?:
     if len(xs) == 0:
         return none
     var smallest = xs[0]
@@ -201,7 +201,7 @@ func vmin(xs: array(double, _)) -> double?:
         smallest = min(smallest, xs[i])
     return smallest
 
-func vmax(xs: array(double, _)) -> double?:
+func vmax(xs: array[f64, _]) -> f64?:
     if len(xs) == 0:
         return none
     var largest = xs[0]
@@ -213,7 +213,7 @@ func vmax(xs: array(double, _)) -> double?:
 # the same array twice, and there could not have been a `minmax`
 # before: writing one would have meant inventing a bag struct in the
 # standard library (docs/RETURNS.md).
-func minmax(xs: array(double, _)) -> (double?, double?):
+func minmax(xs: array[f64, _]) -> (f64?, f64?):
     if len(xs) == 0:
         return none, none
     var smallest = xs[0]
@@ -224,48 +224,48 @@ func minmax(xs: array(double, _)) -> (double?, double?):
     return smallest, largest
 
 # The dot product; lengths must agree.
-func dot(xs: array(double, _), ys: array(double, _)) -> double:
+func dot(xs: array[f64, _], ys: array[f64, _]) -> f64:
     if len(xs) != len(ys):
         trap("dot needs arrays of one length")
-    var total: double = 0.0
+    var total: f64 = 0.0
     for i in range(0, len(xs)):
         total += xs[i] * ys[i]
     return total
 
 # The Euclidean norm.
-func norm(xs: array(double, _)) -> double:
+func norm(xs: array[f64, _]) -> f64:
     return sqrt(dot(xs, xs))
 
 # Population variance (mean of squared deviations) and its root.
-func variance(xs: array(double, _)) -> double?:
+func variance(xs: array[f64, _]) -> f64?:
     if len(xs) == 0:
         return none
     let center = mean(xs) else 0.0
-    var total: double = 0.0
+    var total: f64 = 0.0
     for i in range(0, len(xs)):
         let d = xs[i] - center
         total += d * d
-    return total / double(len(xs))
+    return total / f64(len(xs))
 
-func stddev(xs: array(double, _)) -> double?:
+func stddev(xs: array[f64, _]) -> f64?:
     let spread = variance(xs)
     if spread == none:
         return none
     return sqrt(spread)
 
 # xs[i] = value for every element — a typed fill.
-func fill(xs: array(double, _), value: double):
+func fill(xs: array[f64, _], value: f64):
     for i in range(0, len(xs)):
         xs[i] = value
 
 # xs[i] *= factor for every element.
-func scale(xs: array(double, _), factor: double):
+func scale(xs: array[f64, _], factor: f64):
     for i in range(0, len(xs)):
         xs[i] *= factor
 
 # xs[i] += factor * ys[i] — the BLAS axpy, the shape most numeric
 # loops reduce to.
-func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
+func axpy(xs: array[f64, _], factor: f64, ys: array[f64, _]):
     if len(xs) != len(ys):
         trap("axpy needs arrays of one length")
     for i in range(0, len(xs)):
@@ -276,14 +276,14 @@ func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
 # Lehmer / MINSTD: state' = state * 48271 mod (2^31 - 1).  Period
 # 2^31 - 2; not cryptographic — games and shuffles, not secrets.
 #
-# The state is one `long` in a struct, and every draw writes it back:
+# The state is one `i64` in a struct, and every draw writes it back:
 #
 #     var rng = math.rng(42)
 #     let roll = rng.in_range(1, 7)
 #
-# This was a one-element `list(long)`, allocated by a `seed` function
+# This was a one-element `list[i64]`, allocated by a `seed` function
 # and kept alive for the life of `main`, whose entire purpose was to
-# give a `long` reference semantics so the *state* could go out
+# give a `i64` reference semantics so the *state* could go out
 # through a borrow while the *draw* went out through `return`.  Two
 # values, two channels, one allocation.  An implied receiver updated
 # in place and the ordinary return between them delete all three.
@@ -292,10 +292,10 @@ struct Rng:
     # is brought into range on first use.  Marked, because reaching
     # through it was never the API — the factory below is
     # (docs/VISIBILITY.md §6).
-    private state: long
+    private state: i64
 
     # The next raw state value in [1, 2^31 - 2].
-    func next() -> long:
+    func next() -> i64:
         # A Lehmer generator has no zero state and none at or past its
         # modulus, so a seed of either shape would stick or wrap.  In
         # range this is the identity — which is the property that
@@ -309,19 +309,19 @@ struct Rng:
         self.state = self.state * 48271 % 2147483647
         return self.state
 
-    # A double uniform in (0, 1).
-    func real() -> double:
-        return double(self.next()) / 2147483647.0
+    # A f64 uniform in (0, 1).
+    func real() -> f64:
+        return f64(self.next()) / 2147483647.0
 
-    # A long uniform in [low, high) — high is exclusive, like range.
+    # A i64 uniform in [low, high) — high is exclusive, like range.
     # (Slight modulo bias; fine for games, meaningless for spans that
     # small anyway.)
-    func in_range(low: long, high: long) -> long:
+    func in_range(low: i64, high: i64) -> i64:
         if high <= low:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)
 
 # The constructor the module owes its callers: any seed works, and the
 # state stays the module's own (docs/VISIBILITY.md §6).
-func rng(seed: long) -> Rng:
+func rng(seed: i64) -> Rng:
     return Rng(state = seed)

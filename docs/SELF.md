@@ -21,9 +21,9 @@ written signature lists only the arguments a caller passes:
 
 ```luce
 struct Counter:
-    value: long
+    value: i64
 
-    func read() -> long:
+    func read() -> i64:
         return self.value
 
     func bump():
@@ -31,9 +31,9 @@ struct Counter:
 
 func main():
     var counter = Counter(value = 4)
-    print(string(counter.read()))
+    print(str(counter.read()))
     counter.bump()
-    print(string(counter.read()))
+    print(str(counter.read()))
 ```
 
 `counter.read()` and `counter.bump()` are the call shape: the receiver
@@ -47,18 +47,18 @@ value:
 
 ```luce
 struct Cursor:
-    pos: long
+    pos: i64
 
     static func start() -> Cursor:
         return Cursor(pos = 0)
 
-    func advance(by: long):
+    func advance(by: i64):
         self.pos += by
 
 func main():
     var c = Cursor.start()
     c.advance(8)
-    print(string(c.pos))
+    print(str(c.pos))
 ```
 
 `Cursor.start()` is a namespace call; `c.advance(8)` is a method call.
@@ -69,16 +69,16 @@ State that a mutable value parameter might otherwise have threaded
 through is expressed another way: multi-return into existing bindings,
 
 ```luce
-func read_bits(data: long, pos: long, count: long) -> (long, long):
+func read_bits(data: i64, pos: i64, count: i64) -> (i64, i64):
     let value = data >> pos & ((1 << count) - 1)
     return value, pos + count
 
 func main():
-    var pos: long = 3
-    var bits: long = 0
+    var pos: i64 = 3
+    var bits: i64 = 0
     bits, pos = read_bits(255, pos, 5)
-    print(string(bits))
-    print(string(pos))
+    print(str(bits))
+    print(str(pos))
 ```
 
 a member function, a fresh construction, or a reference object whose
@@ -105,17 +105,17 @@ mutability is the whole permission, exactly as it is for `xs.append`.
 
 ```luce
 struct Cursor:
-    pos: long
+    pos: i64
 
-    func advance(by: long):
+    func advance(by: i64):
         self.pos += by
 
 func main():
     let frozen = Cursor(pos = 0)
-    print(string(frozen.pos))     # reading a let is fine
+    print(str(frozen.pos))     # reading a let is fine
     var moving = Cursor(pos = 0)
     moving.advance(8)             # a writer needs a var
-    print(string(moving.pos))
+    print(str(moving.pos))
 ```
 
 A writer may declare zero, one, or several ordinary results; the receiver

@@ -309,7 +309,7 @@ test "CRLF line endings compile, and keep every line and column" {
     // is what makes the layout rules see the same text.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: string = b\r\n",
+        "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: str = b\r\n",
         script,
     );
     defer result.deinit();
@@ -389,21 +389,21 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // honesty.  The refusal fires in the root module too, where the
     // mark lives in "this file".
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: long\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "read is public and answers Inner, which is marked private in this file; mark read private or remove the mark on Inner",
         4,
         16,
     );
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: long\n\nfunc read(p: Inner) -> long:\n    return 1\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nfunc read(p: Inner) -> i64:\n    return 1\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "read is public and takes Inner, which is marked private in this file; mark read private or remove the mark on Inner",
         4,
         14,
     );
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: long\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "held of Outer is public and holds Inner, which is marked private in this file; mark held private or remove the mark on Inner",
         5,
@@ -412,13 +412,13 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // A container in the surface publishes its element exactly as the
     // bare name would.
     try expectRejected(
-        "private struct Inner:\n    n: long\n\nfunc read() -> list(Inner):\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nfunc read() -> list[Inner]:\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
         "luce.sema.private",
     );
     // A map's **key** publishes as its value does, now that a key can
     // be a declared type (docs/ENUMS.md, As built 2026-08-12).
     try expectSaying(
-        "private enum Key:\n    left\n\nfunc table() -> map(Key, long):\n    return new map(Key, long)\n\nfunc main():\n    return\n",
+        "private enum Key:\n    left\n\nfunc table() -> map[Key, i64]:\n    return new map[Key, i64]\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "table is public and answers Key, which is marked private",
     );
@@ -426,24 +426,24 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // The outer `func` tag must not hide a private parameter or result
     // from the same D4 check containers receive above.
     try expectSaying(
-        "private struct Inner:\n    n: long\n\nfunc use(callback: func(Inner) -> long) -> long:\n    return 0\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nfunc use(callback: func(Inner) -> i64) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "use is public and takes Inner, which is marked private",
     );
     try expectSaying(
-        "private struct Inner:\n    n: long\n\nfunc use(callback: func(long) -> func(long) -> Inner) -> long:\n    return 0\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nfunc use(callback: func(i64) -> func(i64) -> Inner) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "which is marked private",
     );
     try expectSaying(
-        "private struct Inner:\n    n: long\n\nprivate func reveal(n: long) -> Inner:\n    return Inner(n = n)\n\nfunc expose() -> func(long) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
+        "private struct Inner:\n    n: i64\n\nprivate func reveal(n: i64) -> Inner:\n    return Inner(n = n)\n\nfunc expose() -> func(i64) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "expose is public and answers Inner, which is marked private",
     );
     // The quiet common case: a private function may traffic in the
     // private type freely, and a private field may hold one.
     try expectCompiles(
-        "private struct Inner:\n    n: long\n\nprivate func read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    private held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
+        "private struct Inner:\n    n: i64\n\nprivate func read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    private held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
     );
 }
 
@@ -453,18 +453,18 @@ test "the bare underscore declares nothing, and the wildcard keeps its one home"
     try expectOnlySayingAt(
         "func main():\n    let _ = 1\n",
         "luce.parse.expected",
-        "_ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name",
+        "_ is the array-shape wildcard, not a name (array[i64, _]); a binding needs a name",
         2,
         9,
     );
     // The pin: wildcard shapes in annotations survive R3 untouched.
     try expectCompiles(
-        \\func corner(grid: array(long, _, _)) -> long:
+        \\func corner(grid: array[i64, _, _]) -> i64:
         \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
-        \\    var grid = new array(long, 2, 2)
-        \\    print(string(corner(grid)))
+        \\    var grid = new array[i64](2, 2)
+        \\    print(str(corner(grid)))
         \\
     );
 }
@@ -642,7 +642,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     // and reaches the type checker unharmed.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(string(c))\n",
+        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(str(c))\n",
         .{ .allow_host = true },
     );
     defer result.deinit();
@@ -722,7 +722,7 @@ test "luce.parse.type: the three shapes a return list is not" {
     // type (docs/RETURNS.md).  `-> (long)` is no longer here, because a
     // parenthesized type is that type and it means `-> long`.
     try expectSaying(
-        \\func f() -> ((long, long), long):
+        \\func f() -> ((i64, i64), i64):
         \\    return 1
         \\
         \\func main():
@@ -731,7 +731,7 @@ test "luce.parse.type: the three shapes a return list is not" {
     , "luce.parse.type", "a return shape is not a type: a pair that travels together is a struct");
 
     try expectSaying(
-        \\func f() -> (long, long)?:
+        \\func f() -> (i64, i64)?:
         \\    return 1, 2
         \\
         \\func main():
@@ -744,10 +744,10 @@ test "luce.parse.type: a return shape is not a type, in any position" {
     // A binding, a parameter, a struct field, a container element.
     // The sentence to keep is the second half.
     for ([_][]const u8{
-        "func main():\n    let p: (long, long) = 1\n",
-        "func f(p: (long, long)):\n    return\n\nfunc main():\n    return\n",
-        "struct Pair:\n    both: (long, long)\n\nfunc main():\n    return\n",
-        "func main():\n    var xs: list((long, long)) = []\n",
+        "func main():\n    let p: (i64, i64) = 1\n",
+        "func f(p: (i64, i64)):\n    return\n\nfunc main():\n    return\n",
+        "struct Pair:\n    both: (i64, i64)\n\nfunc main():\n    return\n",
+        "func main():\n    var xs: list[(i64, i64)] = []\n",
     }) |source| {
         try expectSaying(
             source,
@@ -767,7 +767,7 @@ test "luce.parse.expression: there are still no tuples, and the parser already s
 
 test "luce.parse.assign: one keyword governs a bind, and catch cannot invent a tuple" {
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -776,7 +776,7 @@ test "luce.parse.assign: one keyword governs a bind, and catch cannot invent a t
     , "luce.parse.assign", "one let or one var governs the whole bind");
 
     try expectSaying(
-        \\func minmax() -> (long, long)!:
+        \\func minmax() -> (i64, i64)!:
         \\    return 1, 2
         \\
         \\func main():
@@ -828,18 +828,18 @@ test "luce.parse.assign: multi-return assignment has bare names, one equals, and
 
 test "luce.parse.type: a destructuring bind takes its types from the call" {
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
-        \\    let low: long, high: long = minmax()
+        \\    let low: i64, high: i64 = minmax()
         \\
     , "luce.parse.type", "a destructuring bind takes its types from the call");
 }
 
 test "luce.sema.shape: the bind's arity is the call's" {
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -850,7 +850,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
     // One value, two names: the call is named, because that is what
     // makes the sentence actionable.
     try expectSaying(
-        \\func one() -> long:
+        \\func one() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -859,7 +859,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
     , "luce.sema.shape", "one answers 1 value, got 2 names");
 
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -871,7 +871,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
     , "luce.sema.shape", "pair answers 2 values, got 3 names");
 
     try expectSaying(
-        \\func one() -> long:
+        \\func one() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -884,7 +884,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
 
 test "existing-name destructuring checks every target before replacing any" {
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -895,7 +895,7 @@ test "existing-name destructuring checks every target before replacing any" {
     , "luce.sema.let", "fixed is let-bound; use var for reassignment");
 
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -905,7 +905,7 @@ test "existing-name destructuring checks every target before replacing any" {
     , "luce.sema.name", "unknown name missing");
 
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -915,23 +915,23 @@ test "existing-name destructuring checks every target before replacing any" {
     , "luce.sema.duplicate", "value is assigned twice in this statement");
 
     try expectSaying(
-        \\func pair() -> (long, string):
+        \\func pair() -> (i64, str):
         \\    return 1, "two"
         \\
         \\func main():
-        \\    var number: long = 0
+        \\    var number: i64 = 0
         \\    var other = 0
         \\    number, other = pair()
         \\
-    , "luce.sema.type", "other is int, but value 2 from pair is string");
+    , "luce.sema.type", "other is i32, but value 2 from pair is str");
 
     try expectSaying(
-        \\func pair() -> (long, long)!:
+        \\func pair() -> (i64, i64)!:
         \\    return 1, 2
         \\
         \\func main():
-        \\    var left: long = 0
-        \\    var right: long = 0
+        \\    var left: i64 = 0
+        \\    var right: i64 = 0
         \\    left, right = pair()
         \\
     , "luce.sema.fallible", "pair can fail: write 'try pair(");
@@ -939,12 +939,12 @@ test "existing-name destructuring checks every target before replacing any" {
     // The expression form of catch still supplies one value.  It
     // cannot synthesize a return shape; use the statement handler.
     try expectSaying(
-        \\func pair() -> (long, long)!:
+        \\func pair() -> (i64, i64)!:
         \\    return 1, 2
         \\
         \\func main():
-        \\    var left: long = 0
-        \\    var right: long = 0
+        \\    var left: i64 = 0
+        \\    var right: i64 = 0
         \\    left, right = pair() catch 0
         \\
     , "luce.sema.call", "only a destructuring let, var, or assignment can receive them");
@@ -952,7 +952,7 @@ test "existing-name destructuring checks every target before replacing any" {
 
 test "luce.sema.return: the return's arity is the signature's" {
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1
         \\
         \\func main():
@@ -961,7 +961,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     , "luce.sema.return", "minmax answers 2 values, got 1");
 
     try expectSaying(
-        \\func count() -> long:
+        \\func count() -> i64:
         \\    return 1, 2
         \\
         \\func main():
@@ -983,7 +983,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     // earlier, by the arms that route a `return` to the single-value
     // channel or refuse a comma outright.
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1, 2, 3
         \\
         \\func main():
@@ -995,9 +995,9 @@ test "luce.sema.return: the return's arity is the signature's" {
     // receiver is separate from the declared return arity.
     try expectSaying(
         \\struct Rng:
-        \\    state: long
+        \\    state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        return self.state, 1
         \\
         \\func main():
@@ -1011,9 +1011,9 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
     // pass-through, which Go allows and this language does not,
     // because refusing it is what makes the rule have no exceptions.
     for ([_][]const u8{
-        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
-        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
-        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
+        "func minmax() -> (i64, i64):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
+        "func minmax() -> (i64, i64):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
+        "func minmax() -> (i64, i64):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
     }) |source| {
         try expectSaying(
             source,
@@ -1023,10 +1023,10 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
     }
 
     try expectSaying(
-        \\func minmax() -> (long, long):
+        \\func minmax() -> (i64, i64):
         \\    return 1, 2
         \\
-        \\func pass() -> (long, long):
+        \\func pass() -> (i64, i64):
         \\    return minmax()
         \\
         \\func main():
@@ -1044,7 +1044,7 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
 
 test "luce.parse.self: an explicit receiver parameter is retired everywhere" {
     try expectSaying(
-        \\func loose(self) -> long:
+        \\func loose(self) -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1054,7 +1054,7 @@ test "luce.parse.self: an explicit receiver parameter is retired everywhere" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\    func grow(var self):
         \\        self.x += 1
@@ -1067,7 +1067,7 @@ test "luce.parse.self: an explicit receiver parameter is retired everywhere" {
 
 test "luce.parse.static: self: static is only a struct or enum member modifier" {
     try expectSaying(
-        \\static func helper() -> long:
+        \\static func helper() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1079,9 +1079,9 @@ test "luce.parse.static: self: static is only a struct or enum member modifier" 
 test "luce.sema.self: a static member cannot read self" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    static func read() -> long:
+        \\    static func read() -> i64:
         \\        return self.x
         \\
         \\func main():
@@ -1093,7 +1093,7 @@ test "luce.sema.self: a static member cannot read self" {
 test "luce.sema.self: a static member is not callable through a value" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\    static func origin() -> Point:
         \\        return Point(x = 0)
@@ -1108,9 +1108,9 @@ test "luce.sema.self: a static member is not callable through a value" {
 test "luce.sema.self: a method is not callable through its type" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func read() -> long:
+        \\    func read() -> i64:
         \\        return self.x
         \\
         \\func main():
@@ -1123,9 +1123,9 @@ test "luce.sema.self: a method is not callable through its type" {
 test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func length() -> long:
+        \\    func length() -> i64:
         \\        return self.x
         \\
         \\func main():
@@ -1139,7 +1139,7 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
     // With nothing close, the sentence still names both.
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -1154,9 +1154,9 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
 test "luce.sema.name: a method reference with no landing place is not a value" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func length() -> long:
+        \\    func length() -> i64:
         \\        return self.x
         \\
         \\func main():
@@ -1174,12 +1174,12 @@ test "luce.sema.name: a method reference with no landing place is not a value" {
 test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
     try expectSaying(
         \\struct Counter:
-        \\    total: long
+        \\    total: i64
         \\
-        \\    func bump(by: long):
+        \\    func bump(by: i64):
         \\        self.total = self.total + by
         \\
-        \\func apply(f: func(long)):
+        \\func apply(f: func(i64)):
         \\    f(1)
         \\
         \\func main():
@@ -1194,10 +1194,10 @@ test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
 
 test "luce.sema.own: a function value does not cross a worker boundary (BINDING.md D4)" {
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func work(f: func(long) -> long, n: long) -> long:
+        \\func work(f: func(i64) -> i64, n: i64) -> i64:
         \\    return f(n)
         \\
         \\func main():
@@ -1212,10 +1212,10 @@ test "luce.sema.own: a function value does not cross a worker boundary (BINDING.
 
 test "luce.sema.own: a worker cannot answer a function value (BINDING.md D4)" {
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func pick() -> func(long) -> long:
+        \\func pick() -> func(i64) -> i64:
         \\    return twice
         \\
         \\func main():
@@ -1231,12 +1231,12 @@ test "luce.sema.own: a worker cannot answer a function value (BINDING.md D4)" {
 
 test "luce.sema.type: a function value has no equality (BINDING.md D6)" {
     try expectSaying(
-        \\func up(a: long, b: long) -> bool:
+        \\func up(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    let f: func(long, long) -> bool = up
-        \\    let g: func(long, long) -> bool = up
+        \\    let f: func(i64, i64) -> bool = up
+        \\    let g: func(i64, i64) -> bool = up
         \\    assert(f == g)
         \\
     ,
@@ -1248,16 +1248,16 @@ test "luce.sema.type: a function value has no equality (BINDING.md D6)" {
 test "luce.sema.type: a bound value has no equality either (BINDING.md D6)" {
     try expectSaying(
         \\struct Scale:
-        \\    factor: long
+        \\    factor: i64
         \\
-        \\    func times(n: long) -> long:
+        \\    func times(n: i64) -> i64:
         \\        return n * self.factor
         \\
         \\func main():
         \\    let two = Scale(factor = 2)
         \\    let three = Scale(factor = 3)
-        \\    let f: func(long) -> long = two.times
-        \\    let g: func(long) -> long = three.times
+        \\    let f: func(i64) -> i64 = two.times
+        \\    let g: func(i64) -> i64 = three.times
         \\    assert(f != g)
         \\
     ,
@@ -1274,11 +1274,11 @@ test "luce.sema.method: searching a container of function values is equality too
     // in both engines.  The refusal is where the comparison is
     // written, and it names what to search instead.
     try expectSaying(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list((func(long) -> string)?)
+        \\    var xs = new list[(func(i64) -> str)?]
         \\    xs.append(twice)
         \\    assert(xs.contains(twice))
         \\
@@ -1287,11 +1287,11 @@ test "luce.sema.method: searching a container of function values is equality too
         "a function value has no equality",
     );
     try expectSaying(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\func main():
-        \\    var cells = new array((func(long) -> string)?, 2)
+        \\    var cells = new array[(func(i64) -> str)?](2)
         \\    cells.fill(twice)
         \\    let at = cells.find(twice)
         \\
@@ -1328,12 +1328,12 @@ test "luce.sema.union: a struct carrying a union is not compared either (UNION.m
     // unchecked one.
     try expectSaying(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\union Shape:
         \\    at(p: Point)
-        \\    count(n: long)
+        \\    count(n: i64)
         \\
         \\struct Cell:
         \\    what: Shape
@@ -1354,8 +1354,8 @@ test "luce.sema.union: a struct carrying a union is not compared either (UNION.m
     // program that quietly compares an inactive slot.
     try expectSaying(
         \\union Shape:
-        \\    circle(radius: double)
-        \\    square(side: double)
+        \\    circle(radius: f64)
+        \\    square(side: f64)
         \\
         \\struct Box:
         \\    s: Shape
@@ -1380,12 +1380,12 @@ test "luce.sema.type: a struct carrying a function value is not compared either 
     // own tag, so the field shape D7 exists to allow walked straight
     // past it into the runtime comparator's `unreachable`.
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\struct Button:
-        \\    label: string
-        \\    on_click: (func(long) -> long)?
+        \\    label: str
+        \\    on_click: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let a = Button(label = "ok", on_click = twice)
@@ -1398,11 +1398,11 @@ test "luce.sema.type: a struct carrying a function value is not compared either 
     );
     // Two levels deeper, so the walk is a walk and not one hop.
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\struct Button:
-        \\    on_click: (func(long) -> long)?
+        \\    on_click: (func(i64) -> i64)?
         \\
         \\struct Row:
         \\    b: Button
@@ -1427,15 +1427,15 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
     // itself.  A struct in a list is one level; a struct in a list in a
     // struct is the level that proves the walk.
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\struct Button:
-        \\    label: string
-        \\    on_click: (func(long) -> long)?
+        \\    label: str
+        \\    on_click: (func(i64) -> i64)?
         \\
         \\func main():
-        \\    var xs = new list(Button)
+        \\    var xs = new list[Button]
         \\    xs.append(Button(label = "ok", on_click = twice))
         \\    assert(xs.contains(Button(label = "ok", on_click = twice)))
         \\
@@ -1444,17 +1444,17 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         "a function value has no equality",
     );
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\struct Button:
-        \\    on_click: (func(long) -> long)?
+        \\    on_click: (func(i64) -> i64)?
         \\
         \\struct Row:
         \\    b: Button
         \\
         \\func main():
-        \\    var rows = new list(Row)
+        \\    var rows = new list[Row]
         \\    rows.append(Row(b = Button(on_click = twice)))
         \\    let at = rows.find(Row(b = Button(on_click = twice)))
         \\
@@ -1467,11 +1467,11 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
     // an element, and as a field of one.
     try expectSaying(
         \\union Shape:
-        \\    circle(radius: double)
-        \\    square(side: double)
+        \\    circle(radius: f64)
+        \\    square(side: f64)
         \\
         \\func main():
-        \\    var xs = new list(Shape)
+        \\    var xs = new list[Shape]
         \\    xs.append(Shape.circle(radius = 1.0))
         \\    assert(xs.contains(Shape.square(side = 2.0)))
         \\
@@ -1481,14 +1481,14 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
     );
     try expectSaying(
         \\union Shape:
-        \\    circle(radius: double)
-        \\    square(side: double)
+        \\    circle(radius: f64)
+        \\    square(side: f64)
         \\
         \\struct Box:
         \\    s: Shape
         \\
         \\func main():
-        \\    var xs = new list(Box)
+        \\    var xs = new list[Box]
         \\    xs.append(Box(s = Shape.circle(radius = 1.0)))
         \\    assert(xs.contains(Box(s = Shape.square(side = 2.0))))
         \\
@@ -1506,7 +1506,7 @@ test "luce.sema.type: len measures a container, and a resource is not one" {
     // `unreachable` — the predicate and its own message disagreeing,
     // which is the whole bug.
     try expectSaying(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1536,11 +1536,11 @@ test "luce.sema.type: values() of a map of function values is refused (BINDING.m
     // `luce build` aborted the compiler with no diagnostic at all,
     // because a list cell has no shape for a bare function value.
     try expectSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
-        \\    var m = new map(string, func(long) -> long)
+        \\    var m = new map[str, func(i64) -> i64]
         \\    m["a"] = twice
         \\    let vs = m.values()
         \\    assert(len(vs) == 1)
@@ -1555,9 +1555,9 @@ test "luce.sema.type: a member constructor whose shape does not fit the place is
     try expectSaying(
         \\union Msg:
         \\    quit
-        \\    query_changed(query: string)
+        \\    query_changed(query: str)
         \\
-        \\func apply(f: func(long) -> Msg) -> Msg:
+        \\func apply(f: func(i64) -> Msg) -> Msg:
         \\    return f(1)
         \\
         \\func main():
@@ -1565,19 +1565,19 @@ test "luce.sema.type: a member constructor whose shape does not fit the place is
         \\
     ,
         "luce.sema.type",
-        "and Msg.query_changed is func(string) -> Msg",
+        "and Msg.query_changed is func(str) -> Msg",
     );
 }
 
 test "luce.sema.type: a bind whose shape does not fit the place is refused" {
     try expectSaying(
         \\struct Scale:
-        \\    factor: long
+        \\    factor: i64
         \\
-        \\    func times(n: long) -> long:
+        \\    func times(n: i64) -> i64:
         \\        return n * self.factor
         \\
-        \\func apply(f: func(long, long) -> long) -> long:
+        \\func apply(f: func(i64, i64) -> i64) -> i64:
         \\    return f(1, 2)
         \\
         \\func main():
@@ -1593,14 +1593,14 @@ test "luce.sema.type: a bind whose shape does not fit the place is refused" {
 test "luce.sema.fallible: a fallible method does not bind yet (BINDING.md D8)" {
     try expectSaying(
         \\struct Reader:
-        \\    at: long
+        \\    at: i64
         \\
-        \\    func value(n: long) -> long!:
+        \\    func value(n: i64) -> i64!:
         \\        if n < 0:
         \\            error("negative")
         \\        return n + self.at
         \\
-        \\func apply(f: func(long) -> long) -> long:
+        \\func apply(f: func(i64) -> i64) -> i64:
         \\    return f(1)
         \\
         \\func main():
@@ -1616,7 +1616,7 @@ test "luce.sema.fallible: a fallible method does not bind yet (BINDING.md D8)" {
 test "luce.sema.self: a writer needs a bare var receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\    func grow():
         \\        self.x = self.x + 1
@@ -1629,7 +1629,7 @@ test "luce.sema.self: a writer needs a bare var receiver" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\    static func origin() -> Point:
         \\        return Point(x = 0)
@@ -1648,7 +1648,7 @@ test "luce.sema.self: a writer needs a bare var receiver" {
     }) |call| {
         const source = try std.fmt.allocPrint(std.testing.allocator,
             \\struct Point:
-            \\    x: long
+            \\    x: i64
             \\
             \\    func grow():
             \\        self.x += 1
@@ -1670,7 +1670,7 @@ test "luce.sema.self: a writer needs a bare var receiver" {
 test "luce.sema.self: an optional narrowing is not a receiver place" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\    func grow():
         \\        self.x += 1
@@ -1689,9 +1689,9 @@ test "luce.sema.self: an optional narrowing is not a receiver place" {
 test "luce.sema.self: the receiver is separate from declared return values" {
     try expectSaying(
         \\struct Rng:
-        \\    state: long
+        \\    state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        self.state = self.state + 1
         \\        return self.state
         \\
@@ -1705,9 +1705,9 @@ test "luce.sema.self: the receiver is separate from declared return values" {
 test "luce.sema.method: a missing method argument is named, without the receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func moved(dx: long, dy: long) -> long:
+        \\    func moved(dx: i64, dy: i64) -> i64:
         \\        return self.x + dx + dy
         \\
         \\func main():
@@ -1723,9 +1723,9 @@ test "luce.sema.method: a missing method argument is named, without the receiver
 test "luce.sema.method: a method checks its arity against its written parameters" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func moved(dx: long, dy: long) -> long:
+        \\    func moved(dx: i64, dy: i64) -> i64:
         \\        return self.x + dx + dy
         \\
         \\func main():
@@ -1741,26 +1741,26 @@ test "luce.sema.method: a method checks its arity against its written parameters
 test "luce.sema.call: self: reader and writer methods are not function values" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func read() -> long:
+        \\    func read() -> i64:
         \\        return self.x
         \\
         \\func main():
-        \\    let f: func(Point) -> long = Point.read
+        \\    let f: func(Point) -> i64 = Point.read
         \\
     , "luce.sema.call", "a method reference would carry its receiver; write a lambda that takes the receiver");
 
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func grow() -> long:
+        \\    func grow() -> i64:
         \\        self.x += 1
         \\        return self.x
         \\
         \\func main():
-        \\    let f: func(Point) -> long = Point.grow
+        \\    let f: func(Point) -> i64 = Point.grow
         \\
     , "luce.sema.call", "writes its implicit self and is not a function value; move the operation into a top-level or static function");
 }
@@ -1768,10 +1768,10 @@ test "luce.sema.call: self: reader and writer methods are not function values" {
 test "luce.sema.name: self: a lambda cannot capture the implicit receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func read() -> long:
-        \\        let f: func() -> long = () -> self.x
+        \\    func read() -> i64:
+        \\        let f: func() -> i64 = () -> self.x
         \\        return f()
         \\
         \\func main():
@@ -1786,7 +1786,7 @@ test "luce.sema.name: self: a lambda cannot capture the implicit receiver" {
 
 test "luce.sema.main: a script needs func main(), with or without the command line" {
     try expectRejected("func other():\n    return\n", "luce.sema.main");
-    try expectRejected("func main(x: long):\n    return\n", "luce.sema.main");
+    try expectRejected("func main(x: i64):\n    return\n", "luce.sema.main");
 }
 
 // "script entry must be exactly func main():" was not true —
@@ -1797,12 +1797,12 @@ test "luce.sema.main: a script needs func main(), with or without the command li
 
 test "luce.sema.main: a return type on the entry names the other legal form" {
     try expectOnlySayingAt(
-        \\func main() -> long:
+        \\func main() -> i64:
         \\    return 1
         \\
     ,
         "luce.sema.main",
-        "main returns nothing; use func main():, func main() -> !:, func main(args: list(string)):, or func main(args: list(string)) -> !:",
+        "main returns nothing; use func main():, func main() -> !:, func main(args: list[str]):, or func main(args: list[str]) -> !:",
         1,
         16,
     );
@@ -1814,39 +1814,39 @@ test "luce.sema.main: a return type on the entry names the other legal form" {
 // mistakes that are left get one sentence each and a caret on the part
 // that is wrong.
 
-test "luce.sema.main: the entry's parameter is the command line and must be list(string)" {
+test "luce.sema.main: the entry's parameter is the command line and must be list[str]" {
     try expectOnlySayingAt(
-        \\func main(n: long):
+        \\func main(n: i64):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main's parameter is the command line and must be list(string); it is long here",
+        "main's parameter is the command line and must be list[str]; it is i64 here",
         1,
         14,
     );
     // A list of the wrong thing is the same mistake and says so with
     // the type it was actually given.
     try expectSaying(
-        \\func main(xs: list(long)):
+        \\func main(xs: list[i64]):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main's parameter is the command line and must be list(string); it is list(long) here",
+        "main's parameter is the command line and must be list[str]; it is list[i64] here",
     );
 }
 
 test "luce.sema.main: the entry takes at most the one parameter" {
     try expectOnlySayingAt(
-        \\func main(a: list(string), b: long):
+        \\func main(a: list[str], b: i64):
         \\    return
         \\
     ,
         "luce.sema.main",
         "main takes at most one parameter, the command line; it has 2",
         1,
-        28,
+        25,
     );
 }
 
@@ -1860,15 +1860,15 @@ test "luce.sema.retired: arg and arg_count name their replacement" {
         \\
     ,
         "luce.sema.retired",
-        "arg was retired: declare func main(args: list(string)): and index args",
+        "arg was retired: declare func main(args: list[str]): and index args",
     );
     try expectHostSaying(
         \\func main():
-        \\    print(string(arg_count()))
+        \\    print(str(arg_count()))
         \\
     ,
         "luce.sema.retired",
-        "arg_count was retired: declare func main(args: list(string)): and write len(args)",
+        "arg_count was retired: declare func main(args: list[str]): and write len(args)",
     );
 }
 
@@ -1877,7 +1877,7 @@ test "arg is an ordinary word again, and a program that declares one gets its ow
     // resolved: the two names left `reserved_names` with the builtins,
     // so they are available to a program like any other.
     var result = try compile_mod.compile(testing.allocator,
-        \\func arg(index: long) -> long:
+        \\func arg(index: i64) -> i64:
         \\    return index * 2
         \\
         \\func main():
@@ -1902,8 +1902,8 @@ test "luce.sema.main: all four legal entry shapes compile" {
     for ([_][]const u8{
         "func main():\n    return\n",
         "func main() -> !:\n    return\n",
-        "func main(args: list(string)):\n    return\n",
-        "func main(command_line: list(string)) -> !:\n    return\n",
+        "func main(args: list[str]):\n    return\n",
+        "func main(command_line: list[str]) -> !:\n    return\n",
     }) |source| {
         var result = try compile_mod.compile(testing.allocator, source, script);
         defer result.deinit();
@@ -1954,7 +1954,7 @@ test "luce.sema.name: an unknown name is rejected" {
 
 test "luce.sema.name: a function used as a value is named, not denied" {
     try expectOnlySayingAt(
-        \\func helper() -> long:
+        \\func helper() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1971,7 +1971,7 @@ test "luce.sema.name: a function used as a value is named, not denied" {
 test "luce.sema.name: a struct used as a value says how to build one" {
     try expectOnlySayingAt(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = Point
@@ -2017,9 +2017,9 @@ test "luce.sema.name: a missing namespace member offers one of that namespace" {
 test "luce.sema.name: a struct namespace answers for its own members" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: long
+        \\    count: i64
         \\
-        \\    static func classify() -> long:
+        \\    static func classify() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -2036,9 +2036,9 @@ test "luce.sema.name: a struct namespace answers for its own members" {
 test "luce.sema.name: a struct namespace with no such member says so" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: long
+        \\    count: i64
         \\
-        \\    static func classify() -> long:
+        \\    static func classify() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -2062,10 +2062,10 @@ test "luce.sema.duplicate: a name cannot be declared twice" {
 test "luce.sema.duplicate: a duplicate struct points at the first" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\struct P:
-        \\    y: long
+        \\    y: i64
         \\
         \\func main():
         \\    return
@@ -2076,9 +2076,9 @@ test "luce.sema.duplicate: a duplicate struct points at the first" {
 test "luce.sema.duplicate: a duplicate field points at the first" {
     try expectOnlySayingAt(
         \\struct S:
-        \\    x: long
-        \\    y: long
-        \\    x: long
+        \\    x: i64
+        \\    y: i64
+        \\    x: i64
         \\
         \\func main():
         \\    return
@@ -2126,7 +2126,7 @@ test "luce.sema.duplicate: a lambda parameter cannot shadow an enclosing local" 
     try expectSaying(
         \\func main():
         \\    let n = 10
-        \\    let chosen: func(long) -> long = (n) -> n + 1
+        \\    let chosen: func(i64) -> i64 = (n) -> n + 1
         \\
     , "luce.sema.duplicate", "n is already declared on line 2");
 
@@ -2134,12 +2134,12 @@ test "luce.sema.duplicate: a lambda parameter cannot shadow an enclosing local" 
     // an inner parameter cannot shadow a grandparent local merely
     // because the middle lambda has been lifted to the function table.
     try expectSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
         \\    let n = 10
-        \\    let nested: func(long) -> long = (x) -> apply((n) -> n + 1, x)
+        \\    let nested: func(i64) -> i64 = (x) -> apply((n) -> n + 1, x)
         \\
     , "luce.sema.duplicate", "n is already declared on line 5");
 }
@@ -2186,7 +2186,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
         \\
     ,
         "luce.sema.type",
-        "operands of + are int and string, and there is no conversion between them",
+        "operands of + are i32 and str, and there is no conversion between them",
         4,
         13,
     );
@@ -2194,9 +2194,9 @@ test "luce.sema.type: a mismatch with no conversion says so" {
 
 test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
-        "func main():\n    let s: string = 1\n",
+        "func main():\n    let s: str = 1\n",
         "luce.sema.type",
-        "s declared string but initialized with int, and there is no conversion between them",
+        "s declared str but initialized with i32, and there is no conversion between them",
         2,
         5,
     );
@@ -2218,7 +2218,7 @@ test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
         \\
     ,
         "luce.sema.type",
-        "/ answers a double and this place is int; write '//=' for the integer quotient",
+        "/ answers f64 and this place is i32; write '//=' for the integer quotient",
         3,
         5,
     );
@@ -2230,12 +2230,12 @@ test "luce.sema.type: n /= 2 on a long place says the same thing" {
     // truncating at exactly the width the resize made the default.
     try expectOnlySayingAt(
         \\func main():
-        \\    var n: long = 10
+        \\    var n: i64 = 10
         \\    n /= 2
         \\
     ,
         "luce.sema.type",
-        "/ answers a double and this place is long; write '//=' for the integer quotient",
+        "/ answers f64 and this place is i64; write '//=' for the integer quotient",
         3,
         5,
     );
@@ -2243,7 +2243,7 @@ test "luce.sema.type: n /= 2 on a long place says the same thing" {
 
 test "luce.sema.type: a double where a long is required is still refused" {
     try expectRejectedAt(
-        \\func take(n: long) -> long:
+        \\func take(n: i64) -> i64:
         \\    return n
         \\
         \\func main():
@@ -2259,7 +2259,7 @@ test "luce.sema.type: a double where a long is required is still refused" {
     , "luce.sema.type");
     try expectRejected(
         \\func main():
-        \\    let n: long = 2.5
+        \\    let n: i64 = 2.5
         \\
     , "luce.sema.type");
 }
@@ -2275,11 +2275,11 @@ test "luce.sema.type: a double where a long is required is still refused" {
 test "luce.sema.literal: an integer past an int names the width that holds it" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var n: int = 3000000000
+        \\    var n: i32 = 3000000000
         \\
     ,
         "luce.sema.literal",
-        "integer literal out of range; int holds -2147483648 to 2147483647 — write the place as a long",
+        "integer literal out of range; i32 holds -2147483648 to 2147483647 — write the place as i64",
         2,
         18,
     );
@@ -2287,36 +2287,36 @@ test "luce.sema.literal: an integer past an int names the width that holds it" {
     // the sentence stops after the range rather than offering one.
     try expectOnlySayingAt(
         \\func main():
-        \\    var n: long = 99223372036854775808
+        \\    var n: i64 = 99223372036854775808
         \\
     ,
         "luce.sema.literal",
-        "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807",
+        "integer literal out of range; i64 holds -9223372036854775808 to 9223372036854775807",
         2,
-        19,
+        18,
     );
 }
 
 test "luce.sema.literal: a float past a float names the width that holds it" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var x: float = 1.0e300
+        \\    var x: f32 = 1.0e300
         \\
     ,
         "luce.sema.literal",
-        "float literal is not a finite float; float holds up to about 3.4e38 — write the place as a double",
+        "float literal is not a finite f32; f32 holds up to about 3.4e38 — write the place as f64",
         2,
-        20,
+        18,
     );
     try expectOnlySayingAt(
         \\func main():
-        \\    var x: double = 1.0e400
+        \\    var x: f64 = 1.0e400
         \\
     ,
         "luce.sema.literal",
-        "float literal is not a finite number; double holds up to about 1.8e308",
+        "float literal is not a finite number; f64 holds up to about 1.8e308",
         2,
-        21,
+        18,
     );
 }
 
@@ -2328,23 +2328,23 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
     // refuses is performing it unasked.
     try expectOnlySayingAt(
         \\func main():
-        \\    var wide: long = 5
-        \\    var narrow: int = wide
+        \\    var wide: i64 = 5
+        \\    var narrow: i32 = wide
         \\
     ,
         "luce.sema.type",
-        "narrow declared int but initialized with long; narrowing is never implicit — write int(…)",
+        "narrow declared i32 but initialized with i64; narrowing is never implicit — write i32(…)",
         3,
         5,
     );
     try expectOnlySayingAt(
         \\func main():
-        \\    var wide: double = 0.5
-        \\    var narrow: float = wide
+        \\    var wide: f64 = 0.5
+        \\    var narrow: f32 = wide
         \\
     ,
         "luce.sema.type",
-        "narrow declared float but initialized with double; narrowing is never implicit — write float(…)",
+        "narrow declared f32 but initialized with f64; narrowing is never implicit — write f32(…)",
         3,
         5,
     );
@@ -2352,11 +2352,11 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
     // two sentences stay distinguishable.
     try expectOnlySayingAt(
         \\func main():
-        \\    var s: string = 1
+        \\    var s: str = 1
         \\
     ,
         "luce.sema.type",
-        "s declared string but initialized with int, and there is no conversion between them",
+        "s declared str but initialized with i32, and there is no conversion between them",
         2,
         5,
     );
@@ -2364,16 +2364,16 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
 
 test "luce.sema.type: a narrowing argument earns the same sentence" {
     try expectOnlySayingAt(
-        \\func take(n: int) -> int:
+        \\func take(n: i32) -> i32:
         \\    return n
         \\
         \\func main():
-        \\    var wide: long = 5
+        \\    var wide: i64 = 5
         \\    let bad = take(wide)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of take is int, got long; narrowing is never implicit — write int(…)",
+        "argument 1 of take is i32, got i64; narrowing is never implicit — write i32(…)",
         6,
         20,
     );
@@ -2386,7 +2386,7 @@ test "luce.sema.type: a percent formatting mistake names f-strings" {
         \\    let text = "hello %s" % name
         \\    print(text)
         \\
-    , "luce.sema.type", "string does not support '%'; use an f-string");
+    , "luce.sema.type", "str does not support '%'; use an f-string");
 }
 
 // A conversion the constant folder performs is the *same* conversion
@@ -2397,43 +2397,43 @@ test "luce.sema.type: a percent formatting mistake names f-strings" {
 
 test "luce.sema.const: a folded narrowing is range-checked at its own width" {
     try expectOnlySayingAt(
-        \\const wide: long = 3000000000
-        \\const narrowed = int(wide)
+        \\const wide: i64 = 3000000000
+        \\const narrowed = i32(wide)
         \\
         \\func main():
-        \\    print(string(narrowed))
+        \\    print(str(narrowed))
         \\
     , "luce.sema.const", "constant conversion out of range", 2, 18);
     // One below the top fits, so the check is the boundary and not a
     // refusal of the whole conversion.
     try expectCompiles(
-        \\const wide: long = 2147483647
-        \\const narrowed = int(wide)
+        \\const wide: i64 = 2147483647
+        \\const narrowed = i32(wide)
         \\
         \\func main():
-        \\    print(string(narrowed))
+        \\    print(str(narrowed))
         \\
     );
 }
 
-test "luce.sema.const: a folded float-to-integer is range-checked at its own width" {
+test "luce.sema.const: a folded f32-to-integer is range-checked at its own width" {
     try expectOnlySayingAt(
-        \\const big: double = 3.0e9
-        \\const narrowed = int(big)
+        \\const big: f64 = 3.0e9
+        \\const narrowed = i32(big)
         \\
         \\func main():
-        \\    print(string(narrowed))
+        \\    print(str(narrowed))
         \\
     , "luce.sema.const", "constant conversion out of range", 2, 18);
     // The same value reaches a `long` without complaint, which is what
     // makes the message above a statement about the width rather than
     // about the number.
     try expectCompiles(
-        \\const big: double = 3.0e9
-        \\const widened = long(big)
+        \\const big: f64 = 3.0e9
+        \\const widened = i64(big)
         \\
         \\func main():
-        \\    print(string(widened))
+        \\    print(str(widened))
         \\
     );
 }
@@ -2453,7 +2453,7 @@ test "luce.sema.type: a bad left operand of and is named, and underlined alone" 
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be bool, not int", 3, 8, 9);
+    , "luce.sema.type", "the left operand of and must be bool, not i32", 3, 8, 9);
 }
 
 test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
@@ -2465,7 +2465,7 @@ test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
         \\    if total + 1 or false:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of or must be bool, not int", 3, 8, 17);
+    , "luce.sema.type", "the left operand of or must be bool, not i32", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
@@ -2475,30 +2475,30 @@ test "luce.sema.type: a bad right operand of or is named, and underlined alone" 
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be bool, not int", 3, 16, 17);
+    , "luce.sema.type", "the right operand of or must be bool, not i32", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
-    // Was "n is long, and a long is always there; only a long? is ever
+    // Was "n is i64, and an i64 is always there; only an i64? is ever
     // none" — twice ungrammatical, and tautological besides.
     try expectOnlySayingAt(
-        "func main():\n    let n: long = none\n",
+        "func main():\n    let n: i64 = none\n",
         "luce.sema.absent",
-        "n is long, which is always there; only long? is ever none",
+        "n is i64, which is always there; only i64? is ever none",
         2,
-        19,
+        18,
     );
 }
 
 test "luce.sema.return: a returned type takes no article either" {
     try expectOnlySayingAt(
-        \\func f() -> long:
+        \\func f() -> i64:
         \\    return
         \\
         \\func main():
         \\    let x = f()
         \\
-    , "luce.sema.return", "return needs a value of type long", 2, 5);
+    , "luce.sema.return", "return needs a value of type i64", 2, 5);
 }
 
 // `//` is floor division, and the message that used to greet a
@@ -2538,7 +2538,7 @@ test "luce.parse.fstring: an unknown format spec names the one that exists" {
         \\
     ,
         "luce.parse.fstring",
-        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a double",
+        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of an f64",
         5,
         15,
     );
@@ -2594,37 +2594,35 @@ test "luce.sema.convert: string() names its value domain and build() for a build
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).
     try expectOnlySayingAt(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.append("x")
-        \\    let text = string(b)
+        \\    let text = str(b)
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, a union member, or a function value; a builder hands over its text with .build()",
+        "str() converts a number, a bool, a str, an enum, a union member, or a function value; a builder hands over its text with .build()",
         4,
         16,
     );
     try expectOnlySayingAt(
         \\func main():
         \\    var xs = [1, 2]
-        \\    let text = string(xs)
+        \\    let text = str(xs)
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, a union member, or a function value, not list(int)",
+        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i32]",
         3,
         16,
     );
 }
 
-test "luce.sema.call: str is gone, and is not a name anybody kept" {
-    // Not reserved either, so it is an unknown function like any other
-    // — a program may declare one and mean it.
-    try expectRejected(
+test "luce.sema.type.retired: the old text conversion names its replacement" {
+    try expectSaying(
         \\func main():
-        \\    let text = str(1)
+        \\    let text = string(1)
         \\
-    , "luce.sema.call");
+    , "luce.sema.type.retired", "string is retired; write str");
 }
 
 test "luce.sema.type: a condition must be bool" {
@@ -2632,12 +2630,12 @@ test "luce.sema.type: a condition must be bool" {
 }
 
 test "luce.sema.type: an annotation must match the initializer" {
-    try expectRejected("func main():\n    let a: long = \"x\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a: i64 = \"x\"\n", "luce.sema.type");
 }
 
 test "luce.sema.convert: long and double convert only their opposite" {
-    try expectRejected("func main():\n    let a = long(\"x\")\n", "luce.sema.convert");
-    try expectRejected("func main():\n    let a = double(true)\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = i64(\"x\")\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = f64(true)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -2647,7 +2645,7 @@ test "luce.sema.convert: long and double convert only their opposite" {
 test "luce.sema.field: an unknown struct field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -2658,7 +2656,7 @@ test "luce.sema.field: an unknown struct field is rejected" {
 
 test "luce.sema.call: arity and unknown callees are checked" {
     try expectRejected(
-        \\func add(a: long, b: long) -> long:
+        \\func add(a: i64, b: i64) -> i64:
         \\    return a + b
         \\
         \\func main():
@@ -2677,7 +2675,7 @@ test "luce.sema.method: map get takes exactly its key" {
     // a second argument is a count mistake and says both counts.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let x = m.get("k", 0)
         \\
     , "luce.sema.method", "get takes 1 argument, got 2", 3, 13);
@@ -2685,17 +2683,17 @@ test "luce.sema.method: map get takes exactly its key" {
     // at the argument rather than at the call.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let x = m.get(7)
         \\
-    , "luce.sema.type", "argument 1 of get is string, got int", 3, 19);
+    , "luce.sema.type", "argument 1 of get is str, got i32", 3, 19);
 }
 
 test "luce.sema.loop: two-name for needs a map or a sequence" {
     // A builder is not iterable at all.
     try expectRejected(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    for a, c in b:
         \\        b.append("x")
         \\
@@ -2705,7 +2703,7 @@ test "luce.sema.loop: two-name for needs a map or a sequence" {
 test "luce.sema.duplicate: the two for-loop names must differ" {
     try expectRejected(
         \\func main():
-        \\    var m = new map(long, long)
+        \\    var m = new map[i64, i64]
         \\    m[1] = 1
         \\    for k, k in m:
         \\        let unused = k
@@ -2724,8 +2722,8 @@ test "luce.sema.index: only heap containers index, with the right key" {
 test "luce.sema.construct: a struct needs all fields, named, once" {
     try expectRejected(
         \\struct P:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -2740,8 +2738,8 @@ test "luce.sema.construct: a struct needs all fields, named, once" {
 test "luce.sema.construct: one missing field is named in the singular" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: long
-        \\    b: long
+        \\    a: i64
+        \\    b: i64
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -2752,9 +2750,9 @@ test "luce.sema.construct: one missing field is named in the singular" {
 test "luce.sema.construct: two missing fields take no serial comma" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: long
-        \\    b: long
-        \\    c: long
+        \\    a: i64
+        \\    b: i64
+        \\    c: i64
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -2765,10 +2763,10 @@ test "luce.sema.construct: two missing fields take no serial comma" {
 test "luce.sema.construct: every missing field is named, in declaration order" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: long
-        \\    b: long
-        \\    c: long
-        \\    d: long
+        \\    a: i64
+        \\    b: i64
+        \\    c: i64
+        \\    d: i64
         \\
         \\func main():
         \\    let p = P(b = 1)
@@ -2781,9 +2779,9 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
     // different words for the same mistake at file scope (context.zig).
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: long
-        \\    b: long
-        \\    c: long
+        \\    a: i64
+        \\    b: i64
+        \\    c: i64
         \\
         \\const origin = P(a = 1)
         \\
@@ -2793,8 +2791,8 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
     , "luce.sema.const", "P is missing fields b and c", 6, 16);
 }
 
-test "luce.sema.new: new builds only the heap types" {
-    try expectRejected("func main():\n    let a = new array(long)\n", "luce.sema.new");
+test "luce.sema.container.type: an array construction needs its extents" {
+    try expectRejected("func main():\n    let a = new array[i64]\n", "luce.sema.container.type");
 }
 
 test "luce.sema.loop: break and continue need a loop" {
@@ -2803,7 +2801,7 @@ test "luce.sema.loop: break and continue need a loop" {
 
 test "luce.sema.return: return paths and value shape are checked" {
     try expectRejected(
-        \\func f() -> long:
+        \\func f() -> i64:
         \\    let x = 1
         \\
         \\func main():
@@ -2837,7 +2835,7 @@ test "luce.sema.struct: a struct cannot be empty or self-containing" {
 test "luce.sema.struct: a direct cycle names the field and the fix" {
     try expectOnlySayingAt(
         \\struct Node:
-        \\    value: long
+        \\    value: i64
         \\    next: Node
         \\
         \\func main():
@@ -2875,7 +2873,7 @@ test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
 test "luce.sema.struct: a three-struct cycle reads the whole way round" {
     try expectOnlySayingAt(
         \\struct A:
-        \\    n: long
+        \\    n: i64
         \\    b: B
         \\
         \\struct B:
@@ -2928,7 +2926,7 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
     // suggestion, compiled.
     var result = try compile_mod.compile(testing.allocator,
         \\struct Node:
-        \\    value: long
+        \\    value: i64
         \\    next: Node?
         \\
         \\func main():
@@ -2950,7 +2948,7 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
 }
 
 test "luce.sema.const: a top-level const is not a computation" {
-    try expectRejected("const bad = new list(long)\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad = new list[i64]\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.host: host builtins are gated off by default" {
@@ -2962,15 +2960,15 @@ test "luce.sema.host: host builtins are gated off by default" {
     // has no machine to ask about, and asking is refused where it is
     // written rather than where it would run.
     try expectRejected(
-        "func main():\n    print(string(os_total_memory()))\n",
+        "func main():\n    print(str(os_total_memory()))\n",
         "luce.sema.host",
     );
     try expectRejected(
-        "func main():\n    print(string(os_available_memory()))\n",
+        "func main():\n    print(str(os_available_memory()))\n",
         "luce.sema.host",
     );
     try expectRejected(
-        "func main():\n    print(string(os_cpu_count()))\n",
+        "func main():\n    print(str(os_cpu_count()))\n",
         "luce.sema.host",
     );
 }
@@ -3131,9 +3129,9 @@ test "luce.parse.expression: the comparison operators of other languages" {
 
 test "luce.parse.expression: '**' names the std function that does it" {
     try expectOnlySayingAcross(
-        "func main():\n    let a = 2 ** 3\n    print(string(a))\n",
+        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
         "luce.parse.expression",
-        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for long",
+        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for i64",
         2,
         15,
         17,
@@ -3143,20 +3141,20 @@ test "luce.parse.expression: '**' names the std function that does it" {
 test "luce.sema.type: the bit set works on integers, said with the fact that refused it" {
     // docs/BITWISE.md D2: a double has no bits a program may see.
     try expectRejected(
-        "func main():\n    let a = 1.5 & 2.0\n    print_error(string(a))\n",
+        "func main():\n    let a = 1.5 & 2.0\n    print_error(str(a))\n",
         "luce.sema.type",
     );
     try expectSayingAt(
         "func main():\n    let x = 1.5\n    let b = x << 2.0\n",
         "luce.sema.type",
-        "<< works on int and long; float has no bits a program may see",
+        "<< works on integers; f32 has no bits a program may see",
         3,
         13,
     );
     try expectSayingAt(
         "func main():\n    let x = 1.5\n    let b = ~x\n",
         "luce.sema.type",
-        "~ works on int and long; float has no bits a program may see",
+        "~ works on integers; f32 has no bits a program may see",
         3,
         13,
     );
@@ -3167,7 +3165,7 @@ test "luce.sema.const: a constant shift with a bad count is the trap's compile-t
     // a count out of range cannot quietly fold to anything.
     try expectRejected("const bad = 1 << 64\n\nfunc main():\n    return\n", "luce.sema.const");
     try expectRejected("const bad = 1 << -1\n\nfunc main():\n    return\n", "luce.sema.const");
-    try expectCompiles("const fine: long = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
+    try expectCompiles("const fine: i64 = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
 }
 
 test "luce.parse.expression: '&&' and '||' name the Luce keyword" {
@@ -3226,7 +3224,7 @@ test "luce.parse.expected: a struct field needs a type after its colon" {
 
 test "luce.parse.type: array shape wildcards must come last" {
     try expectRejected(
-        "func f(a: array(long, _, long)):\n    return\n\nfunc main():\n    return\n",
+        "func f(a: array[i64, _, i64]):\n    return\n\nfunc main():\n    return\n",
         "luce.parse.type",
     );
 }
@@ -3244,7 +3242,7 @@ test "luce.parse.assign: cannot assign through a call result" {
 test "luce.sema.field: a nested place checks each field on the way down" {
     try expectRejected(
         \\struct Inner:
-        \\    n: long
+        \\    n: i64
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -3258,7 +3256,7 @@ test "luce.sema.field: a nested place checks each field on the way down" {
 
 test "luce.sema.new: new builds only the heap constructors" {
     try expectSaying(
-        "struct Point:\n    x: long\n\nfunc main():\n    let a = new Point()\n",
+        "struct Point:\n    x: i64\n\nfunc main():\n    let a = new Point()\n",
         "luce.sema.new",
         "Point is a value type",
     );
@@ -3288,25 +3286,25 @@ test "luce.sema.type: an alias target must exist and have the written shape" {
         "unknown type Missing",
     );
     try expectSaying(
-        "alias UserId = long(string)\n\nfunc main():\n    return\n",
-        "luce.sema.type",
-        "long takes no type arguments",
+        "alias UserId = i64(str)\n\nfunc main():\n    return\n",
+        "luce.parse.type",
+        "type arguments use brackets: write i64[...]",
     );
     try expectSaying(
-        "alias MaybeId = long?\n\nfunc main():\n    let value: MaybeId? = none\n",
+        "alias MaybeId = i64?\n\nfunc main():\n    let value: MaybeId? = none\n",
         "luce.sema.type",
-        "MaybeId? is not a type: long? is already optional",
+        "MaybeId? is not a type: i64? is already optional",
     );
 }
 
 test "luce.sema.reserved: an alias cannot replace a builtin type or reserved name" {
     try expectSaying(
-        "alias long = int\n\nfunc main():\n    return\n",
+        "alias i64 = i32\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
-        "long is a builtin type",
+        "i64 is a builtin type",
     );
     try expectSaying(
-        "alias print = long\n\nfunc main():\n    return\n",
+        "alias print = i64\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
         "print is a reserved name",
     );
@@ -3314,18 +3312,18 @@ test "luce.sema.reserved: an alias cannot replace a builtin type or reserved nam
 
 test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
     const cases = [_][]const u8{
-        "alias Thing = long\nalias Thing = string\n",
-        "struct Thing:\n    value: long\nalias Thing = long\n",
-        "alias Thing = long\nstruct Thing:\n    value: long\n",
-        "class Thing:\n    value: long\nalias Thing = long\n",
-        "interface Thing:\n    func value() -> long\nalias Thing = long\n",
-        "enum Thing:\n    one\nalias Thing = long\n",
-        "union Thing:\n    one(value: long)\nalias Thing = long\n",
-        "const Thing = 1\nalias Thing = long\n",
-        "func Thing() -> long:\n    return 1\nalias Thing = long\n",
-        "alias Thing = long\nfunc Thing() -> long:\n    return 1\n",
-        "import std.math\nalias math = long\n",
-        "alias math = long\nimport std.math\n",
+        "alias Thing = i64\nalias Thing = str\n",
+        "struct Thing:\n    value: i64\nalias Thing = i64\n",
+        "alias Thing = i64\nstruct Thing:\n    value: i64\n",
+        "class Thing:\n    value: i64\nalias Thing = i64\n",
+        "interface Thing:\n    func value() -> i64\nalias Thing = i64\n",
+        "enum Thing:\n    one\nalias Thing = i64\n",
+        "union Thing:\n    one(value: i64)\nalias Thing = i64\n",
+        "const Thing = 1\nalias Thing = i64\n",
+        "func Thing() -> i64:\n    return 1\nalias Thing = i64\n",
+        "alias Thing = i64\nfunc Thing() -> i64:\n    return 1\n",
+        "import std.math\nalias math = i64\n",
+        "alias math = i64\nimport std.math\n",
     };
     for (cases) |declarations| {
         const source = try std.fmt.allocPrint(testing.allocator, "{s}\nfunc main():\n    return\n", .{declarations});
@@ -3336,18 +3334,18 @@ test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
 
 test "luce.sema.private: a public alias cannot expose a private nominal type" {
     try expectSaying(
-        "private struct Secret:\n    value: long\n\nalias PublicSecret = Secret\n\nfunc main():\n    return\n",
+        "private struct Secret:\n    value: i64\n\nalias PublicSecret = Secret\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "alias PublicSecret is public and names Secret",
     );
     try expectCompiles(
-        "private struct Secret:\n    value: long\n\nprivate alias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
+        "private struct Secret:\n    value: i64\n\nprivate alias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
     );
 }
 
 test "luce.sema.call: an alias is callable only when its target has constructor syntax" {
     try expectSaying(
-        "alias Names = list(long)\n\nfunc main():\n    let values = Names()\n",
+        "alias Names = list[i64]\n\nfunc main():\n    let values = Names()\n",
         "luce.sema.call",
         "construct it with new Names",
     );
@@ -3360,9 +3358,9 @@ test "luce.sema.call: an alias is callable only when its target has constructor 
 
 test "luce.sema.name: a bare alias is a type rather than a runtime value" {
     try expectSaying(
-        "alias UserId = long\n\nfunc main():\n    let value = UserId\n",
+        "alias UserId = i64\n\nfunc main():\n    let value = UserId\n",
         "luce.sema.name",
-        "UserId is a type alias for long, not a value",
+        "UserId is a type alias for i64, not a value",
     );
 }
 
@@ -3377,10 +3375,10 @@ test "luce.sema.name: input is not a name in a script" {
 test "luce.sema.duplicate: a struct cannot be declared twice" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\struct P:
-        \\    y: long
+        \\    y: i64
         \\
         \\func main():
         \\    return
@@ -3391,8 +3389,8 @@ test "luce.sema.duplicate: a struct cannot be declared twice" {
 test "luce.sema.duplicate: a struct cannot repeat a field" {
     try expectRejected(
         \\struct P:
-        \\    x: long
-        \\    x: long
+        \\    x: i64
+        \\    x: i64
         \\
         \\func main():
         \\    return
@@ -3419,7 +3417,7 @@ test "luce.sema.reserved: a function cannot take a builtin's name" {
 }
 
 test "luce.sema.reserved: a struct cannot take a type keyword's name" {
-    try expectRejected("struct long:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct i64:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 // spelling:off — these two programs exist to be refused, so they are
@@ -3429,40 +3427,40 @@ test "luce.sema.reserved: a struct cannot take a type keyword's name" {
 // says `Int`.  A reader who writes one of the retired spellings is
 // told what it is called now, by name, in both places one can appear:
 // a type annotation and a conversion call.  Edit distance cannot find
-// `long` from `Int`, so nothing else would answer at all.
-test "luce.sema.type: a retired TitleCase type name names its replacement" {
+// `i64` from `Int`, so nothing else would answer at all.
+test "luce.sema.type.retired: a retired TitleCase type name names its replacement" {
     try expectMessage(
         \\func main():
         \\    let n: Int = 1
         \\    assert(n == 1)
         \\
-    , "the builtin types are lowercase: Int is written long");
+    , "Int is retired; write i64");
     try expectMessage(
         \\func main():
         \\    let x: Float = 1.5
         \\    assert(x == 1.5)
         \\
-    , "the builtin types are lowercase: Float is written double");
+    , "Float is retired; write f64");
     try expectMessage(
         \\func main():
-        \\    var xs: List(Int) = []
+        \\    var xs: List[i64] = []
         \\    assert(len(xs) == 0)
         \\
-    , "the builtin types are lowercase: List is written list");
+    , "List is retired; write list");
 }
 
-test "luce.sema.call: a retired conversion constructor names its replacement" {
+test "luce.sema.type.retired: a retired conversion constructor names its replacement" {
     try expectMessage(
         \\func main():
         \\    let n = Int(1.5)
         \\    assert(n == 2)
         \\
-    , "the builtin types are lowercase: Int is written long");
+    , "Int is retired; write i64");
     try expectMessage(
         \\func main():
         \\    assert(String(1) == "1")
         \\
-    , "the builtin types are lowercase: String is written string");
+    , "String is retired; write str");
 }
 
 // spelling:on
@@ -3472,19 +3470,19 @@ test "luce.sema.reserved: a struct cannot take a builtin type's name" {
     // spelled `list` would be a type nothing could write down, because
     // `resolveBase` answers that name first — so it is refused where it
     // is declared rather than shadowed where it is used.
-    try expectRejected("struct list:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("struct double:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("struct builder:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct list:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct f64:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct builder:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 test "luce.sema.reserved: a function cannot take a conversion's name" {
     // The container names are not reserved as callables — `files.list`
     // is the right name for what it does and collides with nothing —
-    // but the three conversions are answers to a bare call and a
+    // but scalar conversions are answers to a bare call and a
     // declaration would stand in front of one.
-    try expectRejected("func long():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("func double():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("func string():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func i64():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func f64():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func str():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 test "luce.sema.reserved: a function cannot take a terminal service's name" {
@@ -3493,11 +3491,11 @@ test "luce.sema.reserved: a function cannot take a terminal service's name" {
     // builtin.  One per shape: no arguments, some arguments, and the
     // one whose name a program is most likely to reach for.
     try expectRejected(
-        "func term_rows() -> long:\n    return 1\n\nfunc main():\n    return\n",
+        "func term_rows() -> i64:\n    return 1\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
     try expectRejected(
-        "func term_write(text: string):\n    return\n\nfunc main():\n    return\n",
+        "func term_write(text: str):\n    return\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
     try expectRejected(
@@ -3512,7 +3510,7 @@ test "luce.sema.reserved: a local cannot take a terminal service's name" {
 
 test "luce.sema.reserved: a struct cannot take a terminal service's name" {
     try expectRejected(
-        "struct term_style:\n    x: long\n\nfunc main():\n    return\n",
+        "struct term_style:\n    x: i64\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
 }
@@ -3523,7 +3521,7 @@ test "luce.sema.reserved: a struct cannot take a terminal service's name" {
 
 test "luce.sema.type: a wrong argument type is rejected" {
     try expectRejected(
-        \\func f(a: long):
+        \\func f(a: i64):
         \\    return
         \\
         \\func main():
@@ -3534,7 +3532,7 @@ test "luce.sema.type: a wrong argument type is rejected" {
 
 test "luce.sema.type: a returned value must match the declared return type" {
     try expectRejected(
-        \\func f() -> long:
+        \\func f() -> i64:
         \\    return "x"
         \\
         \\func main():
@@ -3550,7 +3548,7 @@ test "luce.sema.type: a list literal is homogeneous" {
 test "luce.sema.type: a struct field takes its declared type" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = P(x = "s")
@@ -3587,7 +3585,7 @@ test "luce.sema.type: range bounds must be long" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.convert: a conversion takes exactly one argument" {
-    try expectRejected("func main():\n    let a = long(1, 2)\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = i64(1, 2)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -3617,7 +3615,7 @@ test "luce.sema.call: the entry function cannot be called" {
 
 test "luce.sema.call: a positional argument cannot follow a named one" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
@@ -3628,7 +3626,7 @@ test "luce.sema.call: a positional argument cannot follow a named one" {
 
 test "luce.sema.call: an unknown argument name offers the closest parameter" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
@@ -3639,7 +3637,7 @@ test "luce.sema.call: an unknown argument name offers the closest parameter" {
 
 test "luce.sema.call: an unknown argument name with nothing close enumerates the surface" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
@@ -3650,7 +3648,7 @@ test "luce.sema.call: an unknown argument name with nothing close enumerates the
 
 test "luce.sema.call: a parameter given by position and by name is refused" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
@@ -3661,7 +3659,7 @@ test "luce.sema.call: a parameter given by position and by name is refused" {
 
 test "luce.sema.call: a parameter named twice is refused" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
@@ -3672,7 +3670,7 @@ test "luce.sema.call: a parameter named twice is refused" {
 
 test "luce.sema.call: every missing argument is named at once" {
     try expectSaying(
-        \\func volume(width: long, height: long, depth: long) -> long:
+        \\func volume(width: i64, height: i64, depth: i64) -> i64:
         \\    return width * height * depth
         \\
         \\func main():
@@ -3684,9 +3682,9 @@ test "luce.sema.call: every missing argument is named at once" {
 test "luce.sema.self: the type spelling cannot name a method receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func read() -> long:
+        \\    func read() -> i64:
         \\        return self.x
         \\
         \\func main():
@@ -3699,9 +3697,9 @@ test "luce.sema.self: the type spelling cannot name a method receiver" {
 test "luce.sema.self: self is not a nameable argument on the method form" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func plus(other: long) -> long:
+        \\    func plus(other: i64) -> i64:
         \\        return self.x + other
         \\
         \\func main():
@@ -3715,7 +3713,7 @@ test "luce.sema.self: self is not a nameable argument on the method form" {
 
 test "luce.sema.call: defaults are trailing" {
     try expectSaying(
-        \\func range_of(start: long = 0, finish: long):
+        \\func range_of(start: i64 = 0, finish: i64):
         \\    return
         \\
         \\func main():
@@ -3726,10 +3724,10 @@ test "luce.sema.call: defaults are trailing" {
 
 test "luce.sema.const: a call is not a default" {
     try expectSaying(
-        \\func cost() -> long:
+        \\func cost() -> i64:
         \\    return 1
         \\
-        \\func f(a: long = cost()):
+        \\func f(a: i64 = cost()):
         \\    return
         \\
         \\func main():
@@ -3740,7 +3738,7 @@ test "luce.sema.const: a call is not a default" {
 
 test "luce.sema.const: a runtime-created object is not a default" {
     try expectSaying(
-        \\func f(xs: list(long) = new list(long)):
+        \\func f(xs: list[i64] = new list[i64]):
         \\    return
         \\
         \\func main():
@@ -3751,7 +3749,7 @@ test "luce.sema.const: a runtime-created object is not a default" {
 
 test "luce.sema.const: a default cannot read an earlier parameter" {
     try expectSaying(
-        \\func f(a: long, b: long = a):
+        \\func f(a: i64, b: i64 = a):
         \\    return
         \\
         \\func main():
@@ -3762,13 +3760,13 @@ test "luce.sema.const: a default cannot read an earlier parameter" {
 
 test "luce.sema.type: a default lands at the parameter's type or is refused" {
     try expectSaying(
-        \\func f(start: long = "zero"):
+        \\func f(start: i64 = "zero"):
         \\    return
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.type", "start is long and its default is string");
+    , "luce.sema.type", "start is i64 and its default is str");
 }
 
 test "luce.sema.const: a default folds once, at the declaration, called or not" {
@@ -3776,7 +3774,7 @@ test "luce.sema.const: a default folds once, at the declaration, called or not" 
     // compile error even though nothing ever calls f — the proof the
     // evaluation is declaration-time (docs/ARGS.md §2).
     try expectSaying(
-        \\func f(a: long = 1 // 0):
+        \\func f(a: i64 = 1 // 0):
         \\    return
         \\
         \\func main():
@@ -3788,9 +3786,9 @@ test "luce.sema.const: a default folds once, at the declaration, called or not" 
 test "luce.parse.self: an explicit self with a default gets the retirement diagnostic" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func f(self = 1) -> long:
+        \\    func f(self = 1) -> i64:
         \\        return 0
         \\
         \\func main():
@@ -3801,7 +3799,7 @@ test "luce.parse.self: an explicit self with a default gets the retirement diagn
 
 test "luce.sema.call: the count sentence names the defaults" {
     try expectSaying(
-        \\func grown(base: long, step: long = 5, twice: bool = false) -> long:
+        \\func grown(base: i64, step: i64 = 5, twice: bool = false) -> i64:
         \\    return base + step
         \\
         \\func main():
@@ -3812,7 +3810,7 @@ test "luce.sema.call: the count sentence names the defaults" {
 
 test "luce.sema.call: only the required slots are ever missing" {
     try expectSaying(
-        \\func f(a: long, b: long, c: long = 0) -> long:
+        \\func f(a: i64, b: i64, c: i64 = 0) -> i64:
         \\    return a + b + c
         \\
         \\func main():
@@ -3826,8 +3824,8 @@ test "luce.sema.call: only the required slots are ever missing" {
 test "luce.sema.struct: field defaults are trailing" {
     try expectSaying(
         \\struct State:
-        \\    cursor: long = 0
-        \\    path: string
+        \\    cursor: i64 = 0
+        \\    path: str
         \\
         \\func main():
         \\    return
@@ -3839,11 +3837,11 @@ test "luce.sema.const: a field default is a constant, called or not" {
     // Nothing constructs Config, and the refusal fires anyway: a
     // default is evaluated at the declaration (docs/ARGS.md D2).
     try expectSaying(
-        \\func cost() -> long:
+        \\func cost() -> i64:
         \\    return 1
         \\
         \\struct Config:
-        \\    budget: long = cost()
+        \\    budget: i64 = cost()
         \\
         \\func main():
         \\    return
@@ -3854,21 +3852,21 @@ test "luce.sema.const: a field default is a constant, called or not" {
 test "luce.sema.type: a field default lands at the field's type or is refused" {
     try expectSaying(
         \\struct Config:
-        \\    budget: long = "much"
+        \\    budget: i64 = "much"
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.type", "Config.budget is long and its default is string");
+    , "luce.sema.type", "Config.budget is i64 and its default is str");
 }
 
 test "luce.sema.const: field defaults cannot lean on each other in a loop" {
     try expectSaying(
         \\struct A:
-        \\    x: long = B().y
+        \\    x: i64 = B().y
         \\
         \\struct B:
-        \\    y: long = A().x
+        \\    y: i64 = A().x
         \\
         \\func main():
         \\    return
@@ -3878,13 +3876,13 @@ test "luce.sema.const: field defaults cannot lean on each other in a loop" {
 
 test "luce.sema.type: a named argument's type mistake names the parameter" {
     try expectSaying(
-        \\func size(width: long, height: long) -> long:
+        \\func size(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
         \\func main():
         \\    let a = size(1, height = "x")
         \\
-    , "luce.sema.type", "height of size is long, got string");
+    , "luce.sema.type", "height of size is i64, got str");
 }
 
 test "luce.sema.call: a None function's result is not a value" {
@@ -3943,20 +3941,20 @@ test "luce.sema.method: a method the receiver does not have answers before its a
     // The landing reaches "no such method" with the receiver lowered
     // and nothing else, which is why it can say it first.
     try expectSayingAt(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\func main():
-        \\    var m = new map(string, func(long) -> string)
+        \\    var m = new map[str, func(i64) -> str]
         \\    m.put("a", twice)
         \\
     , "luce.sema.method", "map has no method put (has get remove keys values clear)", 6, 5);
     try expectSayingAt(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list((func(long) -> string)?)
+        \\    var xs = new list[(func(i64) -> str)?]
         \\    xs.push(twice)
         \\
     ,
@@ -3967,11 +3965,11 @@ test "luce.sema.method: a method the receiver does not have answers before its a
     );
     // A declared receiver answers the same way, out of the same place.
     try expectSayingAt(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\struct Box:
-        \\    v: long
+        \\    v: i64
         \\
         \\func main():
         \\    var b = Box(v = 1)
@@ -3985,11 +3983,11 @@ test "luce.sema.method: one argument too many is a count, not a question about t
     // argument has no slot to land in, and the count is knowable
     // before it is lowered.
     try expectSayingAt(
-        \\func twice(n: long) -> string:
-        \\    return string(n * 2)
+        \\func twice(n: i64) -> str:
+        \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list((func(long) -> string)?)
+        \\    var xs = new list[(func(i64) -> str)?]
         \\    xs.append(twice, twice)
         \\
     , "luce.sema.method", "append takes 1 argument, got 2", 6, 5);
@@ -4043,11 +4041,11 @@ test "luce.sema.method: strings has no such function" {
     , "luce.sema.method");
 }
 
-test "luce.sema.import: string methods need import strings" {
+test "luce.sema.import: str methods need import strings" {
     try expectRejected("func main():\n    let s = \"x\"\n    let n = s.find(\"y\")\n", "luce.sema.import");
 }
 
-test "luce.sema.import: join on list(string) needs import strings" {
+test "luce.sema.import: join on list[str] needs import strings" {
     try expectRejected(
         \\func main():
         \\    let parts = ["a", "b"]
@@ -4079,7 +4077,7 @@ test "luce.sema.type: a routed strings call checks argument types" {
 test "luce.sema.method: map has no such method" {
     try expectRejected(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m.frobnicate()
         \\
     , "luce.sema.method");
@@ -4104,7 +4102,7 @@ test "luce.sema.index: a list indexes with a long, not a bool" {
 test "luce.sema.index: an array wants one index per dimension" {
     try expectRejected(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    let a = grid[0]
         \\
     , "luce.sema.index");
@@ -4113,7 +4111,7 @@ test "luce.sema.index: an array wants one index per dimension" {
 test "luce.sema.index: a map cannot be sliced" {
     try expectRejected(
         \\func main():
-        \\    var m = new map(long, long)
+        \\    var m = new map[i64, i64]
         \\    let a = m[0:1]
         \\
     , "luce.sema.index");
@@ -4126,7 +4124,7 @@ test "luce.sema.index: a map cannot be sliced" {
 test "luce.sema.construct: an unknown field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = P(x = 1, z = 2)
@@ -4137,7 +4135,7 @@ test "luce.sema.construct: an unknown field is rejected" {
 test "luce.sema.construct: a field cannot be given twice" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = P(x = 1, x = 2)
@@ -4148,7 +4146,7 @@ test "luce.sema.construct: a field cannot be given twice" {
 test "luce.sema.construct: fields are named, not positional" {
     try expectRejected(
         \\struct P:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = P(1)
@@ -4159,7 +4157,7 @@ test "luce.sema.construct: fields are named, not positional" {
 test "luce.sema.construct: a function-namespace struct has no value fields" {
     try expectRejected(
         \\struct Util:
-        \\    static func helper() -> long:
+        \\    static func helper() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -4241,7 +4239,7 @@ test "luce.sema.retired: file_exists names what replaced it" {
     // replacement rather than "unknown function".
     try expectHostSaying(
         \\func main():
-        \\    print(string(file_exists("notes.txt")))
+        \\    print(str(file_exists("notes.txt")))
         \\
     , "luce.sema.retired", "file_exists was retired");
 }
@@ -4252,18 +4250,42 @@ test "luce.sema.fallible: a handle's read is fallible like every file service" {
         \\
         \\func main() -> !:
         \\    var f = try files.open("notes.txt")
-        \\    var buffer = new array(byte, 4)
+        \\    var buffer = new array[u8](4)
         \\    let got = f.read(buffer)
         \\
     , "luce.sema.fallible");
 }
 
-test "luce.sema.new: new array takes one to four dimension sizes" {
-    try expectRejected("func main():\n    var a = new array(long, 1, 2, 3, 4, 5)\n", "luce.sema.new");
+test "luce.sema.container.type: new array takes one to four dimension sizes" {
+    try expectRejected("func main():\n    var a = new array[i64](1, 2, 3, 4, 5)\n", "luce.sema.container.type");
 }
 
-test "luce.sema.new: array dimensions are long" {
-    try expectRejected("func main():\n    var a = new array(long, true)\n", "luce.sema.new");
+test "luce.sema.container.type: array dimensions are i64" {
+    try expectRejected("func main():\n    var a = new array[i64](true)\n", "luce.sema.container.type");
+}
+
+test "luce.sema.container.type: construction values belong only to arrays" {
+    try expectSaying(
+        "func main():\n    var xs = new list[i64](4)\n",
+        "luce.sema.container.type",
+        "new list[i64] takes no construction values",
+    );
+}
+
+test "luce.sema.container.type: an array alias keeps and checks its rank" {
+    try expectSaying(
+        "alias Grid = array[i64, _, _]\n\nfunc main():\n    var grid = new Grid(4)\n",
+        "luce.sema.container.type",
+        "new Grid needs 2 dimension sizes, got 1",
+    );
+}
+
+test "luce.sema.container.type: direct new array takes no rank wildcards" {
+    try expectSaying(
+        "func main():\n    var grid = new array[i64, _, _](4, 4)\n",
+        "luce.sema.container.type",
+        "new array writes one element type, then its sizes",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4284,7 +4306,7 @@ test "luce.sema.loop: a non-iterable cannot drive for-each" {
 
 test "luce.sema.return: a typed function must return a value" {
     try expectRejected(
-        \\func f() -> long:
+        \\func f() -> i64:
         \\    return
         \\
         \\func main():
@@ -4328,7 +4350,7 @@ test "luce.sema.struct: mutually recursive structs have no finite value" {
 
 test "luce.sema.const: a call is not a constant" {
     try expectRejected(
-        \\func f() -> long:
+        \\func f() -> i64:
         \\    return 1
         \\
         \\const bad = f()
@@ -4364,15 +4386,15 @@ test "luce.sema.const: a bare none is still refused — nothing says what is abs
 
 test "luce.sema.const: none refuses a place that is always there" {
     try expectSaying(
-        "const bad: long = none\n\nfunc main():\n    return\n",
+        "const bad: i64 = none\n\nfunc main():\n    return\n",
         "luce.sema.const",
-        "long is always there; only long? is ever none",
+        "i64 is always there; only i64? is ever none",
     );
 }
 
 test "luce.sema.const: optional fallback is a runtime operation" {
     try expectSaying(
-        \\const missing: long? = none
+        \\const missing: i64? = none
         \\const bad = missing else 1
         \\
         \\func main():
@@ -4404,11 +4426,11 @@ test "luce.sema.literal: a float literal that is not finite is rejected" {
     try expectRejected("func main():\n    let a = -1e400\n", "luce.sema.literal");
 }
 
-test "luce.sema.const: a non-finite float constant is rejected as well" {
+test "luce.sema.const: a non-finite f32 constant is rejected as well" {
     try expectRejected("const a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
-test "luce.sema.const: ord of an empty string has no codepoint to fold" {
+test "luce.sema.const: ord of an empty str has no codepoint to fold" {
     try expectRejected("const a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
@@ -4503,32 +4525,32 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
     // As a method receiver.
     try expectRejected(
         \\func main():
-        \\    var xs: list(long)? = none
+        \\    var xs: list[i64]? = none
         \\    xs.append(1)
         \\
     , "luce.sema.absent");
     // As something to index.
     try expectRejected(
         \\func main():
-        \\    var xs: list(long)? = none
+        \\    var xs: list[i64]? = none
         \\    let first = xs[0]
         \\
     , "luce.sema.index");
     // As something to iterate.
     try expectRejected(
         \\func main():
-        \\    var xs: list(long)? = none
+        \\    var xs: list[i64]? = none
         \\    for x in xs:
         \\        return
         \\
     , "luce.sema.loop");
     // As something to hand over.
     try expectRejected(
-        \\func consume(xs: list(long)):
+        \\func consume(xs: list[i64]):
         \\    return
         \\
         \\func main():
-        \\    var xs: list(long)? = none
+        \\    var xs: list[i64]? = none
         \\    consume(xs)
         \\
     , "luce.sema.type");
@@ -4537,7 +4559,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
 test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
     try expectMessage(
         \\struct Bag:
-        \\    items: list(long)?
+        \\    items: list[i64]?
         \\
         \\func main():
         \\    let bag = Bag(items = none)
@@ -4554,13 +4576,13 @@ test "luce.sema.absent: none needs somewhere to be none of" {
     , "luce.sema.absent");
     try expectMessage(
         \\func main():
-        \\    assert(string(none) == "")
+        \\    assert(str(none) == "")
         \\
     , "none needs a type here");
     // A place that is always there cannot be none.
     try expectRejected(
         \\func main():
-        \\    var n: long = none
+        \\    var n: i64 = none
         \\
     , "luce.sema.absent");
     try expectRejected(
@@ -4595,14 +4617,14 @@ test "luce.sema.absent: none needs somewhere to be none of" {
 test "luce.sema.absent: a test or a fallback that can never fire is refused" {
     try expectMessage(
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    n = 4
         \\    assert(n != none)
         \\
     , "n already holds a value here");
     try expectMessage(
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    n = 4
         \\    assert((n else 0) == 4)
         \\
@@ -4619,19 +4641,19 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
     // left, so the narrowing from outside does not hold inside.
     try expectMessage(
         \\func main():
-        \\    var n: long? = 1
-        \\    var total: long = 0
+        \\    var n: i64? = 1
+        \\    var total: i64 = 0
         \\    while total < 10:
         \\        total = total + n
         \\        n = none
         \\
-    , "operands of + are long and long?");
+    , "operands of + are i64 and i64?");
     // One arm narrowing is not both arms narrowing.  (Where *both*
     // arms do — `if n == none: n = 1` — the join keeps it, and that is
     // the point of a join.)
     try expectMessage(
-        \\func maybe(flag: bool) -> long:
-        \\    var n: long? = none
+        \\func maybe(flag: bool) -> i64:
+        \\    var n: i64? = none
         \\    if flag:
         \\        n = 1
         \\    return n * 2
@@ -4639,10 +4661,10 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\func main():
         \\    assert(maybe(true) == 2)
         \\
-    , "operands of * are long? and long");
+    , "operands of * are i64? and i64");
     // A call cannot narrow: only the name itself.
     try expectRejected(
-        \\func check(n: long?) -> bool:
+        \\func check(n: i64?) -> bool:
         \\    return n != none
         \\
         \\func main():
@@ -4656,36 +4678,36 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
     // call.  Its catch handler begins with the entry facts, and the
     // merge cannot retain a presence proof that only success made.
     try expectSaying(
-        \\func maybe() -> long!:
+        \\func maybe() -> i64!:
         \\    error("missing")
         \\
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    n = maybe() catch:
         \\        assert(true)
         \\    let result = n + 1
         \\
-    , "luce.sema.type", "operands of + are long? and long");
+    , "luce.sema.type", "operands of + are i64? and i64");
 
     try expectSaying(
-        \\func maybe() -> (long?, long)!:
+        \\func maybe() -> (i64?, i64)!:
         \\    error("missing")
         \\
         \\func main():
-        \\    var n: long? = 1
+        \\    var n: i64? = 1
         \\    var count = 0
         \\    while count < 1:
         \\        let result = n + 1
         \\        n, count = maybe() catch:
         \\            count = count + 1
         \\
-    , "luce.sema.type", "operands of + are long? and long");
+    , "luce.sema.type", "operands of + are i64? and i64");
 }
 
 test "luce.parse.type: T?? is refused where it is written" {
     try expectRejected(
         \\func main():
-        \\    var n: long?? = none
+        \\    var n: i64?? = none
         \\
     , "luce.parse.type");
 }
@@ -4693,17 +4715,17 @@ test "luce.parse.type: T?? is refused where it is written" {
 test "luce.sema.type: a container element may not be optional" {
     try expectMessage(
         \\func main():
-        \\    var xs = new list(long?)
+        \\    var xs = new list[i64?]
         \\
     , "a list element cannot be optional");
     try expectRejected(
         \\func main():
-        \\    var m = new map(string, long?)
+        \\    var m = new map[str, i64?]
         \\
     , "luce.sema.type");
     try expectRejected(
         \\func main():
-        \\    var grid = new array(long?, 2)
+        \\    var grid = new array[i64?](2)
         \\
     , "luce.sema.type");
 }
@@ -4726,7 +4748,7 @@ test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
     try text.appendSlice(testing.allocator, "func main():\n");
     for (0..5000) |index| {
         var line: [64]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: long = \"x\"\n", .{index}));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: i64 = \"x\"\n", .{index}));
     }
     var result = try compile_mod.compile(testing.allocator, text.items, script);
     defer result.deinit();
@@ -4747,7 +4769,7 @@ test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
 test "every statement is checked, not just the first that fails" {
     var result = try compile_mod.compile(testing.allocator,
         \\func main():
-        \\    let a: long = "x"
+        \\    let a: i64 = "x"
         \\    let b: bool = 1
         \\    let c = 1 < true
         \\
@@ -4810,7 +4832,7 @@ test "a misspelled local name suggests the one in scope" {
 
 test "a misspelled function, field, type, and method each suggest the real one" {
     try expectMessage(
-        \\func compute(a: long) -> long:
+        \\func compute(a: i64) -> i64:
         \\    return a
         \\
         \\func main():
@@ -4819,8 +4841,8 @@ test "a misspelled function, field, type, and method each suggest the real one" 
     , "did you mean compute?");
     try expectMessage(
         \\struct Point:
-        \\    across: long
-        \\    down: long
+        \\    across: i64
+        \\    down: i64
         \\
         \\func main():
         \\    let p = Point(across = 1, down = 2)
@@ -4833,10 +4855,10 @@ test "a misspelled function, field, type, and method each suggest the real one" 
     // guess (docs/TYPES.md D8) — the spec for it is below.
     try expectMessage(
         \\func main():
-        \\    let a: strng = "x"
+        \\    let a: strr = "x"
         \\    assert(len(a) == 1)
         \\
-    , "did you mean string?");
+    , "did you mean str?");
     try expectMessage(
         \\func main():
         \\    var xs = [1, 2]
@@ -4849,8 +4871,8 @@ test "a name too short to guess from suggests nothing" {
     // `z` is one edit from `x` and means nothing like it.
     try expectMessage(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -4861,14 +4883,14 @@ test "a name too short to guess from suggests nothing" {
 
 test "a function that can fall off the end names the type it owes" {
     try expectMessage(
-        \\func pick(a: long) -> double:
+        \\func pick(a: i64) -> f64:
         \\    if a > 0:
         \\        return 1.0
         \\
         \\func main():
         \\    assert(pick(1) == 1.0)
         \\
-    , "pick must return double on every path");
+    , "pick must return f64 on every path");
 }
 
 test "an f-string hole is underlined, not the whole literal" {
@@ -4886,7 +4908,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, a union member, or a function value, not list(int)",
+        "str() converts a number, a bool, a str, an enum, a union member, or a function value, not list[i32]",
         6,
         30,
     );
@@ -4931,7 +4953,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     // signature, recompiles, and produces the real message.
     const say = "try applies to a call that can fail, and this one cannot; drop the try";
     try expectOnlySayingAt(
-        \\func plain() -> long:
+        \\func plain() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -4946,7 +4968,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     );
     // The arm that was always right, kept honest.
     try expectOnlySayingAt(
-        \\func plain() -> long:
+        \\func plain() -> i64:
         \\    return 1
         \\
         \\func main() -> !:
@@ -4961,7 +4983,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     );
     // And a try that really does hand an error up still says that.
     try expectOnlySayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -4984,7 +5006,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     // found the keyword 'catch'", which leaves the reader to work out
     // which of the two catch forms they have met.
     try expectSayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -5000,7 +5022,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
         21,
     );
     try expectSayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -5018,7 +5040,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     // Both fixes the message names actually compile.
     var fallback = try compile_mod.compile(
         testing.allocator,
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -5034,11 +5056,11 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
 
     var guarded = try compile_mod.compile(
         testing.allocator,
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
-        \\    var a: long = 0
+        \\    var a: i64 = 0
         \\    a = risky() catch:
         \\        a = -1
         \\    assert(a == 1)
@@ -5058,7 +5080,7 @@ test "luce.parse.expected: a catch block with a binding cannot initialize one ei
     // binding" back again for exactly the mistake the message above
     // was written for.
     try expectHostSayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -5080,7 +5102,7 @@ test "luce.parse.expected: a catch handler's body goes on the next line" {
     // on one line reads as the operator form and leaves a colon behind.
     // "Expected end of line, found ':'" is true and useless.
     try expectHostSayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
@@ -5099,7 +5121,7 @@ test "luce.sema.fallible: catch with a binding names the binding in the refusal"
     // half the advice, because the name goes too — and the reason it
     // goes is the sentence worth reading.
     try expectHostSayingAt(
-        \\func plain(n: long) -> long:
+        \\func plain(n: i64) -> i64:
         \\    return n
         \\
         \\func main():
@@ -5117,7 +5139,7 @@ test "luce.sema.fallible: catch with a binding names the binding in the refusal"
 
 test "luce.sema.duplicate: a handler's binding obeys the no-shadowing rule" {
     try expectHostSayingAt(
-        \\func risky() -> long!:
+        \\func risky() -> i64!:
         \\    error("no")
         \\
         \\func main():
@@ -5156,13 +5178,13 @@ test "a slice whose start falls back to a name is still a slice" {
     // turns on the newline, and this is the program that says why: no
     // newline lives inside brackets, so the colon here is the slice's.
     try expectCompiles(
-        \\func first(xs: list(long)) -> long!:
+        \\func first(xs: list[i64]) -> i64!:
         \\    if len(xs) == 0:
         \\        error("empty")
         \\    return xs[0]
         \\
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    xs.append(1)
         \\    xs.append(2)
         \\    xs.append(3)
@@ -5226,7 +5248,7 @@ test "luce.sema.unreachable: each terminator is named, with its line" {
 test "luce.sema.unreachable: an if counts only when both arms leave" {
     // Both arms return, so nothing below the `if` runs.
     try expectOnlySayingAt(
-        \\func pick(n: long) -> long:
+        \\func pick(n: i64) -> i64:
         \\    if n > 0:
         \\        return 1
         \\    else:
@@ -5248,7 +5270,7 @@ test "luce.sema.unreachable: an if counts only when both arms leave" {
     // written in.
     var guard = try compile_mod.compile(
         testing.allocator,
-        \\func pick(n: long) -> long:
+        \\func pick(n: i64) -> i64:
         \\    if n > 0:
         \\        return 1
         \\    let reached = n
@@ -5281,7 +5303,7 @@ test "a terminator as the last statement of its block is the ordinary case" {
     // an arm with code after the `if`.
     var result = try compile_mod.compile(
         testing.allocator,
-        \\func first(n: long) -> long:
+        \\func first(n: i64) -> i64:
         \\    var i = 0
         \\    while i < n:
         \\        if i == 2:
@@ -5310,7 +5332,7 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     // zero and a register to build.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
     for (1..21) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
@@ -5323,7 +5345,7 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
 /// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
 /// on line `3k` and its first field on line `3k + 1`.
 fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
     for (1..levels + 1) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(
@@ -5377,7 +5399,7 @@ test "luce.sema.struct: a struct too wide from its own fields names no field" {
     try text.appendSlice(testing.allocator, "struct Wide:\n");
     for (0..4097) |index| {
         var line: [32]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: long\n", .{index}));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: i64\n", .{index}));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: Wide\n");
     try expectOnlySayingAt(
@@ -5409,7 +5431,7 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
 
     var optional: std.ArrayList(u8) = .empty;
     defer optional.deinit(testing.allocator);
-    try optional.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
+    try optional.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
     for (1..14) |level| {
         var line: [64]u8 = undefined;
         try optional.appendSlice(testing.allocator, try std.fmt.bufPrint(
@@ -5428,7 +5450,7 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
     var recursive = try compile_mod.compile(
         testing.allocator,
         \\struct Node:
-        \\    value: long
+        \\    value: i64
         \\    next: Node?
         \\
         \\func main():
@@ -5449,7 +5471,7 @@ test "a wide struct graph with no cycle compiles, and quickly" {
     // path is exponential here; both are settled once instead.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
     for (1..11) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
@@ -5473,7 +5495,7 @@ test "luce.sema.struct: a cycle through a wide graph is still found" {
         \\
         \\struct C:
         \\    back: A
-        \\    value: long
+        \\    value: i64
         \\
         \\func main():
         \\    assert(true)
@@ -5629,8 +5651,8 @@ test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing 
     // now asked after the fallback has lowered, so the resolution
     // failure wins and it is the *only* thing reported.
     try expectOnlySayingAt(
-        \\func maybe() -> list(long)?:
-        \\    return new list(long)
+        \\func maybe() -> list[i64]?:
+        \\    return new list[i64]
         \\
         \\func main():
         \\    let xs = maybe() else Nope.empty
@@ -5638,8 +5660,8 @@ test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing 
     , "luce.sema.name", "unknown name Nope", 5, 27);
 
     try expectOnlySayingAt(
-        \\func attempt() -> list(long)!:
-        \\    return new list(long)
+        \\func attempt() -> list[i64]!:
+        \\    return new list[i64]
         \\
         \\func main():
         \\    let xs = attempt() catch Nope.empty
@@ -5659,12 +5681,12 @@ test "luce.parse.expected: catch guards a plain assignment, not a compound one" 
 
 test "luce.sema.main: a script entry may say ! and nothing else" {
     try expectRejected(
-        \\func main() -> long!:
+        \\func main() -> i64!:
         \\    return 1
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main() -> long:
+        \\func main() -> i64:
         \\    return 1
         \\
     , "luce.sema.main");
@@ -5718,8 +5740,8 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // A field of a let-bound struct.
     try expectSaying(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -5731,7 +5753,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // many steps down the leaf sits.
     try expectSaying(
         \\struct Inner:
-        \\    value: long
+        \\    value: i64
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -5745,7 +5767,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // And compound assignment through a chain is an assignment too.
     try expectSaying(
         \\struct Inner:
-        \\    value: long
+        \\    value: i64
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -5770,13 +5792,13 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // the call runs and keeps constants in the constants diagnostic
     // family rather than calling them let-bound locals.
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\const left = 0
         \\
         \\func main():
-        \\    var right: long = 0
+        \\    var right: i64 = 0
         \\    left, right = pair()
         \\
     , "luce.sema.const", "left is a file-scope constant");
@@ -5787,7 +5809,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // deleting a statement is the one failure a build cannot see).
     try expectSaying(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
         \\    func bump():
         \\        self.value += 1
@@ -5805,7 +5827,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // nested place; each reaches it by its own path.
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -5814,7 +5836,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    var p = Point(x = 1)
@@ -5823,7 +5845,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Inner:
-        \\    value: long
+        \\    value: i64
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -5836,7 +5858,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // A near miss is spelled out; a name nothing resembles is not.
     try expectSaying(
         \\struct Point:
-        \\    value: long
+        \\    value: i64
         \\
         \\func main():
         \\    let p = Point(value = 1)
@@ -5848,7 +5870,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
 test "luce.sema.type: a nested place and a compound assignment check their own types" {
     try expectSaying(
         \\struct Inner:
-        \\    value: long
+        \\    value: i64
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -5857,7 +5879,7 @@ test "luce.sema.type: a nested place and a compound assignment check their own t
         \\    var held = Outer(inner = Inner(value = 1))
         \\    held.inner.value = 1.5
         \\
-    , "luce.sema.type", "this place holds long but the value is float");
+    , "luce.sema.type", "this place holds i64 but the value is f32");
     // `compoundCombine`'s own "needs matching types" has no case
     // here, and cannot: all four callers — name, field, element,
     // chain — compare the place with the value before they combine,
@@ -5880,35 +5902,35 @@ test "luce.sema.type: an empty bracket literal needs a container annotation" {
         \\func main():
         \\    var xs = []
         \\
-    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
+    , "luce.sema.type", "an empty [] needs a list[T] or array[T, _] annotation");
     try expectSaying(
         \\func main():
-        \\    var xs: long = []
+        \\    var xs: i64 = []
         \\
-    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
+    , "luce.sema.type", "an empty [] needs a list[T] or array[T, _] annotation");
     try expectSaying(
         \\func main():
         \\    let size = len([])
         \\
-    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
+    , "luce.sema.type", "an empty [] needs a list[T] or array[T, _] annotation");
 }
 
 test "luce.sema.index: every shape of index says what it will accept" {
     try expectSaying(
         \\func main():
-        \\    var grid = new array(long, 2, 2, 2, 2)
+        \\    var grid = new array[i64](2, 2, 2, 2)
         \\    let bad = grid[0, 0, 0, 0, 0]
         \\
     , "luce.sema.index", "at most 4 index dimensions");
     try expectSaying(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    let bad = grid[0, 1.5]
         \\
-    , "luce.sema.index", "array indices are long");
+    , "luce.sema.index", "array indices are i64");
     try expectSaying(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    let bad = b[0]
         \\
     , "luce.sema.index", "builder has no index");
@@ -5919,10 +5941,10 @@ test "luce.sema.index: every shape of index says what it will accept" {
         \\    var xs = [1, 2, 3]
         \\    let bad = xs[0:1.5]
         \\
-    , "luce.sema.type", "slice bounds are long");
+    , "luce.sema.type", "slice bounds are i64");
     try expectSaying(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    let bad = b[0:1]
         \\
     , "luce.sema.index", "cannot be sliced");
@@ -5931,7 +5953,7 @@ test "luce.sema.index: every shape of index says what it will accept" {
 test "luce.sema.loop: for takes a rank-1 array and nothing wider" {
     try expectSaying(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    for cell in grid:
         \\        let unused = cell
         \\
@@ -5944,34 +5966,34 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    var s = "abc"
         \\    let bad = s.byte_at("x")
         \\
-    , "luce.sema.type", "argument 1 of byte_at is long, got string", 3, 25);
+    , "luce.sema.type", "argument 1 of byte_at is i64, got str", 3, 25);
     try expectSayingAt(
         \\func main():
         \\    var s = "abc"
         \\    let bad = s.find_byte("x", 0)
         \\
-    , "luce.sema.type", "argument 1 of find_byte is byte, got string", 3, 27);
+    , "luce.sema.type", "argument 1 of find_byte is u8, got str", 3, 27);
     try expectSaying(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    grid.sort()
         \\
     , "luce.sema.method", "only rank-1 arrays have sort");
     try expectSaying(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let bad = m.hass("a")
         \\
     , "luce.sema.method", "did you mean has?");
     try expectSaying(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.appen("x")
         \\
     , "luce.sema.method", "did you mean append?");
     try expectSaying(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.zzzzzz()
         \\
     , "luce.sema.method", "(append append_ascii build clear)");
@@ -6004,14 +6026,14 @@ test "luce.sema.method: each receiver kind names the methods it has" {
 test "luce.sema.method: a count mistake names the method and both counts" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.append(1, 2)
         \\
     , "luce.sema.method", "append takes 1 argument, got 2", 3, 5);
     // Zero is a count like any other, and reads differently from two.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.append()
         \\
     , "luce.sema.method", "append takes 1 argument, got 0", 3, 5);
@@ -6019,7 +6041,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // one sentence for every arity is one sentence to keep true.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.sort(1)
         \\
     , "luce.sema.method", "sort takes 0 arguments, got 1", 3, 5);
@@ -6029,7 +6051,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // per-method count check had always been able to answer it.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let x = m.get("a", 1, 2)
         \\
     , "luce.sema.method", "get takes 1 argument, got 3", 3, 13);
@@ -6038,32 +6060,32 @@ test "luce.sema.method: a count mistake names the method and both counts" {
 test "luce.sema.type: a wrong argument type names the position, both types, and underlines the argument" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.append("hello")
         \\
-    , "luce.sema.type", "argument 1 of append is long, got string", 3, 15);
+    , "luce.sema.type", "argument 1 of append is i64, got str", 3, 15);
     // The second slot is reported as the second slot, and the caret
     // moves to it rather than staying on the receiver.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(string)
+        \\    var xs = new list[str]
         \\    xs.insert("zero", 0)
         \\
-    , "luce.sema.type", "argument 1 of insert is long, got string", 3, 15);
+    , "luce.sema.type", "argument 1 of insert is i64, got str", 3, 15);
     try expectSayingAt(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.append(65)
         \\
-    , "luce.sema.type", "argument 1 of append is string, got int", 3, 14);
+    , "luce.sema.type", "argument 1 of append is str, got i32", 3, 14);
     // The map says what its key and value types *are*, rather than
     // calling them "the map's key and value types".
     try expectSayingAt(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let x = m.get(1)
         \\
-    , "luce.sema.type", "argument 1 of get is string, got int", 3, 19);
+    , "luce.sema.type", "argument 1 of get is str, got i32", 3, 19);
 }
 
 test "luce.sema.type: a T? argument to a method earns the same advice it earns anywhere" {
@@ -6072,17 +6094,17 @@ test "luce.sema.type: a T? argument to a method earns the same advice it earns a
     // value" and no mention of absence at all.  It is now the one
     // `lowerUserCall` writes, down to the name in the parentheses.
     try expectSayingAt(
-        \\func maybe() -> long?:
+        \\func maybe() -> i64?:
         \\    return none
         \\
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    let m = maybe()
         \\    xs.append(m)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of append is long, got long?; test it first (if m != none:) or supply a fallback (m else …)",
+        "argument 1 of append is i64, got i64?; test it first (if m != none:) or supply a fallback (m else …)",
         7,
         15,
     );
@@ -6119,13 +6141,13 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
     // said "no method sortt here", where "here" named nothing.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.sortt()
         \\
     , "luce.sema.method", "list has no method sortt; did you mean sort?", 3, 5);
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.zzzzzz()
         \\
     ,
@@ -6137,7 +6159,7 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
     // An array is offered the methods an array has, not a list's.
     try expectSayingAt(
         \\func main():
-        \\    var grid = new array(long, 4)
+        \\    var grid = new array[i64](4)
         \\    grid.zzzzzz()
         \\
     , "luce.sema.method", "array has no method zzzzzz (has dim fill sort reverse find contains)", 3, 5);
@@ -6151,12 +6173,12 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
         \\    let s = "x"
         \\    let n = s.frobnicate()
         \\
-    , "luce.sema.method", "string has no method frobnicate, and neither has the strings module", 5, 13);
+    , "luce.sema.method", "str has no method frobnicate, and neither has the strings module", 5, 13);
 }
 
 test "luce.sema.call: a user function agrees with itself about one argument" {
     try expectSayingAt(
-        \\func twice(a: long) -> long:
+        \\func twice(a: i64) -> i64:
         \\    return a * 2
         \\
         \\func main():
@@ -6176,30 +6198,30 @@ test "luce.sema.name: a port is not a place, however it is written" {
 test "luce.sema.type: a written type is checked against the arguments it may take" {
     try expectSaying(
         \\func main():
-        \\    var x: long(string) = 1
+        \\    var x: i64(str) = 1
         \\
-    , "luce.sema.type", "long takes no type arguments");
+    , "luce.parse.type", "type arguments use brackets: write i64[...]");
     try expectSaying(
         \\func main():
-        \\    var m: map(long) = new map(long, long)
+        \\    var m: map[i64] = new map[i64, i64]
         \\
-    , "luce.sema.type", "map takes key and value types");
+    , "luce.sema.container.type", "map takes key and value types");
     try expectSaying(
         \\func main():
-        \\    var a: array(long) = new array(long, 2)
+        \\    var a: array[i64] = new array[i64](2)
         \\
-    , "luce.sema.type", "array spells element and shape");
+    , "luce.sema.type", "array spells element and rank");
     try expectSaying(
         \\func main():
-        \\    var b: builder(long) = new builder()
+        \\    var b: builder[i64] = new builder
         \\
     , "luce.sema.type", "builder takes no type arguments");
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
-        \\    var p: Point(long) = Point(x = 1)
+        \\    var p: Point[i64] = Point(x = 1)
         \\
     , "luce.sema.type", "Point takes no type arguments");
     // `None?` has no test because it has no input: `resolveBase`
@@ -6252,74 +6274,74 @@ test "luce.sema.duplicate: two file-scope constants cannot share a name" {
 test "luce.sema.literal: an integer past a byte names byte's range and a short" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var b: byte = 300
+        \\    var b: u8 = 300
         \\
     ,
         "luce.sema.literal",
-        "integer literal out of range; byte holds 0 to 255 — write the place as a short",
+        "integer literal out of range; u8 holds 0 to 255 — write the place as i16",
         2,
-        19,
+        17,
     );
     // A byte is the one unsigned type there is (D4), so below zero is
     // out of range in exactly the same way as above 255.
     try expectOnlySayingAt(
         \\func main():
-        \\    var b: byte = -1
+        \\    var b: u8 = -1
         \\
     ,
         "luce.sema.literal",
-        "integer literal out of range; byte holds 0 to 255 — write the place as a short",
+        "integer literal out of range; u8 holds 0 to 255 — write the place as i16",
         2,
-        19,
+        17,
     );
 }
 
 test "luce.sema.literal: an integer past a short names short's range and an int" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var s: short = 32768
+        \\    var s: i16 = 32768
         \\
     ,
         "luce.sema.literal",
-        "integer literal out of range; short holds -32768 to 32767 — write the place as an int",
+        "integer literal out of range; i16 holds -32768 to 32767 — write the place as i32",
         2,
-        20,
+        18,
     );
 }
 
 test "luce.sema.literal: a float past a half names half's range and a float" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var h: half = 100000.0
+        \\    var h: f16 = 100000.0
         \\
     ,
         "luce.sema.literal",
-        "float literal is not a finite half; half holds up to about 65504 — write the place as a float",
+        "float literal is not a finite f16; f16 holds up to about 65504 — write the place as f32",
         2,
-        19,
+        18,
     );
 }
 
 test "luce.sema.type: narrowing into a storage width is refused like any other" {
     try expectOnlySayingAt(
         \\func main():
-        \\    var wide: long = 5
-        \\    var narrow: byte = wide
+        \\    var wide: i64 = 5
+        \\    var narrow: u8 = wide
         \\
     ,
         "luce.sema.type",
-        "narrow declared byte but initialized with long; narrowing is never implicit — write byte(…)",
+        "narrow declared u8 but initialized with i64; narrowing is never implicit — write u8(…)",
         3,
         5,
     );
     try expectOnlySayingAt(
         \\func main():
-        \\    var wide: double = 5.0
-        \\    var narrow: half = wide
+        \\    var wide: f64 = 5.0
+        \\    var narrow: f16 = wide
         \\
     ,
         "luce.sema.type",
-        "narrow declared half but initialized with double; narrowing is never implicit — write half(…)",
+        "narrow declared f16 but initialized with f64; narrowing is never implicit — write f16(…)",
         3,
         5,
     );
@@ -6336,12 +6358,12 @@ test "luce.sema.type: a byte reaches a double unbidden but never a float" {
     // behavior_spec beside the rest of the promotion.
     try expectOnlySayingAt(
         \\func main():
-        \\    var b: byte = 7
-        \\    var f: float = b
+        \\    var b: u8 = 7
+        \\    var f: f32 = b
         \\
     ,
         "luce.sema.type",
-        "f declared float but initialized with byte; narrowing is never implicit — write float(…)",
+        "f declared f32 but initialized with u8; narrowing is never implicit — write f32(…)",
         3,
         5,
     );
@@ -6350,12 +6372,12 @@ test "luce.sema.type: a byte reaches a double unbidden but never a float" {
     // `double` and no integer at all.
     try expectOnlySayingAt(
         \\func main():
-        \\    var h: half = 1.5
-        \\    var n: long = h
+        \\    var h: f16 = 1.5
+        \\    var n: i64 = h
         \\
     ,
         "luce.sema.type",
-        "n declared long but initialized with half; narrowing is never implicit — write long(…)",
+        "n declared i64 but initialized with f16; narrowing is never implicit — write i64(…)",
         3,
         5,
     );
@@ -6402,7 +6424,7 @@ test "luce.sema.enum: two members may not hold one number" {
 
 test "luce.sema.enum: a member past the backing width is refused, naming the width" {
     try expectSaying(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored = 0
         \\    deflated = 300
         \\
@@ -6411,12 +6433,12 @@ test "luce.sema.enum: a member past the backing width is refused, naming the wid
         \\
     ,
         "luce.sema.enum",
-        "deflated = 300 does not fit byte, which holds 0 to 255",
+        "deflated = 300 does not fit u8, which holds 0 to 255",
     );
     // The width one rung up holds it, which is what the sentence
     // suggests and what this proves.
     try expectCompiles(
-        \\enum Method(short):
+        \\enum Method(i16):
         \\    stored = 0
         \\    deflated = 300
         \\
@@ -6428,7 +6450,7 @@ test "luce.sema.enum: a member past the backing width is refused, naming the wid
 
 test "luce.sema.enum: the backing type is one of the four integer widths" {
     try expectSaying(
-        \\enum Method(double):
+        \\enum Method(f64):
         \\    stored
         \\
         \\func main():
@@ -6436,14 +6458,14 @@ test "luce.sema.enum: the backing type is one of the four integer widths" {
         \\
     ,
         "luce.sema.enum",
-        "an enum is stored at an integer width: byte, short, int, or long — not double",
+        "an enum is stored at an integer width: u8, i16, i32, or i64 — not f64",
     );
 }
 
 test "luce.sema.enum: an enum with no members is not a set of anything" {
     try expectRejected(
         \\enum Method:
-        \\    static func none_of_them() -> long:
+        \\    static func none_of_them() -> i64:
         \\        return 0
         \\
         \\func main():
@@ -6563,7 +6585,7 @@ test "luce.sema.match: the scrutinee is an enum and nothing else" {
         \\
     ,
         "luce.sema.match",
-        "match dispatches over an enum or a union, and int is neither",
+        "match dispatches over an enum or a union, and i32 is neither",
     );
 }
 
@@ -6580,7 +6602,7 @@ test "luce.sema.type: an enum has no order, and the sentence says what does" {
         \\
     ,
         "luce.sema.type",
-        "Method is a set of names and has no order; write int(a) < int(b)",
+        "Method is a set of names and has no order; write i64(a) < i64(b)",
     );
 }
 
@@ -6598,7 +6620,7 @@ test "luce.sema.type: a member is not a number and a number is not a member" {
         \\
     ,
         "luce.sema.type",
-        "operands of == are Method and int, and there is no conversion between them",
+        "operands of == are Method and i32, and there is no conversion between them",
     );
     try expectSaying(
         \\enum Method:
@@ -6610,14 +6632,14 @@ test "luce.sema.type: a member is not a number and a number is not a member" {
         \\
     ,
         "luce.sema.type",
-        "m declared Method but initialized with int",
+        "m declared Method but initialized with i32",
     );
     try expectSaying(
         \\enum Method:
         \\    stored
         \\    deflated
         \\
-        \\func want(n: long) -> long:
+        \\func want(n: i64) -> i64:
         \\    return n
         \\
         \\func main():
@@ -6625,7 +6647,7 @@ test "luce.sema.type: a member is not a number and a number is not a member" {
         \\
     ,
         "luce.sema.type",
-        "argument 1 of want is long, got Method",
+        "argument 1 of want is i64, got Method",
     );
 }
 
@@ -6640,7 +6662,7 @@ test "luce.sema.convert: Method(x) reads a whole number" {
         \\
     ,
         "luce.sema.convert",
-        "Method(value) reads a whole number and answers Method?; float is not one",
+        "Method(value) reads a whole number and answers Method?; f32 is not one",
     );
 }
 
@@ -6662,7 +6684,7 @@ test "luce.sema.match: a member that does not exist is not a value either" {
 test "luce.sema.duplicate: an enum shares the type-name space, and its members the member space" {
     try expectSaying(
         \\struct Method:
-        \\    size: long
+        \\    size: i64
         \\
         \\enum Method:
         \\    stored
@@ -6678,7 +6700,7 @@ test "luce.sema.duplicate: an enum shares the type-name space, and its members t
         \\enum Method:
         \\    stored
         \\
-        \\    static func stored() -> long:
+        \\    static func stored() -> i64:
         \\        return 0
         \\
         \\func main():
@@ -6751,7 +6773,7 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\    deflated
         \\
         \\func main():
-        \\    var counts = new map(Method, long)
+        \\    var counts = new map[Method, i64]
         \\    counts[Method.deflated] = 1
         \\    assert(counts.has(Method.deflated))
         \\
@@ -6762,45 +6784,45 @@ test "luce.sema.type: a map keys by an enum, and by nothing else new" {
         \\    deflated
         \\
         \\func main():
-        \\    var chosen = new map(string, Method)
+        \\    var chosen = new map[str, Method]
         \\    chosen["a"] = Method.deflated
         \\    assert(chosen["a"] == Method.deflated)
         \\
     );
     try expectSaying(
         \\func main():
-        \\    var counts = new map(int, long)
+        \\    var counts = new map[i32, i64]
         \\
     ,
         "luce.sema.type",
-        "map keys are long, string or an enum, got int",
+        "map keys are i64, str or an enum, got i32",
     );
     try expectSaying(
         \\func main():
-        \\    var counts = new map(double, long)
+        \\    var counts = new map[f64, i64]
         \\
     ,
         "luce.sema.type",
-        "map keys are long, string or an enum, got double",
+        "map keys are i64, str or an enum, got f64",
     );
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
-        \\    var counts = new map(Point, long)
+        \\    var counts = new map[Point, i64]
         \\
     ,
         "luce.sema.type",
-        "map keys are long, string or an enum, got Point",
+        "map keys are i64, str or an enum, got Point",
     );
     try expectSaying(
         \\func main():
-        \\    var counts = new map(list(long), long)
+        \\    var counts = new map[list[i64], i64]
         \\
     ,
         "luce.sema.type",
-        "map keys are long, string or an enum, got list(long)",
+        "map keys are i64, str or an enum, got list[i64]",
     );
 }
 
@@ -6815,7 +6837,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    right
         \\
         \\func main():
-        \\    var counts = new map(Key, long)
+        \\    var counts = new map[Key, i64]
         \\    counts[0] = 1
         \\
     ,
@@ -6830,7 +6852,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    first
         \\
         \\func main():
-        \\    var counts = new map(Key, long)
+        \\    var counts = new map[Key, i64]
         \\    counts[Other.first] = 1
         \\
     ,
@@ -6842,33 +6864,33 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    left
         \\
         \\func main():
-        \\    var counts = new map(long, long)
+        \\    var counts = new map[i64, i64]
         \\    counts[Key.left] = 1
         \\
     ,
         "luce.sema.index",
-        "this map is keyed by long",
+        "this map is keyed by i64",
     );
     try expectSaying(
         \\enum Key:
         \\    left
         \\
         \\func main():
-        \\    var counts = new map(Key, long)
+        \\    var counts = new map[Key, i64]
         \\    assert(counts.has(0))
         \\
     ,
         "luce.sema.type",
-        "argument 1 of has is Key, got int",
+        "argument 1 of has is Key, got i32",
     );
     // A union is still refused, with the advice that is its own.
     try expectSaying(
         \\union Shape:
-        \\    circle(radius: double)
-        \\    square(side: double)
+        \\    circle(radius: f64)
+        \\    square(side: f64)
         \\
         \\func main():
-        \\    var counts = new map(Shape, long)
+        \\    var counts = new map[Shape, i64]
         \\
     ,
         "luce.sema.type",
@@ -6905,51 +6927,51 @@ test "luce.sema.const: a constant keymap refuses a duplicated member" {
 
 test "luce.sema.type: call arguments fit before ownership advice" {
     try expectOnlySayingAt(
-        \\func consume(items: list(long)):
+        \\func consume(items: list[i64]):
         \\    return
         \\
         \\func main():
-        \\    var running = new list(task(long))
+        \\    var running = new list[task[i64]]
         \\    consume(running)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of consume is list(long), got list(task(long))",
+        "argument 1 of consume is list[i64], got list[task[i64]]",
         6,
         13,
     );
 
     try expectOnlySayingAt(
-        \\func count(items: list(long)) -> long:
+        \\func count(items: list[i64]) -> i64:
         \\    return len(items)
         \\
         \\func main():
-        \\    let chosen: func(list(long)) -> long = count
-        \\    var running = new list(task(long))
+        \\    let chosen: func(list[i64]) -> i64 = count
+        \\    var running = new list[task[i64]]
         \\    let result = chosen(running)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of chosen is list(long), got list(task(long))",
+        "argument 1 of chosen is list[i64], got list[task[i64]]",
         7,
         25,
     );
 
     try expectOnlySayingAt(
         \\struct Sink:
-        \\    marker: long
+        \\    marker: i64
         \\
-        \\    func consume(items: list(long)) -> long:
+        \\    func consume(items: list[i64]) -> i64:
         \\        return len(items) + self.marker
         \\
         \\func main():
         \\    let sink = Sink(marker = 0)
-        \\    var running = new list(task(long))
+        \\    var running = new list[task[i64]]
         \\    let result = sink.consume(running)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of consume is list(long), got list(task(long))",
+        "argument 1 of consume is list[i64], got list[task[i64]]",
         10,
         31,
     );
@@ -6957,29 +6979,29 @@ test "luce.sema.type: call arguments fit before ownership advice" {
     // The reverse mismatch proves advice is based on the source type,
     // not on a resource-bearing destination type.
     try expectSaying(
-        \\func keep(items: list(task(long))):
+        \\func keep(items: list[task[i64]]):
         \\    return
         \\
         \\func main():
-        \\    var numbers = new list(long)
+        \\    var numbers = new list[i64]
         \\    keep(numbers)
         \\
-    , "luce.sema.type", "argument 1 of keep is list(task(long)), got list(long)");
+    , "luce.sema.type", "argument 1 of keep is list[task[i64]], got list[i64]");
 
     // Indexed stores obey the same precedence.
     try expectSaying(
         \\func main():
-        \\    var tasks = new list(task(long))
-        \\    var numbers = new list(long)
+        \\    var tasks = new list[task[i64]]
+        \\    var numbers = new list[i64]
         \\    tasks[0] = numbers
         \\
-    , "luce.sema.type", "this place holds task(long) but the value is list(long)");
+    , "luce.sema.type", "this place holds task[i64] but the value is list[i64]");
 }
 
 test "luce.sema.new: a task is spawned, not made" {
     try expectSaying(
         \\func main():
-        \\    var t = new task(long)
+        \\    var t = new task[i64]
         \\
     , "luce.sema.new", "a task is spawned, not made");
 }
@@ -6987,9 +7009,9 @@ test "luce.sema.new: a task is spawned, not made" {
 test "luce.sema.self: a method cannot be spawned" {
     try expectSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func doubled() -> long:
+        \\    func doubled() -> i64:
         \\        return self.x * 2
         \\
         \\func main():
@@ -7009,11 +7031,11 @@ test "luce.sema.call: spawn runs a function you declared" {
     // arguments and results, but the spawn target itself remains the
     // declaration-index channel THREADS.md specifies.
     try expectHostSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
+        \\    let chosen: func(i64) -> i64 = twice
         \\    let work = spawn chosen(21)
         \\
     , "luce.sema.call", "spawn runs a function you declared");
@@ -7021,7 +7043,7 @@ test "luce.sema.call: spawn runs a function you declared" {
 
 test "luce.sema.call: a worker answers one value, so a return shape is refused" {
     try expectSaying(
-        \\func pair() -> (long, long):
+        \\func pair() -> (i64, i64):
         \\    return 1, 2
         \\
         \\func main():
@@ -7033,7 +7055,7 @@ test "luce.sema.call: a worker answers one value, so a return shape is refused" 
 test "luce.parse.spawn: spawn takes a call and nothing else" {
     try expectRejected(
         \\func main():
-        \\    var xs: list(long) = [1]
+        \\    var xs: list[i64] = [1]
         \\    let t = spawn xs
         \\
     , "luce.parse.spawn");
@@ -7041,7 +7063,7 @@ test "luce.parse.spawn: spawn takes a call and nothing else" {
 
 test "luce.sema.method: a task has wait and nothing else" {
     try expectRejected(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -7056,7 +7078,7 @@ test "luce.sema.const: a constant cannot spawn" {
     // worker: a task's death point is a join and only a function scope
     // can reach one (MEMORY.md).
     try expectRejected(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 1
         \\
         \\const started = spawn work()
@@ -7072,7 +7094,7 @@ test "spawn is gated by nothing, because threads are the language" {
     // `host_unavailable` — the fail-closed rule every effect follows —
     // so there is no analyzer gate to write and none to test for.
     try expectCompiles(
-        \\func work() -> long:
+        \\func work() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -7098,29 +7120,29 @@ test "luce.sema.call: a method reference is refused, and taught" {
     // which re-receives the receiver and therefore carries nothing.
     try expectHostSaying(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func length() -> long:
+        \\    func length() -> i64:
         \\        return self.x
         \\
-        \\func apply(f: func(Point) -> long, p: Point) -> long:
+        \\func apply(f: func(Point) -> i64, p: Point) -> i64:
         \\    return f(p)
         \\
         \\func main():
         \\    let p = Point(x = 5)
-        \\    print(string(apply(Point.length, p)))
+        \\    print(str(apply(Point.length, p)))
         \\
     , "luce.sema.call", "a method reference would carry its receiver");
 }
 
 test "luce.sema.name: a lambda reaching an enclosing local is refused, and taught" {
     try expectHostSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
         \\    let scale = 3
-        \\    print(string(apply((n) -> n * scale, 2)))
+        \\    print(str(apply((n) -> n * scale, 2)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
 
@@ -7129,15 +7151,15 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
     // direct-call path and say "unknown function", even though the
     // declaration is visible two lines above.
     try expectHostSaying(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
-        \\    print(string(apply((n) -> chosen(n), 2)))
+        \\    let chosen: func(i64) -> i64 = twice
+        \\    print(str(apply((n) -> chosen(n), 2)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
 
@@ -7147,26 +7169,26 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
     try expectHostSaying(
         \\import std.math
         \\
-        \\func identity(n: double) -> double:
+        \\func identity(n: f64) -> f64:
         \\    return n
         \\
-        \\func apply(f: func(double) -> double, x: double) -> double:
+        \\func apply(f: func(f64) -> f64, x: f64) -> f64:
         \\    return f(x)
         \\
         \\func main():
-        \\    let math: func(double) -> double = identity
-        \\    print(string(apply((x) -> math.round(x), 2.5)))
+        \\    let math: func(f64) -> f64 = identity
+        \\    print(str(apply((x) -> math.round(x), 2.5)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
     try expectHostSaying(
         \\import std.math
         \\
-        \\func read(f: func() -> double) -> double:
+        \\func read(f: func() -> f64) -> f64:
         \\    return f()
         \\
         \\func main():
         \\    let math = 1.0
-        \\    print(string(read(() -> math.pi)))
+        \\    print(str(read(() -> math.pi)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
 
@@ -7175,49 +7197,49 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
     // mistaken for an imported namespace after the middle lambda is
     // lifted to the top level.
     try expectHostSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
         \\    let step = 4
-        \\    let nested: func(long) -> long = (x) -> apply((y) -> y + step, x)
-        \\    print(string(nested(1)))
+        \\    let nested: func(i64) -> i64 = (x) -> apply((y) -> y + step, x)
+        \\    print(str(nested(1)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
     try expectHostSaying(
         \\import std.math
         \\
-        \\func apply(f: func(double) -> double, x: double) -> double:
+        \\func apply(f: func(f64) -> f64, x: f64) -> f64:
         \\    return f(x)
         \\
         \\func main():
         \\    let math = 1.0
-        \\    let nested: func(double) -> double = (x) -> apply((y) -> math.round(y), x)
-        \\    print(string(nested(2.75)))
+        \\    let nested: func(f64) -> f64 = (x) -> apply((y) -> math.round(y), x)
+        \\    print(str(nested(2.75)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
 }
 
 test "luce.sema.type: function values have neither ordering nor equality" {
     try expectHostSaying(
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    let left: func(long, long) -> bool = before
-        \\    let right: func(long, long) -> bool = before
-        \\    print(string(left < right))
+        \\    let left: func(i64, i64) -> bool = before
+        \\    let right: func(i64, i64) -> bool = before
+        \\    print(str(left < right))
         \\
     , "luce.sema.type", "a function value has no order, and no equality either");
 }
 
 test "luce.sema.import: sort_by is routed through std lists" {
     try expectHostSaying(
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(before)
         \\
     , "luce.sema.import", "import std.lists");
@@ -7227,59 +7249,59 @@ test "luce.sema.type: sort_by's comparator has the receiver's element shape" {
     try expectHostSaying(
         \\import std.lists
         \\
-        \\func unary(a: long) -> bool:
+        \\func unary(a: i64) -> bool:
         \\    return a > 0
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(unary)
         \\
-    , "luce.sema.type", "func(long, long) -> bool");
+    , "luce.sema.type", "func(i64, i64) -> bool");
     try expectHostSaying(
         \\import std.lists
         \\
-        \\func before(a: string, b: string) -> bool:
+        \\func before(a: str, b: str) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(before)
         \\
-    , "luce.sema.type", "func(long, long) -> bool");
+    , "luce.sema.type", "func(i64, i64) -> bool");
     try expectHostSaying(
         \\import std.lists
         \\
-        \\func difference(a: long, b: long) -> long:
+        \\func difference(a: i64, b: i64) -> i64:
         \\    return a - b
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(difference)
         \\
-    , "luce.sema.type", "func(long, long) -> bool");
+    , "luce.sema.type", "func(i64, i64) -> bool");
 }
 
 test "luce.sema.method: sort_by's routed method spelling is positional and list-only" {
     try expectHostSaying(
         \\import std.lists
         \\
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(before = before)
         \\
     , "luce.sema.method", "its comparator is positional here");
     try expectHostSaying(
         \\import std.lists
         \\
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    let comparator: func(long, long) -> bool = before
-        \\    var values = new array(long, 3)
+        \\    let comparator: func(i64, i64) -> bool = before
+        \\    var values = new array[i64](3)
         \\    values.sort_by(comparator)
         \\
     , "luce.sema.method", "array has no method sort_by");
@@ -7289,18 +7311,18 @@ test "luce.sema.type: a lambda needs a place that expects a function" {
     try expectHostSaying(
         \\func main():
         \\    let f = (x) -> x + 1
-        \\    print(string(f(1)))
+        \\    print(str(f(1)))
         \\
     , "luce.sema.type", "a lambda needs a place that expects a function");
 }
 
 test "luce.parse.expression: a lambda is one expression, not a block" {
     try expectHostSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
-        \\    print(string(apply((x) ->:
+        \\    print(str(apply((x) ->:
         \\        return x, 1)))
         \\
     , "luce.parse.expression", "a lambda is one expression, not a block");
@@ -7308,27 +7330,27 @@ test "luce.parse.expression: a lambda is one expression, not a block" {
 
 test "luce.sema.type: a lambda's parameter count must be the place's" {
     try expectHostSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
-        \\    print(string(apply((a, b) -> a + b, 2)))
+        \\    print(str(apply((a, b) -> a + b, 2)))
         \\
     , "luce.sema.type", "this lambda writes 2");
 }
 
 test "luce.sema.type: a named function of the wrong shape is refused by shape" {
     try expectHostSaying(
-        \\func wide(a: long, b: long) -> bool:
+        \\func wide(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
-        \\    print(string(apply(wide, 2)))
+        \\    print(str(apply(wide, 2)))
         \\
-    , "luce.sema.type", "func(long) -> long");
+    , "luce.sema.type", "func(i64) -> i64");
 }
 
 test "luce.sema.fallible: a fallible function is not a value yet" {
@@ -7336,10 +7358,10 @@ test "luce.sema.fallible: a fallible function is not a value yet" {
     // type has nowhere to write one — so letting one become a value
     // would drop the obligation in silence.
     try expectHostSaying(
-        \\func risky(path: string) -> string!:
+        \\func risky(path: str) -> str!:
         \\    return try file_read(path)
         \\
-        \\func apply(f: func(string) -> string, x: string) -> string:
+        \\func apply(f: func(str) -> str, x: str) -> str:
         \\    return f(x)
         \\
         \\func main():
@@ -7350,7 +7372,7 @@ test "luce.sema.fallible: a fallible function is not a value yet" {
 
 test "luce.parse.type: a function type carries no bang" {
     try expectHostSaying(
-        \\func apply(f: func(string) -> string!, x: string) -> string:
+        \\func apply(f: func(str) -> str!, x: str) -> str:
         \\    return f(x)
         \\
         \\func main():
@@ -7367,33 +7389,33 @@ test "luce.sema.type: a slot holds the optional form of a function value" {
     // union payload field are the five slots there are.
     try expectHostSaying(
         \\func main():
-        \\    var fs = new list(func(long) -> long)
-        \\    print(string(len(fs)))
+        \\    var fs = new list[func(i64) -> i64]
+        \\    print(str(len(fs)))
         \\
-    , "luce.sema.type", "a list element starts before anything fills it and a function value has no zero: write (func(long) -> long)?");
+    , "luce.sema.type", "a list element starts before anything fills it and a function value has no zero: write (func(i64) -> i64)?");
 
     // The map is the exception, and it is stated as one: `get` already
     // answers `V?`, so the function type is written bare there and the
     // `?` would be a `V??`.
     try expectHostSaying(
         \\func main():
-        \\    var fs = new map(string, (func(long) -> long)?)
-        \\    print(string(len(fs)))
+        \\    var fs = new map[str, (func(i64) -> i64)?]
+        \\    print(str(len(fs)))
         \\
-    , "luce.sema.type", "a map value is written bare: get already answers (func(long) -> long)?, and a second '?' would be a V??");
+    , "luce.sema.type", "a map value is written bare: get already answers (func(i64) -> i64)?, and a second '?' would be a V??");
 
     try expectHostSaying(
         \\struct Handler:
-        \\    run: func(long) -> long
+        \\    run: func(i64) -> i64
         \\
         \\func main():
         \\    print("hi")
         \\
-    , "luce.sema.type", "a struct field starts before anything fills it and a function value has no zero: write (func(long) -> long)?");
+    , "luce.sema.type", "a struct field starts before anything fills it and a function value has no zero: write (func(i64) -> i64)?");
 
     try expectHostSaying(
         \\union Step:
-        \\    run(with: func(long) -> long)
+        \\    run(with: func(i64) -> i64)
         \\
         \\func main():
         \\    print("hi")
@@ -7406,20 +7428,20 @@ test "luce.sema.call: an unwrapped optional function is not callable" {
     // every other `T?` takes (docs/BINDING.md D7).
     try expectHostSaying(
         \\struct Row:
-        \\    action: (func(long) -> long)?
+        \\    action: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let row = Row(action = (n) -> n + 1)
         \\    let held = row.action
-        \\    print(string(held(1)))
+        \\    print(str(held(1)))
         \\
-    , "luce.sema.call", "held is (func(long) -> long)? and may hold none; test it first (if held != none:)");
+    , "luce.sema.call", "held is (func(i64) -> i64)? and may hold none; test it first (if held != none:)");
 }
 
 test "luce.parse.type: one '?' is all there is, inside parentheses too" {
     try expectSaying(
         \\func main():
-        \\    var n: (long?)? = none
+        \\    var n: (i64?)? = none
         \\
     , "luce.parse.type", "one '?' is all there is");
 }
@@ -7427,24 +7449,24 @@ test "luce.parse.type: one '?' is all there is, inside parentheses too" {
 test "luce.sema.type: a function value has no zero, so a late var is refused" {
     try expectHostSaying(
         \\func main():
-        \\    var f: func(long) -> long
-        \\    print(string(f(1)))
+        \\    var f: func(i64) -> i64
+        \\    print(str(f(1)))
         \\
-    , "luce.sema.type", "a function value has no zero: write f = the function it names, or var f: (func(long) -> long)? for a slot that starts empty");
+    , "luce.sema.type", "a function value has no zero: write f = the function it names, or var f: (func(i64) -> i64)? for a slot that starts empty");
 }
 
 test "luce.sema.call: a value that is not a function cannot be called" {
     try expectHostSaying(
         \\func main():
         \\    let n = 3
-        \\    print(string(n(1)))
+        \\    print(str(n(1)))
         \\
     , "luce.sema.call", "which is not a function");
 }
 
 test "luce.sema.call: a call through a value takes the arity its type wrote" {
     try expectHostSaying(
-        \\func apply(f: func(long, long) -> long, x: long) -> long:
+        \\func apply(f: func(i64, i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
@@ -7455,7 +7477,7 @@ test "luce.sema.call: a call through a value takes the arity its type wrote" {
 
 test "luce.sema.call: a function type has no parameter names to call by" {
     try expectHostSaying(
-        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(n = x)
         \\
         \\func main():
@@ -7481,10 +7503,10 @@ test "luce.sema.const: a top-level const is not a place for a lambda" {
 test "luce.sema.call: a field holding a function value is not a method" {
     try expectHostSaying(
         \\struct Rows:
-        \\    render: (func(long) -> string)?
+        \\    render: (func(i64) -> str)?
         \\
-        \\func label(index: long) -> string:
-        \\    return string(index)
+        \\func label(index: i64) -> str:
+        \\    return str(index)
         \\
         \\func main():
         \\    let rows = Rows(render = label)
@@ -7495,11 +7517,11 @@ test "luce.sema.call: a field holding a function value is not a method" {
 
 test "luce.sema.call: an element that may hold none is not called in place" {
     try expectHostSaying(
-        \\func label(index: long) -> string:
-        \\    return string(index)
+        \\func label(index: i64) -> str:
+        \\    return str(index)
         \\
         \\func main():
-        \\    var steps = new list((func(long) -> string)?)
+        \\    var steps = new list[(func(i64) -> str)?]
         \\    steps.append(label)
         \\    print(steps[0](1))
         \\
@@ -7509,10 +7531,10 @@ test "luce.sema.call: an element that may hold none is not called in place" {
 test "luce.sema.call: a field read through a grouping is refused the same way" {
     try expectHostSaying(
         \\struct Rows:
-        \\    render: (func(long) -> string)?
+        \\    render: (func(i64) -> str)?
         \\
-        \\func label(index: long) -> string:
-        \\    return string(index)
+        \\func label(index: i64) -> str:
+        \\    return str(index)
         \\
         \\func main():
         \\    let rows = Rows(render = label)
@@ -7524,19 +7546,19 @@ test "luce.sema.call: a field read through a grouping is refused the same way" {
 test "luce.sema.call: a callee that is not a function says so" {
     try expectHostSaying(
         \\func main():
-        \\    var counts = new list(long)
+        \\    var counts = new list[i64]
         \\    counts.append(1)
-        \\    print(string(counts[0](2)))
+        \\    print(str(counts[0](2)))
         \\
     , "luce.sema.call", "which is not a function");
 }
 
 test "luce.sema.call: a call suffix with the wrong arity is counted" {
     try expectHostSaying(
-        \\func plain(n: long) -> string:
-        \\    return string(n)
+        \\func plain(n: i64) -> str:
+        \\    return str(n)
         \\
-        \\func chooser() -> func(long) -> string:
+        \\func chooser() -> func(i64) -> str:
         \\    return plain
         \\
         \\func main():
@@ -7547,10 +7569,10 @@ test "luce.sema.call: a call suffix with the wrong arity is counted" {
 
 test "luce.sema.type: a call suffix's argument is typed by the signature" {
     try expectHostSaying(
-        \\func plain(n: long) -> string:
-        \\    return string(n)
+        \\func plain(n: i64) -> str:
+        \\    return str(n)
         \\
-        \\func chooser() -> func(long) -> string:
+        \\func chooser() -> func(i64) -> str:
         \\    return plain
         \\
         \\func main():
@@ -7561,10 +7583,10 @@ test "luce.sema.type: a call suffix's argument is typed by the signature" {
 
 test "luce.sema.call: a call suffix has no parameter names either" {
     try expectHostSaying(
-        \\func plain(n: long) -> string:
-        \\    return string(n)
+        \\func plain(n: i64) -> str:
+        \\    return str(n)
         \\
-        \\func chooser() -> func(long) -> string:
+        \\func chooser() -> func(i64) -> str:
         \\    return plain
         \\
         \\func main():
@@ -7577,10 +7599,10 @@ test "luce.sema.fallible: a call through a value can never fail, so try is refus
     // A function type carries no `!` (docs/BINDING.md D8), so nothing
     // reached through one is fallible and `try` has nothing to pass on.
     try expectHostSaying(
-        \\func plain(n: long) -> string:
-        \\    return string(n)
+        \\func plain(n: i64) -> str:
+        \\    return str(n)
         \\
-        \\func chooser() -> func(long) -> string:
+        \\func chooser() -> func(i64) -> str:
         \\    return plain
         \\
         \\func main():
@@ -7591,10 +7613,10 @@ test "luce.sema.fallible: a call through a value can never fail, so try is refus
 
 test "luce.parse.spawn: a worker runs a declared call, not a call suffix" {
     try expectHostSaying(
-        \\func plain(n: long) -> string:
-        \\    return string(n)
+        \\func plain(n: i64) -> str:
+        \\    return str(n)
         \\
-        \\func chooser() -> func(long) -> string:
+        \\func chooser() -> func(i64) -> str:
         \\    return plain
         \\
         \\func main():
@@ -7607,10 +7629,10 @@ test "luce.parse.spawn: a worker runs a declared call, not a call suffix" {
 test "luce.sema.interface: a struct must implement every interface method" {
     try expectHostSaying(
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: string
+        \\    label: str
         \\
         \\func main():
         \\    let button = UIButton(label = "ok")
@@ -7622,12 +7644,12 @@ test "luce.sema.interface: a struct must implement every interface method" {
 test "luce.sema.interface: a multi-method conformance checks every slot" {
     try expectHostSaying(
         \\interface Drawable:
-        \\    func render(value: long) -> long
-        \\    func label() -> string
+        \\    func render(value: i64) -> i64
+        \\    func label() -> str
         \\
         \\struct Button: Drawable:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value + self.marker
         \\
         \\func main():
@@ -7640,11 +7662,11 @@ test "luce.sema.interface: a multi-method conformance checks every slot" {
 test "luce.sema.interface: an implementation must match the contract signature" {
     try expectHostSaying(
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: string
-        \\    func render(value: long) -> string:
+        \\    label: str
+        \\    func render(value: i64) -> str:
         \\        return value
         \\
         \\func main():
@@ -7657,11 +7679,11 @@ test "luce.sema.interface: an implementation must match the contract signature" 
 test "luce.sema.interface: a writing method cannot satisfy a read-only interface" {
     try expectHostSaying(
         \\interface Counter:
-        \\    func update(value: long)
+        \\    func update(value: i64)
         \\
         \\struct Box: Counter:
-        \\    value: long
-        \\    func update(value: long):
+        \\    value: i64
+        \\    func update(value: i64):
         \\        self.value = value
         \\
         \\func main():
@@ -7673,8 +7695,8 @@ test "luce.sema.interface: a writing method cannot satisfy a read-only interface
 
 test "luce.sema.interface: a conformance list names interfaces only" {
     try expectHostSaying(
-        \\struct Box: long:
-        \\    value: long
+        \\struct Box: i64:
+        \\    value: i64
         \\
         \\func main():
         \\    let box = Box(value = 0)
@@ -7686,19 +7708,19 @@ test "luce.sema.interface: a conformance list names interfaces only" {
 test "luce.sema.interface: hidden dispatch fields cannot be read" {
     try expectHostSaying(
         \\interface UIElement:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: string
-        \\    func render(value: long) -> long:
+        \\    label: str
+        \\    func render(value: i64) -> i64:
         \\        return value
         \\
-        \\func read(element: UIElement) -> long:
+        \\func read(element: UIElement) -> i64:
         \\    return element.render
         \\
         \\func main():
         \\    let button = UIButton(label = "ok")
-        \\    print(string(read(button)))
+        \\    print(str(read(button)))
         \\
     , "luce.sema.interface", "expose methods, not fields");
 }
@@ -7706,11 +7728,11 @@ test "luce.sema.interface: hidden dispatch fields cannot be read" {
 test "luce.sema.interface: a fallible witness cannot satisfy a non-fallible requirement" {
     try expectHostSaying(
         \\interface Reader:
-        \\    func read(value: long) -> long
+        \\    func read(value: i64) -> i64
         \\
         \\struct Buffer: Reader:
-        \\    marker: long
-        \\    func read(value: long) -> long!:
+        \\    marker: i64
+        \\    func read(value: i64) -> i64!:
         \\        return value
         \\
         \\func main():
@@ -7723,8 +7745,8 @@ test "luce.sema.interface: a fallible witness cannot satisfy a non-fallible requ
 test "luce.sema.interface: duplicate method requirements are rejected once" {
     try expectHostSaying(
         \\interface Duplicate:
-        \\    func run(value: long) -> long
-        \\    func run(other: long) -> long
+        \\    func run(value: i64) -> i64
+        \\    func run(other: i64) -> i64
         \\
         \\func main():
         \\    return
@@ -7735,11 +7757,11 @@ test "luce.sema.interface: duplicate method requirements are rejected once" {
 test "luce.sema.interface: static methods cannot be witnesses" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable:
-        \\    marker: long
-        \\    static func render(value: long) -> long:
+        \\    marker: i64
+        \\    static func render(value: i64) -> i64:
         \\        return value
         \\
         \\func main():
@@ -7752,11 +7774,11 @@ test "luce.sema.interface: static methods cannot be witnesses" {
 test "luce.sema.interface: a conformance cannot be listed twice" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable, Renderable:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value
         \\
         \\func main():
@@ -7769,19 +7791,19 @@ test "luce.sema.interface: a conformance cannot be listed twice" {
 test "luce.sema.interface: a non-conforming struct cannot be passed as the contract" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value
         \\
-        \\func draw(item: Renderable) -> long:
+        \\func draw(item: Renderable) -> i64:
         \\    return item.render(1)
         \\
         \\func main():
         \\    let button = Button(marker = 0)
-        \\    print(string(draw(button)))
+        \\    print(str(draw(button)))
         \\
     , "luce.sema.type", "argument 1 of draw is Renderable, got Button");
 }
@@ -7799,11 +7821,11 @@ test "luce.parse.interface: an interface must have at least one method" {
 test "luce.sema.interface: a multi-value witness must match every result" {
     try expectHostSaying(
         \\interface Measured:
-        \\    func span(value: long) -> (long, long)
+        \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    marker: long
-        \\    func span(value: long) -> (long, string):
+        \\    marker: i64
+        \\    func span(value: i64) -> (i64, str):
         \\        return value, "wrong"
         \\
         \\func main():
@@ -7816,17 +7838,17 @@ test "luce.sema.interface: a multi-value witness must match every result" {
 test "luce.sema.interface: a fallible dispatch must be handled" {
     try expectHostSaying(
         \\interface Reader:
-        \\    func read(value: long) -> long!
+        \\    func read(value: i64) -> i64!
         \\
         \\struct Buffer: Reader:
-        \\    marker: long
-        \\    func read(value: long) -> long:
+        \\    marker: i64
+        \\    func read(value: i64) -> i64:
         \\        return value
         \\
         \\func main():
         \\    let buffer = Buffer(marker = 0)
         \\    let reader: Reader = buffer
-        \\    print(string(reader.read(1)))
+        \\    print(str(reader.read(1)))
         \\
     , "luce.sema.fallible", "read can fail");
 }
@@ -7834,7 +7856,7 @@ test "luce.sema.interface: a fallible dispatch must be handled" {
 test "luce.parse.interface: interface methods cannot declare defaults" {
     try expectHostSaying(
         \\interface Defaulted:
-        \\    func run(value: long = 1) -> long
+        \\    func run(value: i64 = 1) -> i64
         \\
         \\func main():
         \\    return
@@ -7856,7 +7878,7 @@ test "luce.parse.interface: interface bodies contain signatures only" {
 test "luce.parse.self: interface methods imply their receiver" {
     try expectHostSaying(
         \\interface Bad:
-        \\    func render(self: long) -> long
+        \\    func render(self: i64) -> i64
         \\
         \\func main():
         \\    return
@@ -7867,7 +7889,7 @@ test "luce.parse.self: interface methods imply their receiver" {
 test "luce.sema.interface: an interface variable needs a conforming value" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\func main():
         \\    var item: Renderable
@@ -7879,7 +7901,7 @@ test "luce.sema.interface: an interface variable needs a conforming value" {
 test "luce.sema.interface: an interface cannot be constructed directly" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\func main():
         \\    let item = Renderable()
@@ -7891,16 +7913,16 @@ test "luce.sema.interface: an interface cannot be constructed directly" {
 test "luce.sema.method: dispatch exposes only declared interface methods" {
     try expectHostSaying(
         \\interface Renderable:
-        \\    func render(value: long) -> long
+        \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable:
-        \\    marker: long
-        \\    func render(value: long) -> long:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
         \\        return value
         \\
         \\func main():
         \\    let item: Renderable = Button(marker = 0)
-        \\    print(string(item.missing(1)))
+        \\    print(str(item.missing(1)))
         \\
     , "luce.sema.method", "interface Renderable has no method missing");
 }
@@ -7908,16 +7930,16 @@ test "luce.sema.method: dispatch exposes only declared interface methods" {
 test "luce.sema.call: a multi-value interface call must be destructured" {
     try expectHostSaying(
         \\interface Measured:
-        \\    func span(value: long) -> (long, long)
+        \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    marker: long
-        \\    func span(value: long) -> (long, long):
+        \\    marker: i64
+        \\    func span(value: i64) -> (i64, i64):
         \\        return value, value + 1
         \\
         \\func main():
         \\    let item: Measured = Range(marker = 0)
-        \\    print(string(item.span(1)))
+        \\    print(str(item.span(1)))
         \\
     , "luce.sema.call", "answers 2 values");
 }

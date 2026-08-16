@@ -28,7 +28,7 @@ import std.paths
 
 func main():
     let path = "src/luce/main.luc"
-    print(string(paths.is_absolute(path)))
+    print(str(paths.is_absolute(path)))
     print(paths.base(path))
     print(paths.dir(path))
     print(paths.extension(path))

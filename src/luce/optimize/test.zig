@@ -86,10 +86,10 @@ fn localCount(program: *const Program) usize {
 test "dead code sweeps unread values and compacts the pool" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    xs.append(1)
         \\    let unused = len(xs)
-        \\    print(string(len(xs)))
+        \\    print(str(len(xs)))
         \\
     );
     defer program.deinit();
@@ -119,10 +119,10 @@ test "the whole stage shrinks a program and leaves it verifiable" {
         \\
         \\func main():
         \\    let words = strings.split("a,b,c", ",")
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for word in words:
         \\        total = total + len(word) + len(word)
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     ;
     var program = try compileRaw(source);
@@ -138,7 +138,7 @@ test "the whole stage shrinks a program and leaves it verifiable" {
 
 test "function pruning does not retain an orphaned function reference" {
     var program = try compileRaw(
-        \\func unused(n: long) -> long:
+        \\func unused(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
@@ -187,12 +187,12 @@ test "function pruning does not retain an orphaned function reference" {
 test "running the stage twice changes nothing the second time" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    var index = 0
         \\    while index < 5:
         \\        xs.append(index * index)
         \\        index = index + 1
-        \\    print(string(len(xs)))
+        \\    print(str(len(xs)))
         \\
     );
     defer program.deinit();
@@ -210,29 +210,29 @@ test "running the stage twice changes nothing the second time" {
 test "every pass on its own leaves verifiable MIR" {
     const sources = [_][]const u8{
         \\func main():
-        \\    let m = new map(string, long)
+        \\    let m = new map[str, i64]
         \\    m["a"] = 1
         \\    if m.has("a"):
-        \\        print(string(m["a"]))
+        \\        print(str(m["a"]))
         \\
         ,
-        \\func fib(n: long) -> long:
+        \\func fib(n: i64) -> i64:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
         \\
         \\func main():
-        \\    print(string(fib(10)))
+        \\    print(str(fib(10)))
         \\
         ,
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
         \\    p.x = p.x + p.y
-        \\    print(string(p.x))
+        \\    print(str(p.x))
         \\
     };
     const each = [_]optimize.Passes{
@@ -309,17 +309,17 @@ test "prune keeps everything the entry can reach, however it reaches it" {
     // the program it was given — same functions, same order, same
     // entry, and the same MIR down to the printed byte.
     var program = try compileRaw(
-        \\func odd(n: long) -> bool:
+        \\func odd(n: i64) -> bool:
         \\    if n == 0:
         \\        return false
         \\    return even(n - 1)
         \\
-        \\func even(n: long) -> bool:
+        \\func even(n: i64) -> bool:
         \\    if n == 0:
         \\        return true
         \\    return odd(n - 1)
         \\
-        \\func label(n: long) -> string:
+        \\func label(n: i64) -> str:
         \\    if even(n):
         \\        return "even"
         \\    return "odd"
@@ -353,16 +353,16 @@ test "std sort_by is an ordinary call whose indirect comparator survives prune" 
         \\import std.lists
         \\
         \\struct Row:
-        \\    value: long
+        \\    value: i64
         \\
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func row_before(a: Row, b: Row) -> bool:
         \\    return a.value < b.value
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(before)
         \\    values.sort_by(before)
         \\    var rows = [Row(value = 3), Row(value = 1)]
@@ -371,33 +371,33 @@ test "std sort_by is an ordinary call whose indirect comparator survives prune" 
     );
     defer program.deinit();
 
-    var long_helper: ?u32 = null;
+    var i64_helper: ?u32 = null;
     var row_helper: ?u32 = null;
     var helpers: usize = 0;
     for (program.functions, 0..) |function, index| {
         if (!std.mem.startsWith(u8, function.name, "lists.sort_by(")) continue;
         helpers += 1;
-        if (std.mem.eql(u8, function.name, "lists.sort_by(long)")) long_helper = @intCast(index);
+        if (std.mem.eql(u8, function.name, "lists.sort_by(i64)")) i64_helper = @intCast(index);
         if (std.mem.eql(u8, function.name, "lists.sort_by(Row)")) row_helper = @intCast(index);
     }
     // Two calls at one T reuse one specialization; a second T gets a
     // distinct checked body.  The private source template is not one
     // of these helpers and is pruned when nothing calls it.
     try testing.expectEqual(@as(usize, 2), helpers);
-    try testing.expect(long_helper != null);
+    try testing.expect(i64_helper != null);
     try testing.expect(row_helper != null);
-    var long_calls: usize = 0;
+    var i64_calls: usize = 0;
     var row_calls: usize = 0;
     for (program.functions[program.entry_function].instructions) |instruction| switch (instruction) {
         .call => |call| {
-            if (call.function == long_helper.?) long_calls += 1;
+            if (call.function == i64_helper.?) i64_calls += 1;
             if (call.function == row_helper.?) row_calls += 1;
         },
         else => {},
     };
-    try testing.expectEqual(@as(usize, 2), long_calls);
+    try testing.expectEqual(@as(usize, 2), i64_calls);
     try testing.expectEqual(@as(usize, 1), row_calls);
-    for ([_]u32{ long_helper.?, row_helper.? }) |helper| {
+    for ([_]u32{ i64_helper.?, row_helper.? }) |helper| {
         var calls_indirect = false;
         for (program.functions[helper].instructions) |instruction| switch (instruction) {
             .call_indirect => calls_indirect = true,
@@ -453,12 +453,12 @@ test "dead keeps an unread instruction that can trap" {
 
 test "dead keeps an unread function-name lookup that can trap" {
     var program = try compileRaw(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
-        \\    print(string(chosen))
+        \\    let chosen: func(i64) -> i64 = twice
+        \\    print(str(chosen))
         \\
     );
     defer program.deinit();
@@ -574,9 +574,9 @@ test "a read that writes is never pure, whatever a later pass would like to beli
     // can be checked without a program having to run.
     var program = try compileRaw(
         \\func main():
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    counts["fig"] += 1
-        \\    print(string(counts["fig"]))
+        \\    print(str(counts["fig"]))
         \\
     );
     defer program.deinit();
@@ -616,7 +616,7 @@ test "reading the error channel is never pure either, for the same reason" {
     // statement about `dead`'s reach and not about the table.  Pinned
     // against the table, where the claim actually lives.
     var program = try compileRaw(
-        \\func check(n: long) -> long!:
+        \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative")
         \\    return n

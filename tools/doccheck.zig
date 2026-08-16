@@ -422,9 +422,9 @@ test "a fragment is indented into an entry, and a whole file keeps its own" {
 
     // Declarations with no entry get one, so a document that shows a
     // struct does not have to show a `main` beside it.
-    const declared = try program(gpa, .{ .line = 1, .wrap = .file, .expect = .compiles, .body = "struct Point:\n    x: long\n" });
+    const declared = try program(gpa, .{ .line = 1, .wrap = .file, .expect = .compiles, .body = "struct Point:\n    x: i64\n" });
     defer gpa.free(declared);
-    try testing.expectEqualStrings("struct Point:\n    x: long\n\nfunc main():\n    return\n", declared);
+    try testing.expectEqualStrings("struct Point:\n    x: i64\n\nfunc main():\n    return\n", declared);
 }
 
 test "every Luce sample in every catalogued document compiles" {

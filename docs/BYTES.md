@@ -37,12 +37,12 @@ A `list(byte)` grows and iterates like any list:
 
 ```luce
 func main():
-    var buffer = new list(byte)
+    var buffer = new list[u8]
     buffer.append(72)
     buffer.append(105)
     print(f"{len(buffer)} bytes")
     for b in buffer:
-        print(string(b))
+        print(str(b))
 ```
 
 Because it is a reference type (`docs/MEMORY.md`), a buffer is shared, not
@@ -50,7 +50,7 @@ copied, when assigned or passed. ARC reclaims it at the last strong release:
 
 ```luce
 func main():
-    var a = new list(byte)
+    var a = new list[u8]
     a.append(1)
     let b = a
     b.append(2)
@@ -63,11 +63,11 @@ target width before shifting — otherwise the top byte's high bit would
 land in a sign position:
 
 ```luce
-func read_u32(data: list(byte), at: long) -> long:
-    let b0 = long(data[at])
-    let b1 = long(data[at + 1])
-    let b2 = long(data[at + 2])
-    let b3 = long(data[at + 3])
+func read_u32(data: list[u8], at: i64) -> i64:
+    let b0 = i64(data[at])
+    let b1 = i64(data[at + 1])
+    let b2 = i64(data[at + 2])
+    let b3 = i64(data[at + 3])
     return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
 
 func main():
@@ -106,10 +106,10 @@ Reading a file to its end is a loop over `read`:
 ```luce
 import std.files
 
-func stream(path: string) -> long!:
+func stream(path: str) -> i64!:
     var f = try files.open(path)
-    var buffer = new array(byte, 4096)
-    var total: long = 0
+    var buffer = new array[u8](4096)
+    var total: i64 = 0
     var filled = try f.read(buffer)
     while filled > 0:
         total += filled
@@ -125,9 +125,9 @@ Writing goes through `write` and `flush`:
 ```luce
 import std.files
 
-func save(path: string) -> !:
+func save(path: str) -> !:
     var f = try files.create(path)
-    var buffer = new array(byte, 3)
+    var buffer = new array[u8](3)
     buffer[0] = 72
     buffer[1] = 105
     buffer[2] = 10
@@ -178,7 +178,7 @@ text" means.
 ```luce
 import std.strings
 
-func roundtrip(s: string) -> string:
+func roundtrip(s: str) -> str:
     let raw = strings.to_bytes(s)
     let back = strings.from_bytes(raw)
     if back == none:
@@ -213,7 +213,7 @@ the way Go's `os.ReadFile` is a loop over `Read`:
 import std.files
 import std.strings
 
-func save(path: string, text: string) -> !:
+func save(path: str, text: str) -> !:
     try files.write_bytes(path, strings.to_bytes(text))
 
 func main():
@@ -259,7 +259,7 @@ carried a hand-written UTF-8 decoder now defers to the one validator.
 ```luce
 import std.zip
 
-func list_names(path: string) -> !:
+func list_names(path: str) -> !:
     let archive = try zip.read(path)
     let items = try zip.entries(archive)
     for entry in items:

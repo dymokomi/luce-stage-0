@@ -11,7 +11,7 @@ A program that accepts command-line arguments declares
 own name.
 
 ```luce run args=3 fig
-func main(args: list(string)):
+func main(args: list[str]):
     print(f"{len(args)} arguments")
     for name in args:
         print(f"  {name}")
@@ -141,10 +141,10 @@ import std.files
 import std.strings
 
 func main() -> !:
-    var bytes = new list(byte)
-    bytes.append(byte(0x89))
-    bytes.append(byte(0x50))
-    bytes.append(byte(0x00))
+    var bytes = new list[u8]
+    bytes.append(u8(0x89))
+    bytes.append(u8(0x50))
+    bytes.append(u8(0x00))
     try files.write_bytes("image.bin", bytes)
 
     let back = try files.read_bytes("image.bin")
@@ -170,10 +170,10 @@ import std.files
 func main() -> !:
     try files.write("stock.txt", "fig\npear\nplum\n")
     var f = try files.open("stock.txt")
-    var buffer = new array(byte, 4)
-    print(string(try f.read(buffer)))
-    print(string(try f.read(buffer)))
-    print(string(int(buffer[0])))
+    var buffer = new array[u8](4)
+    print(str(try f.read(buffer)))
+    print(str(try f.read(buffer)))
+    print(str(i32(buffer[0])))
 ```
 
 ```output

@@ -46,7 +46,7 @@ an ordinary value that a `T?` place can hold.
 
 ```luce
 struct User:
-    name: string
+    name: str
 
 func find() -> User?:
     return none
@@ -110,7 +110,7 @@ type, `return x` in a `-> T!` function just returns
 the message is any `string`:
 
 ```luce
-func checked(s: string) -> long!:
+func checked(s: str) -> i64!:
     let n = parse_int(s)
     if n == none:
         error("not a number: " + s)
@@ -134,7 +134,7 @@ function unwinds with the same error.
 **`catch EXPR`** supplies a fallback value for the whole expression:
 
 ```luce
-func read(path: string) -> string!:
+func read(path: str) -> str!:
     return try file_read(path)
 
 func main() -> !:
@@ -156,7 +156,7 @@ func main() -> !:
 **`catch NAME:`** binds the error's message for the handler:
 
 ```luce
-func read(path: string) -> string!:
+func read(path: str) -> str!:
     return try file_read(path)
 
 func main() -> !:

@@ -6,15 +6,15 @@ import termui
 import view as views
 
 struct Log:
-    lines: list(string)
+    lines: list[str]
 
-    func at(index: long) -> string:
+    func at(index: i64) -> str:
         return self.lines[index]
 
-func log_of(count: long) -> Log:
-    var held = Log(lines = new list(string))
+func log_of(count: i64) -> Log:
+    var held = Log(lines = new list[str])
     for i in range(0, count):
-        held.lines.append("line" + string(i))
+        held.lines.append("line" + str(i))
     return held
 
 func test_scroll_stays_on_the_content():

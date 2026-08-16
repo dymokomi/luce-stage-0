@@ -2,41 +2,41 @@
 #
 # Two numbers, and they answer two different questions:
 #
-#   * **crossing** — a 1,000,000-element `list(long)` given to a worker
+#   * **crossing** — a 1,000,000-element `list[i64]` given to a worker
 #     and its answer brought back.  That is a deep re-own each way, and
 #     it is the correct floor rather than a placeholder: a handle is an
-#     index into one runtime's table and a string's bytes come from one
+#     index into one runtime's table and a str's bytes come from one
 #     runtime's allocator, so there is no representation two runtimes
 #     could share.
 #   * **speedup** — the same arithmetic split across four workers
 #     against one, on disjoint slices.  An honest number, taken on the
 #     same machine in the same run.
 
-func sum_of(values: list(long)) -> long:
-    var total: long = 0
+func sum_of(values: list[i64]) -> i64:
+    var total: i64 = 0
     for v in values:
         total = total + v
     return total
 
-func slice_sum(values: list(long)) -> long:
+func slice_sum(values: list[i64]) -> i64:
     # Deliberately arithmetic-bound rather than memory-bound: what is
     # under test is whether four workers use four cores, not how fast
     # one list walks.
-    var total: long = 0
+    var total: i64 = 0
     for round in range(0, 400):
         for v in values:
             total = total + (v * v) % 7919
     return total
 
-func chunk(source: list(long), from: long, upto: long) -> list(long):
-    var made = new list(long)
+func chunk(source: list[i64], from: i64, upto: i64) -> list[i64]:
+    var made = new list[i64]
     for i in range(from, upto):
         made.append(source[i])
     return made
 
 func main():
-    let size: long = 1000000
-    var numbers = new list(long)
+    let size: i64 = 1000000
+    var numbers = new list[i64]
     for i in range(0, size):
         numbers.append(i)
 
@@ -45,31 +45,31 @@ func main():
     let crossed = spawn sum_of(numbers)
     let answered = crossed.wait()
     let cross_ms = clock_ms() - before_cross
-    print("crossing_ms " + string(cross_ms))
-    print("crossing_sum " + string(answered))
+    print("crossing_ms " + str(cross_ms))
+    print("crossing_sum " + str(answered))
 
     # -- one worker vs four ---------------------------------------------
-    let work: long = 200000
+    let work: i64 = 200000
     var one_piece = chunk(numbers, 0, work)
     let before_one = clock_ms()
     let single = spawn slice_sum(one_piece)
     let one_total = single.wait()
     let one_ms = clock_ms() - before_one
 
-    var pieces = new list(list(long))
+    var pieces = new list[list[i64]]
     let step = work // 4
     for part in range(0, 4):
         pieces.append(chunk(numbers, part * step, (part + 1) * step))
 
     let before_four = clock_ms()
-    var tasks = new list(task(long))
+    var tasks = new list[task[i64]]
     for piece in pieces:
         tasks.append(spawn slice_sum(piece))
-    var four_total: long = 0
+    var four_total: i64 = 0
     for t in tasks:
         four_total = four_total + t.wait()
     let four_ms = clock_ms() - before_four
 
-    print("one_worker_ms " + string(one_ms))
-    print("four_workers_ms " + string(four_ms))
-    print("same_answer " + string(one_total == four_total))
+    print("one_worker_ms " + str(one_ms))
+    print("four_workers_ms " + str(four_ms))
+    print("same_answer " + str(one_total == four_total))

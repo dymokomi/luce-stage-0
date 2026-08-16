@@ -83,19 +83,19 @@ test "traps keep their code, their message, and their place" {
         \\func main():
         \\    var n = 0
         \\    print("before")
-        \\    print(string(10 // n))
+        \\    print(str(10 // n))
         \\
         ,
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    print("before")
-        \\    print(string(xs[3]))
+        \\    print(str(xs[3]))
         \\
         ,
         \\func main():
-        \\    var n: long = 9223372036854775807
+        \\    var n: i64 = 9223372036854775807
         \\    print("before")
-        \\    print(string(n + n))
+        \\    print(str(n + n))
         \\
         ,
         \\func main():
@@ -104,9 +104,9 @@ test "traps keep their code, their message, and their place" {
         \\
         ,
         \\func main():
-        \\    let m = new map(string, long)
+        \\    let m = new map[str, i64]
         \\    print("before")
-        \\    print(string(m["missing"]))
+        \\    print(str(m["missing"]))
         \\
     };
     for (cases) |source| try unchanged(source);
@@ -124,15 +124,15 @@ test "traps keep their code, their message, and their place" {
 fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {
     try text.appendSlice(testing.allocator,
         \\func main():
-        \\    var a: long = 3
-        \\    var b: long = 7
-        \\    let xs = new list(long)
+        \\    var a: i64 = 3
+        \\    var b: i64 = 7
+        \\    let xs = new list[i64]
         \\
     );
     const statements = random.intRangeAtMost(usize, 1, 6);
     for (0..statements) |_| try statement(text, random, 1);
     try text.appendSlice(testing.allocator,
-        \\    print(string(a) + " " + string(b) + " " + string(len(xs)))
+        \\    print(str(a) + " " + str(b) + " " + str(len(xs)))
         \\
     );
 }
@@ -202,7 +202,7 @@ fn statement(text: *std.ArrayList(u8), random: std.Random, depth: usize) Allocat
             fresh_name += 1;
             const name = fresh_name;
             try indent(text, depth + 1);
-            try add(text, "let row{d} = new list(long)\n", .{name});
+            try add(text, "let row{d} = new list[i64]\n", .{name});
             try indent(text, depth + 1);
             try add(text, "row{d}.append(a)\n", .{name});
             try statement(text, random, depth + 1);

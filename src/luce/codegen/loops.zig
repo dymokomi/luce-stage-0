@@ -563,11 +563,11 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new array(double, 8)
-        \\    var total: double = 0.0
+        \\    var a = new array[f64](8)
+        \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(string(long(total)))
+        \\    print(str(i64(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -590,15 +590,15 @@ test "a loop that writes plain elements still lifts; matmul's nest lifts all thr
     var built = try planned(gpa,
         \\func main():
         \\    let n = 4
-        \\    var a = new array(double, n * n)
-        \\    var b = new array(double, n * n)
-        \\    var c = new array(double, n * n)
+        \\    var a = new array[f64](n * n)
+        \\    var b = new array[f64](n * n)
+        \\    var c = new array[f64](n * n)
         \\    for i in range(0, n):
         \\        for k in range(0, n):
         \\            let pivot = a[i * n + k]
         \\            for j in range(0, n):
         \\                c[i * n + j] += pivot * b[k * n + j]
-        \\    print(string(long(c[0])))
+        \\    print(str(i64(c[0])))
         \\
     );
     defer built.deinit(gpa);
@@ -616,25 +616,25 @@ test "a loop that can allocate or call refuses to lift" {
     const gpa = testing.allocator;
     for ([_][]const u8{
         // A call can do anything at all.
-        \\func touch(xs: array(double, _)) -> double:
+        \\func touch(xs: array[f64, _]) -> f64:
         \\    return xs[0]
         \\
         \\func main():
-        \\    var a = new array(double, 8)
-        \\    var total: double = 0.0
+        \\    var a = new array[f64](8)
+        \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + touch(a)
-        \\    print(string(long(total)))
+        \\    print(str(i64(total)))
         \\
         ,
         // A fresh object grows the table, and the rows move with it.
         \\func main():
-        \\    var a = new array(double, 8)
-        \\    var total: double = 0.0
+        \\    var a = new array[f64](8)
+        \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
-        \\        var xs = new list(long)
+        \\        var xs = new list[i64]
         \\        total = total + a[i]
-        \\    print(string(long(total)))
+        \\    print(str(i64(total)))
         \\
     }) |source| {
         var built = try planned(gpa, source);
@@ -647,12 +647,12 @@ test "an inner loop lifts even when the loop around it cannot" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var total: double = 0.0
+        \\    var total: f64 = 0.0
         \\    for r in range(0, 2):
-        \\        var a = new array(double, 8)
+        \\        var a = new array[f64](8)
         \\        for i in range(0, 8):
         \\            total = total + a[i]
-        \\    print(string(long(total)))
+        \\    print(str(i64(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -672,11 +672,11 @@ test "the local assignment guard remains independent of the effect gate" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new array(double, 8)
-        \\    var total: double = 0.0
+        \\    var a = new array[f64](8)
+        \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(string(long(total)))
+        \\    print(str(i64(total)))
         \\
     );
     defer built.deinit(gpa);

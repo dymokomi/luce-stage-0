@@ -146,13 +146,13 @@ test "semantic diagnostics carry the right code and location" {
     // A bad conversion argument, pointed at the call.
     try expectDiagnostics(
         \\func main():
-        \\    let x = long("no")
+        \\    let x = i64("no")
         \\
     , .{}, &.{.{ .code = "luce.sema.convert", .line = 2, .column = 13 }});
     // An unknown field, pointed at the access.
     try expectDiagnostics(
         \\struct Point:
-        \\    x: double
+        \\    x: f64
         \\
         \\func main():
         \\    var p = Point(x = 1.0)
@@ -171,7 +171,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     //
     // Columns, so this cannot pass by pointing at the right line.
     try expectDiagnostics(
-        \\func term_rows() -> long:
+        \\func term_rows() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -180,7 +180,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 6 }});
     try expectDiagnostics(
         \\struct term_style:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    return
@@ -200,7 +200,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     try expectDiagnostics(
         \\func main():
-        \\    var term_rows: long
+        \\    var term_rows: i64
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     // The same rule for the duplicates, which read the same spans.
@@ -217,10 +217,10 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 6 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
         \\struct Point:
-        \\    y: long
+        \\    y: i64
         \\
         \\func main():
         \\    return
@@ -228,27 +228,27 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 8 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: long
-        \\    x: long
+        \\    x: i64
+        \\    x: i64
         \\
         \\func main():
         \\    return
         \\
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 3, .column = 5 }});
     try expectDiagnostics(
-        \\func f(a: long, a: long) -> long:
+        \\func f(a: i64, a: i64) -> i64:
         \\    return a
         \\
         \\func main():
         \\    return
         \\
-    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 1, .column = 17 }});
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 1, .column = 16 }});
     try expectDiagnostics(
         \\func main():
         \\    let a = 1
         \\    if true:
         \\        let a = 2
-        \\        print(string(a))
+        \\        print(str(a))
         \\
     , .{ .allow_host = true }, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 13 }});
 }
@@ -280,8 +280,8 @@ test "the previously-unasserted diagnostic codes fire" {
         // A missing operand, not a stray character: `let a = @` is
         // stage 2's mistake, and stage 3 no longer says it again.
         .{ .source = "func main():\n    let a = 1 +\n", .code = "luce.parse.expression" },
-        .{ .source = "func main():\n    let a: list = []\n", .code = "luce.sema.type" },
-        .{ .source = "func main():\n    let a = new array(long)\n", .code = "luce.sema.new" },
+        .{ .source = "func main():\n    let a: list = []\n", .code = "luce.sema.container.type" },
+        .{ .source = "func main():\n    let a = new array[i64]\n", .code = "luce.sema.container.type" },
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
     };
     for (cases) |case| {
@@ -300,10 +300,10 @@ test "the pipeline survives every allocation failure" {
     // enforces error.NondeterministicMemoryUsage.
     const representative =
         \\struct Point:
-        \\    x: double
-        \\    tag: string
+        \\    x: f64
+        \\    tag: str
         \\
-        \\func total(values: list(long)) -> long:
+        \\func total(values: list[i64]) -> i64:
         \\    var sum = 0
         \\    for value in values:
         \\        sum = sum + value
@@ -312,9 +312,9 @@ test "the pipeline survives every allocation failure" {
         \\func main():
         \\    var xs = [3, 1, 2]
         \\    xs.sort()
-        \\    var ages = new map(string, long)
+        \\    var ages = new map[str, i64]
         \\    ages["ada"] = total(xs)
-        \\    print(string(ages["ada"]))
+        \\    print(str(ages["ada"]))
         \\
     ;
     try testing.checkAllAllocationFailures(testing.allocator, struct {
@@ -353,17 +353,17 @@ test "decode survives every allocation failure" {
 
 test "the entry is exactly func main(), and nothing else will do" {
     try expectRejected(
-        \\func helper() -> long:
+        \\func helper() -> i64:
         \\    return 1
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main(value: long):
+        \\func main(value: i64):
         \\    return
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main() -> long:
+        \\func main() -> i64:
         \\    return 1
         \\
     , "luce.sema.main");
@@ -390,12 +390,12 @@ test "the entry is exactly func main(), and nothing else will do" {
 test "struct namespaces collect functions and reject invalid members" {
     var program = try expectCompiles(
         \\struct Math:
-        \\    static func twice(value: long) -> long:
+        \\    static func twice(value: i64) -> i64:
         \\        return value * 2
         \\
         \\struct Pair:
-        \\    left: long
-        \\    static func sum(left: long, right: long) -> long:
+        \\    left: i64
+        \\    static func sum(left: i64, right: i64) -> i64:
         \\        return left + right
         \\
         \\func main():
@@ -407,8 +407,8 @@ test "struct namespaces collect functions and reject invalid members" {
 
     try expectRejected(
         \\struct Bad:
-        \\    value: long
-        \\    static func value() -> long:
+        \\    value: i64
+        \\    static func value() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -417,7 +417,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.duplicate");
     try expectRejected(
         \\struct Helpers:
-        \\    static func one() -> long:
+        \\    static func one() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -426,7 +426,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.call");
     try expectRejected(
         \\struct Helpers:
-        \\    static func one() -> long:
+        \\    static func one() -> i64:
         \\        return 1
         \\
         \\func main():
@@ -438,10 +438,10 @@ test "struct namespaces collect functions and reject invalid members" {
 test "the plan's scale example compiles and verifies" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func scale_point(point: Point, factor: double) -> Point:
+        \\func scale_point(point: Point, factor: f64) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
@@ -463,7 +463,7 @@ test "the plan's scale example compiles and verifies" {
 test "control flow, loops, and builtins compile and verify" {
     var program = try expectCompiles(
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
         \\            total = total + index
@@ -504,7 +504,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\import std.strings
         \\
         \\func main():
-        \\    print(string("abc".find("b") else -1))
+        \\    print(str("abc".find("b") else -1))
         \\
     , .{ .allow_host = true });
     defer used.deinit();
@@ -562,15 +562,15 @@ test "functions unreachable from the entry are pruned from the artifact" {
 // not move where a number lands.
 test "a literal lands at its context's type, with no conversion behind it" {
     var program = try expectCompiles(
-        \\func takes(x: double) -> double:
+        \\func takes(x: f64) -> f64:
         \\    return x
         \\
-        \\func answers() -> double:
+        \\func answers() -> f64:
         \\    return 12
         \\
         \\func main():
-        \\    let annotated: double = 7
-        \\    let negated: double = -3
+        \\    let annotated: f64 = 7
+        \\    let negated: f64 = -3
         \\    assert(annotated == 7.0)
         \\    assert(negated == -3.0)
         \\    assert(takes(8) == 8.0)
@@ -617,11 +617,11 @@ test "the IR dump is readable and deterministic" {
 
     try testing.expectEqualStrings(first, second);
     try testing.expect(std.mem.indexOf(u8, first, "func main() -> None") != null);
-    // Unannotated, so `value` is an `int` and the multiply is at that
+    // Unannotated, so `value` is an `i32` and the multiply is at that
     // width — the resize's default, read straight off the IR
     // (docs/TYPES.md, the ladder's rule 1).
-    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: int") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "multiply.int") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: i32") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "multiply.i32") != null);
 }
 
 test "a named call lowers to byte-identical MIR — names die in stage 4" {
@@ -633,7 +633,7 @@ test "a named call lowers to byte-identical MIR — names die in stage 4" {
     // cheapest possible proof that neither the instruction set nor the
     // serialized module moved — format_version stays where it is.
     const positional =
-        \\func size(width: long, height: long, deep: bool) -> long:
+        \\func size(width: i64, height: i64, deep: bool) -> i64:
         \\    if deep:
         \\        return width * height * 2
         \\    return width * height
@@ -643,7 +643,7 @@ test "a named call lowers to byte-identical MIR — names die in stage 4" {
         \\
     ;
     const named =
-        \\func size(width: long, height: long, deep: bool) -> long:
+        \\func size(width: i64, height: i64, deep: bool) -> i64:
         \\    if deep:
         \\        return width * height * 2
         \\    return width * height
@@ -688,20 +688,20 @@ test "the IR dump has a stable golden shape (short-circuit)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): list(int)
-        \\    local %1 xs: list(int)
+        \\    local %0 (temporary): list[i32]
+        \\    local %1 xs: list[i32]
         \\    local %2 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
-        \\    r2 = heap_new list(int)
+        \\    r2 = heap_new list[i32]
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
         \\    local_set %1, r2
         \\    r6 = local_get %1
         \\    r7 = intrinsic len, r6
         \\    r8 = const 0
-        \\    r9 = greater.long r7, r8
+        \\    r9 = greater.i64 r7, r8
         \\    local_set %2, r9
         \\    branch r9, b1, b2
         \\  b1:
@@ -709,7 +709,7 @@ test "the IR dump has a stable golden shape (short-circuit)" {
         \\    r13 = const 0
         \\    r14 = intrinsic index_get, r12, r13
         \\    r15 = const 1
-        \\    r16 = equal.int r14, r15
+        \\    r16 = equal.i32 r14, r15
         \\    local_set %2, r16
         \\    jump b2
         \\  b2:
@@ -738,7 +738,7 @@ test "no implicit narrowing, no reassigned let, no shadowing" {
     // float contagion from ever being silent.
     try expectRejected(
         \\func main():
-        \\    let narrowed: long = 2.5
+        \\    let narrowed: i64 = 2.5
         \\
     , "luce.sema.type");
     try expectRejected(
@@ -758,7 +758,7 @@ test "no implicit narrowing, no reassigned let, no shadowing" {
 
 test "return paths are checked on every branch" {
     try expectRejected(
-        \\func partial(flag: bool) -> long:
+        \\func partial(flag: bool) -> i64:
         \\    if flag:
         \\        return 1
         \\
@@ -771,8 +771,8 @@ test "return paths are checked on every branch" {
 test "struct construction is complete, named, and typed" {
     const source_prefix =
         \\struct Color:
-        \\    red: double
-        \\    green: double
+        \\    red: f64
+        \\    green: f64
         \\
     ;
     try expectRejected(source_prefix ++
@@ -804,7 +804,7 @@ test "struct construction is complete, named, and typed" {
 
 test "calls check arity, types, and none results" {
     try expectRejected(
-        \\func helper(value: long) -> long:
+        \\func helper(value: i64) -> i64:
         \\    return value
         \\
         \\func main():
@@ -846,8 +846,8 @@ test "break and continue require a loop" {
 test "var struct fields update through functional struct_set" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
         \\func main():
         \\    var point = Point(x = 0.0, y = 0.0)
@@ -890,7 +890,7 @@ test "host builtins type-check and stay host-gated" {
     , "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
-        \\func main(args: list(string)) -> !:
+        \\func main(args: list[str]) -> !:
         \\    print("hello " + args[0])
         \\    let text = file_read("notes.txt") catch ""
         \\    try file_write("copy.txt", text)
@@ -944,20 +944,20 @@ test "collections type-check and reject misuse at compile time" {
     const script: types.CompileOptions = .{};
 
     var featured = try compile_mod.compile(testing.allocator,
-        \\func sum(values: list(long)) -> long:
-        \\    var total: long = 0
+        \\func sum(values: list[i64]) -> i64:
+        \\    var total: i64 = 0
         \\    for value in values:
         \\        total = total + value
         \\    return total
         \\
-        \\func label(counts: map(string, long), grid: array(long, _, _)) -> string:
-        \\    var b = new builder()
-        \\    b.append(string(len(counts) + grid[0, 0]))
+        \\func label(counts: map[str, i64], grid: array[i64, _, _]) -> str:
+        \\    var b = new builder
+        \\    b.append(str(len(counts) + grid[0, 0]))
         \\    let made = b.build()
         \\    return made
         \\
         \\func main():
-        \\    var values: list(long) = []
+        \\    var values: list[i64] = []
         \\    values.append(4)
         \\    let total = sum(values[0:])
         \\
@@ -977,18 +977,18 @@ test "collections type-check and reject misuse at compile time" {
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new map(double, long)
+        \\    var m = new map[f64, i64]
         \\
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    let bad = grid[0]
         \\
     , script, "luce.sema.index");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let bad = m[7]
         \\
     , script, "luce.sema.index");
@@ -1068,17 +1068,17 @@ const geo_module: TestModule = .{ .name = "geo", .source =
     \\import util
     \\
     \\struct Point:
-    \\    x: double
-    \\    y: double
+    \\    x: f64
+    \\    y: f64
     \\
     \\struct Text:
-    \\    static func twice(value: long) -> long:
+    \\    static func twice(value: i64) -> i64:
     \\        return value * 2
     \\
-    \\func make(x: double, y: double) -> Point:
+    \\func make(x: f64, y: f64) -> Point:
     \\    return Point(x = x, y = y)
     \\
-    \\func length(point: Point) -> double:
+    \\func length(point: Point) -> f64:
     \\    return util.hypot(point.x, point.y)
     \\
 };
@@ -1086,7 +1086,7 @@ const geo_module: TestModule = .{ .name = "geo", .source =
 const util_module: TestModule = .{ .name = "util", .source =
     \\const TABLE = [1]
     \\
-    \\func hypot(x: double, y: double) -> double:
+    \\func hypot(x: f64, y: f64) -> f64:
     \\    return sqrt(x * x + y * y)
     \\
 };
@@ -1109,7 +1109,7 @@ test "luce.import.limit: an import graph past the module ceiling is refused" {
             .name = try std.fmt.allocPrint(arena, "m{d}", .{index}),
             .source = try std.fmt.allocPrint(
                 arena,
-                "func value{d}() -> long:\n    return {d}\n",
+                "func value{d}() -> i64:\n    return {d}\n",
                 .{ index, index },
             ),
         };
@@ -1187,44 +1187,44 @@ fn expectProjectCompiles(root: []const u8, modules: []const TestModule) !void {
 
 /// The memo's corpus in one module: every marked shape §8's rows need.
 const vault_module: TestModule = .{ .name = "vault", .source =
-    \\private func helper() -> long:
+    \\private func helper() -> i64:
     \\    return 41
     \\
-    \\func visible() -> long:
+    \\func visible() -> i64:
     \\    return helper() + 1
     \\
     \\private const seed = 41
     \\const answer = seed + 1
     \\
     \\private struct Inner:
-    \\    n: long
+    \\    n: i64
     \\
     \\    static func make() -> Inner:
     \\        return Inner(n = 1)
     \\
     \\struct Handle:
     \\    private:
-    \\        slot: long
-    \\    label: long
+    \\        slot: i64
+    \\    label: i64
     \\
     \\func fresh() -> Handle:
     \\    return Handle(slot = 1, label = 2)
     \\
     \\struct Session:
-    \\    name: string
-    \\    private id: long
-    \\    private token: long = 0
+    \\    name: str
+    \\    private id: i64
+    \\    private token: i64 = 0
     \\
-    \\    func title() -> string:
+    \\    func title() -> str:
     \\        return self.name
     \\
-    \\    private func stamp() -> long:
+    \\    private func stamp() -> i64:
     \\        return self.id
     \\
-    \\    private static func widest() -> long:
+    \\    private static func widest() -> i64:
     \\        return 64
     \\
-    \\func open(name: string) -> Session:
+    \\func open(name: str) -> Session:
     \\    return Session(name = name, id = 7)
     \\
     \\struct Box:
@@ -1237,11 +1237,11 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\    static func lead() -> Hidden:
     \\        return Hidden.first
     \\
-    \\enum Shown(byte):
+    \\enum Shown(u8):
     \\    open = 0
     \\    shut = 1
     \\
-    \\    private static func sealed() -> long:
+    \\    private static func sealed() -> i64:
     \\        return 7
     \\
     \\func opened() -> Shown:
@@ -1254,7 +1254,7 @@ test "luce.sema.private: a private function is withheld, and the call graph is n
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.helper()))
+        \\    print(str(vault.helper()))
         \\
     , &.{vault_module}, "helper is private to vault");
     // A public function calling its module's own private one is
@@ -1264,7 +1264,7 @@ test "luce.sema.private: a private function is withheld, and the call graph is n
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.visible()))
+        \\    print(str(vault.visible()))
         \\
     , &.{vault_module});
 }
@@ -1274,7 +1274,7 @@ test "luce.sema.private: a private constant is withheld, and its folded value cr
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.seed))
+        \\    print(str(vault.seed))
         \\
     , &.{vault_module}, "seed is private to vault");
     // D8: a public constant folds from private ones; the value
@@ -1285,7 +1285,7 @@ test "luce.sema.private: a private constant is withheld, and its folded value cr
         \\const doubled = vault.answer * 2
         \\
         \\func main():
-        \\    print(string(vault.answer + doubled))
+        \\    print(str(vault.answer + doubled))
         \\
     , &.{vault_module});
     // The same gate holds inside a constant initializer's fold.
@@ -1295,7 +1295,7 @@ test "luce.sema.private: a private constant is withheld, and its folded value cr
         \\const stolen = vault.seed + 1
         \\
         \\func main():
-        \\    print(string(stolen))
+        \\    print(str(stolen))
         \\
     , &.{vault_module}, "seed is private to vault");
 }
@@ -1304,7 +1304,7 @@ test "luce.sema.private: a private struct is withheld from annotation, construct
     try expectPrivateSaying(
         \\import vault
         \\
-        \\func read(p: vault.Inner) -> long:
+        \\func read(p: vault.Inner) -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1316,7 +1316,7 @@ test "luce.sema.private: a private struct is withheld from annotation, construct
         \\
         \\func main():
         \\    let p = vault.Inner(n = 1)
-        \\    print(string(p.n))
+        \\    print(str(p.n))
         \\
     , &.{vault_module}, "Inner is private to vault");
     // A namespace function of a private struct is reached through the
@@ -1326,7 +1326,7 @@ test "luce.sema.private: a private struct is withheld from annotation, construct
         \\
         \\func main():
         \\    let p = vault.Inner.make()
-        \\    print(string(p.n))
+        \\    print(str(p.n))
         \\
     , &.{vault_module}, "Inner is private to vault");
 }
@@ -1337,7 +1337,7 @@ test "luce.sema.private: a private field refuses reads, writes, and construction
         \\
         \\func main():
         \\    var h = vault.fresh()
-        \\    print(string(h.slot))
+        \\    print(str(h.slot))
         \\
     , &.{vault_module}, "slot of Handle is private to vault");
     try expectPrivateSaying(
@@ -1389,7 +1389,7 @@ test "luce.sema.private: a private method is withheld from the value spelling to
         \\
         \\func main():
         \\    let s = vault.open("dy")
-        \\    print(string(s.stamp()))
+        \\    print(str(s.stamp()))
         \\
     , &.{vault_module}, "stamp is private to vault");
 }
@@ -1402,7 +1402,7 @@ test "luce.sema.private: a private enum is withheld by name, and every door says
     try expectPrivateSaying(
         \\import vault
         \\
-        \\func read(m: vault.Hidden) -> long:
+        \\func read(m: vault.Hidden) -> i64:
         \\    return 1
         \\
         \\func main():
@@ -1435,7 +1435,7 @@ test "luce.sema.private: a private enum is withheld by name, and every door says
     try expectProjectCompiles(
         \\import vault
         \\
-        \\func spell(s: vault.Shown) -> string:
+        \\func spell(s: vault.Shown) -> str:
         \\    match s:
         \\        open:
         \\            return "open"
@@ -1462,14 +1462,14 @@ test "every spelling of touching a private member gets the same useful sentence"
         \\
         \\func main():
         \\    let s = vault.open("dy")
-        \\    print(string(vault.Session.stamp(s)))
+        \\    print(str(vault.Session.stamp(s)))
         \\
     , &.{vault_module}, "stamp is private to vault");
     try expectPrivateSaying(
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.Session.widest()))
+        \\    print(str(vault.Session.widest()))
         \\
     , &.{vault_module}, "widest is private to vault");
     // Enum function visibility used to be parsed and then discarded;
@@ -1479,7 +1479,7 @@ test "every spelling of touching a private member gets the same useful sentence"
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.Shown.sealed()))
+        \\    print(str(vault.Shown.sealed()))
         \\
     , &.{vault_module}, "sealed is private to vault");
     // A nested place: the write walks the chain, and the gate stands
@@ -1509,7 +1509,7 @@ test "every spelling of touching a private member gets the same useful sentence"
         \\
         \\func main():
         \\    var boxed = vault.Box(held = vault.fresh())
-        \\    print(string(boxed.held.slot))
+        \\    print(str(boxed.held.slot))
         \\
     , &.{vault_module}, "slot of Handle is private to vault");
     // Importing a module and touching only public things is just the
@@ -1520,7 +1520,7 @@ test "every spelling of touching a private member gets the same useful sentence"
         \\
         \\func main():
         \\    var boxed = vault.Box(held = vault.fresh())
-        \\    print(string(boxed.held.label))
+        \\    print(str(boxed.held.label))
         \\
     , &.{vault_module});
 }
@@ -1533,7 +1533,7 @@ test "member typos beside private members suggest visible members only" {
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.sed))
+        \\    print(str(vault.sed))
         \\
     , files.loader(), .{ .allow_host = true });
     defer result.deinit();
@@ -1585,7 +1585,7 @@ test "a typo near a private name is unknown, and the private name is never sugge
         \\import vault
         \\
         \\func main():
-        \\    print(string(vault.helperr()))
+        \\    print(str(vault.helperr()))
         \\
     , files.loader(), .{ .allow_host = true });
     defer result.deinit();
@@ -1604,17 +1604,17 @@ test "the private path is checked per module: A sees its own, B does not, one co
     // compile, which is what proves the check reads the *reference
     // site's* module and not some global mode.
     const a: TestModule = .{ .name = "a", .source =
-        \\private func inner() -> long:
+        \\private func inner() -> i64:
         \\    return 1
         \\
-        \\func outer() -> long:
+        \\func outer() -> i64:
         \\    return inner()
         \\
     };
     const b: TestModule = .{ .name = "b", .source =
         \\import a
         \\
-        \\func steal() -> long:
+        \\func steal() -> i64:
         \\    return a.inner()
         \\
     };
@@ -1624,7 +1624,7 @@ test "the private path is checked per module: A sees its own, B does not, one co
         \\import b
         \\
         \\func main():
-        \\    print(string(a.outer() + b.steal()))
+        \\    print(str(a.outer() + b.steal()))
         \\
     , files.loader(), .{ .allow_host = true });
     defer result.deinit();
@@ -1640,7 +1640,7 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
     const even: TestModule = .{ .name = "even", .source =
         \\import odd
         \\
-        \\func check(value: long) -> bool:
+        \\func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return true
         \\    return odd.check(value - 1)
@@ -1649,7 +1649,7 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
     const odd_open: TestModule = .{ .name = "odd", .source =
         \\import even
         \\
-        \\func check(value: long) -> bool:
+        \\func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -1659,14 +1659,14 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
         \\import even
         \\
         \\func main():
-        \\    print(string(even.check(4)))
+        \\    print(str(even.check(4)))
         \\
     ;
     try expectProjectCompiles(root, &.{ even, odd_open });
     const odd_marked: TestModule = .{ .name = "odd", .source =
         \\import even
         \\
-        \\private func check(value: long) -> bool:
+        \\private func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -1682,25 +1682,25 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
     const region: TestModule = .{ .name = "rng", .source =
         \\struct Rng:
         \\    private:
-        \\        state: long
+        \\        state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\func rng(seed: long) -> Rng:
+        \\func rng(seed: i64) -> Rng:
         \\    return Rng(state = seed)
         \\
     };
     const marker: TestModule = .{ .name = "rng", .source =
         \\struct Rng:
-        \\    private state: long
+        \\    private state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\func rng(seed: long) -> Rng:
+        \\func rng(seed: i64) -> Rng:
         \\    return Rng(state = seed)
         \\
     };
@@ -1709,7 +1709,7 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
         \\
         \\func main():
         \\    var r = rng.Rng(state = 42)
-        \\    print(string(r.next()))
+        \\    print(str(r.next()))
         \\
     ;
     const using =
@@ -1717,7 +1717,7 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
         \\
         \\func main():
         \\    var r = rng.rng(42)
-        \\    print(string(r.next()))
+        \\    print(str(r.next()))
         \\
     ;
     for ([_]TestModule{ region, marker }) |shape| {
@@ -1792,7 +1792,7 @@ test "luce.sema.duplicate: an import cannot take a struct's name" {
         \\import util
         \\
         \\struct util:
-        \\    x: long
+        \\    x: i64
         \\
         \\func main():
         \\    return
@@ -1815,14 +1815,14 @@ test "luce.sema.duplicate: an import cannot take a struct's name" {
 // Tagged unions: the front half (docs/UNION.md)
 // ---------------------------------------------------------------------------
 
-test "a union compiles through construction, dispatch, bindings, and string(u)" {
+test "a union compiles through construction, dispatch, bindings, and str(u)" {
     var program = try expectCompiles(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double = 1.0)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64 = 1.0)
         \\
-        \\    func corners() -> long:
+        \\    func corners() -> i64:
         \\        match self:
         \\            empty:
         \\                return 0
@@ -1843,10 +1843,10 @@ test "a union compiles through construction, dispatch, bindings, and string(u)" 
         \\        empty:
         \\            total = 0
         \\        circle(radius):
-        \\            total = total + long(radius)
+        \\            total = total + i64(radius)
         \\        rect(width, height):
-        \\            total = total + long(width + height)
-        \\    let name = string(u)
+        \\            total = total + i64(width + height)
+        \\    let name = str(u)
         \\    var late: Shape
         \\    assert(len(name) >= 0 and total >= 0)
         \\
@@ -1879,7 +1879,7 @@ test "a union compiles through construction, dispatch, bindings, and string(u)" 
     const dump = try mir.print(testing.allocator, &program);
     defer testing.allocator.free(dump);
     try testing.expect(std.mem.indexOf(u8, dump, "union Shape:") != null);
-    try testing.expect(std.mem.indexOf(u8, dump, "circle(radius: double)") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "circle(radius: f64)") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "variant_make Shape.circle") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "variant_field") != null);
 }
@@ -1898,7 +1898,7 @@ test "a union's refusals land where UNION.md puts them" {
     // D3: a member is not a type.
     try expectRejected(
         \\union Shape:
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let c: Shape.circle = Shape.circle(radius = 1.0)
@@ -1909,7 +1909,7 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Chain:
         \\    nil
-        \\    cons(head: long, tail: Chain)
+        \\    cons(head: i64, tail: Chain)
         \\
         \\func main():
         \\    return
@@ -1919,17 +1919,17 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
-        \\    var m = new map(Shape, long)
+        \\    var m = new map[Shape, i64]
         \\
     , "luce.sema.type");
     // D16: `==` on unions is refused naming match.
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let a = Shape.empty
@@ -1941,7 +1941,7 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape(1)
@@ -1951,7 +1951,7 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape.circle
@@ -1961,7 +1961,7 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape.empty()
@@ -1971,7 +1971,7 @@ test "a union's refusals land where UNION.md puts them" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    rect(width: double, height: double)
+        \\    rect(width: f64, height: f64)
         \\
         \\func main():
         \\    let s = Shape.rect(width = 1.0)
@@ -1984,7 +1984,7 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    rect(width: double, height: double)
+        \\    rect(width: f64, height: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
@@ -1999,7 +1999,7 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
@@ -2012,7 +2012,7 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
@@ -2027,7 +2027,7 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
@@ -2058,7 +2058,7 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func main():
         \\    let radius = 1.0
@@ -2169,7 +2169,7 @@ test "imports are explicit, checked, and reported per file" {
 
     // An error inside an imported module renders against that file.
     const broken: TestModule = .{ .name = "broken", .source =
-        \\func helper() -> long:
+        \\func helper() -> i64:
         \\    return "not an int"
         \\
     };
@@ -2210,7 +2210,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // A module whose bytes are not text is refused at the import that
     // asked for it, naming the file it could not become.
     var binary: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "func area() -> long:\n    return \x00\n" },
+        .{ .name = "geo", .source = "func area() -> i64:\n    return \x00\n" },
     } };
     var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), script);
     defer not_text.deinit();
@@ -2227,7 +2227,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // A module that imports itself says so, instead of quietly
     // resolving to the module already being loaded.
     var recursive: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "import geo\n\nfunc area() -> long:\n    return 4\n" },
+        .{ .name = "geo", .source = "import geo\n\nfunc area() -> i64:\n    return 4\n" },
     } };
     var itself = try compile_mod.compileProject(testing.allocator, uses_geo, recursive.loader(), script);
     defer itself.deinit();
@@ -2239,7 +2239,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
 test "std is a namespace, not a reserved name: a sibling module may be called math" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> long:\n    return 42\n" },
+        .{ .name = "math", .source = "func answer() -> i64:\n    return 42\n" },
     } };
 
     // `import math` is the file beside the program.  The library takes
@@ -2312,8 +2312,8 @@ test "two imports may not share a last segment, and the alias is the named remed
     // refusal offers `as`, and taking the offer compiles.
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
-        .{ .name = "blocks.shapes", .source = "func area() -> long:\n    return 9\n" },
+        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
+        .{ .name = "blocks.shapes", .source = "func area() -> i64:\n    return 9\n" },
     } };
 
     var collision = try compile_mod.compileProject(testing.allocator,
@@ -2349,8 +2349,8 @@ test "two imports may not share a last segment, and the alias is the named remed
 test "one module, one binding: a program cannot import geo.shapes under two names" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
-        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> long:\n    return gs.area()\n" },
+        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
+        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> i64:\n    return gs.area()\n" },
     } };
 
     var result = try compile_mod.compileProject(testing.allocator,
@@ -2374,8 +2374,8 @@ test "an aliased module's hint spells the import with its alias" {
     // carries the alias too.
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
-        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> long:\n    return gs.area()\n" },
+        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
+        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> i64:\n    return gs.area()\n" },
     } };
 
     var result = try compile_mod.compileProject(testing.allocator,
@@ -2417,11 +2417,11 @@ test "the routed list comparator requires std lists, not a sibling named lists" 
     var result = try compile_mod.compileProject(testing.allocator,
         \\import lists
         \\
-        \\func before(a: long, b: long) -> bool:
+        \\func before(a: i64, b: i64) -> bool:
         \\    return a < b
         \\
         \\func main():
-        \\    var values: list(long) = [3, 1, 2]
+        \\    var values: list[i64] = [3, 1, 2]
         \\    values.sort_by(before)
         \\
     , files.loader(), .{});
@@ -2436,8 +2436,8 @@ test "the routed list comparator requires std lists, not a sibling named lists" 
 test "a missing import is spelled the way the author would have to write it" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> long:\n    return 42\n" },
-        .{ .name = "user", .source = "import math\n\nfunc go() -> long:\n    return math.answer()\n" },
+        .{ .name = "math", .source = "func answer() -> i64:\n    return 42\n" },
+        .{ .name = "user", .source = "import math\n\nfunc go() -> i64:\n    return math.answer()\n" },
     } };
 
     // A sibling math.luc is in the program, so the fix is `import
@@ -2508,7 +2508,7 @@ test "a project's diagnostics name every file they come from" {
     // file this could only ever print one file's line numbers.
     var files: TestLoader = .{ .modules = &.{
         .{ .name = "geo", .source =
-        \\func area() -> long:
+        \\func area() -> i64:
         \\    return "not an int"
         \\
         },
@@ -2518,8 +2518,8 @@ test "a project's diagnostics name every file they come from" {
         \\import std.math
         \\
         \\func main():
-        \\    let bad: long = geo.area()
-        \\    let worse: long = math.pi
+        \\    let bad: i64 = geo.area()
+        \\    let worse: i64 = math.pi
         \\
     , files.loader(), .{ .source_name = "program.luc" });
     defer result.deinit();
@@ -2542,9 +2542,9 @@ test "an import cycle compiles; what may not be circular is checked finer" {
     // `specs/modules_spec.zig`.
     const script: types.CompileOptions = .{};
     var ring: TestLoader = .{ .modules = &.{
-        .{ .name = "a", .source = "import b\n\nfunc step(v: long) -> long:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
-        .{ .name = "b", .source = "import c\n\nfunc step(v: long) -> long:\n    return c.step(v)\n" },
-        .{ .name = "c", .source = "import a\n\nfunc step(v: long) -> long:\n    return a.step(v)\n" },
+        .{ .name = "a", .source = "import b\n\nfunc step(v: i64) -> i64:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\nfunc step(v: i64) -> i64:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\nfunc step(v: i64) -> i64:\n    return a.step(v)\n" },
     } };
     var looped = try compile_mod.compileProject(testing.allocator,
         \\import a
@@ -2568,7 +2568,7 @@ test "an import cycle compiles; what may not be circular is checked finer" {
         \\import a
         \\
         \\func main():
-        \\    print(string(a.width))
+        \\    print(str(a.width))
         \\
     , constants.loader(), script);
     defer knotted.deinit();
@@ -2593,7 +2593,7 @@ fn failsWith(source: []const u8, code: []const u8) !void {
 
 test "constants are compile-time: calls and nested objects are refused" {
     try failsWith(
-        \\func answer() -> long:
+        \\func answer() -> i64:
         \\    return 42
         \\
         \\const bad = answer()
@@ -2604,7 +2604,7 @@ test "constants are compile-time: calls and nested objects are refused" {
     , "luce.sema.const");
     try failsWith(
         \\struct Bag:
-        \\    items: list(long)
+        \\    items: list[i64]
         \\
         \\const bad = Bag(items = [1])
         \\
@@ -2650,7 +2650,7 @@ test "constants share the one namespace and stay immutable" {
     try failsWith(
         \\const twice = 2
         \\
-        \\func twice() -> long:
+        \\func twice() -> i64:
         \\    return 2
         \\
         \\func main():
@@ -2684,7 +2684,7 @@ test "constants share the one namespace and stay immutable" {
     // a float value does not land on an integer annotation, because
     // narrowing is never implicit.
     try failsWith(
-        \\const wrong: long = 3.5
+        \\const wrong: i64 = 3.5
         \\
         \\func main():
         \\    return
@@ -2733,7 +2733,7 @@ test "a plain map store reads nothing; only the compound one defines" {
     // once" guarantee in instruction form.
     var program = try expectCompilesOptions(
         \\func main():
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    counts["a"] = 7
         \\    counts["b"] += 1
         \\
@@ -2743,10 +2743,10 @@ test "a plain map store reads nothing; only the compound one defines" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): map(string, long)
-        \\    local %1 counts: map(string, long)
+        \\    local %0 (temporary): map[str, i64]
+        \\    local %1 counts: map[str, i64]
         \\  b0:
-        \\    r0 = heap_new map(string, long)
+        \\    r0 = heap_new map[str, i64]
         \\    local_set %1, r0
         \\    r2 = local_get %1
         \\    r3 = const data#0
@@ -2757,7 +2757,7 @@ test "a plain map store reads nothing; only the compound one defines" {
         \\    r8 = const 1
         \\    r9 = const 0
         \\    r10 = intrinsic map_place, r6, r7, r9
-        \\    r11 = add.long r10, r8
+        \\    r11 = add.i64 r10, r8
         \\    intrinsic index_set, r6, r7, r11
         \\    r13 = local_get %1
         \\    intrinsic release, r13
@@ -2775,10 +2775,10 @@ test "a plain store through a nested place reads nothing either" {
     // that is a compound store.
     var program = try expectCompilesOptions(
         \\struct Tally:
-        \\    counts: map(string, long)
+        \\    counts: map[str, i64]
         \\
         \\func main():
-        \\    var t = Tally(counts = new map(string, long))
+        \\    var t = Tally(counts = new map[str, i64])
         \\    t.counts["a"] = 7
         \\    t.counts["b"] += 1
         \\
@@ -2805,7 +2805,7 @@ test "a compound store into a list or an array still reads through index_get" {
         \\func main():
         \\    var xs = [1, 2]
         \\    xs[0] += 1
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    grid[1, 1] += 1
         \\
     , .{});
@@ -2837,27 +2837,27 @@ test "two packages shipping the same file name both load, apart (docs/PACKAGES.m
             .name = "alpha",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/alpha.luc",
-            .source = "import util\n\nfunc scaled(v: long) -> long:\n    return util.factor() * v\n",
+            .source = "import util\n\nfunc scaled(v: i64) -> i64:\n    return util.factor() * v\n",
         },
         .{
             .name = "beta",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/beta.luc",
-            .source = "import util\n\nfunc shifted(v: long) -> long:\n    return util.factor() + v\n",
+            .source = "import util\n\nfunc shifted(v: i64) -> i64:\n    return util.factor() + v\n",
         },
         .{
             .name = "util",
             .from = "alpha-1.0.0",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/util.luc",
-            .source = "func factor() -> long:\n    return 10\n",
+            .source = "func factor() -> i64:\n    return 10\n",
         },
         .{
             .name = "util",
             .from = "beta-1.0.0",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/util.luc",
-            .source = "func factor() -> long:\n    return 100\n",
+            .source = "func factor() -> i64:\n    return 100\n",
         },
     } };
     var result = try compile_mod.compileProject(testing.allocator,
@@ -2911,20 +2911,20 @@ test "a package's util and the project's util never answer for each other" {
         .{
             .name = "util",
             .from = "",
-            .source = "func factor() -> long:\n    return 2\n",
+            .source = "func factor() -> i64:\n    return 2\n",
         },
         .{
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import util\n\nfunc measure() -> long:\n    return util.factor()\n",
+            .source = "import util\n\nfunc measure() -> i64:\n    return util.factor()\n",
         },
         .{
             .name = "util",
             .from = "geo-1.2.0",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/util.luc",
-            .source = "func factor() -> long:\n    return 7\n",
+            .source = "func factor() -> i64:\n    return 7\n",
         },
     } };
     var result = try compile_mod.compileProject(testing.allocator,
@@ -2958,7 +2958,7 @@ fn encodePackaged(token: []const u8, util_source: []const u8) ![]u8 {
         .{
             .name = "geo",
             .root = token,
-            .source = "import util\n\nfunc measure() -> long:\n    return util.factor()\n",
+            .source = "import util\n\nfunc measure() -> i64:\n    return util.factor()\n",
         },
         .{
             .name = "util",
@@ -2995,8 +2995,8 @@ test "the artifact cache key moves with a package file and with its resolution (
     // names — so an edited package file moves the key, and so does a
     // resolution change that re-roots the very same bytes.  This test
     // is what the loom cache's invalidation story stands on.
-    const ten = "func factor() -> long:\n    return 10\n";
-    const eleven = "func factor() -> long:\n    return 11\n";
+    const ten = "func factor() -> i64:\n    return 10\n";
+    const eleven = "func factor() -> i64:\n    return 11\n";
 
     const baseline = try encodePackaged("geo-1.2.0", ten);
     defer testing.allocator.free(baseline);
@@ -3031,8 +3031,8 @@ test "fuzz: compilation yields verified MIR or bounded diagnostics" {
         "",
         "func main():\n    return\n",
         "func main():\n    let value = (1 + 2) * 3\n",
-        "struct Point:\n    x: double\n    y: double\n\nfunc main():\n    let p = Point(x = 1.0, y = 2.0)\n",
-        "union Shape:\n    circle(radius: double)\n    square(side: double)\n\nfunc main():\n    let s = Shape.circle(radius = 1.0)\n",
+        "struct Point:\n    x: f64\n    y: f64\n\nfunc main():\n    let p = Point(x = 1.0, y = 2.0)\n",
+        "union Shape:\n    circle(radius: f64)\n    square(side: f64)\n\nfunc main():\n    let s = Shape.circle(radius = 1.0)\n",
         "func main():\n    let broken = (1 +\n",
     } });
 }

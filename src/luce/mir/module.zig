@@ -1062,7 +1062,7 @@ test "constant containers round-trip with declaration identity and exact values"
     try testing.expect(loaded.container_constants[0].payload.sequence[0].strukt.fields[1] == .absent);
     const dump = try mir.print(testing.allocator, &loaded);
     defer testing.allocator.free(dump);
-    try testing.expect(std.mem.indexOf(u8, dump, "constant container#0 labels: list(Label) = [Label(text=data#1, fallback=none, enabled=true)]") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "constant container#0 labels: list[Label] = [Label(text=data#1, fallback=none, enabled=true)]") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -1171,29 +1171,29 @@ test "constant value decode depth is bounded" {
 test "a compiled program round-trips through the module format" {
     const source =
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func length(point: Point) -> double:
+        \\func length(point: Point) -> f64:
         \\    return sqrt(point.x * point.x + point.y * point.y)
         \\
         \\func main():
         \\    var point = Point(x = 3.0, y = 4.0)
         \\    point.x = 6.0
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for index in range(0, 5):
         \\        if index % 2 == 0:
         \\            total = total + index
         \\    print("length ready")
         \\    let text = "π = " + "3.14159"[0:4]
-        \\    var points = new list(double)
+        \\    var points = new list[f64]
         \\    points.append(length(point))
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    counts[text] = len(points)
-        \\    var grid = new array(long, 2, 3)
+        \\    var grid = new array[i64](2, 3)
         \\    grid[1, 2] = total
         \\    for value in points:
-        \\        total = total + long(value)
+        \\        total = total + i64(value)
         \\
     ;
     var program = try compileScript(source);
@@ -1223,9 +1223,9 @@ test "a compiled program round-trips through the module format" {
 test "an inout receiver and call round-trip through the current format" {
     var program = try compileScript(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
-        \\    func add(amount: long):
+        \\    func add(amount: i64):
         \\        self.value = self.value + amount
         \\
         \\func main():
@@ -1266,16 +1266,16 @@ test "an inout receiver and call round-trip through the current format" {
 
 test "function signatures, values, lambdas, and indirect calls round-trip" {
     const source =
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func apply(f: func(long) -> long, n: long) -> long:
+        \\func apply(f: func(i64) -> i64, n: i64) -> i64:
         \\    return f(n)
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
-        \\    print(string(chosen))
-        \\    print(string(apply((n) -> n + 1, 4)))
+        \\    let chosen: func(i64) -> i64 = twice
+        \\    print(str(chosen))
+        \\    print(str(apply((n) -> n + 1, 4)))
         \\
     ;
     var program = try compileScript(source);
@@ -1317,12 +1317,12 @@ test "function signatures, values, lambdas, and indirect calls round-trip" {
 
 test "decoded function types and conversions are verified before execution" {
     var program = try compileScriptWith(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
-        \\    print(string(chosen))
+        \\    let chosen: func(i64) -> i64 = twice
+        \\    print(str(chosen))
         \\
     , false);
     defer program.deinit();
@@ -1415,16 +1415,16 @@ test "decoded function types and conversions are verified before execution" {
 test "a decoded bound function value rejects a forged receiver" {
     var program = try compileScript(
         \\struct Scale:
-        \\    factor: long
+        \\    factor: i64
         \\
-        \\    func times(n: long) -> long:
+        \\    func times(n: i64) -> i64:
         \\        return n * self.factor
         \\
         \\func main():
         \\    let scale = Scale(factor = 2)
-        \\    let f: func(long) -> long = scale.times
-        \\    let n: long = 3
-        \\    print(string(f(n)))
+        \\    let f: func(i64) -> i64 = scale.times
+        \\    let n: i64 = 3
+        \\    print(str(f(n)))
         \\
     );
     defer program.deinit();
@@ -1478,18 +1478,18 @@ test "a decoded bound function value rejects a forged receiver" {
 test "an optional type round-trips with its payload, and T?? is rejected" {
     var program = try compileScript(
         \\struct Slot:
-        \\    held: string?
+        \\    held: str?
         \\
-        \\func widen(n: long) -> long?:
+        \\func widen(n: i64) -> i64?:
         \\    return n
         \\
         \\func main():
-        \\    var counted: long? = none
+        \\    var counted: i64? = none
         \\    counted = widen(3)
         \\    var slot = Slot(held = none)
         \\    slot.held = "there"
-        \\    var listed: list(long)? = none
-        \\    listed = new list(long)
+        \\    var listed: list[i64]? = none
+        \\    listed = new list[i64]
         \\    listed.append(1)
         \\    assert((counted else 0) == 3)
         \\    assert(slot.held != none)
@@ -1508,8 +1508,8 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
     const loaded_dump = try mir.print(testing.allocator, &loaded);
     defer testing.allocator.free(loaded_dump);
     try testing.expectEqualStrings(original_dump, loaded_dump);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "long?") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list(long)?") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "i64?") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list[i64]?") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -1545,7 +1545,7 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
 
 test "debug origins round-trip; strip removes them and shrinks the module" {
     var program = try compileScript(
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
         \\func main():
@@ -1663,23 +1663,23 @@ test "a damaged register reference fails verification, not execution" {
 // the corpus keeps it by being acyclic (see `forwardOnly`).
 const mutation_source =
     \\struct Point:
-    \\    x: double
-    \\    tag: string
+    \\    x: f64
+    \\    tag: str
     \\
-    \\const seeds: list(long) = [3, 1, 2]
+    \\const seeds: list[i64] = [3, 1, 2]
     \\
-    \\func total(values: list(long)) -> long:
+    \\func total(values: list[i64]) -> i64:
     \\    return values[0] + values[1] + values[2]
     \\
     \\func main():
-    \\    var xs: list(long) = [3, 1, 2]
+    \\    var xs: list[i64] = [3, 1, 2]
     \\    xs.sort()
-    \\    var ages = new map(string, long)
+    \\    var ages = new map[str, i64]
     \\    ages["ada"] = total(xs)
     \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
     \\    assert(seeds[0] == 3)
     \\    if point.x > 1.0 and ages.has("ada"):
-    \\        xs.append(long(point.x))
+    \\        xs.append(i64(point.x))
     \\    assert(len(xs) == 4)
     \\
 ;
@@ -1914,7 +1914,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
     var program = try compileScript(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored = 0
         \\    deflated = 8
         \\
@@ -1932,11 +1932,11 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\func main():
         \\    var m = Method.stored
         \\    m = Method.deflated
-        \\    var seen = new list(Method)
+        \\    var seen = new list[Method]
         \\    seen.append(m)
         \\    assert(seen[0] == Method.deflated)
-        \\    assert(string(m) == "deflated")
-        \\    assert(int(m) == 8)
+        \\    assert(str(m) == "deflated")
+        \\    assert(i32(m) == 8)
         \\    assert(MODES[0] == Method.stored)
         \\    assert(BINDINGS[Method.stored] == Method.deflated)
         \\    assert((ENTRIES[0].fallback else Method.deflated) == Method.stored)
@@ -1955,12 +1955,12 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
     const loaded_dump = try mir.print(testing.allocator, &loaded);
     defer testing.allocator.free(loaded_dump);
     try testing.expectEqualStrings(original_dump, loaded_dump);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "enum Method(byte):") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "enum Method(u8):") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "deflated = 8") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list(Method)") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "MODES: list(Method) = [Method.stored, Method.deflated]") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "BINDINGS: map(Method, Method) = {Method.stored: Method.deflated}") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "ENTRIES: list(Entry) = [Entry(method=Method.deflated, fallback=Method.stored), Entry(method=Method.stored, fallback=none)]") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list[Method]") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "MODES: list[Method] = [Method.stored, Method.deflated]") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "BINDINGS: map[Method, Method] = {Method.stored: Method.deflated}") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "ENTRIES: list[Entry] = [Entry(method=Method.deflated, fallback=Method.stored), Entry(method=Method.stored, fallback=none)]") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -1982,13 +1982,13 @@ test "a union round-trips with its members and payload fields" {
     var program = try compileScript(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
         \\func main():
         \\    var s = Shape.circle(radius = 2.0)
         \\    s = Shape.empty
-        \\    var total: double = 0.0
+        \\    var total: f64 = 0.0
         \\    match s:
         \\        empty:
         \\            total = 0.0
@@ -1997,7 +1997,7 @@ test "a union round-trips with its members and payload fields" {
         \\        rect(width, height):
         \\            total = width * height
         \\    assert(total == 0.0)
-        \\    assert(string(s) == "empty")
+        \\    assert(str(s) == "empty")
         \\
     );
     defer program.deinit();
@@ -2013,7 +2013,7 @@ test "a union round-trips with its members and payload fields" {
     defer testing.allocator.free(loaded_dump);
     try testing.expectEqualStrings(original_dump, loaded_dump);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "union Shape:") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "rect(width: double, height: double)") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "rect(width: f64, height: f64)") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_make Shape.circle") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_tag") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_field") != null);

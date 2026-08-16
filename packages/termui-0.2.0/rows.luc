@@ -15,16 +15,16 @@ import view as views
 # the widget owns — exactly what a union is for — and the app matches
 # this and decides what "chosen" means.
 union RowsEvent:
-    moved(index: long)
-    chosen(index: long)
+    moved(index: i64)
+    chosen(index: i64)
 
 struct Rows:
-    count: long = 0
-    top: long = 0
-    selected: long = 0
+    count: i64 = 0
+    top: i64 = 0
+    selected: i64 = 0
 
     # Keep the selection on the list and the window on the selection.
-    func adjust(height: long):
+    func adjust(height: i64):
         if self.count <= 0:
             self.top = 0
             self.selected = 0
@@ -36,7 +36,7 @@ struct Rows:
             self.top = self.selected - height + 1
         self.top = clamp(self.top, 0, max(self.count - 1, 0))
 
-    func move_by(steps: long) -> RowsEvent:
+    func move_by(steps: i64) -> RowsEvent:
         self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
         return RowsEvent.moved(index = self.selected)
 
@@ -49,17 +49,17 @@ struct Rows:
 # selection is a style, not a Line, because a file list has one colour
 # per row and a bar across the width says "selected" better than markup.
 struct RowsView: views.View:
-    render: (func(long) -> string)?
-    count: long = 0
-    top: long = 0
-    selected: long = 0
+    render: (func(i64) -> str)?
+    count: i64 = 0
+    top: i64 = 0
+    selected: i64 = 0
     normal: termui.Style = termui.Style()
     highlight: termui.Style = termui.Style(foreground = 7, background = 4)
 
-    func measure(area: termui.Rect) -> (long, long):
+    func measure(area: termui.Rect) -> (i64, i64):
         return min(max(self.count, 0), max(area.rows, 0)), max(area.columns, 0)
 
-    func label(index: long) -> string:
+    func label(index: i64) -> str:
         let provider = self.render
         if provider == none:
             return ""

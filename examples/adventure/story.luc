@@ -115,19 +115,19 @@ func build() -> world.Realm:
 
     return realm
 
-# Where a new game begins.  `where` answers a `long?` because a name
+# Where a new game begins.  `where` answers a `i64?` because a name
 # is only a name until a realm has been asked; this realm was built
 # three lines above with that room in it, and `else` says what to do
 # if it somehow were not (docs/LANGUAGE.md).
-func start(realm: world.Realm) -> long:
+func start(realm: world.Realm) -> i64:
     return realm.where(gate_room) else 0
 
-func opening() -> string:
+func opening() -> str:
     return "THE SHUTTER\nAn observatory, thirty years shut. Type help if you have not\nbeen here before.\n"
 
 # The end of the story, or "" while it is still going.  One condition:
 # the lens, in the dome, in the player's own hands.
-func ending(realm: world.Realm, at: long, moves: long) -> string:
+func ending(realm: world.Realm, at: i64, moves: i64) -> str:
     if realm.name_at(at) != dome_room or not realm.holding(eyepiece):
         return ""
-    return "You unwrap the lens and press it into the empty socket. It seats\nwith a sound like a latch. The shutter above is still shut, but the\neyepiece holds the whole dark of it now, and thirty years late the\nobservatory is looking again.\n\nYou finished the story in " + string(moves) + " turns."
+    return "You unwrap the lens and press it into the empty socket. It seats\nwith a sound like a latch. The shutter above is still shut, but the\neyepiece holds the whole dark of it now, and thirty years late the\nobservatory is looking again.\n\nYou finished the story in " + str(moves) + " turns."

@@ -34,27 +34,27 @@ keeps both `integer` and `real`. JSON strings are named `text` because
 ```luce run
 import std.json
 
-func describe(doc: json.Json) -> string:
+func describe(doc: json.Json) -> str:
     match doc:
         null:
             return "null"
         boolean(value):
-            return "boolean " + string(value)
+            return "boolean " + str(value)
         integer(value):
-            return "integer " + string(value)
+            return "integer " + str(value)
         real(value):
-            return "real " + string(value)
+            return "real " + str(value)
         text(value):
             return "text " + value
-        array(items):
-            return "array " + string(len(items))
+        array[items]:
+            return "array " + str(len(items))
         object(fields):
-            return "object " + string(len(fields))
+            return "object " + str(len(fields))
 
 func main() -> !:
     let value = try json.parse("[null, true, 7, 7.5, \"s\"]")
     match value:
-        array(items):
+        array[items]:
             for item in items:
                 print(describe(item))
         else:
@@ -100,8 +100,8 @@ func main() -> !:
     match doc:
         object(fields):
             print(fields["name"].as_text() else "?")
-            print(string(fields["port"].as_long() else 0))
-            print(string(fields["debug"].as_bool() else true))
+            print(str(fields["port"].as_long() else 0))
+            print(str(fields["debug"].as_bool() else true))
         else:
             print("not an object")
 ```
@@ -121,10 +121,10 @@ value remains the same shared reference:
 import std.json
 
 func main():
-    var fields = new map(string, json.Json)
+    var fields = new map[str, json.Json]
     fields["name"] = json.Json.text(value = "Luce")
     fields["version"] = json.Json.integer(value = 1)
-    fields["tags"] = json.Json.array(items = [json.Json.text(value = "language")])
+    fields["tags"] = json.Json.array[items = [json.Json.text(value = "language")]]
     let doc = json.Json.object(fields = fields)
     print(doc.write())
     print(doc.pretty(2))
@@ -161,8 +161,8 @@ import std.json
 
 func main() -> !:
     let doc = try json.parse("[42, 42.0, 4.2e1, \"\\u0041\"]")
-    print(string(doc.element(0).as_long() else -1))
-    print(string(doc.element(1).as_long() == none))
+    print(str(doc.element(0).as_long() else -1))
+    print(str(doc.element(1).as_long() == none))
     print(doc.write())
     print(json.quote("say \"hi\""))
 ```

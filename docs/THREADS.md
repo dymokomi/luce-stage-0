@@ -18,8 +18,8 @@ implemented on both execution paths.
 argument graph into a new runtime, starts `f`, and answers a `task`:
 
 ```luce
-func sum_to(limit: long) -> long:
-    var total: long = 0
+func sum_to(limit: i64) -> i64:
+    var total: i64 = 0
     for value in range(1, limit + 1):
         total += value
     return total
@@ -27,7 +27,7 @@ func sum_to(limit: long) -> long:
 func main():
     let first = spawn sum_to(1000000)
     let second = spawn sum_to(2000000)
-    print(string(first.wait() + second.wait()))
+    print(str(first.wait() + second.wait()))
 ```
 
 The target is a declared top-level or static function. An instance method is

@@ -37,8 +37,8 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 4))
-    print(string(math.round(-2.5)))
-    print(string(math.ipow(2, 10)))
+    print(str(math.round(-2.5)))
+    print(str(math.ipow(2, 10)))
     print(strings.format_float(math.sin(math.pi / 2.0), 2))
 ```
 
@@ -77,15 +77,15 @@ with `else`:
 import std.math
 
 func main():
-    var xs = new array(double, 4)
+    var xs = new array[f64](4)
     for i in range(0, 4):
-        xs[i] = double(i + 1)
-    print(string(math.sum(xs)))
-    print(string(math.mean(xs) else 0.0))
-    print(string(math.vmin(xs) else 0.0))
+        xs[i] = f64(i + 1)
+    print(str(math.sum(xs)))
+    print(str(math.mean(xs) else 0.0))
+    print(str(math.vmin(xs) else 0.0))
 
-    var empty = new array(double, 0)
-    print(string(math.mean(empty) else -1.0))
+    var empty = new array[f64](0)
+    print(str(math.mean(empty) else -1.0))
 ```
 
 ```output
@@ -116,9 +116,9 @@ import std.math
 
 func main():
     var rng = math.rng(2026)
-    print(string(rng.in_range(1, 7)))
+    print(str(rng.in_range(1, 7)))
     var same = math.rng(2026)
-    print(string(same.in_range(1, 7)))
+    print(str(same.in_range(1, 7)))
 ```
 
 ```output

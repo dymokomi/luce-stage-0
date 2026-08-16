@@ -1,7 +1,7 @@
 //! The entry: the four shapes a program may declare, and the one the
 //! compiler builds for `luce test`.
 //!
-//! A program is `func main():` or `func main(args: list(string)):`,
+//! A program is `func main():` or `func main(args: list[str]):`,
 //! each with an optional `-> !` — four shapes, checked by `check`
 //! below, and there is no second entry *mode*: whatever the entry is,
 //! it is one row of the function table that the runtime starts through
@@ -11,7 +11,7 @@
 //! the source (docs/TESTING.md D3).  The runner discovers the file's
 //! `func test_*()` declarations, hands their names down as
 //! `CompileOptions.entry`, and `synthesize` writes the fourth shape —
-//! `func main(args: list(string)) -> !` — whose body reads one name
+//! `func main(args: list[str]) -> !` — whose body reads one name
 //! out of `args` and calls exactly that test **by direct call**.  It is
 //! built as ordinary AST and collected as an ordinary signature, so it
 //! is checked by the same walk, lowered by the same pass, verified by
@@ -63,7 +63,7 @@ fn check(self: *Analyzer) Error!void {
     const info = self.functions.items[index];
     const declaration = info.declaration;
     // Four shapes are legal: `func main():` and
-    // `func main(args: list(string)):`, each with or without `-> !`
+    // `func main(args: list[str]):`, each with or without `-> !`
     // — the mark is how a program says the world can stop it, and
     // loom reports what it raised (docs/FAILURE.md).  A program
     // that never reads a command line says nothing about one, which
@@ -87,7 +87,7 @@ fn check(self: *Analyzer) Error!void {
             try self.fail(
                 "luce.sema.main",
                 parameter.type_name.span,
-                "main's parameter is the command line and must be list(string); it is {s} here",
+                "main's parameter is the command line and must be list[str]; it is {s} here",
                 .{try self.typeName(info.parameter_types[0])},
             );
         }
@@ -96,7 +96,7 @@ fn check(self: *Analyzer) Error!void {
         try self.fail(
             "luce.sema.main",
             written,
-            "main returns nothing; use func main():, func main() -> !:, func main(args: list(string)):, or func main(args: list(string)) -> !:",
+            "main returns nothing; use func main():, func main() -> !:, func main(args: list[str]):, or func main(args: list[str]) -> !:",
             .{},
         );
     }
@@ -117,7 +117,7 @@ fn isCommandLine(self: *const Analyzer, of: Type) bool {
 /// shadows nothing, because file-scope names live in another namespace.
 const selector_parameter = "args";
 
-/// Write `func main(args: list(string)) -> !` over `names`, register
+/// Write `func main(args: list[str]) -> !` over `names`, register
 /// it, and make it the entry.
 ///
 /// It is a row of the ordinary function table, so it is registered the
@@ -225,7 +225,7 @@ fn synthesize(self: *Analyzer, names: []const []const u8) Error!void {
     } }), nowhere));
 
     const written = try self.arena.create(ast.FuncDecl);
-    const element = try one(self, ast.TypeName, .{ .name = "string", .span = nowhere });
+    const element = try one(self, ast.TypeName, .{ .name = "str", .span = nowhere });
     written.* = .{
         .name = "main",
         .name_span = nowhere,

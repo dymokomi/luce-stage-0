@@ -24,7 +24,7 @@ element type. An empty literal needs an annotation, or you can use
 ```luce run
 func main():
     var values = [3, 1, 4, 1, 5]
-    var names: list(string) = []
+    var names: list[str] = []
 
     values.append(9)
     values.insert(0, 2)
@@ -55,7 +55,7 @@ func main():
     var values = [3, 1, 4, 1, 5]
     values.sort()
     print(f"first {values[0]}, four at {values.find(4) else -1}")
-    print(string(values.contains(8)))
+    print(str(values.contains(8)))
 ```
 
 ```output
@@ -70,8 +70,8 @@ It is also stable, so elements that compare equally keep their input order.
 import std.lists
 
 struct Player:
-    name: string
-    score: long
+    name: str
+    score: i64
 
 func main():
     var players = [
@@ -114,10 +114,10 @@ be independently resizable.
 
 ```luce run
 func main():
-    var rows = new list(list(long))
+    var rows = new list[list[i64]]
     rows.append([1, 2])
 
-    var loose: list(long) = [3, 4]
+    var loose: list[i64] = [3, 4]
     rows.append(loose)
     let independent = loose[0:len(loose)]
     rows.append(independent)
@@ -167,9 +167,9 @@ Indexing a missing key traps because it asserts that the key exists. Use
 
 ```luce trap
 func main():
-    var ages = new map(string, long)
+    var ages = new map[str, i64]
     ages["ada"] = 36
-    print(string(ages["unknown"]))
+    print(str(ages["unknown"]))
 ```
 
 ```output
@@ -186,7 +186,7 @@ import std.strings
 
 func main():
     let text = "the cat sat on the mat the end"
-    var counts = new map(string, long)
+    var counts = new map[str, i64]
     for word in text.split(" "):
         counts[word] += 1
 
@@ -209,11 +209,11 @@ and resizing would be meaningless or harmful.
 
 ```luce run
 func main():
-    var row = new array(long, 5)
+    var row = new array[i64](5)
     for index in range(0, len(row)):
         row[index] = index * index
 
-    var flags = new array(bool, 3)
+    var flags = new array[bool](3)
     print(f"{len(row)} elements, last {row[4]}")
     print(f"zero value is {flags[0]}")
 ```
@@ -227,15 +227,15 @@ Arrays have one to four dimensions. A type annotation uses `_` for each
 runtime dimension; `dim(axis)` reports its size.
 
 ```luce run
-func sum(grid: array(long, _, _)) -> long:
-    var total: long = 0
+func sum(grid: array[i64, _, _]) -> i64:
+    var total: i64 = 0
     for row in range(0, grid.dim(0)):
         for column in range(0, grid.dim(1)):
             total += grid[row, column]
     return total
 
 func main():
-    var grid = new array(long, 4, 4)
+    var grid = new array[i64](4, 4)
     for row in range(0, 4):
         for column in range(0, 4):
             grid[row, column] = row * column

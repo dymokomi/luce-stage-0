@@ -406,7 +406,7 @@ test "a test is a top-level public zero-parameter test_* answering nothing or !"
     const scratch = arena.allocator();
 
     const decided = try decide(scratch, "tests/geo_test.luc",
-        \\func helper(value: long) -> long:
+        \\func helper(value: i64) -> i64:
         \\    return value
         \\
         \\func test_plain():
@@ -443,15 +443,15 @@ test "a test that cannot run is refused by name, and the sentence names the fix"
             .says = "test_hidden is private and would never run",
         },
         .{
-            .source = "func test_parameterized(value: long):\n    assert(value == 1)\n",
+            .source = "func test_parameterized(value: i64):\n    assert(value == 1)\n",
             .says = "test_parameterized takes 1 parameter; a test takes none",
         },
         .{
-            .source = "func test_answers() -> long:\n    return 1\n",
+            .source = "func test_answers() -> i64:\n    return 1\n",
             .says = "test_answers answers a value",
         },
         .{
-            .source = "struct Box:\n    value: long\n\n    func test_inside():\n        assert(true)\n",
+            .source = "struct Box:\n    value: i64\n\n    func test_inside():\n        assert(true)\n",
             .says = "Box.test_inside is inside a struct",
         },
         .{
@@ -473,7 +473,7 @@ test "silence is a helper module once, and a mistake twice" {
     defer arena.deinit();
     const scratch = arena.allocator();
 
-    const quiet = "func area(side: long) -> long:\n    return side * side\n";
+    const quiet = "func area(side: i64) -> i64:\n    return side * side\n";
     // Swept, unclaimed: a helper module, skipped and counted.
     try testing.expectEqual(What.helper, try decide(scratch, "tests/geo.luc", quiet, .swept));
     // Swept and claiming the name: a file that promised tests.

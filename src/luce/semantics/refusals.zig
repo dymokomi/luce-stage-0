@@ -372,14 +372,13 @@ pub fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Sp
         try self.fail("luce.sema.retired", span, "{s} was retired: {s}", .{ gone.name, gone.instead });
         return;
     }
-    // A conversion named for the type it produces is spelled the
-    // way that type is, and the types are lowercase now
-    // (docs/TYPES.md D8): `Int(x)` is `long(x)`.
+    // A retired conversion spelling receives the same direct migration
+    // answer as that spelling in a type annotation.
     if (types.retiredSpelling(written)) |now| {
         try self.fail(
-            "luce.sema.call",
+            "luce.sema.type.retired",
             span,
-            "the builtin types are lowercase: {s} is written {s}",
+            "{s} is retired; write {s}",
             .{ written, now },
         );
         return;
@@ -596,7 +595,7 @@ pub fn failIncomparable(
                     span,
                     "a function value is the function it names and the receiver it may carry, and its type cannot say which; " ++
                         "two values of one method with different receivers are different workers, so {s} has no honest answer — " ++
-                        "compare string(f) if the name is what you meant",
+                        "compare str(f) if the name is what you meant",
                     .{operator},
                 );
                 return;
@@ -605,7 +604,7 @@ pub fn failIncomparable(
                 "luce.sema.type",
                 span,
                 "{s} is compared field by field and it reaches {s}: a function value has no equality, because its type " ++
-                    "cannot say which receiver it carries, so {s} has no honest answer — compare string(f) of the field " ++
+                    "cannot say which receiver it carries, so {s} has no honest answer — compare str(f) of the field " ++
                     "if the name is what you meant",
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );

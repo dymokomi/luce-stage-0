@@ -36,13 +36,13 @@ const testing = std.testing;
 // Bytes, and text as a reading of them
 // ---------------------------------------------------------------------------
 
-test "a string's bytes round-trip through list(byte)" {
+test "a str's bytes round-trip through list[u8]" {
     try agree.prints(
         \\import std.strings
         \\
         \\func main():
         \\    let xs = strings.to_bytes("héllo")
-        \\    print(string(len(xs)))
+        \\    print(str(len(xs)))
         \\    print(strings.from_bytes(xs) else "(not text)")
         \\
     , "6\nhéllo\n");
@@ -56,32 +56,32 @@ test "bytes that are not UTF-8 answer absent rather than a broken string" {
         \\import std.strings
         \\
         \\func main():
-        \\    var xs = new list(byte)
-        \\    xs.append(byte(0xFF))
-        \\    xs.append(byte(0xFE))
+        \\    var xs = new list[u8]
+        \\    xs.append(u8(0xFF))
+        \\    xs.append(u8(0xFE))
         \\    print(strings.from_bytes(xs) else "(not text)")
-        \\    var truncated = new list(byte)
-        \\    truncated.append(byte(0xE2))
+        \\    var truncated = new list[u8]
+        \\    truncated.append(u8(0xE2))
         \\    print(strings.from_bytes(truncated) else "(not text)")
         \\
     , "(not text)\n(not text)\n");
 }
 
-test "a list(byte) holds every value a byte can, packed" {
+test "a list[u8] holds every value a u8 can, packed" {
     // R1 is storage and nothing else, so the proof is behavioural: 128
     // and 255 are the two that come back negative if anything on the
     // way reads the cell as signed.
     try agree.prints(
         \\func main():
-        \\    var xs = new list(byte)
+        \\    var xs = new list[u8]
         \\    var at = 0
         \\    while at < 256:
-        \\        xs.append(byte(at))
+        \\        xs.append(u8(at))
         \\        at += 1
-        \\    print(string(len(xs)))
-        \\    print(string(int(xs[0])) + " " + string(int(xs[128])) + " " + string(int(xs[255])))
+        \\    print(str(len(xs)))
+        \\    print(str(i32(xs[0])) + " " + str(i32(xs[128])) + " " + str(i32(xs[255])))
         \\    xs.reverse()
-        \\    print(string(int(xs[0])))
+        \\    print(str(i32(xs[0])))
         \\
     , "256\n0 128 255\n255\n");
 }
@@ -92,23 +92,23 @@ test "a packed list still slices, sorts, finds and pops" {
     // can see.
     try agree.prints(
         \\func main():
-        \\    var xs = new list(byte)
-        \\    xs.append(byte(3))
-        \\    xs.append(byte(1))
-        \\    xs.append(byte(2))
-        \\    xs.insert(0, byte(9))
-        \\    print(string(xs.find(byte(2)) else -1))
-        \\    print(string(xs.contains(byte(7))))
+        \\    var xs = new list[u8]
+        \\    xs.append(u8(3))
+        \\    xs.append(u8(1))
+        \\    xs.append(u8(2))
+        \\    xs.insert(0, u8(9))
+        \\    print(str(xs.find(u8(2)) else -1))
+        \\    print(str(xs.contains(u8(7))))
         \\    let part = xs[1:3]
-        \\    print(string(len(part)) + " " + string(int(part[0])))
+        \\    print(str(len(part)) + " " + str(i32(part[0])))
         \\    xs.sort()
         \\    var seen = ""
         \\    for b in xs:
-        \\        seen = seen + string(int(b)) + ","
+        \\        seen = seen + str(i32(b)) + ","
         \\    print(seen)
-        \\    print(string(int(xs.pop())))
+        \\    print(str(i32(xs.pop())))
         \\    xs.remove(0)
-        \\    print(string(len(xs)))
+        \\    print(str(len(xs)))
         \\
     , "3\nfalse\n2 3\n1,2,3,9,\n9\n2\n");
 }
@@ -125,11 +125,11 @@ test "a handle opens, reads a count, and its last reference closes it" {
         \\
         \\func main() -> !:
         \\    var f = try files.open("notes.txt")
-        \\    var buffer = new array(byte, 4)
-        \\    print(string(try f.read(buffer)))
-        \\    print(string(int(buffer[0])))
-        \\    print(string(try f.read(buffer)))
-        \\    print(string(try f.read(buffer)))
+        \\    var buffer = new array[u8](4)
+        \\    print(str(try f.read(buffer)))
+        \\    print(str(i32(buffer[0])))
+        \\    print(str(try f.read(buffer)))
+        \\    print(str(try f.read(buffer)))
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -156,8 +156,8 @@ test "a handle returns out of the function that opened it" {
         \\
         \\func main() -> !:
         \\    var f = try opened()
-        \\    var buffer = new array(byte, 6)
-        \\    print(string(try f.read(buffer)))
+        \\    var buffer = new array[u8](6)
+        \\    print(str(try f.read(buffer)))
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -172,16 +172,16 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\
         \\struct Packet:
         \\    handle: file?
-        \\    callback: (func(long) -> long)?
+        \\    callback: (func(i64) -> i64)?
         \\
-        \\func scale(value: long) -> long:
+        \\func scale(value: i64) -> i64:
         \\    return value * 2
         \\
-        \\func read(packet: Packet) -> long!:
+        \\func read(packet: Packet) -> i64!:
         \\    let handle = packet.handle
         \\    if handle == none:
         \\        return 0
-        \\    var buffer = new array(byte, 8)
+        \\    var buffer = new array[u8](8)
         \\    let count = try handle.read(buffer)
         \\    let chosen = packet.callback else scale
         \\    return chosen(count)
@@ -191,7 +191,7 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\        handle = try files.open("notes.txt"),
         \\        callback = scale,
         \\    )
-        \\    print(string(try read(packet)))
+        \\    print(str(try read(packet)))
         \\
     , .{ .world = .withFile("notes.txt", "abcdef") }, "12\n");
 }
@@ -230,22 +230,22 @@ test "read_bytes and write_bytes carry bytes that are not text" {
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    var bytes = new list(byte)
-        \\    bytes.append(byte(0x89))
-        \\    bytes.append(byte(0x50))
-        \\    bytes.append(byte(0x4E))
-        \\    bytes.append(byte(0x47))
-        \\    bytes.append(byte(0x00))
+        \\    var bytes = new list[u8]
+        \\    bytes.append(u8(0x89))
+        \\    bytes.append(u8(0x50))
+        \\    bytes.append(u8(0x4E))
+        \\    bytes.append(u8(0x47))
+        \\    bytes.append(u8(0x00))
         \\    try files.write_bytes("image.bin", bytes)
         \\    let back = try files.read_bytes("image.bin")
-        \\    print(string(len(back)))
+        \\    print(str(len(back)))
         \\    var same = true
         \\    var at = 0
         \\    while at < len(back):
         \\        if back[at] != bytes[at]:
         \\            same = false
         \\        at += 1
-        \\    print(string(same))
+        \\    print(str(same))
         \\    print(strings.from_bytes(back) else "(not text)")
         \\
     , .{ .world = world });

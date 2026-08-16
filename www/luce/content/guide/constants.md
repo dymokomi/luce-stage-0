@@ -6,22 +6,22 @@ once in the program root and is read-only.
 
 ```luce run
 struct Entry:
-    label: string
-    fallback: long?
+    label: str
+    fallback: i64?
 
 const WIDTH = 80
-const NUMBERS: list(long) = [3, 1, 2]
+const NUMBERS: list[i64] = [3, 1, 2]
 const ALIAS = NUMBERS
-const EQUAL: list(long) = [3, 1, 2]
+const EQUAL: list[i64] = [3, 1, 2]
 const AGES = {"ada": 36, "alan": 41}
 const METHODS = {0: "stored", 8: "deflated"}
-const ORDER: array(long, _) = [16, 17, 18, 0]
+const ORDER: array[i64, _] = [16, 17, 18, 0]
 const ENTRIES = [
     Entry(label = "missing", fallback = none),
     Entry(label = "present", fallback = 9),
 ]
 
-func first(values: list(long) = NUMBERS) -> long:
+func first(values: list[i64] = NUMBERS) -> i64:
     return values[0]
 
 func main():

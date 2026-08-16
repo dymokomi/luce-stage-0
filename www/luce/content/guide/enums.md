@@ -11,7 +11,7 @@ enum Method:
 
 func main():
     let m = Method.deflated
-    print(string(m))
+    print(str(m))
 ```
 
 ```output
@@ -30,8 +30,8 @@ enum Method:
     deflated = 8
 
 func main():
-    print(f"{Method.stored} is {int(Method.stored)}")
-    print(f"{Method.deflated} is {int(Method.deflated)}")
+    print(f"{Method.stored} is {i32(Method.stored)}")
+    print(f"{Method.deflated} is {i32(Method.deflated)}")
 ```
 
 ```output
@@ -49,13 +49,13 @@ The default backing width is `int`. Put a storage type in parentheses when
 the enum must fit a narrow array:
 
 ```luce run
-enum Cell(byte):
+enum Cell(u8):
     empty
     wall
     door
 
 func main():
-    var room = new array(Cell, 3, 3)
+    var room = new array[Cell](3, 3)
     room[1, 1] = Cell.wall
     room[0, 2] = Cell.door
     var walls = 0
@@ -74,7 +74,7 @@ An explicit member value must fit the chosen width, and values must be
 unique:
 
 ```luce fail
-enum Method(byte):
+enum Method(u8):
     stored = 0
     deflated = 300
 
@@ -100,7 +100,7 @@ enum Colour:
     green
     blue
 
-func describe(c: Colour) -> string:
+func describe(c: Colour) -> str:
     match c:
         red:
             return "stop"
@@ -150,7 +150,7 @@ enum Method:
     stored = 0
     deflated = 8
 
-func read(raw: long) -> string:
+func read(raw: i64) -> str:
     let m = Method(raw)
     if m == none:
         return f"method {raw} is one I cannot read"
@@ -190,8 +190,8 @@ func intent(pressed: Key) -> Intent:
     return bindings.get(pressed) else Intent.nothing
 
 func main():
-    print(string(intent(Key.left)))
-    print(string(intent(Key.right)))
+    print(str(intent(Key.left)))
+    print(str(intent(Key.right)))
     for k in bindings:
         print(f"{k} -> {bindings[k]}")
 ```
@@ -224,7 +224,7 @@ enum Light:
 
 func main():
     var light = Light.red
-    print(string(light.go()))
+    print(str(light.go()))
     light.flip()
     print(f"{light}, and go is {light.go()}")
 ```

@@ -12,35 +12,35 @@ operation a particular struct happens to provide:
 
 ```luce run
 interface Drawable:
-    func render(value: long) -> long
-    func label() -> string
+    func render(value: i64) -> i64
+    func label() -> str
 
 struct Button: Drawable:
-    caption: string
-    offset: long
+    caption: str
+    offset: i64
 
-    func render(value: long) -> long:
+    func render(value: i64) -> i64:
         return value + self.offset
 
-    func label() -> string:
+    func label() -> str:
         return self.caption
 
 struct Badge: Drawable:
-    caption: string
+    caption: str
 
-    func render(value: long) -> long:
+    func render(value: i64) -> i64:
         return value + 2
 
-    func label() -> string:
+    func label() -> str:
         return self.caption
 
-func describe(item: Drawable) -> string:
-    return item.label() + ":" + string(item.render(value = 40))
+func describe(item: Drawable) -> str:
+    return item.label() + ":" + str(item.render(value = 40))
 
 func main():
     let button = Button(caption = "button", offset = 1)
     let badge = Badge(caption = "badge")
-    var items = new list(Drawable)
+    var items = new list[Drawable]
     items.append(button)
     items.append(badge)
     print(describe(items[0]))
@@ -86,21 +86,21 @@ assignment:
 
 ```luce run
 interface Bounds:
-    func limits(value: long) -> (long, long)!
+    func limits(value: i64) -> (i64, i64)!
 
 struct Window: Bounds:
-    width: long
+    width: i64
 
-    func limits(value: long) -> (long, long):
+    func limits(value: i64) -> (i64, i64):
         return value, value + self.width
 
-func total(item: Bounds) -> long!:
+func total(item: Bounds) -> i64!:
     let low, high = try item.limits(10)
     return low + high
 
 func main() -> !:
     let window = Window(width = 7)
-    print(string(try total(window)))
+    print(str(try total(window)))
 ```
 
 ```output

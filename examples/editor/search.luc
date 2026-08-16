@@ -1,20 +1,20 @@
 # In-file search — find every match, and step through them.
 #
-# Matches are byte offsets into the content, held in a `list(long)` the
+# Matches are u8 offsets into the content, held in a `list[i64]` the
 # app owns.  `scan` refills it for a query; `step` moves a cursor
 # through the matches, wrapping at each end.  Pure over its arguments,
 # so a test drives it without a terminal.
 
 import std.strings
 
-# Refill `matches` with the byte offset of every occurrence of `query`
+# Refill `matches` with the u8 offset of every occurrence of `query`
 # in `content`.  An empty query matches nothing.  Overlapping matches
-# advance by one byte, so "aa" in "aaa" finds two.
-func scan(matches: list(long), content: string, query: string):
+# advance by one u8, so "aa" in "aaa" finds two.
+func scan(matches: list[i64], content: str, query: str):
     matches.clear()
     if query == "":
         return
-    var at: long = 0
+    var at: i64 = 0
     while at <= len(content):
         let found = strings.find(content, query, at)
         if found == none:
@@ -24,7 +24,7 @@ func scan(matches: list(long), content: string, query: string):
 
 # The match index after moving `direction` (+1 next, -1 previous) from
 # `current`, wrapping at the ends; -1 when there are no matches.
-func step(count: long, current: long, direction: long) -> long:
+func step(count: i64, current: i64, direction: i64) -> i64:
     if count <= 0:
         return -1
     var next = current + direction

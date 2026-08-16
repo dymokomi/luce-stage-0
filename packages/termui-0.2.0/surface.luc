@@ -18,35 +18,35 @@ import std.term
 import termui
 
 struct Cell:
-    text: string = " "
+    text: str = " "
     style: termui.Style = termui.Style()
 
 # What one `present` did.  Returned rather than printed so a test can
 # hold the library to its promise without a terminal in front of it.
 struct Painted:
-    cells: long = 0
-    runs: long = 0
-    moves: long = 0
+    cells: i64 = 0
+    runs: i64 = 0
+    moves: i64 = 0
 
 struct Surface:
-    back: array(Cell, _, _)
-    front: array(Cell, _, _)
+    back: array[Cell, _, _]
+    front: array[Cell, _, _]
     # The terminal's contents after a resize are not knowable, so the
     # first frame after one is written whole.  Stored in a one-element
     # list so presenting a frame mutates the owned front grid without
     # making the whole Surface a writing receiver — the Renderer can own
     # a Surface field and call present directly, while replacing the
     # grids on resize stays a writer.
-    stale: list(bool)
-    rows: long = 0
-    columns: long = 0
+    stale: list[bool]
+    rows: i64 = 0
+    columns: i64 = 0
 
-    static func of(rows: long, columns: long) -> Surface:
+    static func of(rows: i64, columns: i64) -> Surface:
         let high = max(rows, 1)
         let wide = max(columns, 1)
         return Surface(
-            back = new array(Cell, high, wide),
-            front = new array(Cell, high, wide),
+            back = new array[Cell](high, wide),
+            front = new array[Cell](high, wide),
             rows = high,
             columns = wide,
             stale = [true],
@@ -55,13 +55,13 @@ struct Surface:
     func area() -> termui.Rect:
         return termui.Rect(rows = self.rows, columns = self.columns)
 
-    func resize(rows: long, columns: long):
+    func resize(rows: i64, columns: i64):
         let high = max(rows, 1)
         let wide = max(columns, 1)
         if high == self.rows and wide == self.columns:
             return
-        self.back = new array(Cell, high, wide)
-        self.front = new array(Cell, high, wide)
+        self.back = new array[Cell](high, wide)
+        self.front = new array[Cell](high, wide)
         self.rows = high
         self.columns = wide
         self.stale = [true]
@@ -73,7 +73,7 @@ struct Surface:
             for column in range(0, self.columns):
                 self.back[row, column] = Cell()
 
-    func put(row: long, column: long, text: string, style: termui.Style):
+    func put(row: i64, column: i64, text: str, style: termui.Style):
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return
         self.back[row, column] = Cell(text = text, style = style)
@@ -82,7 +82,7 @@ struct Surface:
     # An out-of-range cell reads as a blank one, so a caller that merges
     # onto the surface (a frame joining a neighbour's rule) never has to
     # guard the edges itself.
-    func cell_at(row: long, column: long) -> Cell:
+    func cell_at(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return Cell()
         return self.back[row, column]
@@ -90,7 +90,7 @@ struct Surface:
     # Write `text` inside `area`, clipped to it and to the surface.  The
     # offsets are relative to the area, which is what makes a widget
     # able to draw without knowing where it sits.
-    func write(area: termui.Rect, row: long, column: long, text: string, style: termui.Style):
+    func write(area: termui.Rect, row: i64, column: i64, text: str, style: termui.Style):
         if row < 0 or row >= area.rows:
             return
         var at = column
@@ -101,7 +101,7 @@ struct Surface:
                 self.put(area.row + row, area.column + at, character, style)
             at += 1
 
-    func fill(area: termui.Rect, text: string, style: termui.Style):
+    func fill(area: termui.Rect, text: str, style: termui.Style):
         for row in range(0, area.rows):
             for column in range(0, area.columns):
                 self.put(area.row + row, area.column + column, text, style)
@@ -110,7 +110,7 @@ struct Surface:
     func present() -> Painted:
         var painted = Painted()
         for row in range(0, self.rows):
-            var column: long = 0
+            var column: i64 = 0
             while column < self.columns:
                 if self.back[row, column] == self.front[row, column] and not self.stale[0]:
                     column += 1
@@ -118,7 +118,7 @@ struct Surface:
                 # A run: changed cells, sharing a style, side by side.
                 let style = self.back[row, column].style
                 var stop = column
-                var text = new builder()
+                var text = new builder
                 while stop < self.columns:
                     let cell = self.back[row, stop]
                     if cell.style != style:

@@ -15,18 +15,18 @@ import termui.surface as surface
 # Build an editor over fixed content, with both side panes open, and no
 # file listing (so the frame geometry does not depend on the directory).
 func editor_of() -> state.Editor:
-    var buffers = new list(document.Buffer)
+    var buffers = new list[document.Buffer]
     buffers.append(document.Buffer(path = "sample.luc"))
-    var histories = new list(history.Stacks)
-    histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
-    var names = new list(string)
+    var histories = new list[history.Stacks]
+    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
+    var names = new list[str]
     names.append("a.luc")
     names.append("b.luc")
     return state.Editor(
         buffers = buffers,
         histories = histories,
         names = names,
-        search_matches = new list(long),
+        search_matches = new list[i64],
         path = "sample.luc",
         content = "func main():\n    let x = 42",
         output = "build ok",
@@ -34,8 +34,8 @@ func editor_of() -> state.Editor:
         output_pane = true,
     )
 
-func row_text(view: surface.Surface, row: long) -> string:
-    var line = new builder()
+func row_text(view: surface.Surface, row: i64) -> str:
+    var line = new builder
     for column in range(0, view.columns):
         line.append(view.back[row, column].text)
     return line.build()

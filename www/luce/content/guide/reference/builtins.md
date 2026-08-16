@@ -25,7 +25,7 @@ enabled compilation and may report `host_unavailable` at run time.
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums, unions (answering the member's name, never the payload) and function values, and refuses container objects, resources and structs |
+| `u8(x)`, `i16(x)`, `i32(x)`, `i64(x)`, `f16(x)`, `f32(x)`, `f64(x)`, `str(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `str(x)` accepts numbers, `bool`, strings, enums, unions (answering the member's name, never the payload) and function values, and refuses container objects, resources and structs |
 
 The four numeric builtins that answer their operand's own type land
 their arguments where the whole call lands, so `let x: double =
@@ -35,18 +35,18 @@ what the fourth line below prints.
 
 ```luce run
 func main():
-    print(string(abs(-7)))
-    print(string(min(3, 9)) + " " + string(max(3, 9)))
-    print(string(clamp(42, 0, 10)))
-    print(string(sqrt(2.0)))
-    let two: double = 2.0
-    print(string(sqrt(two)))
-    print(string(floor(-2.5)) + " " + string(ceil(-2.5)) + " " + string(trunc(-2.5)))
-    print(string(long(2.5)) + " " + string(long(-2.5)) + " " + string(long(2.4)))
+    print(str(abs(-7)))
+    print(str(min(3, 9)) + " " + str(max(3, 9)))
+    print(str(clamp(42, 0, 10)))
+    print(str(sqrt(2.0)))
+    let two: f64 = 2.0
+    print(str(sqrt(two)))
+    print(str(floor(-2.5)) + " " + str(ceil(-2.5)) + " " + str(trunc(-2.5)))
+    print(str(i64(2.5)) + " " + str(i64(-2.5)) + " " + str(i64(2.4)))
     print(chr(9731))
-    print(string(ord("A")))
-    print(string(parse_int("17") else -1))
-    print(string(parse_float("nope") else -1.0))
+    print(str(ord("A")))
+    print(str(parse_int("17") else -1))
+    print(str(parse_float("nope") else -1.0))
 ```
 
 ```output
@@ -143,11 +143,11 @@ func main():
     # `epoch_ms` names a moment: this is the number a timestamp is
     # made of, and it means the same thing on every machine.
     let stamped = epoch_ms()
-    print("after 2020: " + string(stamped > 1577836800000))
+    print("after 2020: " + str(stamped > 1577836800000))
     # `clock_ms` measures a span, and only differences mean anything.
     let started = clock_ms()
     sleep_ms(0)
-    print("elapsed is never negative: " + string(clock_ms() >= started))
+    print("elapsed is never negative: " + str(clock_ms() >= started))
 ```
 
 ```output
@@ -219,7 +219,7 @@ func main() -> !:
     # And saying it again is success, not an error.
     try files.make_directory("store/packages")
     try files.write("store/packages/geo-1.2.0/luce.json", "{}\n")
-    let names = try files.list("store/packages")
+    let names = try files.list["store/packages"]
     for name in names:
         print(name)
 ```
@@ -322,7 +322,7 @@ single axis to mean anything.
 
 ```luce run
 func main():
-    var grid = new array(long, 2, 3)
+    var grid = new array[i64](2, 3)
     grid.fill(7)
     print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[1, 2]}")
 ```
@@ -396,9 +396,9 @@ func main():
     let s = "hello, Luce"
     print(f"{len(s)} bytes")
     print(s[7:11])
-    print(string(s.byte_at(0)))
-    print(string(s.find_byte(44, 0)))
-    print(string(s.find_byte(122, 0)))
+    print(str(s.byte_at(0)))
+    print(str(s.find_byte(44, 0)))
+    print(str(s.find_byte(122, 0)))
 ```
 
 ```output

@@ -30,7 +30,7 @@ Declare a `list(string)` parameter on `main` when a program needs its
 arguments. Leave the parameter out when it does not.
 
 ```luce run args=fig pear plum
-func main(args: list(string)):
+func main(args: list[str]):
     if len(args) == 0:
         print("usage: greet NAME [NAME ...]")
         return
@@ -50,7 +50,7 @@ Arguments are strings. `parse_int` returns a `long?` because some text
 is not an integer; `else` supplies a value when it is absent:
 
 ```luce run args=4
-func main(args: list(string)):
+func main(args: list[str]):
     let times = parse_int(args[0]) else 1
     for i in range(0, times):
         print(f"line {i}")
@@ -71,10 +71,10 @@ to `int`; an unannotated fractional literal defaults to `float`.
 
 ```luce run
 func main():
-    let count = 7                 # int
-    let ratio: double = 0.5
+    let count = 7                 # i32
+    let ratio: f64 = 0.5
     let ready = true              # bool
-    let name = "Luce"             # string
+    let name = "Luce"             # str
     print(f"{count} {ratio} {ready} {name}")
 ```
 
@@ -87,10 +87,10 @@ func main():
 Use `alias` when a domain name makes an existing type easier to understand:
 
 ```luce run
-alias UserId = long
-alias UserNames = map(UserId, string)
+alias UserId = i64
+alias UserNames = map[UserId, str]
 
-func display_name(names: UserNames, id: UserId) -> string:
+func display_name(names: UserNames, id: UserId) -> str:
     return names.get(id) else "unknown"
 
 func main():
@@ -143,9 +143,9 @@ value does not wrap merely because it was stored in a narrow type.
 
 ```luce run
 func main():
-    var full: byte = 255
-    print(string(full + 1))
-    print(string(full * full))
+    var full: u8 = 255
+    print(str(full + 1))
+    print(str(full * full))
 ```
 
 ```output
@@ -157,10 +157,10 @@ Narrow arrays are useful when storage size matters:
 
 ```luce run
 func main():
-    var pixels = new array(byte, 4)
+    var pixels = new array[u8](4)
     pixels[0] = 255
     pixels[1] = 128
-    print(string(pixels[0] + pixels[1]))
+    print(str(pixels[0] + pixels[1]))
 ```
 
 ```output
@@ -181,10 +181,10 @@ floating value meet, the common type is `double`.
 func main():
     let steps = 7
     let seconds = 2.5
-    print(string(steps * seconds))
-    let elapsed: double = steps
-    print(string(elapsed))
-    print(string(long(seconds)))
+    print(str(steps * seconds))
+    let elapsed: f64 = steps
+    print(str(elapsed))
+    print(str(i64(seconds)))
 ```
 
 ```output
@@ -197,10 +197,10 @@ Comparisons across numeric types preserve the exact values being compared:
 
 ```luce run
 func main():
-    let after: long = 9007199254740993
-    let rounded: double = 9007199254740992.0
-    print(string(1 < 1.5))
-    print(string(after == rounded))
+    let after: i64 = 9007199254740993
+    let rounded: f64 = 9007199254740992.0
+    print(str(1 < 1.5))
+    print(str(after == rounded))
 ```
 
 ```output
@@ -217,7 +217,7 @@ changes whether a referenced object is mutable.
 func main():
     let limit = 10
     limit = 11
-    print(string(limit))
+    print(str(limit))
 ```
 
 ```output
@@ -230,12 +230,12 @@ main.luc:3:5: limit is let-bound; use var for reassignment [luce.sema.let]
 Multiple mutable names can receive a function's multiple return values:
 
 ```luce run
-func step(value: long, at: long) -> (long, long):
+func step(value: i64, at: i64) -> (i64, i64):
     return value + at, at + 1
 
 func main():
-    var value: long = 0
-    var at: long = 0
+    var value: i64 = 0
+    var at: i64 = 0
     while at < 5:
         value, at = step(value, at)
     print(f"{value} {at}")

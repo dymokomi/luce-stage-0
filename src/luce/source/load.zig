@@ -778,8 +778,8 @@ test "a byte-order mark counts toward the offsets a message reports" {
 
 test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "math", .text = "func local() -> long:\n    return 0\n" },
-        .{ .name = "geo", .text = "func area() -> long:\n    return 4\n" },
+        .{ .name = "math", .text = "func local() -> i64:\n    return 0\n" },
+        .{ .name = "geo", .text = "func area() -> i64:\n    return 4\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -808,7 +808,7 @@ test "a sibling module is reached by its own name, whatever the library is calle
     // shadowed, not warned about, and not reserved — it is simply what
     // `import math` means.
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "math", .text = "func local() -> long:\n    return 7\n" },
+        .{ .name = "math", .text = "func local() -> i64:\n    return 7\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -828,7 +828,7 @@ test "one name cannot mean two modules, and the remedy is the alias" {
     const orders = [_][2]Origin{ .{ .standard, .sibling }, .{ .sibling, .standard } };
     for (orders) |order| {
         var table: TableLoader = .{ .entries = &.{
-            .{ .name = "math", .text = "func local() -> long:\n    return 7\n", .path = "lib/math.luc" },
+            .{ .name = "math", .text = "func local() -> i64:\n    return 7\n", .path = "lib/math.luc" },
         } };
         var diagnostics = Diagnostics.init(testing.allocator);
         defer diagnostics.deinit();
@@ -850,7 +850,7 @@ test "an alias frees the binding: std.math and math coexist as sm and math" {
     // sibling keeps `math` and the library answers under `sm` — or the
     // other way around, since only the binding moves, never the name.
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "math", .text = "func local() -> long:\n    return 7\n" },
+        .{ .name = "math", .text = "func local() -> i64:\n    return 7\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -871,7 +871,7 @@ test "a module has one binding: a second spelling is refused, naming the first" 
     // another want two prefixes for one module, and qualified names
     // can carry only one.  The refusal names the binding that holds.
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "geo.shapes", .text = "func area() -> long:\n    return 4\n" },
+        .{ .name = "geo.shapes", .text = "func area() -> i64:\n    return 4\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -907,8 +907,8 @@ test "the registry keys modules by (root, name): one name, two roots, two module
     // `helper` modules load separately and neither dedups to the other.
     var table: TableLoader = .{ .entries = &.{
         .{ .name = "geo", .text = "import helper\n", .root = "pkg" },
-        .{ .name = "helper", .text = "func ours() -> long:\n    return 1\n", .from = "" },
-        .{ .name = "helper", .text = "func theirs() -> long:\n    return 2\n", .root = "pkg", .from = "pkg" },
+        .{ .name = "helper", .text = "func ours() -> i64:\n    return 1\n", .from = "" },
+        .{ .name = "helper", .text = "func theirs() -> i64:\n    return 2\n", .root = "pkg", .from = "pkg" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -939,8 +939,8 @@ test "collision is per importing namespace, not program-global" {
     // and is no collision at all.
     var table: TableLoader = .{ .entries = &.{
         .{ .name = "geo", .text = "import math\n", .root = "pkg" },
-        .{ .name = "math", .text = "func local() -> long:\n    return 7\n", .path = "pkg/math.luc", .root = "pkg", .from = "pkg" },
-        .{ .name = "math", .text = "func local() -> long:\n    return 8\n", .from = "" },
+        .{ .name = "math", .text = "func local() -> i64:\n    return 7\n", .path = "pkg/math.luc", .root = "pkg", .from = "pkg" },
+        .{ .name = "math", .text = "func local() -> i64:\n    return 8\n", .from = "" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -1008,14 +1008,14 @@ test "one file reached under two spellings is one module, and the binding still 
     var table: TableLoader = .{ .entries = &.{
         .{
             .name = "geo.shapes",
-            .text = "func area() -> long:\n    return 4\n",
+            .text = "func area() -> i64:\n    return 4\n",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
             .root = "geo-1.2.0",
             .from = "",
         },
         .{
             .name = "shapes",
-            .text = "func area() -> long:\n    return 4\n",
+            .text = "func area() -> i64:\n    return 4\n",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
             .root = "geo-1.2.0",
             .from = "geo-1.2.0",
@@ -1061,8 +1061,8 @@ test "the std namespace holds exactly the library, and nothing else" {
 
 test "an imported module is named by the path the host really opened" {
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "geo", .text = "func area() -> long:\n    return \"no\"\n", .path = "lib/geo.luc" },
-        .{ .name = "util", .text = "func twice(v: long) -> long:\n    return v * 2\n" },
+        .{ .name = "geo", .text = "func area() -> i64:\n    return \"no\"\n", .path = "lib/geo.luc" },
+        .{ .name = "util", .text = "func twice(v: i64) -> i64:\n    return v * 2\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();

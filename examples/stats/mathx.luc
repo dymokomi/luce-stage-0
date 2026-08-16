@@ -1,15 +1,15 @@
 # A tiny math module: imported by stats.luc (`import mathx`).
 
-func mean(values: list(double)) -> double:
-    var total: double = 0.0
+func mean(values: list[f64]) -> f64:
+    var total: f64 = 0.0
     for value in values:
         total = total + value
-    return total / double(len(values))
+    return total / f64(len(values))
 
 # A sorted copy; whoever calls owns it.
 # The smallest and the largest, in one pass — where `sorted` was
 # called only to read its two ends (docs/RETURNS.md).
-func extremes(values: list(double)) -> (double, double):
+func extremes(values: list[f64]) -> (f64, f64):
     if len(values) == 0:
         trap("extremes needs at least one value")
     var smallest = values[0]
@@ -19,12 +19,12 @@ func extremes(values: list(double)) -> (double, double):
         largest = max(largest, value)
     return smallest, largest
 
-private func sorted(values: list(double)) -> list(double):
+private func sorted(values: list[f64]) -> list[f64]:
     var copied = values[0:]
     copied.sort()
     return copied
 
-func median(values: list(double)) -> double:
+func median(values: list[f64]) -> f64:
     var ordered = sorted(values)
     let count = len(ordered)
     var middle = ordered[count // 2]
@@ -32,9 +32,9 @@ func median(values: list(double)) -> double:
         middle = (ordered[count // 2 - 1] + ordered[count // 2]) / 2.0
     return middle
 
-func deviation(values: list(double)) -> double:
+func deviation(values: list[f64]) -> f64:
     let center = mean(values)
-    var spread: double = 0.0
+    var spread: f64 = 0.0
     for value in values:
         spread = spread + (value - center) * (value - center)
-    return sqrt(spread / double(len(values)))
+    return sqrt(spread / f64(len(values)))

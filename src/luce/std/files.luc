@@ -65,7 +65,7 @@ enum Kind:
 #         directory: walk(p)
 #         file: visit(p)
 #         other: continue
-func kind(path: string) -> Kind?!:
+func kind(path: str) -> Kind?!:
     let code = try path_kind(path)
     if code == 1:
         return Kind.file
@@ -88,12 +88,12 @@ func kind(path: string) -> Kind?!:
 #
 # It is still a question about the past, so it is still never a guard
 # for the call after it: read the file, and handle what the read says.
-func exists(path: string) -> bool!:
+func exists(path: str) -> bool!:
     let what = try kind(path)
     return what != none
 
 # Whether an ordinary file is there — `os.path.isfile`.
-func is_file(path: string) -> bool!:
+func is_file(path: str) -> bool!:
     let what = try kind(path)
     if what == none:
         return false
@@ -102,21 +102,21 @@ func is_file(path: string) -> bool!:
 # Whether a directory is there — `os.path.isdir`.  This is the
 # question `exists` is usually asked by mistake: a file holding the
 # name answers false here and true there.
-func is_dir(path: string) -> bool!:
+func is_dir(path: str) -> bool!:
     let what = try kind(path)
     if what == none:
         return false
     return what == Kind.directory
 
-func read(path: string) -> string!:
+func read(path: str) -> str!:
     return try file_read(path)
 
-func write(path: string, text: string) -> !:
+func write(path: str, text: str) -> !:
     try file_write(path, text)
 
 # The file's lines, without their newlines.  A trailing final newline
 # (the usual text-file ending) does not produce a phantom empty line.
-func read_lines(path: string) -> list(string)!:
+func read_lines(path: str) -> list[str]!:
     let text = try file_read(path)
     var lines = text.split("\n")
     if len(lines) > 0 and lines[len(lines) - 1] == "":
@@ -125,7 +125,7 @@ func read_lines(path: string) -> list(string)!:
 
 # Write lines joined with newlines, ending with one (the text-file
 # convention); an empty list writes an empty file.
-func write_lines(path: string, lines: list(string)) -> !:
+func write_lines(path: str, lines: list[str]) -> !:
     if len(lines) == 0:
         try file_write(path, "")
         return
@@ -139,23 +139,23 @@ func write_lines(path: string, lines: list(string)) -> !:
 # Spelled `append_text` and not `append` because `append` is a
 # reserved name — it is `xs.append(v)`, the list method — and nothing
 # user-declared may take one, module-qualified or not.
-func append_text(path: string, text: string) -> !:
+func append_text(path: str, text: str) -> !:
     try file_append(path, text)
 
 # The same, one line at a time, each ending in a newline.  An empty
 # list adds nothing at all rather than an empty line.
-func append_lines(path: string, lines: list(string)) -> !:
+func append_lines(path: str, lines: list[str]) -> !:
     if len(lines) == 0:
         return
     try file_append(path, lines.join("\n") + "\n")
 
-func delete(path: string) -> !:
+func delete(path: str) -> !:
     try file_delete(path)
 
 # Move a file.  Renaming onto an existing name replaces it, which is
 # what makes write-then-rename the way to replace a file without ever
-# leaving half of one on disk.
-func rename(from: string, to: string) -> !:
+# leaving f16 of one on disk.
+func rename(from: str, to: str) -> !:
     try file_rename(from, to)
 
 # Make a directory, and every directory leading to it.
@@ -169,10 +169,10 @@ func rename(from: string, to: string) -> !:
 #
 # A *file* holding the name is an error: you asked for a directory and
 # there is not one.
-func make_directory(path: string) -> !:
+func make_directory(path: str) -> !:
     try dir_create(path)
 
-# -- the byte channel (docs/BYTES.md) ---------------------------------
+# -- the u8 channel (docs/BYTES.md) ---------------------------------
 #
 # A file is bytes reached through an open handle, and text is a
 # validation the language performs on the bytes.  `open`, `create` and
@@ -199,27 +199,27 @@ private const mode_append = 2
 private const chunk = 65536
 
 # Open a file to read from the start.  The file must be there.
-func open(path: string) -> file!:
+func open(path: str) -> file!:
     return try file_open(path, mode_read)
 
 # Open a file to write from the start, creating it and emptying it.
-func create(path: string) -> file!:
+func create(path: str) -> file!:
     return try file_open(path, mode_write)
 
 # Open a file to write at its end, creating it if it is not there.
-func append_to(path: string) -> file!:
+func append_to(path: str) -> file!:
     return try file_open(path, mode_append)
 
 # The whole file, as bytes.  Nothing here asks whether the bytes are
 # text — that is what `strings.from_bytes` is for — so this reads a
 # JPEG as happily as a note.
-func read_bytes(path: string) -> list(byte)!:
+func read_bytes(path: str) -> list[u8]!:
     var f = try open(path)
-    var buffer = new array(byte, chunk)
-    var all = new list(byte)
+    var buffer = new array[u8](chunk)
+    var all = new list[u8]
     var filled = try f.read(buffer)
     while filled > 0:
-        var at: long = 0
+        var at: i64 = 0
         while at < filled:
             all.append(buffer[at])
             at += 1
@@ -227,27 +227,27 @@ func read_bytes(path: string) -> list(byte)!:
     return all
 
 # Write bytes, replacing whatever was there.
-func write_bytes(path: string, bytes: list(byte)) -> !:
+func write_bytes(path: str, bytes: list[u8]) -> !:
     var f = try create(path)
     try send(f, bytes)
 
 # Add bytes to the end of a file, creating it if it is not there.
-func append_bytes(path: string, bytes: list(byte)) -> !:
+func append_bytes(path: str, bytes: list[u8]) -> !:
     var f = try append_to(path)
     try send(f, bytes)
 
 # The loop both writers share: fill a buffer from where the last write
-# stopped, hand it over, and go round again.  A short write is
+# stopped, hand it over, and go round again.  A i16 write is
 # ordinary and not a failure — which is the whole reason `write`
 # answers a count — so the next round refills from `at + sent` rather
 # than re-sending bytes that already landed.  A host that accepts
 # nothing at all has stopped writing, and says so as an error instead
 # of spinning.
-private func send(f: file, bytes: list(byte)) -> !:
-    var buffer = new array(byte, chunk)
-    var at: long = 0
+private func send(f: file, bytes: list[u8]) -> !:
+    var buffer = new array[u8](chunk)
+    var at: i64 = 0
     while at < len(bytes):
-        var held: long = 0
+        var held: i64 = 0
         while held < chunk and at + held < len(bytes):
             buffer[held] = bytes[at + held]
             held += 1
@@ -266,8 +266,8 @@ private func send(f: file, bytes: list(byte)) -> !:
 # join, and the join deleted from the top of every walk loop is the
 # one that was getting written wrong.
 struct Entry:
-    name: string
-    path: string
+    name: str
+    path: str
     kind: Kind
 
 # What is in a directory, sorted by name, each entry carrying its kind
@@ -292,10 +292,10 @@ struct Entry:
 # on top of the listing.  That is an implementation detail behind this
 # signature: a host that could answer the whole listing at once would
 # change this function and not one program that calls it.
-func entries(path: string) -> list(Entry)!:
+func entries(path: str) -> list[Entry]!:
     var names = try dir_list(path)
     names.sort()
-    var found = new list(Entry)
+    var found = new list[Entry]
     for name in names:
         let whole = paths.join(path, name)
         let what = try kind(whole)
@@ -309,7 +309,7 @@ func entries(path: string) -> list(Entry)!:
 # and read `path`.  It survives beside `entries` for the reason Python
 # keeps both and PEP 471 says so — most callers only want the names —
 # and it asks the host for exactly that: the listing, and no kinds.
-func list(path: string) -> list(string)!:
+func list(path: str) -> list[str]!:
     var names = try dir_list(path)
     names.sort()
     return names

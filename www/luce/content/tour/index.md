@@ -33,8 +33,8 @@ annotation makes an important boundary visible.
 
 ```luce run
 func main():
-    let name: string = "Luce"
-    var visits: long = 0
+    let name: str = "Luce"
+    var visits: i64 = 0
     for step in range(0, 3):
         visits = visits + 1
     if visits == 3:
@@ -59,14 +59,14 @@ it behind an untyped value.
 
 ```luce run
 struct Point:
-    x: long
-    y: long
+    x: i64
+    y: i64
 
-    func moved(dx: long, dy: long) -> Point:
+    func moved(dx: i64, dy: i64) -> Point:
         return Point(x = self.x + dx, y = self.y + dy)
 
-func total(values: list(long)) -> long:
-    var sum: long = 0
+func total(values: list[i64]) -> i64:
+    var sum: i64 = 0
     for value in values:
         sum = sum + value
     return sum
@@ -105,15 +105,15 @@ parsed. Use `T!` when the outside world may refuse a valid request. A trap is
 for a violated program precondition, such as an out-of-bounds index.
 
 ```luce run
-func parse_port(text: string) -> long!:
+func parse_port(text: str) -> i64!:
     let port = parse_int(text) else error("not a number")
     if port < 1 or port > 65535:
         error("port out of range")
     return port
 
 func main() -> !:
-    print(string(try parse_port("8080")))
-    print(string(parse_port("nope") catch -1))
+    print(str(try parse_port("8080")))
+    print(str(parse_port("nope") catch -1))
 ```
 
 ```output
@@ -148,12 +148,12 @@ reference graphs are copied between runtimes; aliases remain aliases inside
 the independent snapshot. Live resources and function values do not cross.
 
 ```luce run
-func square(n: long) -> long:
+func square(n: i64) -> i64:
     return n * n
 
 func main():
     let task = spawn square(12)
-    print(string(task.wait()))
+    print(str(task.wait()))
 ```
 
 ```output

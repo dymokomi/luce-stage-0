@@ -130,7 +130,7 @@ The file named after the package is its entry module. `import greet` loads
 ```luce module file=greet/greet.luc
 import format
 
-func hello(name: string) -> string:
+func hello(name: str) -> str:
     return format.greeting(name)
 ```
 
@@ -139,7 +139,7 @@ inside the package, so it loads the package's `format.luc`, never a
 same-named file in the consuming project:
 
 ```luce module file=greet/format.luc
-func greeting(name: string) -> string:
+func greeting(name: str) -> str:
     return "Hello, " + name + "!"
 ```
 
@@ -175,7 +175,7 @@ the package's front door: keep `greet.hello` small, and keep representation
 helpers private or in separate modules.
 
 ```luce module file=private.luc
-private func normalize(name: string) -> string:
+private func normalize(name: str) -> str:
     return name
 ```
 

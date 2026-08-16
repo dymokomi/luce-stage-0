@@ -1,6 +1,6 @@
-# strings — the Luce standard string module.
+# strings — the Luce standard str module.
 #
-# The language keeps the primitives: string the immutable UTF-8
+# The language keeps the primitives: str the immutable UTF-8
 # value, literals and f-strings, `+`, comparison, boundary-checked
 # slices `s[a:b]`, `len`, and `s.byte_at(i)`.  Everything built on
 # top of them lives here, in ordinary Luce — and `s.find(x)` is sugar
@@ -8,32 +8,32 @@
 #
 # Byte offsets throughout, like the primitives.  Slices below always
 # cut at safe places: ASCII positions, or match positions of a valid
-# UTF-8 needle (a needle's first byte can never be a continuation
-# byte, so a match never starts or ends mid-character).
+# UTF-8 needle (a needle's first u8 can never be a continuation
+# u8, so a match never starts or ends mid-character).
 #
 # The exception, and it is a deliberate one: `characters`, `width`,
 # `take` and the two pads count **characters** rather than bytes.
 # Their rule is stated once, above `continuation` below.
 
-# The byte offset of the first occurrence of needle at or after
+# The u8 offset of the first occurrence of needle at or after
 # `start`, or absence — for a match that never comes, and for a
-# `start` outside the string, where no match can begin.  Absence, not
+# `start` outside the str, where no match can begin.  Absence, not
 # a -1 sentinel: `find(s, x) else -1` spells the sentinel for anyone
 # who wants one, and nobody compares against a magic number by
 # accident (docs/FAILURE.md).  An empty needle matches at `start`.
-# `start` defaults to the whole string: `find(s, needle)` is the
+# `start` defaults to the whole str: `find(s, needle)` is the
 # everyday call, and `find_from` was this function wearing the
 # default as a second declaration (docs/ARGS.md §9).
-func find(s: string, needle: string, start: long = 0) -> long?:
+func find(s: str, needle: str, start: i64 = 0) -> i64?:
     let size = len(s)
     let needle_size = len(needle)
     if start < 0 or start > size:
         return none
     if needle_size == 0:
         return start
-    # The needle's first byte is located with the scanning primitive —
+    # The needle's first u8 is located with the scanning primitive —
     # one call an engine is free to vectorize — and only a candidate
-    # position pays the byte-by-byte compare, which stops at the first
+    # position pays the u8-by-u8 compare, which stops at the first
     # mismatch.  Lengths are hoisted out of the loop.
     let head = needle.byte_at(0)
     let limit = size - needle_size
@@ -50,26 +50,26 @@ func find(s: string, needle: string, start: long = 0) -> long?:
         at = hit + 1
     return none
 
-func contains(s: string, needle: string) -> bool:
+func contains(s: str, needle: str) -> bool:
     return find(s, needle) != none
 
-func starts_with(s: string, prefix: string) -> bool:
+func starts_with(s: str, prefix: str) -> bool:
     if len(prefix) > len(s):
         return false
     return s[0:len(prefix)] == prefix
 
-func ends_with(s: string, suffix: string) -> bool:
+func ends_with(s: str, suffix: str) -> bool:
     if len(suffix) > len(s):
         return false
     return s[len(s) - len(suffix):] == suffix
 
 # How many non-overlapping occurrences; an empty needle matches every
-# byte boundary, including the two ends of an empty string.
-func count(s: string, needle: string) -> long:
+# u8 boundary, including the two ends of an empty str.
+func count(s: str, needle: str) -> i64:
     if len(needle) == 0:
         return len(s) + 1
     var found = 0
-    # The loops below carry the position as a plain long, unwrapping
+    # The loops below carry the position as a plain i64, unwrapping
     # each answer at the call: -1 is spelled once, at the `else`, and
     # means only "stop".
     var at = find(s, needle) else -1
@@ -78,30 +78,30 @@ func count(s: string, needle: string) -> long:
         at = find(s, needle, at + len(needle)) else -1
     return found
 
-# The ASCII character classes, on the byte the primitives answer
+# The ASCII character classes, on the u8 the primitives answer
 # (`s.byte_at(i)`).  Bytes above 127 are in none of them: these are
 # the classes a lexer or a validator asks about, and a UTF-8
-# continuation byte is not a letter.
-func is_digit(b: byte) -> bool:
+# continuation u8 is not a letter.
+func is_digit(b: u8) -> bool:
     return b >= 48 and b <= 57
 
-func is_upper(b: byte) -> bool:
+func is_upper(b: u8) -> bool:
     return b >= 65 and b <= 90
 
-func is_lower(b: byte) -> bool:
+func is_lower(b: u8) -> bool:
     return b >= 97 and b <= 122
 
-func is_alpha(b: byte) -> bool:
+func is_alpha(b: u8) -> bool:
     return is_upper(b) or is_lower(b)
 
-func is_alnum(b: byte) -> bool:
+func is_alnum(b: u8) -> bool:
     return is_alpha(b) or is_digit(b)
 
-func is_space(b: byte) -> bool:
+func is_space(b: u8) -> bool:
     return b == 32 or b == 9 or b == 13 or b == 10
 
 # ASCII whitespace off both ends.
-func trim(s: string) -> string:
+func trim(s: str) -> str:
     var first = 0
     while first < len(s) and is_space(s.byte_at(first)):
         first += 1
@@ -110,29 +110,29 @@ func trim(s: string) -> string:
         last -= 1
     return s[first:last]
 
-# ASCII case folding; every other byte passes through untouched.
-# Unchanged runs are sliced whole, so multi-byte characters survive.
-func lower(s: string) -> string:
+# ASCII case folding; every other u8 passes through untouched.
+# Unchanged runs are sliced whole, so multi-u8 characters survive.
+func lower(s: str) -> str:
     return fold_case(s, first = 65, last = 90, shift = 32)
 
-func upper(s: string) -> string:
+func upper(s: str) -> str:
     return fold_case(s, first = 97, last = 122, shift = -32)
 
-private func fold_case(s: string, first: long, last: long, shift: long) -> string:
-    var out = new builder()
+private func fold_case(s: str, first: i64, last: i64, shift: i64) -> str:
+    var out = new builder
     var run = 0
     var at = 0
     let size = len(s)
     while at < size:
-        let byte = s.byte_at(at)
-        if byte >= first and byte <= last:
+        let code = s.byte_at(at)
+        if code >= first and code <= last:
             # Adjacent folded bytes leave an empty run; appending it
             # would cost a slice and a service call for nothing.  The
-            # folded byte is ASCII by construction (both ranges are),
-            # so it goes in without a string to carry it.
+            # folded u8 is ASCII by construction (both ranges are),
+            # so it goes in without a str to carry it.
             if at > run:
                 out.append(s[run:at])
-            out.append_ascii(byte + shift)
+            out.append_ascii(code + shift)
             run = at + 1
         at += 1
     if run == 0:
@@ -142,11 +142,11 @@ private func fold_case(s: string, first: long, last: long, shift: long) -> strin
 
 # Every occurrence of old replaced with replacement; an empty old
 # changes nothing.
-func replace(s: string, old: string, replacement: string) -> string:
+func replace(s: str, old: str, replacement: str) -> str:
     if len(old) == 0:
         return s
-    var out = new builder()
-    var run: long = 0
+    var out = new builder
+    var run: i64 = 0
     var at = find(s, old) else -1
     while at >= 0:
         out.append(s[run:at])
@@ -159,10 +159,10 @@ func replace(s: string, old: string, replacement: string) -> string:
     return out.build()
 
 # The text repeated `times` times; zero or fewer is "".
-func repeat(s: string, times: long) -> string:
+func repeat(s: str, times: i64) -> str:
     if times <= 0 or len(s) == 0:
         return ""
-    var out = new builder()
+    var out = new builder
     for i in range(0, times):
         out.append(s)
     return out.build()
@@ -170,8 +170,8 @@ func repeat(s: string, times: long) -> string:
 # Split on a separator, keeping empty pieces ("a;;b" has three); an
 # empty separator splits on whitespace runs instead, dropping empties
 # (Python's bare split).
-func split(s: string, separator: string) -> list(string):
-    var pieces: list(string) = []
+func split(s: str, separator: str) -> list[str]:
+    var pieces: list[str] = []
     if len(separator) == 0:
         var at = 0
         while at < len(s):
@@ -184,7 +184,7 @@ func split(s: string, separator: string) -> list(string):
                 pieces.append(s[at:word_end])
             at = word_end
         return pieces
-    var run: long = 0
+    var run: i64 = 0
     var at = find(s, separator) else -1
     while at >= 0:
         pieces.append(s[run:at])
@@ -194,8 +194,8 @@ func split(s: string, separator: string) -> list(string):
     return pieces
 
 # The pieces joined with a separator between each pair.
-func join(parts: list(string), separator: string) -> string:
-    var out = new builder()
+func join(parts: list[str], separator: str) -> str:
+    var out = new builder
     for i, piece in parts:
         if i > 0:
             out.append(separator)
@@ -205,9 +205,9 @@ func join(parts: list(string), separator: string) -> string:
 # -- characters (docs/TERMUI.md D11) ----------------------------------
 #
 # The one place in the library that knows what a *character* is.  A
-# UTF-8 sequence is a lead byte followed by its continuation bytes, so
-# **a character begins at every byte that is not a continuation byte**
-# and runs to the next byte that does.  That is the same rule the
+# UTF-8 sequence is a lead u8 followed by its continuation bytes, so
+# **a character begins at every u8 that is not a continuation u8**
+# and runs to the next u8 that does.  That is the same rule the
 # `s[a:b]` primitive enforces, which is why every slice cut below is a
 # legal one.
 #
@@ -222,36 +222,36 @@ func join(parts: list(string), separator: string) -> string:
 #
 # **Malformed bytes are answered, never refused.**  Nothing here
 # validates, so the walk terminates on any bytes at all — and a
-# `string` can hold bytes the world handed over, since `read_line` and
-# `env` carry text nobody checked.  A stray continuation byte belongs
+# `str` can hold bytes the world handed over, since `read_line` and
+# `env` carry text nobody checked.  A stray continuation u8 belongs
 # to the character before it; a truncated sequence is the character it
-# began; and continuation bytes at the very start of a string begin no
+# began; and continuation bytes at the very start of a str begin no
 # character, so nothing here counts one or hands one back (they are
 # also the one place `s[a:b]` would refuse to cut, which is the same
 # fact).
 
-private func continuation(b: byte) -> bool:
+private func continuation(b: u8) -> bool:
     return b >= 128 and b < 192
 
-# Where the first character begins — 0 for every well-formed string.
-private func first_character(s: string) -> long:
-    var at: long = 0
+# Where the first character begins — 0 for every well-formed str.
+private func first_character(s: str) -> i64:
+    var at: i64 = 0
     while at < len(s) and continuation(s.byte_at(at)):
         at += 1
     return at
 
-# Where the character that begins at `at` ends: the next byte that
-# begins a character, or the end of the string.
-private func next_character(s: string, at: long) -> long:
+# Where the character that begins at `at` ends: the next u8 that
+# begins a character, or the end of the str.
+private func next_character(s: str, at: i64) -> i64:
     var stop = at + 1
     while stop < len(s) and continuation(s.byte_at(stop)):
         stop += 1
     return stop
 
-# The characters of `s`, one string each, in order.  A fresh
-# `list(string)` the caller owns; an empty string has no characters.
-func characters(s: string) -> list(string):
-    var out: list(string) = []
+# The characters of `s`, one str each, in order.  A fresh
+# `list[str]` the caller owns; an empty str has no characters.
+func characters(s: str) -> list[str]:
+    var out: list[str] = []
     var at = first_character(s)
     while at < len(s):
         let stop = next_character(s, at)
@@ -261,9 +261,9 @@ func characters(s: string) -> list(string):
 
 # The display-width seam described above. In v0.1 it counts code
 # points, not terminal cells, so `width(s)` is the character count and
-# `len(s)` is still the byte count.
-func width(s: string) -> long:
-    var cells: long = 0
+# `len(s)` is still the u8 count.
+func width(s: str) -> i64:
+    var cells: i64 = 0
     var at = first_character(s)
     while at < len(s):
         at = next_character(s, at)
@@ -271,14 +271,14 @@ func width(s: string) -> long:
     return cells
 
 # The longest prefix of `s` that fits in `cells` cells: the whole
-# string when it already fits, "" for a width of zero or less.  A
-# character is never cut in half, so the answer always ends where one
+# str when it already fits, "" for a width of zero or less.  A
+# character is never cut in f16, so the answer always ends where one
 # ends.
-func take(s: string, cells: long) -> string:
+func take(s: str, cells: i64) -> str:
     if cells <= 0:
         return ""
     let first = first_character(s)
-    var taken: long = 0
+    var taken: i64 = 0
     var at = first
     while at < len(s):
         let stop = next_character(s, at)
@@ -294,18 +294,18 @@ func take(s: string, cells: long) -> string:
 # Space-padded to `cells` display cells; text already that wide is
 # unchanged.  The count is `width`'s and not `len`'s, so a label
 # carrying a non-ASCII character lines up in a column instead of
-# losing a space per continuation byte.  For ASCII the two numbers are
+# losing a space per continuation u8.  For ASCII the two numbers are
 # the same, which is why this is a correction and not a change.
-func pad_left(s: string, cells: long) -> string:
+func pad_left(s: str, cells: i64) -> str:
     return repeat(" ", cells - width(s)) + s
 
-func pad_right(s: string, cells: long) -> string:
+func pad_right(s: str, cells: i64) -> str:
     return s + repeat(" ", cells - width(s))
 
-# A double as fixed-point text: format_float(2.5, 2) is "2.50",
-# rounded half away from zero.  Meant for display of ordinary
-# magnitudes; |value| past ~1e15 falls back to string(value).
-func format_float(value: double, decimals: long) -> string:
+# A f64 as fixed-point text: format_float(2.5, 2) is "2.50",
+# rounded f16 away from zero.  Meant for display of ordinary
+# magnitudes; |value| past ~1e15 falls back to str(value).
+func format_float(value: f64, decimals: i64) -> str:
     if decimals < 0:
         trap("format_float needs decimals >= 0")
     var magnitude = value
@@ -314,46 +314,46 @@ func format_float(value: double, decimals: long) -> string:
         magnitude = 0.0 - value
         sign = "-"
     if magnitude > 1.0e15:
-        return string(value)
-    # Annotated `double`, and it has to be.  This one binding never
+        return str(value)
+    # Annotated `f64`, and it has to be.  This one binding never
     # meets `value` in an expression the checker would complain about
     # — it is multiplied by literals and compared against a widened
-    # `long` — so at the narrower default it would quietly stay 32-bit
+    # `i64` — so at the narrower default it would quietly stay 32-bit
     # and stop being exact at 10^8, three digits inside the range
     # `decimals` allows.  The other unannotated site in std that would
     # have gone wrong is loud; this is the one that is not
     # (docs/TYPES.md, the unannotated-site audit).
-    var scale: double = 1.0
+    var scale: f64 = 1.0
     for i in range(0, decimals):
         scale *= 10.0
-    # `long(x)` rounds (docs/NUMERICS.md), so the split at the
+    # `i64(x)` rounds (docs/NUMERICS.md), so the split at the
     # integral part says `trunc` out loud — and the `+ 0.5` that used
-    # to hand-roll the rounding of the fraction is what `long` does
+    # to hand-roll the rounding of the fraction is what `i64` does
     # now, correctly, including at the values `floor(x + 0.5)` gets
     # wrong.
-    var whole = long(trunc(magnitude))
-    var fraction = long((magnitude - double(whole)) * scale)
-    if double(fraction) >= scale:
+    var whole = i64(trunc(magnitude))
+    var fraction = i64((magnitude - f64(whole)) * scale)
+    if f64(fraction) >= scale:
         whole += 1
         fraction = 0
     if decimals == 0:
-        return sign + string(whole)
-    var digits = string(fraction)
+        return sign + str(whole)
+    var digits = str(fraction)
     while len(digits) < decimals:
         digits = "0" + digits
-    return sign + string(whole) + "." + digits
+    return sign + str(whole) + "." + digits
 
 # -- bytes (docs/BYTES.md R3) -----------------------------------------
 
-# A string's bytes, as a `list(byte)`.
+# A str's bytes, as a `list[u8]`.
 #
-# Total, and it has to be: a string is already valid UTF-8, so there
+# Total, and it has to be: a str is already valid UTF-8, so there
 # is nothing here that can fail and nothing to ask about.  The bytes
 # are the encoding, not the characters — `len(to_bytes(s))` is
 # `len(s)`, which is bytes on both sides.
-func to_bytes(s: string) -> list(byte):
-    var out = new list(byte)
-    var at: long = 0
+func to_bytes(s: str) -> list[u8]:
+    var out = new list[u8]
+    var at: i64 = 0
     while at < len(s):
         out.append(s.byte_at(at))
         at += 1
@@ -361,11 +361,11 @@ func to_bytes(s: string) -> list(byte):
 
 # Bytes as text, or absent when they are not valid UTF-8.
 #
-# The other direction is a **parse**, which is why it answers `string?`
-# and not `string!`: "not UTF-8" is the same reason every time and the
+# The other direction is a **parse**, which is why it answers `str?`
+# and not `str!`: "not UTF-8" is the same reason every time and the
 # name already implies it, so absence carries all the information there
 # is — the `parse_int` precedent (docs/FAILURE.md).  The validator is
 # `libluce_rt`'s, so a compiled program and the test oracle agree
-# byte-for-byte on what "not text" means.
-func from_bytes(xs: list(byte)) -> string?:
+# u8-for-u8 on what "not text" means.
+func from_bytes(xs: list[u8]) -> str?:
     return parse_string(xs)

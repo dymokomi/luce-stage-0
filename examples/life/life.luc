@@ -13,13 +13,13 @@
 const frame_ms = 80
 
 struct World:
-    static func rows() -> long:
+    static func rows() -> i64:
         return clamp(term_rows() - 2, 8, 40)
 
-    static func cols() -> long:
+    static func cols() -> i64:
         return clamp((term_cols() - 1) // 2, 8, 60)
 
-    static func seed(grid: array(bool, _, _)):
+    static func seed(grid: array[bool, _, _]):
         # A glider...
         grid[1, 2] = true
         grid[2, 3] = true
@@ -32,7 +32,7 @@ struct World:
         grid[mid, 7] = true
         grid[mid, 8] = true
 
-    static func neighbors(grid: array(bool, _, _), row: long, col: long) -> long:
+    static func neighbors(grid: array[bool, _, _], row: i64, col: i64) -> i64:
         let height = grid.dim(0)
         let width = grid.dim(1)
         var alive = 0
@@ -46,10 +46,10 @@ struct World:
         return alive
 
     # One generation: builds the next grid; the caller owns it.
-    static func step(grid: array(bool, _, _)) -> array(bool, _, _):
+    static func step(grid: array[bool, _, _]) -> array[bool, _, _]:
         let height = grid.dim(0)
         let width = grid.dim(1)
-        var next = new array(bool, height, width)
+        var next = new array[bool](height, width)
         for row in range(0, height):
             for col in range(0, width):
                 let around = World.neighbors(grid, row, col)
@@ -59,7 +59,7 @@ struct World:
                     next[row, col] = around == 3
         return next
 
-    static func draw(grid: array(bool, _, _), generation: long):
+    static func draw(grid: array[bool, _, _], generation: i64):
         term_clear()
         for row in range(0, grid.dim(0)):
             term_move(row, 0)
@@ -72,10 +72,10 @@ struct World:
                     term_write(" ·")
         term_move(grid.dim(0), 0)
         term_style(252, 237)
-        term_write(" generation " + string(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
+        term_write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
-    var grid = new array(bool, World.rows(), World.cols())
+    var grid = new array[bool](World.rows(), World.cols())
     World.seed(grid)
     var generation = 0
     var running = true

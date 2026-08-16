@@ -34,8 +34,8 @@ float — `double` unless both operands are already `float` — so
 
 ```luce
 func main():
-    print(string(7 / 2))         # 3.5
-    print(string(23 / 7))        # 3.2857142857142856 — a double
+    print(str(7 / 2))         # 3.5
+    print(str(23 / 7))        # 3.2857142857142856 — a f64
 ```
 
 Integer operands promote to `double`, so integer division answers full
@@ -55,10 +55,10 @@ together, so `%` takes the sign of the **divisor** and
 
 ```luce
 func main():
-    print(string(7 // 2))        # 3
-    print(string(7 % 3))         # 1
-    print(string(-7 % 3))        # 2 — sign of the divisor
-    print(string(-7 // 3))       # -3
+    print(str(7 // 2))        # 3
+    print(str(7 % 3))         # 1
+    print(str(-7 % 3))        # 2 — sign of the divisor
+    print(str(-7 // 3))       # -3
 ```
 
 `//` and `%` accept mixed operands too, promoting like every other
@@ -80,9 +80,9 @@ float is IEEE.
 
 ```luce
 func main():
-    var a: int = 1
-    var b: int = 0
-    print(string(a // b))
+    var a: i32 = 1
+    var b: i32 = 0
+    print(str(a // b))
 ```
 
 ```output
@@ -99,8 +99,8 @@ counter overflows at ±2³¹, a `long` at ±2⁶³.
 
 ```luce
 func main():
-    var x: int = 46341
-    print(string(x * x))         # 2147488281 > 2^31 - 1
+    var x: i32 = 46341
+    print(str(x * x))         # 2147488281 > 2^31 - 1
 ```
 
 ```output
@@ -115,9 +115,9 @@ that result back into a storage type, which is a **checked narrowing**:
 
 ```luce
 func main():
-    var b: byte = 255
-    b += 1                       # b = byte(b + 1); 256 does not fit
-    print(string(b))
+    var b: u8 = 255
+    b += 1                       # b = u8(b + 1); 256 does not fit
+    print(str(b))
 ```
 
 ```output
@@ -137,8 +137,8 @@ answer wrongly at the boundary:
 
 ```luce
 func main():
-    var n: long = 9007199254740993
-    print(string(n == 9007199254740992.0))   # false
+    var n: i64 = 9007199254740993
+    print(str(n == 9007199254740992.0))   # false
 ```
 
 The two values differ by one, and `9007199254740993` cannot be
@@ -167,14 +167,14 @@ is the only way to narrow, since narrowing is never implicit.
 ```luce
 func main():
     let x = 3.9
-    print(string(int(x)))            # 4 — rounds
-    print(string(long(floor(x))))    # 3 — floor, then convert
+    print(str(i32(x)))            # 4 — rounds
+    print(str(i64(floor(x))))    # 3 — floor, then convert
 ```
 
 ```luce
 func main():
-    var over: long = 300
-    print(string(byte(over)))
+    var over: i64 = 300
+    print(str(u8(over)))
 ```
 
 ```output
@@ -199,8 +199,8 @@ and a function value's name.
 
 ```luce
 func main():
-    print(string(double(1.0) / double(3.0)))   # 0.3333333333333333
-    print(string(float(1.0) / float(3.0)))     # 0.33333334
+    print(str(f64(1.0) / f64(3.0)))   # 0.3333333333333333
+    print(str(f32(1.0) / f32(3.0)))     # 0.33333334
 ```
 
 ### Formatting in f-strings

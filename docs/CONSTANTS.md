@@ -17,12 +17,12 @@ program ends.
 ## Scalar constants
 
 ```luce
-const answer: long = 42
+const answer: i64 = 42
 const pi = 3.14159
 const greeting = "hello"
 
 func main():
-    print(string(answer))
+    print(str(answer))
     print(greeting)
 ```
 
@@ -41,8 +41,8 @@ folded into the artifact beside the interned strings, materialized once
 before `main`, and held by the program root.
 
 ```luce
-const crc_table: list(long) = [0, 1996959894, 3993919788]
-const length_bases: array(long, _) = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+const crc_table: list[i64] = [0, 1996959894, 3993919788]
+const length_bases: array[i64, _] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
 private const keywords = {"and": true, "break": true, "catch": true}
 ```
 
@@ -70,12 +70,12 @@ enum Mode:
     idle
     ready
 
-const modes: list(Mode) = [Mode.idle, Mode.ready]
+const modes: list[Mode] = [Mode.idle, Mode.ready]
 const reals = [1.0, 2.5, 3.75]
 
 func main():
-    print(string(len(modes)))
-    print(string(reals[0]))
+    print(str(len(modes)))
+    print(str(reals[0]))
 ```
 
 Constant containers **index, slice, and iterate** like any container. A
@@ -92,9 +92,9 @@ compare equal; two separately written but equal constructions are
 distinct objects.
 
 ```luce
-const numbers: list(long) = [5, 8]
+const numbers: list[i64] = [5, 8]
 const same_numbers = numbers
-const equal: list(long) = [5, 8]
+const equal: list[i64] = [5, 8]
 
 func main():
     assert(numbers == same_numbers)
@@ -108,7 +108,7 @@ The literal is legal in both positions: at file scope it folds into a
 constant map; inside a function it builds a fresh, mutable map.
 
 ```luce
-private const keywords: map(string, bool) = {
+private const keywords: map[str, bool] = {
     "and": true, "break": true, "catch": true,
 }
 const method_names = {0: "stored", 8: "deflated"}
@@ -131,7 +131,7 @@ func main():
     assert(len(numbers) == 2 and numbers[1] == "last")
     numbers[3] = "three"
     numbers.remove(2)
-    print(string(len(numbers)))
+    print(str(len(numbers)))
 ```
 
 Empty `{}` has no literal: it is refused with a sentence naming
@@ -164,14 +164,14 @@ is immutable`), on both engines. A program that wants a mutable object
 builds one the ordinary way and fills it from the constant:
 
 ```luce
-const seed: list(long) = [1, 2, 3]
+const seed: list[i64] = [1, 2, 3]
 
 func main():
-    var working: list(long) = []
+    var working: list[i64] = []
     for value in seed:
         working.append(value)
     working.append(4)
-    print(string(len(working)))
+    print(str(len(working)))
 ```
 
 Because a constant container is a shared reference, passing one to a

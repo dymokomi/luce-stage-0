@@ -15,12 +15,12 @@ The worker target is a named function. `spawn` returns a `task(T)`, where `T`
 is the function's return type. `wait()` joins the worker and returns its answer:
 
 ```luce run
-func square(n: long) -> long:
+func square(n: i64) -> i64:
     return n * n
 
 func main():
     let work = spawn square(12)
-    print(string(work.wait()))
+    print(str(work.wait()))
 ```
 
 ```output
@@ -39,18 +39,18 @@ not race with it:
 
 ```luce run
 struct Work:
-    first: long
-    second: long
+    first: i64
+    second: i64
 
-func total(work: Work) -> long:
+func total(work: Work) -> i64:
     return work.first + work.second
 
 func main():
     var values = Work(first = 4, second = 6)
     let task = spawn total(values)
     values.second = 20
-    print(string(task.wait()))
-    print(string(values.second))
+    print(str(task.wait()))
+    print(str(values.second))
 ```
 
 ```output
@@ -75,8 +75,8 @@ A worker may build a reference graph and return it. `wait()` copies that graph
 into the joiner's runtime before the worker runtime is torn down:
 
 ```luce run
-func squares(n: long) -> list(long):
-    var made = new list(long)
+func squares(n: i64) -> list[i64]:
+    var made = new list[i64]
     for i in range(0, n):
         made.append(i * i)
     return made
@@ -102,18 +102,18 @@ A fallible worker keeps its `!` in the task type. The error crosses at
 `wait()`, where the parent handles it or passes it on:
 
 ```luce run
-func risky(n: long) -> long!:
+func risky(n: i64) -> i64!:
     if n < 0:
         error("negative input")
     return n
 
 func main() -> !:
     var bad = spawn risky(-1)
-    var answered: long = 0
+    var answered: i64 = 0
     answered = bad.wait() catch reason:
         print("caught: " + reason)
     let good = spawn risky(7)
-    print(string(try good.wait()))
+    print(str(try good.wait()))
 ```
 
 ```output
@@ -131,17 +131,17 @@ Tasks are ARC references and can be stored in ordinary aggregates. Join them in
 the order in which your program needs their results:
 
 ```luce run
-func square(n: long) -> long:
+func square(n: i64) -> i64:
     return n * n
 
 func main():
-    var tasks = new list(task(long))
+    var tasks = new list[task[i64]]
     for i in range(1, 5):
         tasks.append(spawn square(i))
-    var total: long = 0
+    var total: i64 = 0
     for work in tasks:
         total += work.wait()
-    print(string(total))
+    print(str(total))
 ```
 
 ```output

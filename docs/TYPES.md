@@ -71,13 +71,13 @@ two `double`s.
 
 ```luce
 func main():
-    var a: byte = 255
-    var b: byte = 1
-    print(string(a + b))     # 256 — the int value, not a wrap
+    var a: u8 = 255
+    var b: u8 = 1
+    print(str(a + b))     # 256 — the i32 value, not a wrap
 
-    let pixels = new array(byte, 3)
-    pixels[0] = 200          # 200 fits a byte
-    print(string(pixels[0]))
+    let pixels = new array[u8](3)
+    pixels[0] = 200          # 200 fits a u8
+    print(str(pixels[0]))
 ```
 
 Storing a value back into a storage type is a checked narrowing:
@@ -100,11 +100,11 @@ integer; a program that wants one writes `float(x)`.
 
 ```luce
 func main():
-    let n: int = 100
-    let wide: long = n       # int widens to long
-    let d: double = n        # and to double
-    let f: float = 1         # a literal lands on float directly
-    print(string(wide + d + f))
+    let n: i32 = 100
+    let wide: i64 = n       # i32 widens to i64
+    let d: f64 = n        # and to f64
+    let f: f32 = 1         # a literal lands on f32 directly
+    print(str(wide + d + f))
 ```
 
 **Narrowing is never implicit** — not `long` into `int`, not `double`
@@ -141,7 +141,7 @@ must be narrowed to a `T` before the `T`'s operations apply — test it
 ```luce fragment
 let totals = {"a": 1}
 let value = totals.get("b") else 0   # a T, whatever get answered
-print(string(value))
+print(str(value))
 ```
 
 `T?` is the widening every value type has: a `T` reaches a `T?` place
@@ -164,11 +164,11 @@ literal, and parameterized by their element types:
 - `builder` — an append-only text buffer, finished with `b.build()`.
 
 ```luce fragment
-let xs = new list(int)
+let xs = new list[i32]
 xs.append(10)
 xs.append(20)
 let totals = {"a": 1, "b": 2}
-print(string(xs[0] + (totals.get("a") else 0)))
+print(str(xs[0] + (totals.get("a") else 0)))
 ```
 
 Sharing a struct that holds a container shares the container: the
@@ -181,12 +181,12 @@ each field:
 
 ```luce
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 
 func main():
     let p = Point(x = 1.0, y = 2.0)
-    print(string(p.x))
+    print(str(p.x))
 ```
 
 An `enum` is a set of named constants stored at one integer width
@@ -201,8 +201,8 @@ enum Suit:
 
 func main():
     let s = Suit.hearts
-    print(string(s))         # hearts
-    print(string(int(s)))    # 0
+    print(str(s))         # hearts
+    print(str(i32(s)))    # 0
 ```
 
 A `union` is a tagged choice whose members may carry payload fields, and

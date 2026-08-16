@@ -92,14 +92,14 @@ structures, classes, interfaces, enums, and unions.
 | Type | Definition |
 |---|---|
 | `bool` | `true` or `false`. The only type a condition may have. |
-| `byte` | Unsigned 8-bit, 0 … 255. **Storage.** |
-| `short` | Signed 16-bit, −32 768 … 32 767. **Storage.** |
-| `int` | Signed 32-bit, **checked**: overflow traps. The default for an integer literal. |
-| `long` | Signed 64-bit, **checked**: overflow traps. |
-| `half` | IEEE 754 binary16, ±65 504. **Storage.** |
-| `float` | IEEE 754 binary32. Does not trap. The default for a float literal. |
-| `double` | IEEE 754 binary64. Does not trap. |
-| `string` | Immutable UTF-8. A value. |
+| `u8` | Unsigned 8-bit, 0 … 255. **Storage.** |
+| `i16` | Signed 16-bit, −32 768 … 32 767. **Storage.** |
+| `i32` | Signed 32-bit, **checked**: overflow traps. The default for an integer literal. |
+| `i64` | Signed 64-bit, **checked**: overflow traps. |
+| `f16` | IEEE 754 binary16, ±65 504. **Storage.** |
+| `f32` | IEEE 754 binary32. Does not trap. The default for a float literal. |
+| `f64` | IEEE 754 binary64. Does not trap. |
+| `str` | Immutable UTF-8. A value. |
 
 `byte` is the only unsigned numeric type and stores values from 0
 through 255.
@@ -118,11 +118,11 @@ Operators widen storage types before arithmetic. For example, `byte`
 
 ```luce run
 func main():
-    var a: byte = 255
-    var b: byte = 1
-    print(string(a + b))
-    var h: half = 0.5
-    print(string(h + h))
+    var a: u8 = 255
+    var b: u8 = 1
+    print(str(a + b))
+    var h: f16 = 0.5
+    print(str(h + h))
 ```
 
 ```output
@@ -177,8 +177,8 @@ it on.
 
 ```luce trap
 func main():
-    var over: long = 300
-    print(string(byte(over)))
+    var over: i64 = 300
+    print(str(u8(over)))
 ```
 
 ```output
@@ -194,9 +194,9 @@ name. Container objects, resources and structs are not accepted.
 
 ```luce run
 func main():
-    print(string(1.0 / 3.0))
-    print(string(double(1.0) / double(3.0)))
-    print(string(half(65504.0)))
+    print(str(1.0 / 3.0))
+    print(str(f64(1.0) / f64(3.0)))
+    print(str(f16(65504.0)))
 ```
 
 ```output
@@ -215,9 +215,9 @@ A function value's type is its signature with parameter names and
 defaults removed:
 
 ```
-func(long, long) -> bool
-func(string)
-func(list(long)) -> long
+func(i64, i64) -> bool
+func(str)
+func(list[i64]) -> i64
 ```
 
 A function type is worn by four things: a named top-level or `static`
@@ -255,14 +255,14 @@ same slot and takes the same form.
 
 ```luce run
 struct Button:
-    label: string
-    on_click: (func(long) -> long)?
+    label: str
+    on_click: (func(i64) -> i64)?
 
 func main():
     let wired = Button(label = "double", on_click = (n) -> n * 2)
     let action = wired.on_click
     if action != none:
-        print(wired.label + " " + string(action(21)))
+        print(wired.label + " " + str(action(21)))
 ```
 
 ```output
@@ -276,16 +276,16 @@ key. Writing the `?` as well would make `get` answer a `V??`, which
 does not exist.
 
 ```luce run
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
 func main():
-    var actions = new map(string, func(long) -> long)
+    var actions = new map[str, func(i64) -> i64]
     actions["double"] = twice
     let found = actions.get("double")
     if found != none:
-        print(string(found(4)))
-    print(string(actions.get("missing") == none))
+        print(str(found(4)))
+    print(str(actions.get("missing") == none))
 ```
 
 ```output
@@ -361,34 +361,34 @@ method uses the implementation carried by the value:
 
 ```luce run
 interface Drawable:
-    func draw(scale: long) -> long
+    func draw(scale: i64) -> i64
 
 struct Button: Drawable:
-    label: string
+    label: str
 
-    func draw(scale: long) -> long:
+    func draw(scale: i64) -> i64:
         return scale + 1
 
 struct Badge: Drawable:
-    label: string
+    label: str
 
-    func draw(scale: long) -> long:
+    func draw(scale: i64) -> i64:
         return scale + 2
 
-func paint(item: Drawable) -> long:
+func paint(item: Drawable) -> i64:
     return item.draw(40)
 
 func main():
-    var items = new list(Drawable)
+    var items = new list[Drawable]
     items.append(Button(label = "button"))
     items.append(Badge(label = "badge"))
-    var named = new map(string, Drawable)
+    var named = new map[str, Drawable]
     named["button"] = Button(label = "button")
     named["badge"] = Badge(label = "badge")
-    print(string(items[0].draw(40)))
-    print(string(items[1].draw(40)))
+    print(str(items[0].draw(40)))
+    print(str(items[1].draw(40)))
     let found = named.get("badge") else Button(label = "fallback")
-    print(string(paint(found)))
+    print(str(paint(found)))
 ```
 
 ```output
@@ -430,8 +430,8 @@ its fields — every one without a default; assignment copies.
 
 ```luce run
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 
 func main():
     let p = Point(x = 1.5, y = 2.5)
@@ -451,7 +451,7 @@ one constructs bare.
 
 ```luce run
 struct Options:
-    depth: long = 3
+    depth: i64 = 3
     wide: bool = false
 
 func main():
@@ -479,7 +479,7 @@ goes through an optional field:
 
 ```luce run
 struct Node:
-    value: long
+    value: i64
     next: Node?
 
 func main():
@@ -529,14 +529,14 @@ container holds it at its backing width.
   `const`, a parameter default and a field default.
 
 ```luce run
-enum Method(byte):
+enum Method(u8):
     stored = 0
     deflated = 8
 
 func main():
-    var seen = new list(Method)
+    var seen = new list[Method]
     seen.append(Method.deflated)
-    print(f"{seen[0]} is {int(seen[0])}, and 3 is {string(Method(3) != none)}")
+    print(f"{seen[0]} is {i32(seen[0])}, and 3 is {str(Method(3) != none)}")
 ```
 
 ```output
@@ -577,15 +577,15 @@ proved which member the value holds.
 ```luce run
 union Json:
     null
-    number(value: double)
-    array(items: list(Json))
+    number(value: f64)
+    array[items: list[Json]]
 
 func main():
-    var xs = new list(Json)
+    var xs = new list[Json]
     xs.append(Json.number(value = 2.5))
-    let doc = Json.array(items = xs)
+    let doc = Json.array[items = xs]
     match doc:
-        array(items):
+        array[items]:
             print(f"an {doc} of {len(items)}")
         else:
             print("not an array")
@@ -648,8 +648,8 @@ import std.files
 func main() -> !:
     try files.write("note.txt", "abc")
     var f = try files.open("note.txt")
-    var buffer = new array(byte, 8)
-    print(string(try f.read(buffer)))
+    var buffer = new array[u8](8)
+    print(str(try f.read(buffer)))
     try files.delete("note.txt")
 ```
 
@@ -692,17 +692,17 @@ and it decides whether `t.wait()` is a site that has to say `try` or
 `catch`.
 
 ```luce run
-func square(n: long) -> long:
+func square(n: i64) -> i64:
     return n * n
 
 func main():
-    var tasks = new list(task(long))
+    var tasks = new list[task[i64]]
     for i in range(1, 4):
         tasks.append(spawn square(i))
-    var total: long = 0
+    var total: i64 = 0
     for t in tasks:
         total = total + t.wait()
-    print(string(total))
+    print(str(total))
 ```
 
 ```output
@@ -725,7 +725,7 @@ value). There is no expression that produces one.
 
 ```luce fail
 func main():
-    let p: (long, long) = 1
+    let p: (i64, i64) = 1
 ```
 
 ```output
@@ -803,7 +803,7 @@ function returns `x` with nothing wrapped around it.
 
 ```luce fail
 struct Holder:
-    value: long!
+    value: i64!
 
 func main():
     print("unreachable")

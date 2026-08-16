@@ -146,12 +146,12 @@ be there, and `none` is the value that is not.  `?` means nullable and
 
 ```luce
 struct User:
-    name: string
+    name: str
 
-func main(args: list(string)):
+func main(args: list[str]):
     var user: User? = none
-    var limit: long? = 10
-    let parsed = parse_int(args[0])   # long?
+    var limit: i64? = 10
+    let parsed = parse_int(args[0])   # i64?
 ```
 
 `T?` may be a local, a parameter, a return type, or a struct field.
@@ -171,7 +171,7 @@ counting.
 
 ```luce
 struct Node:
-    value: long
+    value: i64
     next: Node?
 ```
 
@@ -206,7 +206,7 @@ payload: no unwrapping operator, no second spelling.
 
 ```luce
 struct User:
-    name: string
+    name: str
 
 func greet(user: User?):
     if user != none:
@@ -243,7 +243,7 @@ Python needs `??` because `or` is broken there by truthiness, and Luce
 has no truthiness and no ternary.
 
 ```luce
-func main(args: list(string)):
+func main(args: list[str]):
     let count = parse_int(args[0]) else 10
     let first = parse_int(args[1]) else parse_int(args[2]) else 0   # right-associative
     let must = parse_int(args[3]) else trap("not a number")
@@ -270,10 +270,10 @@ never spent on absence, which is `?`'s job (docs/FAILURE.md).
 ```luce
 import std.files
 
-func read(path: string) -> string!:
+func read(path: str) -> str!:
     return try file_read(path)
 
-func main(args: list(string)) -> !:
+func main(args: list[str]) -> !:
     let text = try files.read(args[0])
     let cfg  = files.read("settings") catch ""
 ```
@@ -321,10 +321,10 @@ The two that say which they mean:
 ```luce
 import std.files
 
-func pass_on(path: string, text: string) -> !:
+func pass_on(path: str, text: str) -> !:
     try files.write(path, text)    # pass it to my caller
 
-func handle(path: string, text: string):
+func handle(path: str, text: str):
     files.write(path, text) catch:     # handle it here
         print("cannot write " + path)
 ```
@@ -340,7 +340,7 @@ takes:
 ```luce
 import std.files
 
-func handle_both(path: string):
+func handle_both(path: str):
     let text = files.read(path) catch ""        # a fallback value
 
     files.write(path, text) catch:              # a handler block
@@ -382,9 +382,9 @@ value of the same type the call would have.
 **`error("…")` raises**, with the program's own words:
 
 ```luce
-func check(n: long) -> long!:
+func check(n: i64) -> i64!:
     if n < 0:
-        error("negative: " + string(n))
+        error("negative: " + str(n))
     return n
 ```
 
@@ -455,7 +455,7 @@ It is still not an ordinary value. `print(minmax(xs))`,
 the values and then use or return the names.
 
 ```luce
-func minmax(xs: array(double, _)) -> (double, double):
+func minmax(xs: array[f64, _]) -> (f64, f64):
     var low = xs[0]
     var high = xs[0]
     for x in xs:
@@ -464,10 +464,10 @@ func minmax(xs: array(double, _)) -> (double, double):
     return low, high
 
 func main():
-    var xs = new array(double, 4)
+    var xs = new array[f64](4)
     xs.fill(1.5)
     let low, high = minmax(xs)
-    print(string(low) + " " + string(high))
+    print(str(low) + " " + str(high))
 ```
 
 **One keyword governs the whole bind**: `let a, b` makes both
@@ -542,14 +542,14 @@ answers `V?`, so the absence is the missing key.
 
 ```luce
 struct Button:
-    label: string
-    on_click: (func(long) -> long)?
+    label: str
+    on_click: (func(i64) -> i64)?
 
 func main():
     let wired = Button(label = "double", on_click = (n) -> n * 2)
     let action = wired.on_click
     if action != none:
-        print(wired.label + " " + string(action(21)))
+        print(wired.label + " " + str(action(21)))
 ```
 
 **Parentheses in a type are grouping, and a parenthesized type is that
@@ -563,15 +563,15 @@ declaration the arity decides which production a `(` opened — one type
 is a parenthesized type, two or more is a return shape.
 
 ```luce
-func ascending(a: long, b: long) -> bool:
+func ascending(a: i64, b: i64) -> bool:
     return a < b
 
-func pick(before: func(long, long) -> bool, a: long, b: long) -> long:
+func pick(before: func(i64, i64) -> bool, a: i64, b: i64) -> i64:
     if before(a, b):
         return a
     return b
 
-func chosen() -> func(long, long) -> bool:
+func chosen() -> func(i64, i64) -> bool:
     return ascending
 ```
 
@@ -590,17 +590,17 @@ a bare function name.
 
 ```luce
 struct Scale:
-    factor: long
+    factor: i64
 
-    func times(n: long) -> long:
+    func times(n: i64) -> i64:
         return n * self.factor
 
-func apply(f: func(long) -> long, value: long) -> long:
+func apply(f: func(i64) -> i64, value: i64) -> i64:
     return f(value)
 
 func main():
     let doubling = Scale(factor = 2)
-    print(string(apply(doubling.times, 21)))
+    print(str(apply(doubling.times, 21)))
 ```
 
 A **value** receiver is copied into the value at the bind, so the bound
@@ -630,16 +630,16 @@ order.  A payload-less member such as `Msg.quit` stays a value.
 ```luce
 union Msg:
     quit
-    query_changed(query: string)
+    query_changed(query: str)
 
-func describe(m: Msg) -> string:
+func describe(m: Msg) -> str:
     match m:
         quit:
             return "quit"
         query_changed(query):
             return "query " + query
 
-func route(make: func(string) -> Msg, text: string) -> string:
+func route(make: func(str) -> Msg, text: str) -> str:
     return describe(make(text))
 
 func main():
@@ -650,13 +650,13 @@ A lambda is a parenthesized list of bare parameter names, `->`, and
 one expression:
 
 ```luce
-func apply(f: func(long) -> long, value: long) -> long:
+func apply(f: func(i64) -> i64, value: i64) -> i64:
     return f(value)
 
 func main():
-    print(string(apply((n) -> n * 2, 21)))
-    let positive: func(long) -> bool = (n) -> n > 0
-    print(string(positive(3)))
+    print(str(apply((n) -> n * 2, 21)))
+    let positive: func(i64) -> bool = (n) -> n > 0
+    print(str(positive(3)))
 ```
 
 Its parameter and result types come from the function type at the
@@ -686,17 +686,17 @@ and never a field or an element; the value is bound to a local and
 tested there, and the refusal writes those lines out.
 
 ```luce
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
-func chooser() -> func(long) -> long:
+func chooser() -> func(i64) -> i64:
     return twice
 
 func main():
-    var actions = new map(string, func(long) -> long)
+    var actions = new map[str, func(i64) -> i64]
     actions["double"] = twice
-    print(string(chooser()(21)))
-    print(string(actions["double"](21)))
+    print(str(chooser()(21)))
+    print(str(actions["double"](21)))
 ```
 
 Function values copy freely.  There is
@@ -736,14 +736,14 @@ whose fields has one constructs bare: `Options()`; object-valued field
 defaults remain refused.
 
 ```luce
-func grown(base: long, step: long = 5, twice: bool = false) -> long:
+func grown(base: i64, step: i64 = 5, twice: bool = false) -> i64:
     var total = base + step
     if twice:
         total = total * 2
     return total
 
 struct Options:
-    depth: long = 3
+    depth: i64 = 3
     wide: bool = false
 
 func main():
@@ -801,13 +801,13 @@ no receiver says `static func` and is a namespace function instead.
 
 ```luce
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 
-    func length() -> double:                  # reads implied self
+    func length() -> f64:                  # reads implied self
         return sqrt(self.x * self.x + self.y * self.y)
 
-    func scale(factor: double):               # writes implied self
+    func scale(factor: f64):               # writes implied self
         self.x = self.x * factor
         self.y = self.y * factor
 
@@ -859,7 +859,7 @@ key.  `enum` gives every value in the set a name, and `match` makes
 the compiler check that the code covered them (docs/ENUMS.md).
 
 ```luce
-enum Method(byte):        # the width is int unless one is written
+enum Method(u8):        # the width is i32 unless one is written
     stored                # 0, the C rule for an unvalued first member
     shrunk                # 1, the one before it plus one
     deflated = 8          # a constant integer expression, folded
@@ -868,7 +868,7 @@ enum Method(byte):        # the width is int unless one is written
         return self != Method.stored
 
 func main():
-    print(f"{Method.deflated} is {int(Method.deflated)}")
+    print(f"{Method.deflated} is {i32(Method.deflated)}")
 ```
 
 Members are **namespaced always** — `Method.stored`, never a bare
@@ -896,13 +896,13 @@ enum Method:
     stored
     deflated
 
-func read_stored(entry: long) -> long:
+func read_stored(entry: i64) -> i64:
     return entry
 
-func read_deflated(entry: long) -> long:
+func read_deflated(entry: i64) -> i64:
     return entry * 2
 
-func read(method: Method, entry: long) -> long:
+func read(method: Method, entry: i64) -> i64:
     match method:
         stored:
             return read_stored(entry)
@@ -910,7 +910,7 @@ func read(method: Method, entry: long) -> long:
             return read_deflated(entry)
 
 func main():
-    print(string(read(Method.deflated, 3)))
+    print(str(read(Method.deflated, 3)))
 ```
 
 Arms are bare member names — the scrutinee's type is known and the arm
@@ -935,10 +935,10 @@ enums built — extends with payload arms rather than forking
 ```luce
 union Shape:
     empty
-    circle(radius: double)
-    rect(width: double, height: double)
+    circle(radius: f64)
+    rect(width: f64, height: f64)
 
-func area(s: Shape) -> double:
+func area(s: Shape) -> f64:
     match s:
         empty:
             return 0.0
@@ -948,7 +948,7 @@ func area(s: Shape) -> double:
             return width * height
 
 func main():
-    print(string(area(Shape.rect(width = 3.0, height = 4.0))))
+    print(str(area(Shape.rect(width = 3.0, height = 4.0))))
 ```
 
 Members are namespaced always, like an enum's, and a payload's fields
@@ -995,10 +995,10 @@ implied-`self` rules:
 ```luce
 union Json:
     null
-    number(value: double)
-    array(items: list(Json))
+    number(value: f64)
+    array(items: list[Json])
 
-    func weight() -> long:
+    func weight() -> i64:
         match self:
             null:
                 return 0
@@ -1007,22 +1007,22 @@ union Json:
             array(items):
                 return len(items)
 
-    static func of(n: double) -> Json:
+    static func of(n: f64) -> Json:
         return Json.number(value = n)
 
 func main():
-    print(string(Json.of(2.5).weight()))
+    print(str(Json.of(2.5).weight()))
 ```
 
 ## Collections
 
 ```luce fragment
-var xs = [1, 2, 3]                 # list(int), inferred from elements
-var ys: list(string) = []          # empty literal needs an annotation
+var xs = [1, 2, 3]                 # list[i32], inferred from elements
+var ys: list[str] = []          # empty literal needs an annotation
 var m = {"one": 1, "two": 2}       # insertion-ordered dictionary
-var empty = new map(string, long)   # {} is deliberately not a literal
-var grid = new array(long, 5, 5)    # fixed 5x5, zero-initialized
-var b = new builder()              # string builder
+var empty = new map[str, i64]   # {} is deliberately not a literal
+var grid = new array[i64](5, 5)    # fixed 5x5, zero-initialized
+var b = new builder              # str builder
 
 xs.append(4)                       # [1, 2, 3, 4]
 let first = xs[0]                  # index (bounds-checked)
@@ -1037,7 +1037,7 @@ grid[2, 3] = 7                     # multi-dimensional index
 let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
-let text = b.build()                  # builder -> string
+let text = b.build()                  # builder -> str
 # completed ARC destroys xs, m, grid, and b after their last releases
 ```
 
@@ -1168,15 +1168,15 @@ each converted with `string(...)`:
 import std.strings
 
 struct User:
-    name: string
+    name: str
 
-func show(x: long, y: long, a: long, b: long, user: User, mean: double):
+func show(x: i64, y: i64, a: i64, b: i64, user: User, mean: f64):
     print(f"x = {x}, y = {y}")       # "x = 7, y = 3"
-    print(f"sum = {a + b}")          # any scalar expression: long, double,
-                                     # bool, string — a list is a type error
+    print(f"sum = {a + b}")          # any scalar expression: i64, f64,
+                                     # bool, str — a list is a type error
     print(f"name is {user.name}")    # methods, calls, fields all work
-    print(f"{{literal braces}}")     # double a brace for a literal { or }
-    print(f"mean = {mean:.2f}")      # a double to two decimal places
+    print(f"{{literal braces}}")     # f64 a brace for a literal { or }
+    print(f"mean = {mean:.2f}")      # a f64 to two decimal places
 ```
 
 The hole is one expression; nested `"..."` strings inside a hole are
@@ -1230,10 +1230,10 @@ An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
 ```luce fragment
-string(42)          # "42"        (numbers, bool, string, enum, function)
-parse_int("42")  # 42          long?   — none when the text is not a number
-parse_float("2.5")               # double?
-chr(955)         # "λ"         codepoint -> string; traps on invalid
+str(42)          # "42"        (numbers, bool, str, enum, function)
+parse_int("42")  # 42          i64?   — none when the text is not a number
+parse_float("2.5")               # f64?
+chr(955)         # "λ"         codepoint -> str; traps on invalid
 ord("λ")         # 955         first codepoint; traps on empty
 ```
 
@@ -1243,14 +1243,14 @@ implies it, so absence carries all the information there is
 (docs/FAILURE.md).  Read the answer with `else`, or test it:
 
 ```luce
-func main(args: list(string)):
+func main(args: list[str]):
     let count = parse_int(args[0]) else 10
     let text = args[1]
     let n = parse_int(text)
     if n == none:
         print("not a number: " + text)
         return
-    print(string(n * 2) + string(count))
+    print(str(n * 2) + str(count))
 ```
 
 The free builtins are the generic, cross-type set — Python's own
@@ -1266,7 +1266,7 @@ docs/V2.md).  Everything that belongs to one type is a method on it.
 arguments declares them:
 
 ```luce
-func main(args: list(string)):     # and `-> !` composes with it
+func main(args: list[str]):     # and `-> !` composes with it
     for name in args:
         print(name)
 ```
@@ -1616,7 +1616,7 @@ var total = 0
 total += 5          # total == 5
 var s = "a"
 s += "b"            # s == "ab"
-var counts = new map(string, long)
+var counts = new map[str, i64]
 counts["k"] += 1    # the key is evaluated once, and defined at 0
 ```
 
@@ -1651,9 +1651,9 @@ appear later: **a compound store into a map key that does not exist
 defines the entry at the value type's zero, and then applies.**
 
 ```luce fragment
-var counts = new map(string, long)
+var counts = new map[str, i64]
 counts["fig"] += 1      # defined at 0, then incremented: 1
-var notes = new map(string, string)
+var notes = new map[str, str]
 notes["fig"] += "ripe"  # defined at "", then concatenated
 ```
 
@@ -1735,7 +1735,7 @@ counts only when **every** arm leaves, so the ordinary early-return
 guard is untouched:
 
 ```luce
-func floor_at_zero(n: long) -> long:
+func floor_at_zero(n: i64) -> i64:
     if n < 0:
         return 0
     return n                  # reachable: the guard has no else
@@ -1749,8 +1749,8 @@ that teaches `const`, and there is no top-level `var`.
 
 ```luce
 struct Theme:
-    keyword: long
-    comment: long
+    keyword: i64
+    comment: i64
 
 const width = 80
 const tau = 2.0 * pi          # constants may reference each other,
@@ -1758,7 +1758,7 @@ const pi = 3.14159            # in any order — never in a cycle
 const version = "2"
 const banner = "loom " + version
 const theme = Theme(keyword = 176, comment = 244)  # value structs too
-const missing: long? = none   # a typed absence: the annotation says
+const missing: i64? = none   # a typed absence: the annotation says
                               # what is absent (docs/ARGS.md)
 ```
 
@@ -1776,12 +1776,12 @@ A `const` may also construct one **flat constant container**:
 
 ```luce
 struct Entry:
-    name: string
-    fallback: long?
+    name: str
+    fallback: i64?
 
-const NUMBERS: list(long) = [3, 1, 2]
+const NUMBERS: list[i64] = [3, 1, 2]
 const AGES = {"ada": 36, "alan": 41}
-const ORDER: array(long, _) = [16, 17, 18, 0]
+const ORDER: array[i64, _] = [16, 17, 18, 0]
 const ENTRIES = [Entry(name = "first", fallback = none)]
 const ALIAS = NUMBERS
 ```
@@ -1835,21 +1835,21 @@ are rebuilt at the boundary rather than shared, so races over Luce objects are
 not detected; they are unrepresentable.
 
 ```luce
-func crunch(base: double, count: long) -> double:
-    var total: double = 0.0
+func crunch(base: f64, count: i64) -> f64:
+    var total: f64 = 0.0
     for i in range(0, count):
-        let value = base + double(i)
+        let value = base + f64(i)
         total += value * value
     return total
 
-func main(args: list(string)):
-    var tasks = new list(task(double))
+func main(args: list[str]):
+    var tasks = new list[task[f64]]
     for part in range(0, 4):
-        tasks.append(spawn crunch(double(part), 3))
-    var total: double = 0.0
+        tasks.append(spawn crunch(f64(part), 3))
+    var total: f64 = 0.0
     for t in tasks:
         total += t.wait()
-    print(string(total))
+    print(str(total))
 ```
 
 Three sentences are the whole of it, and each is a rule the language

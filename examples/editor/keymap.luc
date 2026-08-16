@@ -82,7 +82,7 @@ func intent_of(pressed: input.Key) -> Intent:
 
 # How far this intent scrolls a list of rows; zero for every intent
 # that is not a movement.
-func steps_of(intent: Intent) -> long:
+func steps_of(intent: Intent) -> i64:
     let steps = STEPS.get(intent)
     if steps == none:
         return 0

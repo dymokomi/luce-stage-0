@@ -11,28 +11,28 @@ import termui
 # What one region asks of an axis.
 union Length:
     # Exactly `count` cells.  A gutter, a one-row status bar.
-    cells(count: long)
+    cells(count: i64)
     # Share the leftover space in proportion to `weight`.  The text
     # body of an editor: it takes whatever the fixed and clamped
     # regions leave.
-    grow(weight: long)
+    grow(weight: i64)
     # `ratio` percent of the whole axis, clamped to [`low`, `high`].
     # A sidebar that is a quarter of the width but never below 18 nor
     # above 24, and that gives way before its grow sibling starves.
-    between(low: long, high: long, ratio: long)
+    between(low: i64, high: i64, ratio: i64)
 
-# Integer floor division.  Luce's `/` is true division and `long()`
+# Integer floor division.  Luce's `/` is true division and `i64()`
 # rounds to nearest, so a solver that must never over-allocate floors
 # every quotient itself.  Terminal dimensions are far below the range
-# where a double loses integer precision.
-func floor_div(numerator: long, denominator: long) -> long:
-    return long(floor(numerator / denominator))
+# where a f64 loses integer precision.
+func floor_div(numerator: i64, denominator: i64) -> i64:
+    return i64(floor(numerator / denominator))
 
 # Solve one axis: `total` cells, `gap` blank cells between neighbours,
 # one size per item in order.  Total and non-negative by construction.
-func resolve(total: long, gap: long, items: list(Length)) -> list(long):
+func resolve(total: i64, gap: i64, items: list[Length]) -> list[i64]:
     let region_count = len(items)
-    var sizes = new list(long)
+    var sizes = new list[i64]
     if region_count == 0:
         return sizes
     let usable = max(total - gap * (region_count - 1), 0)
@@ -40,10 +40,10 @@ func resolve(total: long, gap: long, items: list(Length)) -> list(long):
     # Preferred pass.  `sizes` starts at each region's wish; `weights`
     # remembers the grows; `floors` is how far a region may be shrunk
     # before it protests.
-    var weights = new list(long)
-    var floors = new list(long)
-    var claimed: long = 0
-    var grow_total: long = 0
+    var weights = new list[i64]
+    var floors = new list[i64]
+    var claimed: i64 = 0
+    var grow_total: i64 = 0
     for item in items:
         match item:
             cells(count):
@@ -71,8 +71,8 @@ func resolve(total: long, gap: long, items: list(Length)) -> list(long):
         # Room to spare: hand it to the grows by weight, the rounding
         # remainder to the first of them, so the axis is filled exactly.
         if grow_total > 0:
-            var given: long = 0
-            var first_grow: long = -1
+            var given: i64 = 0
+            var first_grow: i64 = -1
             for index in range(0, region_count):
                 if weights[index] > 0:
                     let share = floor_div(remaining * weights[index], grow_total)
@@ -112,9 +112,9 @@ func resolve(total: long, gap: long, items: list(Length)) -> list(long):
 # rectangle.  A zero-length item is an empty rectangle, which draws
 # nothing — a hidden pane is a length, never a flag.
 struct Row:
-    static func solve(area: termui.Rect, gap: long, items: list(Length)) -> list(termui.Rect):
+    static func solve(area: termui.Rect, gap: i64, items: list[Length]) -> list[termui.Rect]:
         let widths = resolve(area.columns, gap, items)
-        var rects = new list(termui.Rect)
+        var rects = new list[termui.Rect]
         var column = area.column
         for index, width in widths:
             rects.append(termui.Rect(row = area.row, column = column, rows = area.rows, columns = width))
@@ -124,9 +124,9 @@ struct Row:
 # Divide `area`'s rows top to bottom; each item becomes a full-width
 # rectangle.
 struct Column:
-    static func solve(area: termui.Rect, gap: long, items: list(Length)) -> list(termui.Rect):
+    static func solve(area: termui.Rect, gap: i64, items: list[Length]) -> list[termui.Rect]:
         let heights = resolve(area.rows, gap, items)
-        var rects = new list(termui.Rect)
+        var rects = new list[termui.Rect]
         var row = area.row
         for index, height in heights:
             rects.append(termui.Rect(row = row, column = area.column, rows = height, columns = area.columns))
@@ -149,12 +149,12 @@ enum Axis:
 # the sizes, and the policy that clamps them, stay with the application.
 struct Handle:
     axis: Axis
-    line: long
-    from: long
-    to: long
+    line: i64
+    from: i64
+    to: i64
 
     # Is the mouse cell on this divider?
-    func hit(row: long, column: long) -> bool:
+    func hit(row: i64, column: i64) -> bool:
         match self.axis:
             horizontal:
                 return column == self.line and row >= self.from and row < self.to
@@ -163,7 +163,7 @@ struct Handle:
 
     # The divider's position implied by a drag to this cell: the column
     # for a vertical rule, the row for a horizontal one.
-    func track(row: long, column: long) -> long:
+    func track(row: i64, column: i64) -> i64:
         match self.axis:
             horizontal:
                 return column

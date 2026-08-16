@@ -16,8 +16,8 @@ are values. Assignment and function calls give the destination a value copy.
 
 ```luce run
 struct Point:
-    x: long
-    y: long
+    x: i64
+    y: i64
 
 func main():
     var first = Point(x = 2, y = 3)
@@ -41,11 +41,11 @@ reference resources. Assignment and parameter passing retain the same object
 instead of duplicating its contents.
 
 ```luce run
-func add_one(values: list(long)):
+func add_one(values: list[i64]):
     values.append(3)
 
 func main():
-    let first: list(long) = [1, 2]
+    let first: list[i64] = [1, 2]
     let second = first
     add_one(second)
     print(f"{len(first)} {first[2]}")
@@ -64,7 +64,7 @@ slice creates a new list, for example:
 
 ```luce run
 func main():
-    let source: list(long) = [1, 2, 3]
+    let source: list[i64] = [1, 2, 3]
     let separate = source[0:len(source)]
     separate.append(4)
     print(f"{len(source)} {len(separate)}")
@@ -84,8 +84,8 @@ Copying a struct copies its scalar fields and retains its reference fields:
 
 ```luce run
 struct Model:
-    title: string
-    values: list(long)
+    title: str
+    values: list[i64]
 
 func main():
     var first = Model(title = "first", values = [1])

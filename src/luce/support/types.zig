@@ -703,14 +703,14 @@ pub const StructLayout = struct {
 /// an unknown struct in the other.
 pub const Builtin = enum {
     boolean,
-    byte,
-    short,
-    int,
-    long,
-    half,
-    float,
-    double,
-    string,
+    u8,
+    i16,
+    i32,
+    i64,
+    f16,
+    f32,
+    f64,
+    str,
     list,
     map,
     array,
@@ -749,14 +749,14 @@ pub fn builtinNamed(text: []const u8) ?Builtin {
 
 const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "bool", .is = .boolean },
-    .{ .name = "byte", .is = .byte },
-    .{ .name = "short", .is = .short },
-    .{ .name = "int", .is = .int },
-    .{ .name = "long", .is = .long },
-    .{ .name = "half", .is = .half },
-    .{ .name = "float", .is = .float },
-    .{ .name = "double", .is = .double },
-    .{ .name = "string", .is = .string },
+    .{ .name = "u8", .is = .u8 },
+    .{ .name = "i16", .is = .i16 },
+    .{ .name = "i32", .is = .i32 },
+    .{ .name = "i64", .is = .i64 },
+    .{ .name = "f16", .is = .f16 },
+    .{ .name = "f32", .is = .f32 },
+    .{ .name = "f64", .is = .f64 },
+    .{ .name = "str", .is = .str },
     .{ .name = "list", .is = .list },
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
@@ -783,10 +783,18 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
 /// where somebody writes it down.
 pub fn retiredSpelling(text: []const u8) ?[]const u8 {
     const retired = [_]struct { was: []const u8, now: []const u8 }{
-        .{ .was = "Int", .now = "long" },
-        .{ .was = "Float", .now = "double" },
+        .{ .was = "byte", .now = "u8" },
+        .{ .was = "short", .now = "i16" },
+        .{ .was = "int", .now = "i32" },
+        .{ .was = "long", .now = "i64" },
+        .{ .was = "half", .now = "f16" },
+        .{ .was = "float", .now = "f32" },
+        .{ .was = "double", .now = "f64" },
+        .{ .was = "string", .now = "str" },
+        .{ .was = "Int", .now = "i64" },
+        .{ .was = "Float", .now = "f64" },
         .{ .was = "Bool", .now = "bool" },
-        .{ .was = "String", .now = "string" },
+        .{ .was = "String", .now = "str" },
         .{ .was = "List", .now = "list" },
         .{ .was = "Map", .now = "map" },
         .{ .was = "Array", .now = "array" },
@@ -806,7 +814,7 @@ pub fn retiredSpelling(text: []const u8) ?[]const u8 {
 pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
-        .byte, .short, .int, .long, .half, .float, .double, .string => builtin,
+        .u8, .i16, .i32, .i64, .f16, .f32, .f64, .str => builtin,
         .boolean, .list, .map, .array, .builder, .file, .task => null,
     };
 }
@@ -854,46 +862,46 @@ fn writeTypeName(
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
         .boolean => try written.appendSlice(allocator, "bool"),
-        .byte => try written.appendSlice(allocator, "byte"),
-        .short => try written.appendSlice(allocator, "short"),
-        .int => try written.appendSlice(allocator, "int"),
-        .long => try written.appendSlice(allocator, "long"),
-        .half => try written.appendSlice(allocator, "half"),
-        .float => try written.appendSlice(allocator, "float"),
-        .double => try written.appendSlice(allocator, "double"),
-        .string => try written.appendSlice(allocator, "string"),
+        .byte => try written.appendSlice(allocator, "u8"),
+        .short => try written.appendSlice(allocator, "i16"),
+        .int => try written.appendSlice(allocator, "i32"),
+        .long => try written.appendSlice(allocator, "i64"),
+        .half => try written.appendSlice(allocator, "f16"),
+        .float => try written.appendSlice(allocator, "f32"),
+        .double => try written.appendSlice(allocator, "f64"),
+        .string => try written.appendSlice(allocator, "str"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
         .variant => |index| try written.appendSlice(allocator, variants[index].name),
         .heap => |index| switch (heap_types[index]) {
             .list => |element| {
-                try written.appendSlice(allocator, "list(");
+                try written.appendSlice(allocator, "list[");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, element);
-                try written.appendSlice(allocator, ")");
+                try written.appendSlice(allocator, "]");
             },
             .map => |pair| {
-                try written.appendSlice(allocator, "map(");
+                try written.appendSlice(allocator, "map[");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, pair.key);
                 try written.appendSlice(allocator, ", ");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, pair.value);
-                try written.appendSlice(allocator, ")");
+                try written.appendSlice(allocator, "]");
             },
             .array => |shape| {
-                try written.appendSlice(allocator, "array(");
+                try written.appendSlice(allocator, "array[");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, shape.element);
                 for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
-                try written.appendSlice(allocator, ")");
+                try written.appendSlice(allocator, "]");
             },
             .builder => try written.appendSlice(allocator, "builder"),
             .file => try written.appendSlice(allocator, "file"),
             .task => |work| {
                 try written.appendSlice(allocator, "task");
                 if (work.result != .none) {
-                    try written.appendSlice(allocator, "(");
+                    try written.appendSlice(allocator, "[");
                     try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, work.result);
                     if (work.fallible) try written.appendSlice(allocator, "!");
-                    try written.appendSlice(allocator, ")");
-                } else if (work.fallible) try written.appendSlice(allocator, "!");
+                    try written.appendSlice(allocator, "]");
+                } else if (work.fallible) try written.appendSlice(allocator, "[!]");
             },
         },
         .function => |index| {
@@ -956,7 +964,7 @@ test "an optional is its payload plus one level, and never two" {
 test "an optional type writes the ? it was written with" {
     const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, &.{}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
-    try std.testing.expectEqualStrings("list(long)?", written);
+    try std.testing.expectEqualStrings("list[i64]?", written);
 }
 
 test "an enum is its own type, its own name, and its backing width underneath" {
@@ -993,5 +1001,5 @@ test "an enum is its own type, its own name, and its backing width underneath" {
     };
     const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, &.{}, &.{}, .{ .heap = 0 });
     defer std.testing.allocator.free(written);
-    try std.testing.expectEqualStrings("list(Method)", written);
+    try std.testing.expectEqualStrings("list[Method]", written);
 }

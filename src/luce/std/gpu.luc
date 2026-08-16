@@ -22,24 +22,24 @@ struct Surface:
     static func from_handle(handle: file) -> Surface:
         return Surface(handle = handle)
 
-    func width() -> long!:
+    func width() -> i64!:
         return try gpu_surface_size(self.handle, 0)
 
-    func height() -> long!:
+    func height() -> i64!:
         return try gpu_surface_size(self.handle, 1)
 
-    func clear(red: long, green: long, blue: long, alpha: long = 255) -> !:
+    func clear(red: i64, green: i64, blue: i64, alpha: i64 = 255) -> !:
         try gpu_surface_clear(self.handle, red, green, blue, alpha)
 
     func fill_rect(
-        x: long,
-        y: long,
-        width: long,
-        height: long,
-        red: long,
-        green: long,
-        blue: long,
-        alpha: long = 255,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+        red: i64,
+        green: i64,
+        blue: i64,
+        alpha: i64 = 255,
     ) -> !:
         try gpu_surface_fill_rect(
             self.handle,

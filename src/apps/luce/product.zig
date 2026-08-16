@@ -87,7 +87,7 @@ fn runLuceHere(gpa: Allocator, tree: *const Install, arguments: []const []const 
 
 const greeting =
     \\func main():
-    \\    print("total " + string(3 * 10))
+    \\    print("total " + str(3 * 10))
     \\
 ;
 
@@ -261,7 +261,7 @@ test "package commands create a direct source package and version it" {
     try testing.expect(tree.exists("widget/widget.luc"));
     try testing.expect(!tree.exists("packages/widget/widget.luc"));
     try tree.write("widget/widget.luc",
-        \\func answer() -> long:
+        \\func answer() -> i64:
         \\    return 42
         \\
     );
@@ -269,7 +269,7 @@ test "package commands create a direct source package and version it" {
         \\import widget
         \\
         \\func main():
-        \\    print(string(widget.answer()))
+        \\    print(str(widget.answer()))
         \\
     );
     var checked = try runLuceHere(gpa, &tree, &.{ "check", "main.luc" });
@@ -339,8 +339,8 @@ test "check compiles, reports, and writes nothing" {
     // there may be three of them.
     try tree.write("sub/broken.luc",
         \\func main():
-        \\    let count: long = "seven"
-        \\    print(string(count))
+        \\    let count: i64 = "seven"
+        \\    print(str(count))
         \\
     );
 
@@ -386,7 +386,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("shape.luc",
-        \\func unreached() -> long:
+        \\func unreached() -> i64:
         \\    return 7
         \\
         \\func main():
@@ -413,7 +413,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     try testing.expect(!tree.exists("shape.lc"));
 
     // A program that does not compile has no IR to print.
-    try tree.write("broken.luc", "func main():\n    let x: long = \"s\"\n    print(string(x))\n");
+    try tree.write("broken.luc", "func main():\n    let x: i64 = \"s\"\n    print(string(x))\n");
     const broken = try tree.at(gpa, "broken.luc");
     defer gpa.free(broken);
     var failed = try runLuce(gpa, &tree, &.{ "ir", broken }, null);
@@ -445,7 +445,7 @@ test "a program may arrive on standard input, and is named for what it is" {
         gpa,
         &tree,
         &.{ "check", "-" },
-        "func main():\n    let x: long = \"s\"\n    print(string(x))\n",
+        "func main():\n    let x: i64 = \"s\"\n    print(string(x))\n",
     );
     defer complained.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), complained.status);
@@ -575,13 +575,13 @@ test "each --emit shape writes what it says, and the object links into a program
 // ---------------------------------------------------------------------------
 
 const stumbles =
-    \\func at(xs: list(long), index: long) -> long:
+    \\func at(xs: list[i64], index: i64) -> i64:
     \\    return xs[index]
     \\
     \\func main():
-    \\    var xs: list(long) = [1, 2, 3]
+    \\    var xs: list[i64] = [1, 2, 3]
     \\    print("before")
-    \\    print(string(at(xs, 7)))
+    \\    print(str(at(xs, 7)))
     \\
 ;
 
@@ -691,14 +691,14 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
         .{
             .name = "refuse",
             .source =
-            \\func check(value: long) -> long!:
+            \\func check(value: i64) -> i64!:
             \\    if value < 0:
             \\        error(f"negative: {value}")
             \\    return value
             \\
             \\func main() -> !:
-            \\    print(string(try check(1)))
-            \\    print(string(try check(-5)))
+            \\    print(str(try check(1)))
+            \\    print(str(try check(-5)))
             \\
             ,
             .status = 3,
@@ -743,8 +743,8 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("echo.luc",
-        \\func main(args: list(string)):
-        \\    print(string(len(args)))
+        \\func main(args: list[str]):
+        \\    print(str(len(args)))
         \\    for word in args:
         \\        print(word)
         \\
@@ -789,10 +789,10 @@ fn testedProject(gpa: Allocator) !Install {
         \\
     );
     try tree.write("geo.luc",
-        \\func area(width: long, height: long) -> long:
+        \\func area(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
-        \\func at(xs: list(long), index: long) -> long:
+        \\func at(xs: list[i64], index: i64) -> i64:
         \\    return xs[index]
         \\
     );
@@ -803,7 +803,7 @@ fn testedProject(gpa: Allocator) !Install {
     try tree.write("tests/geo_test.luc",
         \\import geo
         \\
-        \\func helper(side: long) -> long:
+        \\func helper(side: i64) -> i64:
         \\    return geo.area(side, side)
         \\
         \\func test_area_of_unit_square():
@@ -814,7 +814,7 @@ fn testedProject(gpa: Allocator) !Install {
         \\    assert(helper(5) == 25)
         \\
         \\func test_reads_past_the_end():
-        \\    var xs: list(long) = [1, 2, 3]
+        \\    var xs: list[i64] = [1, 2, 3]
         \\    assert(geo.at(xs, 7) == 0)
         \\
     );
@@ -830,7 +830,7 @@ fn testedProject(gpa: Allocator) !Install {
     );
     // A helper module: swept, holds no test, never claimed to.
     try tree.write("tests/support.luc",
-        \\func doubled(value: long) -> long:
+        \\func doubled(value: i64) -> i64:
         \\    return value * 2
         \\
     );
@@ -939,7 +939,7 @@ test "a discovery refusal and a compile failure are reported, and the healthy fi
     );
     try tree.write("tests/b_broken_test.luc",
         \\func test_typed():
-        \\    let count: long = "seven"
+        \\    let count: i64 = "seven"
         \\    assert(count == 7)
         \\
     );

@@ -5,7 +5,7 @@ follows `->`, and a function with no return value omits it. A return value
 must be produced on every path.
 
 ```luce run
-func gcd(a: long, b: long) -> long:
+func gcd(a: i64, b: i64) -> i64:
     var left = a
     var right = b
     while right != 0:
@@ -14,7 +14,7 @@ func gcd(a: long, b: long) -> long:
         right = next
     return left
 
-func announce(label: string, value: long):
+func announce(label: str, value: i64):
     print(f"{label}: {value}")
 
 func main():
@@ -39,16 +39,16 @@ parameter names. Named functions and capture-free lambdas can be passed to
 another function.
 
 ```luce run
-func twice(n: long) -> long:
+func twice(n: i64) -> i64:
     return n * 2
 
-func apply(f: func(long) -> long, value: long) -> long:
+func apply(f: func(i64) -> i64, value: i64) -> i64:
     return f(value)
 
 func main():
-    let chosen: func(long) -> long = twice
-    print(string(chosen(21)))
-    print(string(apply((n) -> n + 1, 41)))
+    let chosen: func(i64) -> i64 = twice
+    print(str(chosen(21)))
+    print(str(apply((n) -> n + 1, 41)))
 ```
 
 ```output
@@ -71,19 +71,19 @@ that expects one. The receiver is copied when it is a value-only struct:
 
 ```luce run
 struct Scale:
-    factor: long
+    factor: i64
 
-    func times(n: long) -> long:
+    func times(n: i64) -> i64:
         return n * self.factor
 
-func apply(f: func(long) -> long, value: long) -> long:
+func apply(f: func(i64) -> i64, value: i64) -> i64:
     return f(value)
 
 func main():
     let doubling = Scale(factor = 2)
     let tripling = Scale(factor = 3)
-    print(string(apply(doubling.times, 21)))
-    print(string(apply(tripling.times, 21)))
+    print(str(apply(doubling.times, 21)))
+    print(str(apply(tripling.times, 21)))
 ```
 
 ```output
@@ -95,17 +95,17 @@ The receiver snapshot is independent of a later change to the original:
 
 ```luce run
 struct Scale:
-    factor: long
+    factor: i64
 
-    func times(n: long) -> long:
+    func times(n: i64) -> i64:
         return n * self.factor
 
 func main():
     var scale = Scale(factor = 2)
-    let doubling: func(long) -> long = scale.times
+    let doubling: func(i64) -> i64 = scale.times
     scale.factor = 100
-    print(string(doubling(3)))
-    print(string(scale.times(3)))
+    print(str(doubling(3)))
+    print(str(scale.times(3)))
 ```
 
 ```output
@@ -119,17 +119,17 @@ so the original receiver must remain alive for as long as the function value:
 
 ```luce run
 struct Bag:
-    items: list(long)
+    items: list[i64]
 
-    func at(i: long) -> long:
+    func at(i: i64) -> i64:
         return self.items[i]
 
 func main():
     var bag = Bag(items = [7, 8])
-    let read: func(long) -> long = bag.at
-    print(string(read(0)))
+    let read: func(i64) -> i64 = bag.at
+    print(str(read(0)))
     bag.items.append(99)
-    print(string(read(2)))
+    print(str(read(2)))
 ```
 
 ```output
@@ -149,14 +149,14 @@ function whose result is optional: `(func(long) -> long)?` versus
 
 ```luce run
 struct Scale:
-    factor: long
+    factor: i64
 
-    func times(n: long) -> long:
+    func times(n: i64) -> i64:
         return n * self.factor
 
 struct Step:
-    name: string
-    action: (func(long) -> long)?
+    name: str
+    action: (func(i64) -> i64)?
 
 func main():
     let three = Scale(factor = 3)
@@ -167,7 +167,7 @@ func main():
     for step in steps:
         let action = step.action
         if action != none:
-            print(step.name + " " + string(action(7)))
+            print(step.name + " " + str(action(7)))
         else:
             print(step.name)
 ```

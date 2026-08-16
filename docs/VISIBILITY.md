@@ -43,17 +43,17 @@ There is no standard-library-specific wording.
 written in full — never abbreviated — immediately before the declaration:
 
 ```luce
-private const scale: long = 10
-public const limit: long = scale * 4
-private alias InternalId = long
-public alias UserId = long
+private const scale: i64 = 10
+public const limit: i64 = scale * 4
+private alias InternalId = i64
+public alias UserId = i64
 
-private func helper(x: long) -> long:
+private func helper(x: i64) -> i64:
     return x + scale
 
 func main():
-    print(string(limit))
-    print(string(helper(2)))
+    print(str(limit))
+    print(str(helper(2)))
 ```
 
 Restating the default is legal and inert: `public func f()` where public
@@ -81,18 +81,18 @@ member in the block takes the label's visibility:
 ```luce
 struct Rng:
     private:
-        state: long
+        state: i64
 
-    func next() -> long:
+    func next() -> i64:
         self.state = self.state * 48271 % 2147483647
         return self.state
 
-    func real() -> double:
-        return double(self.next()) / 2147483647.0
+    func real() -> f64:
+        return f64(self.next()) / 2147483647.0
 
 func main():
     var r = Rng(state = 42)
-    print(string(r.real()))
+    print(str(r.real()))
 ```
 
 Here `state` is private and both methods are public, because they sit

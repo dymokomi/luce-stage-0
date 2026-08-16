@@ -19,7 +19,7 @@ func test_begin_at_clears_and_resize_is_observable():
 func test_a_view_can_be_painted_on_the_renderer_surface():
     var ui = renderer.Renderer.of(2, 12)
     let area = ui.begin_at(2, 12)
-    var lines = new list(text.Line)
+    var lines = new list[text.Line]
     lines.append(text.plain("ready", termui.Style()))
     let block = view.Text(lines = lines)
     let item: view.View = block

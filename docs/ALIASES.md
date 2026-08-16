@@ -3,8 +3,8 @@
 `alias` gives an existing type another source name:
 
 ```luce
-alias UserId = long
-alias UserIds = list(UserId)
+alias UserId = i64
+alias UserIds = list[UserId]
 alias MaybeUserId = UserId?
 
 func find(ids: UserIds, wanted: UserId) -> MaybeUserId:
@@ -16,7 +16,7 @@ func find(ids: UserIds, wanted: UserId) -> MaybeUserId:
 func main():
     var ids: UserIds = new UserIds
     ids.append(42)
-    let found: long? = find(ids, 42)
+    let found: i64? = find(ids, 42)
     assert((found else 0) == 42)
 ```
 
@@ -60,22 +60,22 @@ enums, and unions. They may refer to later declarations and may form chains:
 ```luce
 alias Item = Button
 alias Element = UIElement
-alias Elements = list(Element)
+alias Elements = list[Element]
 
 interface UIElement:
-    func render(value: long) -> long
+    func render(value: i64) -> i64
 
 struct Button: Element:
-    offset: long
+    offset: i64
 
-    func render(value: long) -> long:
+    func render(value: i64) -> i64:
         return value + self.offset
 
 func main():
     var elements: Elements = new Elements
     let item: Item = Item(offset = 2)
     elements.append(item)
-    print(string(elements[0].render(40)))
+    print(str(elements[0].render(40)))
 ```
 
 Resolution is eager. An unused alias is still checked, so an unknown target

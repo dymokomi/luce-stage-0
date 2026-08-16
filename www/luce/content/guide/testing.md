@@ -10,7 +10,7 @@ declarations. A test returns nothing, or declares `-> !` when it needs to
 propagate a fallible operation. Helpers can have any other name.
 
 ```luce module file=tests/geometry_test.luc
-func square(side: long) -> long:
+func square(side: i64) -> i64:
     return side * side
 
 func test_square_of_three():

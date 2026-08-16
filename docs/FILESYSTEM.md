@@ -50,7 +50,7 @@ string.
 ```luce
 import std.paths
 
-func target(root: string, name: string) -> string:
+func target(root: str, name: str) -> str:
     return paths.joined([root, "build", name + ".out"])
 
 func main():
@@ -111,7 +111,7 @@ false`, which is three visible words:
 ```luce
 import std.files
 
-func check(p: string) -> !:
+func check(p: str) -> !:
     if (try files.is_dir(p)):
         print("dir")
     let there = files.exists(p) catch false
@@ -136,10 +136,10 @@ grown later is a compile error here:
 ```luce
 import std.files
 
-func walk(p: string):
+func walk(p: str):
     print("walk " + p)
 
-func classify(p: string) -> !:
+func classify(p: str) -> !:
     let what = try files.kind(p)
     if what == none:
         print(p + " is not there")
@@ -187,10 +187,10 @@ is not one.
 import std.files
 import std.paths
 
-func save(path: string, lines: list(string)) -> !:
+func save(path: str, lines: list[str]) -> !:
     try files.write_lines(path, lines)
 
-func stage(root: string, name: string, text: string) -> string!:
+func stage(root: str, name: str, text: str) -> str!:
     let target = paths.joined([root, "build", name + ".out"])
     try files.make_directory(paths.dir(target))
     try files.write(target, text)
@@ -241,7 +241,7 @@ than reported — a listing is a statement about a moment. A world that
 ```luce
 import std.files
 
-func show(dir: string) -> !:
+func show(dir: str) -> !:
     let listing = try files.entries(dir)
     for entry in listing:
         match entry.kind:
@@ -263,12 +263,12 @@ name before iterating it:
 import std.files
 import std.paths
 
-func main(args: list(string)) -> !:
-    var pending = new list(string)
+func main(args: list[str]) -> !:
+    var pending = new list[str]
     pending.append(args[0])
 
     var largest = ""
-    var largest_size: long = 0
+    var largest_size: i64 = 0
 
     while len(pending) > 0:
         let here = pending[len(pending) - 1]

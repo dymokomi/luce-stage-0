@@ -24,14 +24,14 @@ argument ends the positional run**: every argument after it must also be
 named, and a positional argument following a named one is refused.
 
 ```luce
-func find(s: string, needle: string, start: long = 0) -> long:
+func find(s: str, needle: str, start: i64 = 0) -> i64:
     return start
 
 func main():
     let a = find("abc", "b")               # all positional
     let b = find("abc", "b", start = 1)     # trailing name
     let c = find(needle = "b", s = "abc")   # named, reordered
-    print(string(a + b + c))
+    print(str(a + b + c))
 ```
 
 Names may be written in **any order** — `find(needle = "b", s = "abc")`
@@ -52,15 +52,15 @@ the slots they **name**. When a call reorders, evaluation order and
 parameter order differ:
 
 ```luce
-func log(first: long, second: long):
-    print(string(first))
-    print(string(second))
+func log(first: i64, second: i64):
+    print(str(first))
+    print(str(second))
 
-func one() -> long:
+func one() -> i64:
     print("one")
     return 1
 
-func two() -> long:
+func two() -> i64:
     print("two")
     return 2
 
@@ -91,10 +91,10 @@ An **optional** parameter (`T?`) may default to `none` or to a value of
 `T`, which widens into the optional:
 
 ```luce
-func lookup(key: string, fallback: long? = none) -> long?:
+func lookup(key: str, fallback: i64? = none) -> i64?:
     return fallback
 
-func step(count: long? = 1) -> long?:
+func step(count: i64? = 1) -> i64?:
     return count
 
 func main():
@@ -138,12 +138,12 @@ required fields must still be written.
 
 ```luce
 struct State:
-    path: string
-    content: string
-    cursor: long = 0
-    scroll: long = 0
+    path: str
+    content: str
+    cursor: i64 = 0
+    scroll: i64 = 0
     dirty: bool = false
-    message: string = ""
+    message: str = ""
 
 func main():
     var state = State(path = "notes", content = "hello")
@@ -171,9 +171,9 @@ may be named or defaulted like any others:
 
 ```luce
 struct Point:
-    x: double
-    y: double
-    func scaled(factor: double = 2.0) -> double:
+    x: f64
+    y: f64
+    func scaled(factor: f64 = 2.0) -> f64:
         return self.x * factor
     static func origin() -> Point:
         return Point(x = 0.0, y = 0.0)
@@ -183,7 +183,7 @@ func main():
     let a = p.scaled()               # default factor
     let b = p.scaled(factor = 3.0)   # named
     let o = Point.origin()
-    print(string(a + b + o.x))
+    print(str(a + b + o.x))
 ```
 
 Calling a method through its type — `Point.scaled(p, …)` — is refused:
@@ -210,7 +210,7 @@ default carry one — `term_style(fg, bg = -1, bold = false)` is the
 notable case:
 
 ```luce
-func fg() -> long:
+func fg() -> i64:
     return 3
 
 func main():
@@ -218,7 +218,7 @@ func main():
     let n = len(value = "abc")
     term_style(fg())               # bg and bold defaulted
     term_style(fg(), bold = true)  # bg defaulted
-    print(string(a + n))
+    print(str(a + n))
 ```
 
 **Builtin value methods take neither.** Their parameter types are

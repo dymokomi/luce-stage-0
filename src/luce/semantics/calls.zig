@@ -2187,7 +2187,7 @@ fn stringsCall(
         try self.fail(
             "luce.sema.import",
             method.span,
-            "string manipulation lives in the standard library: import std.strings to use {s} (docs/STD.md)",
+            "str manipulation lives in the standard library: import std.strings to use {s} (docs/STD.md)",
             .{method.name},
         );
         return null;
@@ -2223,9 +2223,9 @@ fn stringsCall(
         // target names something they never typed.  Say what they
         // asked about, then where the answer would have lived.
         if (suggestion.best()) |closest| {
-            try self.fail("luce.sema.method", method.span, "string has no method {s}; did you mean {s}?", .{ method.name, closest });
+            try self.fail("luce.sema.method", method.span, "str has no method {s}; did you mean {s}?", .{ method.name, closest });
         } else {
-            try self.fail("luce.sema.method", method.span, "string has no method {s}, and neither has the strings module", .{method.name});
+            try self.fail("luce.sema.method", method.span, "str has no method {s}, and neither has the strings module", .{method.name});
         }
         return null;
     };
@@ -2610,7 +2610,7 @@ fn objectMethod(
                     try self.fail(
                         "luce.sema.type",
                         method.span,
-                        "map.values() would answer list({s}), and a bare function type is not a list element — the storable " ++
+                        "map.values() would answer list[{s}], and a bare function type is not a list element — the storable " ++
                             "form is ({s})?, which a map value is deliberately not written as; walk m.keys() and read m.get(k) " ++
                             "instead",
                         .{ try self.analyzer.typeName(pair.value), try self.analyzer.typeName(pair.value) },
@@ -2747,7 +2747,7 @@ fn sequenceMethod(
     if (std.mem.eql(u8, name, "sort")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;
         const ordered = element.isNumeric() or element == .string;
-        if (!ordered) return methodFail(self, method, "sort orders numbers or string elements");
+        if (!ordered) return methodFail(self, method, "sort orders numbers or str elements");
         return .{ .kind = .list_sort, .result = .none };
     }
     if (std.mem.eql(u8, name, "reverse")) {

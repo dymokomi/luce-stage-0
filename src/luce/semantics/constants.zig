@@ -352,7 +352,7 @@ fn foldSequence(
         return constantError(
             analyzer,
             literal.span,
-            "an empty [] needs a list(T) or array(T, _) annotation",
+            "an empty [] needs a list[T] or array[T, _] annotation",
             .{},
         );
     }
@@ -513,7 +513,7 @@ fn foldMap(
         const key_type = wanted_key orelse key.value_type;
         key = fitElement(key, key_type);
         if (key_type != .long and key_type != .string and key_type != .enumeration) {
-            return constantError(analyzer, entry.key.span(), "map keys are long, string or an enum, got {s}", .{
+            return constantError(analyzer, entry.key.span(), "map keys are i64, str or an enum, got {s}", .{
                 try analyzer.typeName(key_type),
             });
         }
@@ -742,13 +742,13 @@ pub fn fold(
                 .bit_not => switch (operand.value) {
                     .long => |value| {
                         const arithmetic = operand.value_type.arithmeticType() orelse
-                            return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
+                            return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
                         if (arithmetic.isFloating()) {
-                            return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
+                            return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
                         }
                         return .{ .value = .{ .long = ~value }, .value_type = arithmetic };
                     },
-                    else => return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)}),
+                    else => return constantError(analyzer, unary.span, "~ works on integers; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)}),
                 },
             }
         },
@@ -772,12 +772,12 @@ pub fn fold(
                 }
                 const operand = (try fold(analyzer, module, call.arguments[0].value, null)) orelse return null;
                 if (operand.value != .string) {
-                    return constantError(analyzer, call.span, "ord takes a string, not {s}", .{
+                    return constantError(analyzer, call.span, "ord takes a str, not {s}", .{
                         try analyzer.typeName(operand.value_type),
                     });
                 }
                 const codepoint = helpers.ordOfLiteral(operand.value.string) orelse {
-                    return constantError(analyzer, call.span, "ord has no codepoint to read from an empty string", .{});
+                    return constantError(analyzer, call.span, "ord has no codepoint to read from an empty str", .{});
                 };
                 return .{ .value = .{ .long = codepoint }, .value_type = .long };
             }
@@ -989,7 +989,7 @@ fn foldConvertAs(
     // width (docs/ENUMS.md D4, D5).
     if (operand.value_type == .enumeration) {
         const declared = analyzer.enums.items[operand.value_type.enumeration.index];
-        if (produces == .string) {
+        if (produces == .str) {
             const member = declared.memberOfValue(operand.value.long).?;
             return .{ .value = .{ .string = declared.members[member].name }, .value_type = .string };
         }
@@ -998,7 +998,7 @@ fn foldConvertAs(
             .value_type = declared.backing.asType(),
         }, produces);
     }
-    if (produces == .string) {
+    if (produces == .str) {
         // The same text a run would print, spelled by the same
         // rules — but from a constant, so it is arena-owned here
         // rather than made by the runtime.
@@ -1011,7 +1011,7 @@ fn foldConvertAs(
             .double => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
             .boolean => |held| if (held) "true" else "false",
             .string => |held| held,
-            else => return constantError(analyzer, call.span, "string() converts a number, a bool, a string, or an enum", .{}),
+            else => return constantError(analyzer, call.span, "str() converts a number, a bool, a str, or an enum", .{}),
         };
         return .{ .value = .{ .string = printed }, .value_type = .string };
     }
@@ -1019,14 +1019,14 @@ fn foldConvertAs(
     // takes any number (docs/TYPES.md §3): four destinations and
     // one rule, not sixteen pairs.
     const target: Type = switch (produces) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .u8 => .byte,
+        .i16 => .short,
+        .i32 => .int,
+        .i64 => .long,
+        .f16 => .half,
+        .f32 => .float,
+        .f64 => .double,
+        .boolean, .str, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
     if (!operand.value_type.isNumeric()) {
         return constantError(analyzer, call.span, "{s}() converts a number", .{call.callee});
@@ -1081,14 +1081,14 @@ fn foldConvertAs(
 
 fn builtinForScalar(target: Type) types.Builtin {
     return switch (target) {
-        .byte => .byte,
-        .short => .short,
-        .int => .int,
-        .long => .long,
-        .half => .half,
-        .float => .float,
-        .double => .double,
-        .string => .string,
+        .byte => .u8,
+        .short => .i16,
+        .int => .i32,
+        .long => .i64,
+        .half => .f16,
+        .float => .f32,
+        .double => .f64,
+        .string => .str,
         else => unreachable,
     };
 }
@@ -1306,7 +1306,7 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
             if (left.value != .long or
                 (left.value_type != .int and left.value_type != .long))
             {
-                return constantError(analyzer, binary.span, "{s} works on int and long; {s} has no bits a program may see", .{
+                return constantError(analyzer, binary.span, "{s} works on integers; {s} has no bits a program may see", .{
                     context.operatorText(binary.op),
                     try analyzer.typeName(left.value_type),
                 });
@@ -1410,7 +1410,7 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
             },
             .string => |a| {
                 if (binary.op != .add) {
-                    return constantError(analyzer, binary.span, "string supports + only", .{});
+                    return constantError(analyzer, binary.span, "str supports + only", .{});
                 }
                 const joined = try std.mem.concat(analyzer.arena, u8, &.{ a, right.value.string });
                 return .{ .value = .{ .string = joined }, .value_type = .string };
@@ -1426,7 +1426,7 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
                 return constantError(
                     analyzer,
                     binary.span,
-                    "{s} is a set of names and has no order; write int(…) on both sides to compare the numbers behind them",
+                    "{s} is a set of names and has no order; write i64(…) on both sides to compare the numbers behind them",
                     .{try analyzer.typeName(left.value_type)},
                 );
             }

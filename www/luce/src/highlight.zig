@@ -52,14 +52,16 @@ pub const verbs = [_][]const u8{ "new", "spawn" };
 /// The compiler's lists are `builtin_table` and `retiredSpelling` in
 /// `support/types.zig`.
 pub const type_names = [_][]const u8{
-    // The language's own, lowercase (docs/TYPES.md D8): the seven-rung
-    // numeric ladder, `bool`, `string`, and the four heap shapes.
-    "bool", "byte",  "short",   "int",    "long",
-    "half", "float", "double",  "string", "list",
-    "map",  "array", "builder", "file",   "task",
-    // Retiring: the rename step takes these with it.
-    "Bool", "Int",   "Float",   "String", "List",
-    "Map",  "Array", "Builder",
+    // The language's current lowercase scalar and heap vocabulary.
+    "bool",    "u8",    "i16",    "i32",    "i64",    "f16",
+    "f32",     "f64",   "str",    "list",   "map",    "array",
+    "builder", "file",  "task",
+    // Retired spellings remain highlighted because the compiler gives
+    // each one a targeted replacement diagnostic.
+      "byte",   "short",  "int",
+    "long",    "half",  "float",  "double", "string", "Bool",
+    "Int",     "Float", "String", "List",   "Map",    "Array",
+    "Builder",
 };
 
 /// Everything callable by name on its own: standalone builtins, the
@@ -302,7 +304,7 @@ fn highlighted(gpa: std.mem.Allocator, source: []const u8) ![]u8 {
 
 test "keywords, verbs, types, builtins and declared names each get their class" {
     const gpa = std.testing.allocator;
-    const html = try highlighted(gpa, "static func total() -> int:\n    let xs = new list(int)\n    return len(xs)");
+    const html = try highlighted(gpa, "static func total() -> i32:\n    let xs = new list[i32]\n    return len(xs)");
     defer gpa.free(html);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">static</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">func</span>") != null);
@@ -349,11 +351,11 @@ test "every byte of the input survives highlighting" {
     const gpa = std.testing.allocator;
     const source =
         \\struct Bag:
-        \\    items: list(int)
+        \\    items: list[i32]
         \\
         \\func main():
         \\    var bag = Bag(items = [1, 2])   # <&>
-        \\    print(string(len(bag.items)))
+        \\    print(str(len(bag.items)))
     ;
     const html = try highlighted(gpa, source);
     defer gpa.free(html);

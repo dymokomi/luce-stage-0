@@ -22,10 +22,10 @@ struct Renderer:
 
     # A host-free constructor keeps renderer tests deterministic and lets
     # a caller drive a fixed-size frame without a real terminal.
-    static func of(rows: long, columns: long) -> Renderer:
+    static func of(rows: i64, columns: i64) -> Renderer:
         return Renderer(surface = surface.Surface.of(rows, columns))
 
-    func begin_at(rows: long, columns: long) -> termui.Rect:
+    func begin_at(rows: i64, columns: i64) -> termui.Rect:
         if rows != self.surface.rows or columns != self.surface.columns:
             self.surface = surface.Surface.of(rows, columns)
         self.surface.clear()
@@ -40,7 +40,7 @@ struct Renderer:
     func present() -> surface.Painted:
         return self.surface.present()
 
-    func cursor(row: long, column: long):
+    func cursor(row: i64, column: i64):
         term.move(row, column)
 
     func flush():

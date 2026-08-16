@@ -29,7 +29,7 @@ expected. Write the bare name, no call parentheses:
 import std.lists
 
 struct Player:
-    score: long
+    score: i64
 
 func by_score(a: Player, b: Player) -> bool:
     return a.score < b.score
@@ -38,7 +38,7 @@ func main():
     var xs = [Player(score = 3), Player(score = 1), Player(score = 2)]
     xs.sort_by(by_score)
     for p in xs:
-        print(string(p.score))
+        print(str(p.score))
 ```
 
 Resolution runs through the same head-names-a-declaration path that
@@ -57,15 +57,15 @@ container element, a map value, and a union payload field:
 import std.lists
 
 struct Player:
-    score: long
+    score: i64
 
-func sort_players(xs: list(Player), before: func(Player, Player) -> bool):
+func sort_players(xs: list[Player], before: func(Player, Player) -> bool):
     xs.sort_by(before)
 
 func main():
     var xs = [Player(score = 2), Player(score = 1)]
     sort_players(xs, (a, b) -> a.score < b.score)
-    print(string(xs[0].score))
+    print(str(xs[0].score))
 ```
 
 Where a value must exist before anything fills it — a field, an array
@@ -83,12 +83,12 @@ expression:
 import std.lists
 
 struct Player:
-    score: long
+    score: i64
 
 func main():
     var xs = [Player(score = 3), Player(score = 1), Player(score = 2)]
     xs.sort_by((a, b) -> a.score < b.score)
-    print(string(xs[0].score))
+    print(str(xs[0].score))
 ```
 
 - **Parameters are bare names.** Their types come from the function type
@@ -122,12 +122,12 @@ call suffix `EXPR(args)` applies to **any** expression whose type is a
 `func(...)`, and it is checked exactly as a call through a named value:
 
 ```luce
-func scale(n: long) -> long:
+func scale(n: i64) -> i64:
     return n * 2
 
 func main():
-    var actions: map(string, func(long) -> long) = {"double": scale}
-    print(string(actions["double"](21)))
+    var actions: map[str, func(i64) -> i64] = {"double": scale}
+    print(str(actions["double"](21)))
 ```
 
 `EXPR(args)` parses wherever `EXPR[i]` does — one more postfix suffix
@@ -147,12 +147,12 @@ Function values have no equality or ordering, and copying one costs
 nothing. `string(f)` answers the function's name:
 
 ```luce
-func by_score(a: long, b: long) -> bool:
+func by_score(a: i64, b: i64) -> bool:
     return a < b
 
 func main():
-    let f: func(long, long) -> bool = by_score
-    print(string(f))
+    let f: func(i64, i64) -> bool = by_score
+    print(str(f))
 ```
 
 Two function values cannot be compared with `==` or `!=`: a value is the

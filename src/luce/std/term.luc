@@ -1,4 +1,4 @@
-# The short terminal module.  `std.os` owns the host-facing system facts and
+# The i16 terminal module.  `std.os` owns the host-facing system facts and
 # shell service; `std.term` gives a terminal program the same terminal value
 # without making it reach through the larger OS namespace.
 #
@@ -10,22 +10,22 @@ import std.os
 const ui = os.term.ui
 const io = os.term.io
 
-func rows() -> long:
+func rows() -> i64:
     return os.term.rows()
 
-func cols() -> long:
+func cols() -> i64:
     return os.term.cols()
 
 func clear():
     os.term.clear()
 
-func move(row: long, column: long):
+func move(row: i64, column: i64):
     os.term.move(row, column)
 
-func style(foreground: long, background: long = -1, bold: bool = false):
+func style(foreground: i64, background: i64 = -1, bold: bool = false):
     os.term.style(foreground, background, bold)
 
-func write(text: string):
+func write(text: str):
     os.term.write(text)
 
 func flush():

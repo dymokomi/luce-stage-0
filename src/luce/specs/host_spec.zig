@@ -50,8 +50,8 @@ test "print, arguments, and files flow through the host" {
     world.arguments = &one_argument;
 
     var session = try agree.compare(
-        \\func main(args: list(string)) -> !:
-        \\    print("args: " + string(len(args)))
+        \\func main(args: list[str]) -> !:
+        \\    print("args: " + str(len(args)))
         \\    let path = args[0]
         \\    if (try path_kind(path)) != 0:
         \\        print(try file_read(path))
@@ -73,7 +73,7 @@ test "an argument out of range traps, and a refused write is an error" {
     // The command line is an ordinary list now, so the first of those
     // is the language's own bounds trap (docs/LANGUAGE.md).
     var session = try agree.compare(
-        \\func main(args: list(string)):
+        \\func main(args: list[str]):
         \\    file_write("out.txt", "ignored") catch:
         \\        print("refused")
         \\    let missing = args[5]
@@ -102,24 +102,24 @@ test "main receives the command line, and args[0] is the first user argument" {
     world.arguments = &one_argument;
 
     try agree.printsGiven(
-        \\func main(args: list(string)):
-        \\    print(string(len(args)))
+        \\func main(args: list[str]):
+        \\    print(str(len(args)))
         \\    print(args[0])
         \\
     , .{ .world = world }, "1\nnotes.txt\n");
 }
 
-test "args iterates, slices and joins like any other list(string)" {
+test "args iterates, slices and joins like any other list[str]" {
     // The point of the parameter over `arg(index)`: it composes with
     // everything `list` already has.
     try agree.printsGiven(
         \\import std.strings
         \\
-        \\func main(argv: list(string)):
+        \\func main(argv: list[str]):
         \\    for name in argv:
         \\        print(name)
         \\    print(strings.join(argv[1:len(argv)], "-"))
-        \\    print(string(argv.contains("beta")))
+        \\    print(str(argv.contains("beta")))
         \\
     , .{}, "alpha\nbeta\nbeta\ntrue\n");
 }
@@ -128,8 +128,8 @@ test "a host with no arguments to offer hands main an empty list, not a trap" {
     // Fail-closed for the host builtins means a trap; `args` is not one
     // of them, and the entry cannot fail before `main` starts.
     try agree.printsGiven(
-        \\func main(args: list(string)):
-        \\    print(string(len(args)))
+        \\func main(args: list[str]):
+        \\    print(str(len(args)))
         \\
     , .console_only, "0\n");
 }
@@ -139,7 +139,7 @@ test "reading past the end of args is the language's own bounds trap" {
     world.arguments = &one_argument;
 
     try agree.trapGiven(
-        \\func main(args: list(string)):
+        \\func main(args: list[str]):
         \\    print(args[1])
         \\
     , .{ .world = world }, .index_bounds);
@@ -150,7 +150,7 @@ test "main's args compose with the raising entry" {
     world.arguments = &one_argument;
 
     try agree.printsGiven(
-        \\func main(args: list(string)) -> !:
+        \\func main(args: list[str]) -> !:
         \\    print(try file_read(args[0]))
         \\
     , .{ .world = world }, "file body\n");
@@ -170,7 +170,7 @@ test "read_line answers a line, then absence; the prompt goes out in front" {
         \\    var line = read_line("> ")
         \\    while line != none:
         \\        count = count + 1
-        \\        print(string(count) + ":" + line)
+        \\        print(str(count) + ":" + line)
         \\        line = read_line("> ")
         \\    print("done")
         \\
@@ -190,7 +190,7 @@ test "the clock, the wait and the environment reach the host" {
         \\func main():
         \\    let started = clock_ms()
         \\    sleep_ms(30)
-        \\    print("elapsed " + string(clock_ms() - started))
+        \\    print("elapsed " + str(clock_ms() - started))
         \\    sleep_ms(0)
         \\    sleep_ms(-5)
         \\    print_error("to stderr")
@@ -309,10 +309,10 @@ test "path_kind names what is there, and nothing there is an answer" {
     };
     var session = try agree.compare(
         \\func main() -> !:
-        \\    print(string(try path_kind("notes.txt")))
-        \\    print(string(try path_kind("papers")))
-        \\    print(string(try path_kind("wire")))
-        \\    print(string(try path_kind("ghost.txt")))
+        \\    print(str(try path_kind("notes.txt")))
+        \\    print(str(try path_kind("papers")))
+        \\    print(str(try path_kind("wire")))
+        \\    print(str(try path_kind("ghost.txt")))
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -369,10 +369,10 @@ test "the two clocks are two questions" {
     // program reading both gets both.
     try agree.prints(
         \\func main():
-        \\    print(string(clock_ms()))
-        \\    print(string(epoch_ms()))
-        \\    print(string(clock_ms()))
-        \\    print(string(epoch_ms()))
+        \\    print(str(clock_ms()))
+        \\    print(str(epoch_ms()))
+        \\    print(str(clock_ms()))
+        \\    print(str(epoch_ms()))
         \\
     ,
         \\1000
@@ -391,7 +391,7 @@ test "a host with no calendar refuses rather than inventing a date" {
     provided.world.timeless = true;
     try agree.trapGiven(
         \\func main():
-        \\    print(string(epoch_ms()))
+        \\    print(str(epoch_ms()))
         \\
     , provided, .host_unavailable);
 }
@@ -407,7 +407,7 @@ test "every host service fails closed when the host withholds it" {
         \\
         ,
         \\func main():
-        \\    print(string(clock_ms()))
+        \\    print(str(clock_ms()))
         \\
         ,
         \\func main():
@@ -439,23 +439,23 @@ test "every host service fails closed when the host withholds it" {
         \\
         ,
         \\func main() -> !:
-        \\    print(string(try path_kind("x")))
+        \\    print(str(try path_kind("x")))
         \\
         ,
         \\func main():
-        \\    print(string(epoch_ms()))
+        \\    print(str(epoch_ms()))
         \\
         ,
         \\func main():
-        \\    print(string(os_total_memory()))
+        \\    print(str(os_total_memory()))
         \\
         ,
         \\func main():
-        \\    print(string(os_available_memory()))
+        \\    print(str(os_available_memory()))
         \\
         ,
         \\func main():
-        \\    print(string(os_cpu_count()))
+        \\    print(str(os_cpu_count()))
         \\
         ,
     };
@@ -470,7 +470,7 @@ test "every host service fails closed when the host withholds it" {
 
 test "an uncaught error names its code, its words, and where it was raised" {
     var session = try agree.compare(
-        \\func save(path: string) -> !:
+        \\func save(path: str) -> !:
         \\    try file_write(path, "body")
         \\
         \\func main() -> !:
@@ -491,15 +491,15 @@ test "an uncaught error names its code, its words, and where it was raised" {
 
 test "error() raises the program's own words, and catch discards them" {
     var session = try agree.compare(
-        \\func check(n: long) -> long!:
+        \\func check(n: i64) -> i64!:
         \\    if n < 0:
-        \\        error("negative: " + string(n))
+        \\        error("negative: " + str(n))
         \\    return n
         \\
         \\func main() -> !:
-        \\    print(string(check(-1) catch 0))
-        \\    print(string(try check(7)))
-        \\    print(string(try check(-2)))
+        \\    print(str(check(-1) catch 0))
+        \\    print(str(try check(7)))
+        \\    print(str(try check(-2)))
         \\
     , .{});
     defer session.deinit();
@@ -519,9 +519,9 @@ test "catch NAME: binds the words the error carried, whichever code it was" {
     // write raises the library's, and the handler reads a `string`
     // either way (docs/FAILURE.md).
     var session = try agree.compare(
-        \\func check(n: long) -> long!:
+        \\func check(n: i64) -> i64!:
         \\    if n < 0:
-        \\        error("negative: " + string(n))
+        \\        error("negative: " + str(n))
         \\    return n
         \\
         \\func main():
@@ -588,14 +588,14 @@ test "a call site that raised after it returned gives nothing back twice" {
     // back — and releasing that frees nothing.
     try agree.ok(
         \\struct Turn:
-        \\    at: long = 0
-        \\    note: string = "start"
+        \\    at: i64 = 0
+        \\    note: str = "start"
         \\
-        \\    func act(order: string) -> !:
+        \\    func act(order: str) -> !:
         \\        if order == "no":
         \\            error("cannot " + order)
         \\        self.at += 1
-        \\        self.note = order + " " + string(self.at)
+        \\        self.note = order + " " + str(self.at)
         \\
         \\func main():
         \\    var turn = Turn()
@@ -614,20 +614,20 @@ test "the caught error is consumed: the binding reads it, forget still clears it
     // — the run finishes rather than ending errored, and the caller
     // above it sees nothing pending.
     var session = try agree.compare(
-        \\func check(n: long) -> long!:
+        \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative")
         \\    return n
         \\
-        \\func guard(n: long) -> long:
+        \\func guard(n: i64) -> i64:
         \\    check(n) catch reason:
         \\        print("handled " + reason)
         \\        return 0
         \\    return n
         \\
         \\func main() -> !:
-        \\    print(string(guard(-1)))
-        \\    print(string(try check(3)))
+        \\    print(str(guard(-1)))
+        \\    print(str(try check(3)))
         \\
     , .{});
     defer session.deinit();
@@ -643,19 +643,19 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
     // `return` that leaves it early (S1).  A leak fails the run under
     // the testing allocator; the census fails it too.
     try agree.ok(
-        \\func check(n: long) -> long!:
+        \\func check(n: i64) -> i64!:
         \\    if n < 0:
-        \\        error("a message far too long to live inside a value: " + string(n))
+        \\        error("a message far too long to live inside a value: " + str(n))
         \\    return n
         \\
-        \\func early() -> long:
+        \\func early() -> i64:
         \\    check(-1) catch reason:
         \\        assert(len(reason) > 22)
         \\        return len(reason)
         \\    return 0
         \\
         \\func main():
-        \\    var seen: long = 0
+        \\    var seen: i64 = 0
         \\    var index = 0
         \\    while index < 100:
         \\        check(0 - index - 1) catch reason:
@@ -665,7 +665,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
         \\    assert(early() > 22)
         \\    # And out of a loop from inside a handler: `break` unwinds
         \\    # scopes innermost first, and the binding's is one of them.
-        \\    var stopped: long = 0
+        \\    var stopped: i64 = 0
         \\    while true:
         \\        check(-7) catch reason:
         \\            stopped = len(reason)
@@ -716,7 +716,7 @@ test "terminal builtins drive the host screen and key queue" {
         \\    let quit = key_read()
         \\    term_flush()
         \\    print(quit else "?")
-        \\    print(string(term_rows()) + "x" + string(term_cols()))
+        \\    print(str(term_rows()) + "x" + str(term_cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();
@@ -829,14 +829,14 @@ test "exit unwinds through nested calls, and the census counts what stood" {
     // standing when the run ends, and `settle` holds the two engines
     // to the same census.
     try agree.exits(
-        \\func stop(code: long):
+        \\func stop(code: i64):
         \\    var mine = [1, 2, 3]
-        \\    print("stopping " + string(len(mine)))
+        \\    print("stopping " + str(len(mine)))
         \\    exit(code)
         \\
         \\func main():
         \\    var kept = [4, 5]
-        \\    print("have " + string(len(kept)))
+        \\    print("have " + str(len(kept)))
         \\    stop(7)
         \\
     , .{}, 7);
@@ -845,12 +845,12 @@ test "exit unwinds through nested calls, and the census counts what stood" {
 test "exit unwinds a union carrying a callback and an owned list" {
     try agree.exits(
         \\union Job:
-        \\    run(action: (func(long) -> long)?, items: list(long))
+        \\    run(action: (func(i64) -> i64)?, items: list[i64])
         \\
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
-        \\func stop(code: long):
+        \\func stop(code: i64):
         \\    var job = Job.run(action = twice, items = [8, 9])
         \\    exit(code)
         \\
@@ -897,9 +897,9 @@ test "exit fails closed: a host that cannot carry a status refuses the call" {
 test "the three machine facts reach the host and come back as written" {
     try agree.prints(
         \\func main():
-        \\    print(string(os_total_memory()))
-        \\    print(string(os_available_memory()))
-        \\    print(string(os_cpu_count()))
+        \\    print(str(os_total_memory()))
+        \\    print(str(os_available_memory()))
+        \\    print(str(os_cpu_count()))
         \\
     ,
         \\8589934592
@@ -920,8 +920,8 @@ test "a fact asked twice is asked twice, not folded to one call" {
         \\    var seen = 0
         \\    for round in range(0, 3):
         \\        seen = seen + 1
-        \\        print(string(os_available_memory()))
-        \\    print("read " + string(seen))
+        \\        print(str(os_available_memory()))
+        \\    print("read " + str(seen))
         \\
     ,
         \\3221225472
@@ -940,12 +940,12 @@ test "a host that cannot tell refuses exactly as one without the slot does" {
     const unmeasurable: agree.Provided = .{ .world = .{ .unmeasurable = true } };
     try agree.trapGiven(
         \\func main():
-        \\    print(string(os_total_memory()))
+        \\    print(str(os_total_memory()))
         \\
     , unmeasurable, .host_unavailable);
     try agree.trapGiven(
         \\func main():
-        \\    print(string(os_total_memory()))
+        \\    print(str(os_total_memory()))
         \\
     , .{ .machine = false }, .host_unavailable);
 }
@@ -958,7 +958,7 @@ test "a refused fact stops the program where it stood" {
         \\func main():
         \\    print("asking")
         \\    let bytes = os_available_memory()
-        \\    print("got " + string(bytes))
+        \\    print("got " + str(bytes))
         \\
     , .{ .world = .{ .unmeasurable = true } });
     defer session.deinit();

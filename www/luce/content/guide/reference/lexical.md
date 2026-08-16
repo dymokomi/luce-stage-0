@@ -71,7 +71,7 @@ main.luc:2:9: a name starts with a letter: _total is not a name [luce.lex.name]
 func main():
     let _ = read_count()
 
-func read_count() -> long:
+func read_count() -> i64:
     return 3
 ```
 
@@ -106,7 +106,7 @@ The following names are reserved for builtins and compiler syntax. A
 declaration using one is `luce.sema.reserved`.
 
 ```
-range       long         double       string              None
+range                                                    None
 abs         min          max          clamp               sqrt
 floor       ceil         trunc        len                 byte_at
 assert      trap         parse_int    parse_float         chr
@@ -190,11 +190,11 @@ shift is signed.
 ```luce run
 func main():
     let flags = 0b1010
-    print(string(flags & 0b0010 != 0))
-    print(string(0xF0 | 0x0F))
-    print(string(~0))
-    print(string(-8 >> 1))
-    print(string(1_000_000 >> 3))
+    print(str(flags & 0b0010 != 0))
+    print(str(0xF0 | 0x0F))
+    print(str(~0))
+    print(str(-8 >> 1))
+    print(str(1_000_000 >> 3))
 ```
 
 ```output

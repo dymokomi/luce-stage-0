@@ -77,9 +77,9 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
 test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\func main(args: list(string)):
+        \\func main(args: list[str]):
         \\    let n = parse_int(args[0])
-        \\    print(string(n else 0))
+        \\    print(str(n else 0))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -95,13 +95,13 @@ test "floats, structs, and the host services all lower" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func main(args: list(string)) -> !:
+        \\func main(args: list[str]) -> !:
         \\    let p = Point(x = 1.5, y = -0.0)
-        \\    print(string(p.x * 2.0) + string(long(p.y)) + string(sqrt(4.0)) + string(sqrt(p.x)))
-        \\    print(args[0] + string(len(args)) + string(try path_kind("nowhere")))
+        \\    print(str(p.x * 2.0) + str(i64(p.y)) + str(sqrt(4.0)) + str(sqrt(p.x)))
+        \\    print(args[0] + str(len(args)) + str(try path_kind("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
         \\
@@ -134,22 +134,22 @@ test "a union builds through the struct path and is read inline" {
     const rendered = (try render(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
-        \\func kind(s: Shape) -> long:
+        \\func kind(s: Shape) -> i64:
         \\    match s:
         \\        empty:
         \\            return 0
         \\        circle(radius):
-        \\            return long(radius)
+        \\            return i64(radius)
         \\        rect:
         \\            return 2
         \\
         \\func main():
-        \\    var cells = new array(Shape, 2)
+        \\    var cells = new array[Shape](2)
         \\    cells[1] = Shape.circle(radius = 4.0)
-        \\    print(string(kind(cells[1])))
+        \\    print(str(kind(cells[1])))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -179,10 +179,10 @@ test "the runtime library is called, not reimplemented" {
     // `len` of a List or an Array is generated inline (docs/CODEGEN.md).
     const rendered = (try render(
         \\func main():
-        \\    let xs = new list(long)
-        \\    let counts = new map(string, long)
+        \\    let xs = new list[i64]
+        \\    let counts = new map[str, i64]
         \\    xs.append(1)
-        \\    print(string(len(counts)) + string(xs.pop()))
+        \\    print(str(len(counts)) + str(xs.pop()))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -211,11 +211,11 @@ test "a release artifact carries no origin table, and a debug one does" {
     // that quietly shipped none.
     const gpa = std.testing.allocator;
     const source =
-        \\func ratio(value: long) -> long:
+        \\func ratio(value: i64) -> i64:
         \\    return 10 // value
         \\
         \\func main():
-        \\    print(string(ratio(2)))
+        \\    print(str(ratio(2)))
         \\
     ;
 
@@ -259,17 +259,17 @@ test "LLVM refuses function equality in hostile MIR" {
     // slot and silently treated different binds as equal.
     const gpa = std.testing.allocator;
     var program = try spec.program(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func apply(f: func(long) -> long, n: long) -> long:
+        \\func apply(f: func(i64) -> i64, n: i64) -> i64:
         \\    return f(n)
         \\
         \\func main():
-        \\    let left: func(long) -> long = twice
-        \\    let right: func(long) -> long = twice
-        \\    print(string(apply(left, 1)))
-        \\    print(string(apply(right, 2)))
+        \\    let left: func(i64) -> i64 = twice
+        \\    let right: func(i64) -> i64 = twice
+        \\    print(str(apply(left, 1)))
+        \\    print(str(apply(right, 2)))
     );
     defer program.deinit();
 
@@ -352,12 +352,12 @@ test "a hoisted container read lands on the retired row when the handle is null"
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    var row = 0
         \\    while row < 2:
         \\        grid[row, 0] = row * 2
         \\        row = row + 1
-        \\    print(string(grid[1, 0]))
+        \\    print(str(grid[1, 0]))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -383,9 +383,9 @@ test "every runtime declaration carries what the compiler knows about it" {
     // what proves the saying reaches the module.
     const rendered = (try render(
         \\func main():
-        \\    let counts = new map(string, long)
+        \\    let counts = new map[str, i64]
         \\    counts["one"] = 1
-        \\    print(string(len(counts)) + string(counts["one"]))
+        \\    print(str(len(counts)) + str(counts["one"]))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -471,12 +471,12 @@ test "every runtime declaration carries what the compiler knows about it" {
 
 const flat_constants_source =
     \\struct Label:
-    \\    text: string
-    \\    rank: long
+    \\    text: str
+    \\    rank: i64
     \\
-    \\const labels: list(Label) = [Label(text = "first", rank = 1)]
-    \\const axis: array(long, _) = [3, 5, 8]
-    \\const lookup: map(string, long) = {"one": 1, "two": 2}
+    \\const labels: list[Label] = [Label(text = "first", rank = 1)]
+    \\const axis: array[i64, _] = [3, 5, 8]
+    \\const lookup: map[str, i64] = {"one": 1, "two": 2}
     \\
     \\func main():
     \\    assert(labels[0].text == "first")
@@ -534,7 +534,7 @@ test "constant containers materialize once and load from the program root" {
 test "an unused constant container leaves no pool or prologue behind" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\const unused: list(long) = [1, 2, 3]
+        \\const unused: list[i64] = [1, 2, 3]
         \\
         \\func main():
         \\    assert(2 + 2 == 4)
@@ -551,9 +551,9 @@ test "an unused constant container leaves no pool or prologue behind" {
 }
 
 const worker_constants_source =
-    \\const seeds: list(long) = [13, 21]
+    \\const seeds: list[i64] = [13, 21]
     \\
-    \\func first() -> long:
+    \\func first() -> i64:
     \\    return seeds[0]
     \\
     \\func main():
@@ -581,7 +581,7 @@ test "every worker runtime materializes its own constant roots" {
 test "constant declaration origins survive only in debug artifacts" {
     const gpa = std.testing.allocator;
     const source =
-        \\const seeds: list(long) = [3, 1, 2]
+        \\const seeds: list[i64] = [3, 1, 2]
         \\
         \\func main():
         \\    assert(seeds[0] == 3)
@@ -615,7 +615,7 @@ test "a compiled worker reads its runtime-local constant root" {
 test "inout calls mutate the caller on return, error, and nested forwarding" {
     try agree(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
         \\    func step():
         \\        self.value += 1
@@ -624,12 +624,12 @@ test "inout calls mutate the caller on return, error, and nested forwarding" {
         \\        self.step()
         \\        self.step()
         \\
-        \\    func reject(value: long) -> !:
+        \\    func reject(value: i64) -> !:
         \\        self.value = value
         \\        error("failed")
         \\
         \\struct Holder:
-        \\    values: list(long)
+        \\    values: list[i64]
         \\
         \\    func replace():
         \\        self = Holder(values = [9])
@@ -676,9 +676,9 @@ test "arithmetic, comparison, control flow, locals, and String(long) run" {
         \\        else:
         \\            total = total - index
         \\        index = index + 1
-        \\    print(string(total))
-        \\    print(string(-total))
-        \\    print(string(total // 4))
+        \\    print(str(total))
+        \\    print(str(-total))
+        \\    print(str(total // 4))
         \\
     , &capture, .{});
 
@@ -691,19 +691,19 @@ test "calls and recursion carry values back and traps forward" {
     var capture: Capture = .{};
 
     const status = try run(
-        \\func fib(n: long) -> long:
+        \\func fib(n: i64) -> i64:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
         \\
-        \\func name_of(name: string, value: long) -> string:
+        \\func name_of(name: str, value: i64) -> str:
         \\    if value > 0:
         \\        return name
         \\    return "none"
         \\
         \\func main():
         \\    print(name_of("fib", fib(20)))
-        \\    print(string(fib(20)))
+        \\    print(str(fib(20)))
         \\
     , &capture, .{});
 
@@ -713,12 +713,12 @@ test "calls and recursion carry values back and traps forward" {
 
 test "string of an unwritten function traps null_object on both engines" {
     var program = try spec.program(
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = twice
-        \\    print(string(chosen))
+        \\    let chosen: func(i64) -> i64 = twice
+        \\    print(str(chosen))
         \\
     );
     defer program.deinit();
@@ -758,18 +758,18 @@ test "a call inside a loop does not grow the frame" {
     // The scratch slot for the call result lives in the entry block, so
     // a million iterations cost one stack slot, not a million.
     const status = try run(
-        \\func step(total: long, index: long) -> long:
+        \\func step(total: i64, index: i64) -> i64:
         \\    if index % 7 == 0:
         \\        return total + index
         \\    return total
         \\
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    var index = 0
         \\    while index < 1000000:
         \\        total = step(total, index)
         \\        index = index + 1
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     , &capture, .{});
 
@@ -801,12 +801,12 @@ test "division by zero traps with the interpreter's code and message" {
     var capture: Capture = .{};
 
     const status = try run(
-        \\func divide(a: long, b: long) -> long:
+        \\func divide(a: i64, b: i64) -> i64:
         \\    return a // b
         \\
         \\func main():
         \\    print("before")
-        \\    print(string(divide(1, 0)))
+        \\    print(str(divide(1, 0)))
         \\    print("after")
         \\
     , &capture, .{});
@@ -828,7 +828,7 @@ test "integer overflow traps instead of wrapping" {
         \\    while step < 100:
         \\        value = value * 3
         \\        step = step + 1
-        \\    print(string(value))
+        \\    print(str(value))
         \\
     , &capture, .{});
 
@@ -884,26 +884,26 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
     // message and a trace, the way docs/LANGUAGE.md says it is — on
     // both engines, at the same call.
     try agree(
-        \\func deep(n: long) -> long:
+        \\func deep(n: i64) -> i64:
         \\    return 1 + deep(n - 1)
         \\
         \\func main():
         \\    print("before")
-        \\    print(string(deep(1000000)))
+        \\    print(str(deep(1000000)))
         \\
     );
 }
 
 test "mutual recursion and a shallow limit agree on where the depth ran out" {
     try agreeGiven(
-        \\func ping(n: long) -> long:
+        \\func ping(n: i64) -> i64:
         \\    return pong(n + 1)
         \\
-        \\func pong(n: long) -> long:
+        \\func pong(n: i64) -> i64:
         \\    return ping(n + 1)
         \\
         \\func main():
-        \\    print(string(ping(0)))
+        \\    print(str(ping(0)))
         \\
     , .{ .call_depth = 7 });
     // A host that allows no frames at all refuses `main` itself.
@@ -924,14 +924,14 @@ test "a debug build reports file, line, column, and the whole call stack" {
     var capture: Capture = .{};
 
     const status = try runBuilt(
-        \\func divide(a: long, b: long) -> long:
+        \\func divide(a: i64, b: i64) -> i64:
         \\    return a // b
         \\
-        \\func ratio(n: long) -> long:
+        \\func ratio(n: i64) -> i64:
         \\    return divide(n, 0)
         \\
         \\func main():
-        \\    print(string(ratio(7)))
+        \\    print(str(ratio(7)))
         \\
     , &capture, .{}, .debug);
 
@@ -949,14 +949,14 @@ test "a release build strips the lines and still names the functions" {
     var capture: Capture = .{};
 
     const status = try runBuilt(
-        \\func divide(a: long, b: long) -> long:
+        \\func divide(a: i64, b: i64) -> i64:
         \\    return a // b
         \\
-        \\func ratio(n: long) -> long:
+        \\func ratio(n: i64) -> i64:
         \\    return divide(n, 0)
         \\
         \\func main():
-        \\    print(string(ratio(7)))
+        \\    print(str(ratio(7)))
         \\
     , &capture, .{}, .release);
 
@@ -976,11 +976,11 @@ test "a deep trace keeps its innermost frames and counts the rest" {
     var capture: Capture = .{};
 
     _ = try run(
-        \\func deep(n: long) -> long:
+        \\func deep(n: i64) -> i64:
         \\    return 1 + deep(n - 1)
         \\
         \\func main():
-        \\    print(string(deep(1000000)))
+        \\    print(str(deep(1000000)))
         \\
     , &capture, .{ .call_depth = 200 });
 
@@ -1026,7 +1026,7 @@ test "a compiled host rejects an out-of-range path kind" {
 
     const status = try runBuilt(
         \\func main() -> !:
-        \\    print(string(try path_kind(".")))
+        \\    print(str(try path_kind(".")))
         \\
     , &capture, .{ .malformed_path_kind = true }, .debug);
 
@@ -1048,44 +1048,44 @@ test "a compiled host rejects an out-of-range path kind" {
 
 test "lists, maps, strings, and ownership agree with the interpreter" {
     try agree(
-        \\func total(xs: list(long)) -> long:
-        \\    var sum: long = 0
+        \\func total(xs: list[i64]) -> i64:
+        \\    var sum: i64 = 0
         \\    for x in xs:
         \\        sum = sum + x
         \\    return sum
         \\
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    var i = 1
         \\    while i <= 5:
         \\        xs.append(i * i)
         \\        i = i + 1
         \\    xs.append(0)
         \\    xs.sort()
-        \\    print(string(xs[0]) + "," + string(xs[5]) + "," + string(len(xs)))
-        \\    print(string(total(xs)))
-        \\    print(string(xs.find(9) else -1) + " " + string(xs.contains(7)))
+        \\    print(str(xs[0]) + "," + str(xs[5]) + "," + str(len(xs)))
+        \\    print(str(total(xs)))
+        \\    print(str(xs.find(9) else -1) + " " + str(xs.contains(7)))
         \\
-        \\    let names = new map(string, long)
+        \\    let names = new map[str, i64]
         \\    names["one"] = 1
         \\    names["two"] = 2
         \\    names["one"] = 11
-        \\    print(string(len(names)) + " " + string(names["one"]) + " " + string(names.get("three") else -1))
+        \\    print(str(len(names)) + " " + str(names["one"]) + " " + str(names.get("three") else -1))
         \\    for name, count in names:
-        \\        print(name + "=" + string(count))
-        \\    print(string(names.has("two")) + " " + string(len(names.keys())))
+        \\        print(name + "=" + str(count))
+        \\    print(str(names.has("two")) + " " + str(len(names.keys())))
         \\
         \\    let text = new builder
         \\    text.append("ab")
         \\    text.append_ascii(99)
         \\    let word = text.build()
-        \\    print(word + " " + string(len(word)) + " " + string(word.byte_at(0)))
-        \\    print(word[1:3] + " " + string(word.find_byte(99, 0)))
-        \\    print(string(41 + 1) + chr(33) + string(ord("A")))
-        \\    print(string("abc" < "abd") + string("abc" == "abc"))
+        \\    print(word + " " + str(len(word)) + " " + str(word.byte_at(0)))
+        \\    print(word[1:3] + " " + str(word.find_byte(99, 0)))
+        \\    print(str(41 + 1) + chr(33) + str(ord("A")))
+        \\    print(str("abc" < "abd") + str("abc" == "abc"))
         \\
         \\    let kept = xs
-        \\    print(string(len(kept)))
+        \\    print(str(len(kept)))
         \\
     );
 }
@@ -1094,8 +1094,8 @@ test "a store that traps still owns what it was handed" {
     try agree(
         \\func main():
         \\    let head = "a string comfortably past the inline threshold"
-        \\    var xs: list(string) = [head]
-        \\    print(string(len(xs)))
+        \\    var xs: list[str] = [head]
+        \\    print(str(len(xs)))
         \\    # The value moved into this call, so the trap inside it is
         \\    # the only thing left that can give the bytes back.
         \\    xs.insert(9, head + "-tail well past the threshold as well")
@@ -1114,12 +1114,12 @@ test "a fallible call's result is carried, not taken, and still agrees" {
         \\    file_write("notes.txt", "a string comfortably past the inline threshold") catch:
         \\        print("no write")
         \\        return
-        \\    var xs: list(string) = []
+        \\    var xs: list[str] = []
         \\    let text = file_read("notes.txt") catch "(none)"
         \\    xs.append(text)
         \\    xs.append(file_read("notes.txt") catch "(none)")
         \\    xs.append(text + "!")
-        \\    print(string(len(xs)) + " " + string(len(xs[0])) + " " + string(len(xs[2])))
+        \\    print(str(len(xs)) + " " + str(len(xs[0])) + " " + str(len(xs[2])))
         \\
     );
 }
@@ -1127,16 +1127,16 @@ test "a fallible call's result is carried, not taken, and still agrees" {
 test "a nested container agrees, and the leak census counts the same" {
     try agree(
         \\func main():
-        \\    let rows = new list(list(long))
+        \\    let rows = new list[list[i64]]
         \\    var r = 0
         \\    while r < 3:
-        \\        let row = new list(long)
+        \\        let row = new list[i64]
         \\        row.append(r)
         \\        row.append(r * 10)
         \\        rows.append(row)
         \\        r = r + 1
-        \\    print(string(len(rows)) + " " + string(rows[2][1]))
-        \\    let leaked = new list(long)
+        \\    print(str(len(rows)) + " " + str(rows[2][1]))
+        \\    let leaked = new list[i64]
         \\    leaked.append(1)
         \\    print("done")
         \\
@@ -1146,10 +1146,10 @@ test "a nested container agrees, and the leak census counts the same" {
 test "an index out of bounds agrees" {
     try agree(
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    xs.append(1)
         \\    print("one")
-        \\    print(string(xs[3]))
+        \\    print(str(xs[3]))
         \\
     );
 }
@@ -1166,7 +1166,7 @@ test "an index out of bounds agrees" {
 test "float arithmetic, comparison, and formatting agree over the special values" {
     try agree(
         \\func main():
-        \\    let values = new list(double)
+        \\    let values = new list[f64]
         \\    values.append(0.0)
         \\    values.append(-0.0)
         \\    values.append(1.5)
@@ -1183,12 +1183,12 @@ test "float arithmetic, comparison, and formatting agree over the special values
         \\        while j < len(values):
         \\            let a = values[i]
         \\            let b = values[j]
-        \\            print(string(a) + " " + string(b) + " = " + string(a + b) + " " + string(a - b) +
-        \\                " " + string(a * b) + " " + string(a / b) + " " + string(a % b))
-        \\            print("  " + string(a == b) + string(a != b) + string(a < b) +
-        \\                string(a <= b) + string(a > b) + string(a >= b))
-        \\            print("  " + string(min(a, b)) + " " + string(max(a, b)) + " " +
-        \\                string(clamp(a, -1.0, 1.0)) + " " + string(abs(a)) + " " + string(-a))
+        \\            print(str(a) + " " + str(b) + " = " + str(a + b) + " " + str(a - b) +
+        \\                " " + str(a * b) + " " + str(a / b) + " " + str(a % b))
+        \\            print("  " + str(a == b) + str(a != b) + str(a < b) +
+        \\                str(a <= b) + str(a > b) + str(a >= b))
+        \\            print("  " + str(min(a, b)) + " " + str(max(a, b)) + " " +
+        \\                str(clamp(a, -1.0, 1.0)) + " " + str(abs(a)) + " " + str(-a))
         \\            j = j + 1
         \\        i = i + 1
         \\
@@ -1200,9 +1200,9 @@ test "negating a float flips the sign bit, so -0.0 survives" {
         \\func main():
         \\    var zero = 0.0
         \\    let negative = -zero
-        \\    print(string(negative) + " " + string(1.0 / negative))
-        \\    print(string(zero == negative) + string(1.0 / zero == 1.0 / negative))
-        \\    print(string(-negative) + " " + string(0.0 - zero))
+        \\    print(str(negative) + " " + str(1.0 / negative))
+        \\    print(str(zero == negative) + str(1.0 / zero == 1.0 / negative))
+        \\    print(str(-negative) + " " + str(0.0 - zero))
         \\
     );
 }
@@ -1216,37 +1216,37 @@ test "negating a float flips the sign bit, so -0.0 survives" {
 // so the reductions stay loops long enough to exercise the lowering.
 test "min and max reductions over an array agree, signed zeros and all" {
     try agree(
-        \\func lowest(xs: array(double, _)) -> double:
+        \\func lowest(xs: array[f64, _]) -> f64:
         \\    var smallest = xs[0]
         \\    for i in range(1, len(xs)):
         \\        smallest = min(smallest, xs[i])
         \\    return smallest
         \\
-        \\func highest(xs: array(double, _)) -> double:
+        \\func highest(xs: array[f64, _]) -> f64:
         \\    var largest = xs[0]
         \\    for i in range(1, len(xs)):
         \\        largest = max(largest, xs[i])
         \\    return largest
         \\
         \\func main():
-        \\    let control = new list(double)
+        \\    let control = new list[f64]
         \\    control.append(0.0)
         \\    control.append(-0.0)
         \\    control.append(0.0 / 0.0)
         \\    let n = len(control) * 5
-        \\    var xs = new array(double, n)
+        \\    var xs = new array[f64](n)
         \\    for pattern in range(0, 32):
         \\        for i in range(0, n):
         \\            xs[i] = control[(pattern // (i % 5 + 1)) % 2]
         \\        let low = lowest(xs)
         \\        let high = highest(xs)
-        \\        print(string(low) + " " + string(1.0 / low) + " " +
-        \\            string(high) + " " + string(1.0 / high))
+        \\        print(str(low) + " " + str(1.0 / low) + " " +
+        \\            str(high) + " " + str(1.0 / high))
         \\    for at in range(0, n):
         \\        for i in range(0, n):
-        \\            xs[i] = double(i + 1)
+        \\            xs[i] = f64(i + 1)
         \\        xs[at] = control[2]
-        \\        print(string(lowest(xs)) + " " + string(highest(xs)))
+        \\        print(str(lowest(xs)) + " " + str(highest(xs)))
         \\
     );
 }
@@ -1254,7 +1254,7 @@ test "min and max reductions over an array agree, signed zeros and all" {
 test "clamp agrees when the bounds cross and when they are not numbers" {
     try agree(
         \\func main():
-        \\    let bounds = new list(double)
+        \\    let bounds = new list[f64]
         \\    bounds.append(-1.0)
         \\    bounds.append(1.0)
         \\    bounds.append(0.0)
@@ -1264,11 +1264,11 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
         \\    while low < len(bounds):
         \\        var high = 0
         \\        while high < len(bounds):
-        \\            let held = double(low) - double(high) * 0.5
-        \\            print(string(clamp(held, bounds[low], bounds[high])))
+        \\            let held = f64(low) - f64(high) * 0.5
+        \\            print(str(clamp(held, bounds[low], bounds[high])))
         \\            high = high + 1
         \\        low = low + 1
-        \\    print(string(clamp(5, 9, 2)) + " " + string(clamp(0, 9, 2)))
+        \\    print(str(clamp(5, 9, 2)) + " " + str(clamp(0, 9, 2)))
         \\
     );
 }
@@ -1276,15 +1276,15 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
 test "the float builtins agree" {
     try agree(
         \\func main():
-        \\    let xs = new list(double)
+        \\    let xs = new list[f64]
         \\    xs.append(0.0)
         \\    xs.append(4.0)
         \\    xs.append(2.999)
         \\    xs.append(-2.999)
         \\    xs.append(1.0 / 0.0)
         \\    for x in xs:
-        \\        print(string(x) + ": " + string(sqrt(abs(x))) + " " + string(floor(x)) +
-        \\            " " + string(ceil(x)) + " " + string(double(long(clamp(x, -9.0, 9.0)))))
+        \\        print(str(x) + ": " + str(sqrt(abs(x))) + " " + str(floor(x)) +
+        \\            " " + str(ceil(x)) + " " + str(f64(i64(clamp(x, -9.0, 9.0)))))
         \\
     );
 }
@@ -1297,11 +1297,11 @@ test "long(double) agrees at the range boundaries" {
         \\    while step < 63:
         \\        scale = scale * 2.0
         \\        step = step + 1
-        \\    print(string(long(0.0 - scale)))
-        \\    print(string(long(scale - 1024.0)))
-        \\    print(string(long(2.7)) + " " + string(long(-2.7)) + " " + string(long(-0.0)))
+        \\    print(str(i64(0.0 - scale)))
+        \\    print(str(i64(scale - 1024.0)))
+        \\    print(str(i64(2.7)) + " " + str(i64(-2.7)) + " " + str(i64(-0.0)))
         \\    print("at the edge")
-        \\    print(string(long(scale)))
+        \\    print(str(i64(scale)))
         \\
     );
 }
@@ -1311,14 +1311,14 @@ test "long(NaN) and long(infinity) trap the same way" {
         \\func main():
         \\    let nan = 0.0 / 0.0
         \\    print("before")
-        \\    print(string(long(nan)))
+        \\    print(str(i64(nan)))
         \\
     );
     try agree(
         \\func main():
         \\    let far = -1.0 / 0.0
         \\    print("before")
-        \\    print(string(long(far)))
+        \\    print(str(i64(far)))
         \\
     );
 }
@@ -1326,22 +1326,22 @@ test "long(NaN) and long(infinity) trap the same way" {
 test "the long math builtins agree, and abs of the smallest long traps" {
     try agree(
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    xs.append(0)
         \\    xs.append(7)
         \\    xs.append(-7)
         \\    xs.append(9223372036854775807)
         \\    xs.append(0 - 9223372036854775807 - 1)
         \\    for x in xs:
-        \\        print(string(min(x, 3)) + " " + string(max(x, 3)) + " " + string(clamp(x, -2, 2)))
+        \\        print(str(min(x, 3)) + " " + str(max(x, 3)) + " " + str(clamp(x, -2, 2)))
         \\
     );
     try agree(
         \\func main():
-        \\    let xs = new list(long)
+        \\    let xs = new list[i64]
         \\    xs.append(0 - 9223372036854775807 - 1)
-        \\    print(string(abs(7)) + " " + string(abs(-7)))
-        \\    print(string(abs(xs[0])))
+        \\    print(str(abs(7)) + " " + str(abs(-7)))
+        \\    print(str(abs(xs[0])))
         \\
     );
 }
@@ -1353,8 +1353,8 @@ test "the long math builtins agree, and abs of the smallest long traps" {
 test "nested struct equality recurses into fields, not the slots holding them" {
     try agree(
         \\struct Inner:
-        \\    n: long
-        \\    tag: string
+        \\    n: i64
+        \\    tag: str
         \\
         \\struct Outer:
         \\    left: Inner
@@ -1364,9 +1364,9 @@ test "nested struct equality recurses into fields, not the slots holding them" {
         \\    let a = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 2, tag = "y"))
         \\    let b = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 2, tag = "y"))
         \\    let c = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 3, tag = "y"))
-        \\    print(string(a == b) + string(a != b))
-        \\    print(string(a == c) + string(a != c))
-        \\    print(string(a.left == b.left) + string(a.right == c.right))
+        \\    print(str(a == b) + str(a != b))
+        \\    print(str(a == c) + str(a != c))
+        \\    print(str(a.left == b.left) + str(a.right == c.right))
         \\
     );
 }
@@ -1374,11 +1374,11 @@ test "nested struct equality recurses into fields, not the slots holding them" {
 test "a struct carrying a String copies by value and agrees" {
     try agree(
         \\struct Person:
-        \\    name: string
-        \\    age: long
-        \\    score: double
+        \\    name: str
+        \\    age: i64
+        \\    score: f64
         \\
-        \\func renamed(who: Person, to: string) -> Person:
+        \\func renamed(who: Person, to: str) -> Person:
         \\    var changed = who
         \\    changed.name = to
         \\    return changed
@@ -1386,10 +1386,10 @@ test "a struct carrying a String copies by value and agrees" {
         \\func main():
         \\    var ada = Person(name = "ada", age = 36, score = 1.5)
         \\    let grace = renamed(ada, "grace")
-        \\    print(ada.name + " " + string(ada.age) + " " + string(ada.score))
-        \\    print(grace.name + " " + string(grace.age) + " " + string(grace.score))
+        \\    print(ada.name + " " + str(ada.age) + " " + str(ada.score))
+        \\    print(grace.name + " " + str(grace.age) + " " + str(grace.score))
         \\    ada.age = 37
-        \\    print(string(ada.age) + " " + string(grace.age) + " " + string(ada == grace))
+        \\    print(str(ada.age) + " " + str(grace.age) + " " + str(ada == grace))
         \\
     );
 }
@@ -1397,21 +1397,21 @@ test "a struct carrying a String copies by value and agrees" {
 test "zero-initialized structs agree, nested ones included" {
     try agree(
         \\struct Inner:
-        \\    n: long
-        \\    tag: string
+        \\    n: i64
+        \\    tag: str
         \\
         \\struct Outer:
-        \\    label: string
+        \\    label: str
         \\    inner: Inner
-        \\    weight: double
+        \\    weight: f64
         \\
         \\func main():
-        \\    var grid = new array(Outer, 2, 2)
+        \\    var grid = new array[Outer](2, 2)
         \\    print("[" + grid[0, 0].label + "][" + grid[0, 0].inner.tag + "]")
-        \\    print(string(grid[1, 1].inner.n) + " " + string(grid[1, 1].weight))
+        \\    print(str(grid[1, 1].inner.n) + " " + str(grid[1, 1].weight))
         \\    grid[1, 0].inner.n = 7
-        \\    print(string(grid[1, 0].inner.n) + " " + string(grid[0, 1].inner.n))
-        \\    print(string(grid[0, 0] == grid[0, 1]) + string(grid[0, 0] == grid[1, 0]))
+        \\    print(str(grid[1, 0].inner.n) + " " + str(grid[0, 1].inner.n))
+        \\    print(str(grid[0, 0] == grid[0, 1]) + str(grid[0, 0] == grid[1, 0]))
         \\
     );
 }
@@ -1424,32 +1424,32 @@ test "an inline array access agrees on every element kind and rank" {
     // two ranks, both engines.
     try agree(
         \\func main():
-        \\    var grid = new array(long, 3, 4)
+        \\    var grid = new array[i64](3, 4)
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            grid[r, c] = r * 10 + c
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            total += grid[r, c]
-        \\    print(string(total) + " " + string(grid.dim(0)) + " " + string(grid.dim(1)) + " " + string(len(grid)))
+        \\    print(str(total) + " " + str(grid.dim(0)) + " " + str(grid.dim(1)) + " " + str(len(grid)))
         \\
-        \\    var names = new array(string, 3)
-        \\    var flags = new array(bool, 3)
-        \\    var weights = new array(double, 3)
+        \\    var names = new array[str](3)
+        \\    var flags = new array[bool](3)
+        \\    var weights = new array[f64](3)
         \\    for i in range(0, 3):
-        \\        names[i] = "n" + string(i)
+        \\        names[i] = "n" + str(i)
         \\        flags[i] = i % 2 == 0
-        \\        weights[i] = double(i) * 0.5
+        \\        weights[i] = f64(i) * 0.5
         \\    for i in range(0, 3):
-        \\        print(names[i] + " " + string(flags[i]) + " " + string(weights[i]))
+        \\        print(names[i] + " " + str(flags[i]) + " " + str(weights[i]))
         \\
-        \\    var rows = new array(list(long), 2)
+        \\    var rows = new array[list[i64]](2)
         \\    for i in range(0, 2):
-        \\        var row = new list(long)
+        \\        var row = new list[i64]
         \\        row.append(i)
         \\        rows[i] = row
-        \\    print(string(rows[0][0] + rows[1][0]))
+        \\    print(str(rows[0][0] + rows[1][0]))
         \\
         \\
     );
@@ -1462,11 +1462,11 @@ test "a resolution lifted out of a loop still traps where the access is" {
     // loop's resolution already lifted above it.
     try agree(
         \\func main():
-        \\    var a = new array(double, 4)
-        \\    var total: double = 0.0
+        \\    var a = new array[f64](4)
+        \\    var total: f64 = 0.0
         \\    for i in range(0, 6):
         \\        total += a[i]
-        \\    print("unreachable " + string(long(total)))
+        \\    print("unreachable " + str(i64(total)))
         \\
     );
 }
@@ -1477,12 +1477,12 @@ test "a lifted resolution on a null row still traps at the access" {
     // not at the preheader.
     try agree(
         \\func main():
-        \\    var rows = new array(array(long, _), 2)
+        \\    var rows = new array[array[i64, _]](2)
         \\    var inner = rows[0]
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for i in range(0, 3):
         \\        total += inner[i]
-        \\    print("unreachable " + string(total))
+        \\    print("unreachable " + str(total))
         \\
     );
 }
@@ -1491,14 +1491,14 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
     try agree(
         \\func main():
         \\    let text = "héllo wörld"
-        \\    print(string(len(text)) + " " + string(text.byte_at(0)) + " " + string(text.byte_at(1)))
+        \\    print(str(len(text)) + " " + str(text.byte_at(0)) + " " + str(text.byte_at(1)))
         \\    print(text[0:1] + "|" + text[1:3] + "|" + text[0:0] + "|" + text[3:len(text)])
         \\    var i = 0
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    while i < len(text):
         \\        total += text.byte_at(i)
         \\        i += 1
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     );
     // The end of a String is a legal bound and the byte there is not
@@ -1512,7 +1512,7 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
     try agree(
         \\func main():
         \\    let text = "abc"
-        \\    print(string(text.byte_at(3)))
+        \\    print(str(text.byte_at(3)))
         \\
     );
 }
@@ -1520,15 +1520,15 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
 test "structs inside containers agree" {
     try agree(
         \\struct Cell:
-        \\    value: long
-        \\    name: string
+        \\    value: i64
+        \\    name: str
         \\
         \\func main():
         \\    var cells = [Cell(value = 10, name = "a"), Cell(value = 20, name = "b")]
         \\    cells[1].value = 99
         \\    for cell in cells:
-        \\        print(cell.name + "=" + string(cell.value))
-        \\    print(string(cells[0] == cells[1]) + string(len(cells)))
+        \\        print(cell.name + "=" + str(cell.value))
+        \\    print(str(cells[0] == cells[1]) + str(len(cells)))
         \\
     );
 }
@@ -1539,20 +1539,20 @@ test "a struct carrying an object is owned and released through its fields" {
     // census is what says it did.
     try agree(
         \\struct Bag:
-        \\    items: list(long)
-        \\    label: string
+        \\    items: list[i64]
+        \\    label: str
         \\
-        \\func fill(label: string) -> Bag:
-        \\    let xs = new list(long)
+        \\func fill(label: str) -> Bag:
+        \\    let xs = new list[i64]
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return Bag(items = xs, label = label)
         \\
         \\func main():
         \\    var bag = fill("b")
-        \\    print(string(len(bag.items)) + bag.label)
+        \\    print(str(len(bag.items)) + bag.label)
         \\    bag.items.append(3)
-        \\    print(string(len(bag.items)))
+        \\    print(str(len(bag.items)))
         \\
     );
 }
@@ -1568,7 +1568,7 @@ test "a struct carrying an object is owned and released through its fields" {
 
 test "a value-typed optional agrees on absence, narrowing, and else" {
     try agree(
-        \\func maybe(want: bool) -> long?:
+        \\func maybe(want: bool) -> i64?:
         \\    if want:
         \\        return 7
         \\    return none
@@ -1576,15 +1576,15 @@ test "a value-typed optional agrees on absence, narrowing, and else" {
         \\func main():
         \\    let there = maybe(true)
         \\    if there != none:
-        \\        print("there=" + string(there))
+        \\        print("there=" + str(there))
         \\    let gone = maybe(false)
         \\    if gone == none:
         \\        print("gone")
-        \\    print(string(maybe(false) else -1) + " " + string(maybe(true) else -1))
-        \\    var slot: long? = none
-        \\    print(string(slot else -2))
+        \\    print(str(maybe(false) else -1) + " " + str(maybe(true) else -1))
+        \\    var slot: i64? = none
+        \\    print(str(slot else -2))
         \\    slot = maybe(true)
-        \\    print(string(slot else -2))
+        \\    print(str(slot else -2))
         \\
     );
 }
@@ -1594,21 +1594,21 @@ test "the else fallback runs only where there was no value, and chains" {
     // what says which side ran.  A chain is the same shape nested, and
     // its middle link must not run either once the first supplies one.
     try agree(
-        \\func maybe(want: bool) -> long?:
+        \\func maybe(want: bool) -> i64?:
         \\    if want:
         \\        return 7
         \\    return none
         \\
-        \\func loud(answer: long) -> long:
+        \\func loud(answer: i64) -> i64:
         \\    print("fallback ran")
         \\    return answer
         \\
         \\func main():
-        \\    print(string(maybe(true) else loud(1)))
-        \\    print(string(maybe(false) else loud(2)))
-        \\    print(string(maybe(true) else maybe(false) else loud(3)))
-        \\    print(string(maybe(false) else maybe(true) else loud(4)))
-        \\    print(string(maybe(false) else maybe(false) else loud(5)))
+        \\    print(str(maybe(true) else loud(1)))
+        \\    print(str(maybe(false) else loud(2)))
+        \\    print(str(maybe(true) else maybe(false) else loud(3)))
+        \\    print(str(maybe(false) else maybe(true) else loud(4)))
+        \\    print(str(maybe(false) else maybe(false) else loud(5)))
         \\
     );
 }
@@ -1617,15 +1617,15 @@ test "parse_int and parse_float agree when the text is a number and when it is n
     // The `long?`/`double?` that made optionals load-bearing on day one.
     try agree(
         \\func main():
-        \\    print(string(parse_int("41") else -1))
-        \\    print(string(parse_int("") else -1))
-        \\    print(string(parse_int("12x") else -1))
-        \\    print(string(parse_int("-9") else -1))
-        \\    print(string(parse_float("2.5") else -1.0))
-        \\    print(string(parse_float("nope") else -1.0))
+        \\    print(str(parse_int("41") else -1))
+        \\    print(str(parse_int("") else -1))
+        \\    print(str(parse_int("12x") else -1))
+        \\    print(str(parse_int("-9") else -1))
+        \\    print(str(parse_float("2.5") else -1.0))
+        \\    print(str(parse_float("nope") else -1.0))
         \\    let n = parse_int("77")
         \\    if n != none:
-        \\        print("narrowed=" + string(n + 1))
+        \\        print("narrowed=" + str(n + 1))
         \\
     );
 }
@@ -1634,15 +1634,15 @@ test "x else trap is the assert-unwrap, and it traps where it is written" {
     // The trap code, the message, and every frame of the trace have to
     // match — which is the whole of `calc.luc`'s error path.
     try agree(
-        \\func want(text: string) -> long:
+        \\func want(text: str) -> i64:
         \\    return parse_int(text) else trap("not a number: " + text)
         \\
-        \\func middle(text: string) -> long:
+        \\func middle(text: str) -> i64:
         \\    return want(text) + 1
         \\
         \\func main():
-        \\    print(string(middle("41")))
-        \\    print(string(middle("oops")))
+        \\    print(str(middle("41")))
+        \\    print(str(middle("oops")))
         \\
     );
 }
@@ -1653,21 +1653,21 @@ test "an optional struct field agrees, absent and present" {
     // to box as the `none` tag and read back as the absent pair.
     try agree(
         \\struct Slot:
-        \\    label: string
-        \\    room: long?
+        \\    label: str
+        \\    room: i64?
         \\
         \\func main():
         \\    var empty = Slot(label = "a", room = none)
         \\    if empty.room == none:
         \\        print("a has no room")
         \\    empty.room = 12
-        \\    print("a=" + string(empty.room else 0))
+        \\    print("a=" + str(empty.room else 0))
         \\    let filled = Slot(label = "b", room = 3)
         \\    let room = filled.room
         \\    if room != none:
-        \\        print("b=" + string(room))
+        \\        print("b=" + str(room))
         \\    var zeroed: Slot
-        \\    print(string(zeroed.room else -1))
+        \\    print(str(zeroed.room else -1))
         \\
     );
 }
@@ -1678,10 +1678,10 @@ test "a struct recurses through an optional field, which is what ends it" {
     // in it.  Reading one back is the boxed `strukt` payload.
     try agree(
         \\struct Node:
-        \\    value: long
+        \\    value: i64
         \\    next: Node?
         \\
-        \\func total(from: Node) -> long:
+        \\func total(from: Node) -> i64:
         \\    var sum = from.value
         \\    let step = from.next
         \\    if step != none:
@@ -1691,11 +1691,11 @@ test "a struct recurses through an optional field, which is what ends it" {
         \\func main():
         \\    let tail = Node(value = 2, next = none)
         \\    let head = Node(value = 1, next = tail)
-        \\    print(string(total(head)))
-        \\    print(string(total(tail)))
+        \\    print(str(total(head)))
+        \\    print(str(total(tail)))
         \\    let step = head.next
         \\    if step != none:
-        \\        print("next=" + string(step.value))
+        \\        print("next=" + str(step.value))
         \\
     );
 }
@@ -1706,27 +1706,27 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
     // the absent one leaves nothing behind to release.  A `none` owns
     // nothing, so neither engine may count it.
     try agree(
-        \\func pick(want: bool) -> list(long)?:
+        \\func pick(want: bool) -> list[i64]?:
         \\    if want:
-        \\        let made = new list(long)
+        \\        let made = new list[i64]
         \\        made.append(3)
         \\        made.append(4)
         \\        return made
         \\    return none
         \\
         \\func main():
-        \\    var held: list(long)? = none
+        \\    var held: list[i64]? = none
         \\    if held == none:
         \\        print("absent")
         \\    let got = pick(true)
         \\    if got != none:
-        \\        print("len=" + string(len(got)) + " first=" + string(got[0]))
+        \\        print("len=" + str(len(got)) + " first=" + str(got[0]))
         \\    let missing = pick(false)
         \\    if missing == none:
         \\        print("nothing came back")
         \\    let owned = pick(true)
         \\    if owned != none:
-        \\        print("owned=" + string(len(owned)))
+        \\        print("owned=" + str(len(owned)))
         \\
     );
 }
@@ -1739,38 +1739,38 @@ test "optionals in a loop agree, boxed into container cells and back" {
     // than in a frame slot.
     try agree(
         \\struct Cell:
-        \\    tag: string
-        \\    room: long?
+        \\    tag: str
+        \\    room: i64?
         \\
-        \\func even(n: long) -> long?:
+        \\func even(n: i64) -> i64?:
         \\    if n % 2 == 0:
         \\        return n
         \\    return none
         \\
-        \\func show(room: long?) -> string:
+        \\func show(room: i64?) -> str:
         \\    if room == none:
         \\        return "-"
-        \\    return string(room)
+        \\    return str(room)
         \\
         \\func main():
-        \\    var seen: long = 0
+        \\    var seen: i64 = 0
         \\    var i = 0
         \\    while i < 8:
         \\        let maybe = even(i)
         \\        if maybe != none:
         \\            seen = seen + maybe
         \\        i = i + 1
-        \\    print("sum of evens=" + string(seen))
-        \\    var last: long? = none
+        \\    print("sum of evens=" + str(seen))
+        \\    var last: i64? = none
         \\    var j = 0
         \\    while j < 5:
         \\        last = even(j)
         \\        j = j + 1
-        \\    print("last=" + string(last else -1))
-        \\    let cells = new list(Cell)
+        \\    print("last=" + str(last else -1))
+        \\    let cells = new list[Cell]
         \\    var k = 0
         \\    while k < 4:
-        \\        cells.append(Cell(tag = string(k), room = even(k)))
+        \\        cells.append(Cell(tag = str(k), room = even(k)))
         \\        k = k + 1
         \\    var out = ""
         \\    for cell in cells:
@@ -1789,20 +1789,20 @@ test "every payload a T? can hold survives being returned" {
     // eight every other payload rounds up to.
     try agree(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func flag(want: bool) -> bool?:
         \\    if want:
         \\        return false
         \\    return none
         \\
-        \\func text(want: bool) -> string?:
+        \\func text(want: bool) -> str?:
         \\    if want:
         \\        return "hi"
         \\    return none
         \\
-        \\func ratio(want: bool) -> double?:
+        \\func ratio(want: bool) -> f64?:
         \\    if want:
         \\        return 2.5
         \\    return none
@@ -1813,12 +1813,12 @@ test "every payload a T? can hold survives being returned" {
         \\    return none
         \\
         \\func main():
-        \\    print(string(flag(true) else true) + " " + string(flag(false) else true))
+        \\    print(str(flag(true) else true) + " " + str(flag(false) else true))
         \\    print((text(true) else "-") + " " + (text(false) else "-"))
-        \\    print(string(ratio(true) else -1.0) + " " + string(ratio(false) else -1.0))
+        \\    print(str(ratio(true) else -1.0) + " " + str(ratio(false) else -1.0))
         \\    let here = spot(true)
         \\    if here != none:
-        \\        print("x=" + string(here.x) + " y=" + string(here.y))
+        \\        print("x=" + str(here.x) + " y=" + str(here.y))
         \\    if spot(false) == none:
         \\        print("no spot")
         \\    let f = flag(true)
@@ -1841,15 +1841,15 @@ test "the null object put in a T? is present, because absence is not a handle" {
     // proposed, this program would answer "absent" instead and the two
     // engines would part company here and nowhere else.
     try agree(
-        \\func look(xs: list(long)?) -> bool:
+        \\func look(xs: list[i64]?) -> bool:
         \\    return xs == none
         \\
         \\func main():
-        \\    var raw: list(long)
-        \\    print("absent=" + string(look(raw)))
-        \\    let real = new list(long)
+        \\    var raw: list[i64]
+        \\    print("absent=" + str(look(raw)))
+        \\    let real = new list[i64]
         \\    real.append(1)
-        \\    print("absent=" + string(look(real)))
+        \\    print("absent=" + str(look(real)))
         \\
     );
 }
@@ -1860,12 +1860,12 @@ test "the null object put in a T? is present, because absence is not a handle" {
 
 test "files, arguments, the screen, and the keyboard agree" {
     try agree(
-        \\func main(args: list(string)) -> !:
-        \\    print(string(len(args)) + " " + args[0] + "," + args[1])
-        \\    print(string(try path_kind("notes.txt")))
+        \\func main(args: list[str]) -> !:
+        \\    print(str(len(args)) + " " + args[0] + "," + args[1])
+        \\    print(str(try path_kind("notes.txt")))
         \\    try file_write("notes.txt", "hello world")
-        \\    print(string(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
-        \\    print(string(term_rows()) + "x" + string(term_cols()))
+        \\    print(str(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(str(term_rows()) + "x" + str(term_cols()))
         \\    term_clear()
         \\    term_move(2, 3)
         \\    term_style(114, 236, true)
@@ -1931,7 +1931,7 @@ test "standard input, standard error, the clock and the environment agree" {
         \\    let started = clock_ms()
         \\    sleep_ms(25)
         \\    let ended = clock_ms()
-        \\    print("elapsed " + string(ended - started))
+        \\    print("elapsed " + str(ended - started))
         \\    sleep_ms(0)
         \\    sleep_ms(-1)
         \\    print(env("LUCE_MODE") else "(unset)")
@@ -1948,9 +1948,9 @@ test "end of input is absence, and narrowing sees it on both engines" {
         \\    var line = read_line("")
         \\    while line != none:
         \\        count = count + 1
-        \\        print(string(count) + ": " + line)
+        \\        print(str(count) + ": " + line)
         \\        line = read_line("")
-        \\    print("read " + string(count) + " lines, then nothing")
+        \\    print("read " + str(count) + " lines, then nothing")
         \\
     );
 }
@@ -1962,9 +1962,9 @@ test "the file services beyond read and write agree, and so does what they refus
         \\    try file_append("notes.txt", "two\n")
         \\    print(try file_read("notes.txt"))
         \\    try file_rename("notes.txt", "kept.txt")
-        \\    print(string(try path_kind("notes.txt")) + " " + string(try path_kind("kept.txt")))
+        \\    print(str(try path_kind("notes.txt")) + " " + str(try path_kind("kept.txt")))
         \\    try file_delete("kept.txt")
-        \\    print(string(try path_kind("kept.txt")))
+        \\    print(str(try path_kind("kept.txt")))
         \\    file_delete("kept.txt") catch:
         \\        print("nothing to delete")
         \\    file_rename("gone.txt", "elsewhere.txt") catch:
@@ -1979,7 +1979,7 @@ test "a directory listing is a List(String) the program owns, on both engines" {
     try agree(
         \\func main() -> !:
         \\    let names = try dir_list(".")
-        \\    print(string(len(names)))
+        \\    print(str(len(names)))
         \\    for name in names:
         \\        print(name)
         \\    names.sort()
@@ -2002,10 +2002,10 @@ test "a caught listing failure leaks nothing on either engine" {
     // parks must not be an object the census then counts.
     try agree(
         \\func main():
-        \\    var found: long = 0
-        \\    let names = dir_list("nowhere") catch new list(string)
+        \\    var found: i64 = 0
+        \\    let names = dir_list("nowhere") catch new list[str]
         \\    found = len(names)
-        \\    print("caught, " + string(found) + " names")
+        \\    print("caught, " + str(found) + " names")
         \\
     );
 }
@@ -2023,7 +2023,7 @@ test "each new host service fails closed on its own" {
     , .{ .diagnostics = false });
     try agreeGiven(
         \\func main():
-        \\    print(string(clock_ms()))
+        \\    print(str(clock_ms()))
         \\
     , .{ .clock = false });
     try agreeGiven(
@@ -2072,20 +2072,20 @@ test "a caught error is handled and the run finishes clean" {
 
 test "error() crosses several frames, and the origin is the raise site" {
     try agree(
-        \\func inner(n: long) -> long!:
+        \\func inner(n: i64) -> i64!:
         \\    if n > 2:
-        \\        error("too big: " + string(n))
+        \\        error("too big: " + str(n))
         \\    return n * 2
         \\
-        \\func middle(n: long) -> long!:
+        \\func middle(n: i64) -> i64!:
         \\    return try inner(n)
         \\
-        \\func outer(n: long) -> long!:
+        \\func outer(n: i64) -> i64!:
         \\    return try middle(n)
         \\
         \\func main() -> !:
-        \\    print(string(try outer(1)))
-        \\    print(string(try outer(5)))
+        \\    print(str(try outer(1)))
+        \\    print(str(try outer(5)))
         \\
     );
 }
@@ -2095,8 +2095,8 @@ test "an error path releases the objects and the String storage it owns" {
     // through released what it owned, so a caught error leaves the
     // heap exactly where a returning call would (S4, S34).
     try agree(
-        \\func gather(path: string) -> long!:
-        \\    let words = new list(string)
+        \\func gather(path: str) -> i64!:
+        \\    let words = new list[str]
         \\    words.append("alpha")
         \\    words.append("beta")
         \\    let held = "prefix-" + path
@@ -2105,12 +2105,12 @@ test "an error path releases the objects and the String storage it owns" {
         \\    return len(words)
         \\
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    var round = 0
         \\    while round < 3:
         \\        total = total + (gather("nothing-here.txt") catch -1)
         \\        round = round + 1
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     );
 }
@@ -2127,12 +2127,12 @@ test "text carried across a try keeps the form it was in" {
     try agree(
         \\func main() -> !:
         \\    try file_write("notes.txt", "hello world")
-        \\    let short = try file_read("notes.txt")
-        \\    print(short + "/" + string(len(short)))
+        \\    let brief = try file_read("notes.txt")
+        \\    print(brief + "/" + str(len(brief)))
         \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
         \\    let lengthy = try file_read("notes.txt")
-        \\    print(lengthy + "/" + string(len(lengthy)))
-        \\    print(string(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(lengthy + "/" + str(len(lengthy)))
+        \\    print(str(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
         \\
     );
 }
@@ -2144,7 +2144,7 @@ test "a caught error leaves the value it never produced releasable" {
     // out, and what the caller carries is the empty String rather than
     // whatever the stack held — which the census then proves.
     try agree(
-        \\func load(path: string) -> string!:
+        \\func load(path: str) -> str!:
         \\    return try file_read(path)
         \\
         \\func main():
@@ -2159,14 +2159,14 @@ test "a caught error leaves the value it never produced releasable" {
 
 test "a fallible call handing back an object gives it up on both paths" {
     try agree(
-        \\func load(path: string) -> list(string)!:
-        \\    let lines = new list(string)
+        \\func load(path: str) -> list[str]!:
+        \\    let lines = new list[str]
         \\    lines.append(try file_read(path))
         \\    return lines
         \\
         \\func main():
-        \\    let missing = load("nothing-here.txt") catch new list(string)
-        \\    print(string(len(missing)))
+        \\    let missing = load("nothing-here.txt") catch new list[str]
+        \\    print(str(len(missing)))
         \\
     );
 }
@@ -2175,7 +2175,7 @@ test "an argument index out of range traps index_bounds on both engines" {
     // `args` is an ordinary List, so reading past it is the language's
     // own bounds trap and not a channel of its own (docs/LANGUAGE.md).
     try agree(
-        \\func main(args: list(string)):
+        \\func main(args: list[str]):
         \\    print(args[0])
         \\    print(args[9])
         \\
@@ -2185,12 +2185,12 @@ test "an argument index out of range traps index_bounds on both engines" {
 test "a withheld service group fails closed on both engines" {
     try agreeGiven(
         \\func main() -> !:
-        \\    print(string(try path_kind("notes.txt")))
+        \\    print(str(try path_kind("notes.txt")))
         \\
     , .{ .files = false });
     try agreeGiven(
         \\func main():
-        \\    print(string(term_rows()))
+        \\    print(str(term_rows()))
         \\
     , .{ .terminal = false });
     try agreeGiven(
@@ -2212,28 +2212,28 @@ test "owned String bytes agree, census included" {
         \\import std.strings
         \\
         \\struct Tag:
-        \\    label: string
-        \\    count: long
+        \\    label: str
+        \\    count: i64
         \\
-        \\func widen(s: string) -> string:
+        \\func widen(s: str) -> str:
         \\    return strings.trim(s)
         \\
-        \\func drop_first(pieces: list(string)) -> long:
+        \\func drop_first(pieces: list[str]) -> i64:
         \\    pieces.remove(0)
         \\    return 1
         \\
-        \\func measure(left: string, right: long) -> long:
+        \\func measure(left: str, right: i64) -> i64:
         \\    return len(left) + right
         \\
         \\func main():
         \\    let trimmed = widen("   padded   ")
         \\    print(trimmed)
         \\
-        \\    var names = new list(string)
+        \\    var names = new list[str]
         \\    names.append("ada")
         \\    names.append(trimmed + "-lovelace")
         \\    names[0] = names[1]
-        \\    print(names[0] + " " + string(len(names)))
+        \\    print(names[0] + " " + str(len(names)))
         \\    var duplicate = names
         \\    print(duplicate[1])
         \\
@@ -2244,29 +2244,29 @@ test "owned String bytes agree, census included" {
         \\    copied.label = "other"
         \\    print(tag.label + " " + copied.label)
         \\
-        \\    var table = new map(string, string)
-        \\    table["k" + string(1)] = "v1"
-        \\    table["k1"] = "v" + string(2)
+        \\    var table = new map[str, str]
+        \\    table["k" + str(1)] = "v1"
+        \\    table["k1"] = "v" + str(2)
         \\    var keys = table.keys()
         \\    var values = table.values()
         \\    print(keys[0] + values[0])
         \\    table.remove("k1")
         \\
-        \\    var pieces = new list(string)
+        \\    var pieces = new list[str]
         \\    pieces.append("first-piece")
         \\    pieces.append("second")
-        \\    print(string(measure(pieces[0], drop_first(pieces))))
+        \\    print(str(measure(pieces[0], drop_first(pieces))))
         \\
         \\    var text = "abcdef"
         \\    text = text[1:5]
         \\    text = text + text
         \\    print(text)
         \\
-        \\    var cells = new array(string, 3)
-        \\    cells[0] = "x" + string(0)
+        \\    var cells = new array[str](3)
+        \\    cells[0] = "x" + str(0)
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
-        \\    print(cells[0] + cells[1] + string(len(cells[2])))
+        \\    print(cells[0] + cells[1] + str(len(cells[2])))
         \\
     );
 }
@@ -2285,26 +2285,26 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\import std.strings
         \\
         \\struct Held:
-        \\    label: string
+        \\    label: str
         \\
-        \\func echo(s: string) -> string:
+        \\func echo(s: str) -> str:
         \\    return s
         \\
-        \\func grow(s: string) -> string:
+        \\func grow(s: str) -> str:
         \\    return s + s
         \\
         \\func main():
-        \\    var words = new list(string)
-        \\    var table = new map(string, string)
+        \\    var words = new list[str]
+        \\    var table = new map[str, str]
         \\    for size in [0, 1, 21, 22, 23, 64]:
         \\        let text = strings.repeat("a", size)
         \\        let kept = echo(text)
         \\        words.append(kept)
         \\        table[kept] = kept
         \\        let held = Held(label = kept)
-        \\        print(string(size) + " " + string(len(kept)) + " " + string(len(held.label)) +
-        \\            " " + string(len(words[len(words) - 1])) + " " + string(len(table[kept])) +
-        \\            " " + string(table.has(kept)))
+        \\        print(str(size) + " " + str(len(kept)) + " " + str(len(held.label)) +
+        \\            " " + str(len(words[len(words) - 1])) + " " + str(len(table[kept])) +
+        \\            " " + str(table.has(kept)))
         \\
     );
     // The transitions in both directions: short grown long by `+`,
@@ -2312,11 +2312,11 @@ test "text agrees on both sides of the boundary between its two forms" {
     try agree(
         \\import std.strings
         \\
-        \\func grow(s: string) -> string:
+        \\func grow(s: str) -> str:
         \\    return s + s
         \\
         \\func main():
-        \\    var kept = new list(string)
+        \\    var kept = new list[str]
         \\    for size in [1, 11, 12, 21, 22, 23]:
         \\        var text = strings.repeat("b", size)
         \\        text = grow(text)
@@ -2324,10 +2324,10 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\        var cut = text[0:1]
         \\        cut = cut + text[0:size]
         \\        kept.append(cut)
-        \\        print(string(len(text)) + ":" + text + " " + string(len(cut)) + ":" + cut)
+        \\        print(str(len(text)) + ":" + text + " " + str(len(cut)) + ":" + cut)
         \\    var joined = ""
         \\    for piece in kept:
-        \\        joined = joined + string(len(piece)) + ","
+        \\        joined = joined + str(len(piece)) + ","
         \\    print(joined)
         \\
     );
@@ -2340,12 +2340,12 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\func main():
         \\    var source = strings.repeat("cd", 40)
         \\    var small = source[0:6]
-        \\    var cells = new array(string, 2)
+        \\    var cells = new array[str](2)
         \\    cells[0] = small
         \\    cells[1] = source
         \\    source = "replaced"
         \\    small = small + "!"
-        \\    print(cells[0] + " " + string(len(cells[1])) + " " + small + " " + source)
+        \\    print(cells[0] + " " + str(len(cells[1])) + " " + small + " " + source)
         \\
     );
 }
@@ -2353,21 +2353,21 @@ test "text agrees on both sides of the boundary between its two forms" {
 test "a loop name agrees whether it borrows its element or copies it" {
     try agree(
         \\func main():
-        \\    var words = new list(string)
+        \\    var words = new list[str]
         \\    words.append("aa")
         \\    words.append("bb")
         \\    words.append("cc")
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for w in words:
         \\        total += len(w)
-        \\    print(string(total))
+        \\    print(str(total))
         \\    var seen = ""
         \\    for w in words:
         \\        seen = seen + w
         \\        words[0] = "zz"
         \\    print(seen)
         \\
-        \\    var table = new map(string, string)
+        \\    var table = new map[str, str]
         \\    table["a"] = "1"
         \\    table["b"] = "2"
         \\    var joined = ""
@@ -2381,10 +2381,10 @@ test "a loop name agrees whether it borrows its element or copies it" {
 test "a trap agrees while every frame is still holding String bytes" {
     try agree(
         \\struct Tag:
-        \\    label: string
-        \\    count: long
+        \\    label: str
+        \\    count: i64
         \\
-        \\func deeper(name: string) -> long:
+        \\func deeper(name: str) -> i64:
         \\    let held = name + "-held"
         \\    var tag = Tag(label = held, count = 1)
         \\    trap(tag.label)
@@ -2392,7 +2392,7 @@ test "a trap agrees while every frame is still holding String bytes" {
         \\func main():
         \\    let outer = "kept" + "-here"
         \\    var also = Tag(label = outer, count = 2)
-        \\    print(string(deeper(also.label)))
+        \\    print(str(deeper(also.label)))
         \\
     );
 }
@@ -2407,12 +2407,12 @@ test "array loops carry the two alias scopes, and runtime calls carry neither" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var grid = new array(long, 64)
+        \\    var grid = new array[i64](64)
         \\    var i = 0
         \\    while i < 64:
         \\        grid[i] = i * 2
         \\        i += 1
-        \\    print(string(grid[63]))
+        \\    print(str(grid[63]))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -2447,10 +2447,10 @@ test "fresh container writes omit the constant guard and unknown aliases keep it
     const gpa = std.testing.allocator;
     const fresh = (try render(
         \\func main():
-        \\    var values = new array(long, 64)
+        \\    var values = new array[i64](64)
         \\    for i in range(0, 64):
         \\        values[i] = i
-        \\    print(string(values[63]))
+        \\    print(str(values[63]))
         \\
     )).?;
     defer gpa.free(fresh);
@@ -2460,9 +2460,9 @@ test "fresh container writes omit the constant guard and unknown aliases keep it
     // A parameter may be an alias of a file-scope constant, so its inline
     // store keeps the runtime's immutable_object backstop.
     const unknown = (try render(
-        \\const VALUES: array(long, _) = [1, 2]
+        \\const VALUES: array[i64, _] = [1, 2]
         \\
-        \\func change(values: array(long, _)):
+        \\func change(values: array[i64, _]):
         \\    values[0] = 9
         \\
         \\func main():
@@ -2484,10 +2484,10 @@ test "a program that never spawns pays nothing for threads" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for i in range(0, 10):
         \\        total = total + i
-        \\    print(string(total))
+        \\    print(str(total))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -2506,13 +2506,13 @@ test "a program that spawns installs the channel once and brackets every host ca
     // rather than about the lowering having been left out.
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\func announce(n: long) -> long:
-        \\    print(string(n))
+        \\func announce(n: i64) -> i64:
+        \\    print(str(n))
         \\    return n
         \\
         \\func main():
         \\    let t = spawn announce(1)
-        \\    print(string(t.wait()))
+        \\    print(str(t.wait()))
         \\
     )).?;
     defer gpa.free(rendered);

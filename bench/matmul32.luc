@@ -1,11 +1,11 @@
 # The same dense matrix multiply as bench/matmul.luc, at binary32.
 # This is the row the resize was for: one NEON register holds four
-# `float`s where it held two `double`s, so the ikj inner loop has
+# `f32`s where it held two `f64`s, so the ikj inner loop has
 # twice the lanes to fill and the ratio against the C twin says
 # whether Luce is filling them.
 #
 # Added beside the 64-bit row rather than replacing it (docs/TYPES.md
-# D7): the `double` row's recorded number does not move, and this one
+# D7): the `f64` row's recorded number does not move, and this one
 # is a new comparison rather than a rewritten one.
 #
 # **Every value here is a small integer on purpose.**  The factors are
@@ -15,23 +15,23 @@
 # accumulation would still be *deterministic*, but it would make the
 # cross-check against C a test of two compilers' rounding rather than
 # of the arithmetic, and the harness compares stdout.  The checksum
-# then sums those exact integers into a `long`, where 144 million is
+# then sums those exact integers into a `i64`, where 144 million is
 # nowhere near the top.  The C twin is bench/matmul32.c.
 
 func main():
     let n = 400
-    var a = new array(float, n * n)
-    var b = new array(float, n * n)
-    var c = new array(float, n * n)
+    var a = new array[f32](n * n)
+    var b = new array[f32](n * n)
+    var c = new array[f32](n * n)
     for i in range(0, n * n):
-        a[i] = float((i * 7) % 4)
-        b[i] = float((i * 13) % 4)
+        a[i] = f32((i * 7) % 4)
+        b[i] = f32((i * 13) % 4)
     for i in range(0, n):
         for k in range(0, n):
             let pivot = a[i * n + k]
             for j in range(0, n):
                 c[i * n + j] += pivot * b[k * n + j]
-    var checksum: long = 0
+    var checksum: i64 = 0
     for i in range(0, n * n):
-        checksum += long(c[i])
-    print(string(checksum))
+        checksum += i64(c[i])
+    print(str(checksum))

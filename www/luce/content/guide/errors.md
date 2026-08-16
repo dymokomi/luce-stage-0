@@ -19,16 +19,16 @@ An error is therefore a failure a correct program can encounter anyway. A
 handles it here.
 
 ```luce run
-func parse_port(text: string) -> long!:
+func parse_port(text: str) -> i64!:
     let n = parse_int(text) else error(f"not a number: {text}")
     if n < 1 or n > 65535:
         error(f"port out of range: {n}")
     return n
 
 func main() -> !:
-    print(string(try parse_port("8080")))
-    print(string(parse_port("nope") catch -1))
-    print(string(parse_port("99999") catch -1))
+    print(str(try parse_port("8080")))
+    print(str(parse_port("nope") catch -1))
+    print(str(parse_port("99999") catch -1))
 ```
 
 ```output
@@ -43,20 +43,20 @@ func main() -> !:
 does, with one terminator changed. It needs a caller that said `!`.
 
 ```luce run
-func inner(n: long) -> long!:
+func inner(n: i64) -> i64!:
     if n == 0:
         error("inner refuses zero")
     return 100 // n
 
-func middle(n: long) -> long!:
+func middle(n: i64) -> i64!:
     return try inner(n) + 1
 
-func outer(n: long) -> long!:
+func outer(n: i64) -> i64!:
     return try middle(n) * 2
 
 func main() -> !:
-    print(string(try outer(5)))
-    print(string(outer(0) catch -1))
+    print(str(try outer(5)))
+    print(str(outer(0) catch -1))
 ```
 
 ```output
@@ -68,7 +68,7 @@ Forgetting to say which you meant is a compile error. There is no
 spelling that ignores the outcome.
 
 ```luce fail
-func risky() -> long!:
+func risky() -> i64!:
     error("no")
 
 func main():
@@ -114,7 +114,7 @@ The block form can bind the error message. The binding is an immutable
 `string` scoped to the handler:
 
 ```luce run
-func parse_count(text: string) -> long!:
+func parse_count(text: str) -> i64!:
     let value = parse_int(text) else error("not a count: " + text)
     return value
 
@@ -138,14 +138,14 @@ and the stack is its diagnosis, but an error is news and where it came
 from is the news.
 
 ```luce raise
-func check(value: long) -> long!:
+func check(value: i64) -> i64!:
     if value > 100:
         error(f"{value} is too large")
     return value
 
 func main() -> !:
-    print(string(try check(50)))
-    print(string(try check(500)))
+    print(str(try check(50)))
+    print(str(try check(500)))
 ```
 
 ```output
@@ -161,12 +161,12 @@ builds show the source location and call trace from the machine code you
 ship.
 
 ```luce trap
-func read_third(values: list(long)) -> long:
+func read_third(values: list[i64]) -> i64:
     return values[2]
 
 func main():
-    let values: list(long) = [10]
-    print(string(read_third(values)))
+    let values: list[i64] = [10]
+    print(str(read_third(values)))
 ```
 
 ```output

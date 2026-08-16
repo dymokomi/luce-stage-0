@@ -44,15 +44,15 @@ test "members: sequential from zero, explicit where written, and both at once" {
         \\    e
         \\
         \\func main():
-        \\    assert(int(Step.first) == 0)
-        \\    assert(int(Step.second) == 1)
-        \\    assert(int(Step.third) == 2)
-        \\    assert(int(Method.deflated) == 8)
-        \\    assert(int(Mixed.a) == 0)
-        \\    assert(int(Mixed.b) == 10)
-        \\    assert(int(Mixed.c) == 11)
-        \\    assert(int(Mixed.d) == -2)
-        \\    assert(int(Mixed.e) == -1)
+        \\    assert(i32(Step.first) == 0)
+        \\    assert(i32(Step.second) == 1)
+        \\    assert(i32(Step.third) == 2)
+        \\    assert(i32(Method.deflated) == 8)
+        \\    assert(i32(Mixed.a) == 0)
+        \\    assert(i32(Mixed.b) == 10)
+        \\    assert(i32(Mixed.c) == 11)
+        \\    assert(i32(Mixed.d) == -2)
+        \\    assert(i32(Mixed.e) == -1)
         \\
     );
 }
@@ -69,10 +69,10 @@ test "members: a value folds like any constant expression" {
         \\    eight = base * 2
         \\
         \\func main():
-        \\    assert(int(Flag.one) == 1)
-        \\    assert(int(Flag.two) == 2)
-        \\    assert(int(Flag.four) == 4)
-        \\    assert(int(Flag.eight) == 8)
+        \\    assert(i32(Flag.one) == 1)
+        \\    assert(i32(Flag.two) == 2)
+        \\    assert(i32(Flag.four) == 4)
+        \\    assert(i32(Flag.eight) == 8)
         \\
     );
 }
@@ -83,23 +83,23 @@ test "members: a value folds like any constant expression" {
 
 test "backing: every rung of the ladder holds its members" {
     try agree.ok(
-        \\enum Small(byte):
+        \\enum Small(u8):
         \\    off = 0
         \\    on = 255
         \\
-        \\enum Middle(short):
+        \\enum Middle(i16):
         \\    low = -32768
         \\    high = 32767
         \\
-        \\enum Wide(long):
+        \\enum Wide(i64):
         \\    huge = 9223372036854775807
         \\    tiny = -9223372036854775808
         \\
         \\func main():
-        \\    assert(int(Small.on) == 255)
-        \\    assert(int(Middle.low) == -32768)
-        \\    assert(long(Wide.huge) == 9223372036854775807)
-        \\    assert(long(Wide.tiny) == -9223372036854775808)
+        \\    assert(i32(Small.on) == 255)
+        \\    assert(i32(Middle.low) == -32768)
+        \\    assert(i64(Wide.huge) == 9223372036854775807)
+        \\    assert(i64(Wide.tiny) == -9223372036854775808)
         \\    assert(Small.on == Small.on)
         \\    assert(Middle.low != Middle.high)
         \\
@@ -112,7 +112,7 @@ test "backing: every rung of the ladder holds its members" {
 
 test "equality: members compare with == and !=, at any width" {
     try agree.ok(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored = 0
         \\    deflated = 8
         \\
@@ -143,12 +143,12 @@ test "int(m): the member's number, at every constructor's width" {
         \\
         \\func main():
         \\    let m = Method.deflated
-        \\    assert(int(m) == 8)
-        \\    assert(long(m) == 8)
-        \\    assert(byte(m) == 8)
-        \\    assert(short(m) == 8)
-        \\    assert(double(m) == 8.0)
-        \\    let sum = int(m) + int(Method.stored)
+        \\    assert(i32(m) == 8)
+        \\    assert(i64(m) == 8)
+        \\    assert(u8(m) == 8)
+        \\    assert(i16(m) == 8)
+        \\    assert(f64(m) == 8.0)
+        \\    let sum = i32(m) + i32(Method.stored)
         \\    assert(sum == 8)
         \\
     );
@@ -156,14 +156,14 @@ test "int(m): the member's number, at every constructor's width" {
 
 test "byte(m): a member past the destination traps like any narrowing" {
     try agree.trap(
-        \\enum Big(long):
+        \\enum Big(i64):
         \\    small = 1
         \\    huge = 300
         \\
         \\func main():
         \\    var m = Big.small
         \\    m = Big.huge
-        \\    assert(byte(m) == 44)
+        \\    assert(u8(m) == 44)
         \\
     , .conversion_range);
 }
@@ -174,11 +174,11 @@ test "Method(n): a member for a number that is one, none for a number that is no
         \\    stored = 0
         \\    deflated = 8
         \\
-        \\func read(raw: long) -> string:
+        \\func read(raw: i64) -> str:
         \\    let m = Method(raw)
         \\    if m == none:
         \\        return "unknown"
-        \\    return string(m)
+        \\    return str(m)
         \\
         \\func main():
         \\    assert(Method(0) != none)
@@ -194,7 +194,7 @@ test "Method(n): a member for a number that is one, none for a number that is no
 
 test "Method(n): a narrow backing is asked about numbers no byte could hold" {
     try agree.ok(
-        \\enum Small(byte):
+        \\enum Small(u8):
         \\    off = 0
         \\    on = 200
         \\
@@ -216,7 +216,7 @@ test "Method(n): the answer narrows and is then a member like any other" {
         \\    fixed = 1
         \\    dynamic = 2
         \\
-        \\func describe(raw: long):
+        \\func describe(raw: i64):
         \\    let kind = Kind(raw)
         \\    if kind == none:
         \\        print("unknown block")
@@ -246,32 +246,32 @@ test "Method(n): the answer narrows and is then a member like any other" {
 
 test "string(m): the member's name, from a variable and from a constant" {
     try agree.prints(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored = 0
         \\    shrunk = 1
         \\    deflated = 8
         \\
         \\func main():
-        \\    print(string(Method.stored))
-        \\    print(string(Method.deflated))
+        \\    print(str(Method.stored))
+        \\    print(str(Method.deflated))
         \\    var m = Method.shrunk
-        \\    print(string(m))
-        \\    print(f"{m} is {int(m)}")
+        \\    print(str(m))
+        \\    print(f"{m} is {i32(m)}")
         \\    m = Method.deflated
-        \\    print(f"{m} is {int(m)}")
+        \\    print(f"{m} is {i32(m)}")
         \\
     ,
         "stored\ndeflated\nshrunk\nshrunk is 1\ndeflated is 8\n",
     );
 }
 
-test "string(m): a one-member enum needs no comparison at all" {
+test "str(m): a one-member enum needs no comparison at all" {
     try agree.prints(
         \\enum Only:
         \\    alone
         \\
         \\func main():
-        \\    print(string(Only.alone))
+        \\    print(str(Only.alone))
         \\
     ,
         "alone\n",
@@ -285,11 +285,11 @@ test "string(m): the name is a borrow, and a binding that keeps it copies" {
         \\    deflated
         \\
         \\func main():
-        \\    var names = new list(string)
+        \\    var names = new list[str]
         \\    var m = Method.stored
-        \\    names.append(string(m))
+        \\    names.append(str(m))
         \\    m = Method.deflated
-        \\    names.append(string(m))
+        \\    names.append(str(m))
         \\    assert(len(names) == 2)
         \\    assert(names[0] == "stored")
         \\    assert(names[1] == "deflated")
@@ -308,7 +308,7 @@ test "match: every member named, and the arm that runs is the one that matched" 
         \\    green
         \\    blue
         \\
-        \\func name(c: Colour) -> string:
+        \\func name(c: Colour) -> str:
         \\    match c:
         \\        red:
         \\            return "red"
@@ -355,7 +355,7 @@ test "match: arms are statements, so they assign, loop, break and return" {
         \\    twice
         \\    stop
         \\
-        \\func apply(op: Op, value: long) -> long:
+        \\func apply(op: Op, value: i64) -> i64:
         \\    var total = value
         \\    match op:
         \\        add:
@@ -415,11 +415,11 @@ test "match: it frees what its arms own, on the arm that runs and the ones that 
         \\    var s = Shape.grid
         \\    match s:
         \\        line:
-        \\            var xs = new list(long)
+        \\            var xs = new list[i64]
         \\            xs.append(1)
         \\            assert(len(xs) == 1)
         \\        grid:
-        \\            var rows = new list(long)
+        \\            var rows = new list[i64]
         \\            rows.append(2)
         \\            rows.append(3)
         \\            assert(len(rows) == 2)
@@ -440,14 +440,14 @@ test "methods: implied-self methods and a static enum function" {
         \\    func compressed() -> bool:
         \\        return self != Method.stored
         \\
-        \\    func spelled() -> string:
+        \\    func spelled() -> str:
         \\        match self:
         \\            stored:
         \\                return "stored"
         \\            deflated:
         \\                return "deflated"
         \\
-        \\    static func of(raw: long) -> Method:
+        \\    static func of(raw: i64) -> Method:
         \\        return Method(raw) else Method.stored
         \\
         \\func main():
@@ -495,8 +495,8 @@ test "folding: a member is a top-level constant, and reads as one" {
         \\    deflated = 8
         \\
         \\const default_method = Method.deflated
-        \\const default_number = int(Method.deflated)
-        \\const default_name = string(Method.deflated)
+        \\const default_number = i32(Method.deflated)
+        \\const default_name = str(Method.deflated)
         \\const is_stored = Method.deflated == Method.stored
         \\
         \\func main():
@@ -515,7 +515,7 @@ test "folding: a member is a parameter's default and a field's" {
         \\    deflated = 8
         \\
         \\struct Entry:
-        \\    size: long
+        \\    size: i64
         \\    method: Method = Method.stored
         \\
         \\func made(method: Method = Method.deflated) -> Method:
@@ -538,7 +538,7 @@ test "folding: a member is a parameter's default and a field's" {
 
 test "containers: a list, a map, an array and a struct field all hold members" {
     try agree.ok(
-        \\enum Method(byte):
+        \\enum Method(u8):
         \\    stored = 0
         \\    shrunk = 1
         \\    deflated = 8
@@ -547,19 +547,19 @@ test "containers: a list, a map, an array and a struct field all hold members" {
         \\    method: Method
         \\
         \\func main():
-        \\    var methods = new list(Method)
+        \\    var methods = new list[Method]
         \\    methods.append(Method.stored)
         \\    methods.append(Method.deflated)
         \\    assert(len(methods) == 2)
         \\    assert(methods[0] == Method.stored)
         \\    assert(methods[1] == Method.deflated)
         \\
-        \\    var counts = new map(string, Method)
+        \\    var counts = new map[str, Method]
         \\    counts["a"] = Method.deflated
         \\    assert(counts.has("a"))
         \\    assert(counts["a"] == Method.deflated)
         \\
-        \\    var grid = new array(Method, 3)
+        \\    var grid = new array[Method](3)
         \\    assert(grid[0] == Method.stored)
         \\    grid[2] = Method.shrunk
         \\    assert(grid[2] == Method.shrunk)
@@ -598,7 +598,7 @@ test "a map keys by an enum: put, get, has, remove, and absence" {
         \\    down
         \\
         \\func main():
-        \\    var counts = new map(Key, long)
+        \\    var counts = new map[Key, i64]
         \\    counts[Key.left] = 3
         \\    counts[Key.right] = 4
         \\    counts[Key.left] = counts[Key.left] + 1
@@ -635,7 +635,7 @@ test "a key comes back out as the enum it went in as" {
         \\    right
         \\    up
         \\
-        \\func named(k: Key) -> string:
+        \\func named(k: Key) -> str:
         \\    match k:
         \\        left:
         \\            return "left"
@@ -645,21 +645,21 @@ test "a key comes back out as the enum it went in as" {
         \\            return "up"
         \\
         \\func main():
-        \\    var counts = new map(Key, long)
+        \\    var counts = new map[Key, i64]
         \\    counts[Key.up] = 1
         \\    counts[Key.left] = 2
         \\    counts[Key.right] = 3
         \\    for k in counts:
         \\        let held: Key = k
         \\        print(f"{named(held)}={counts[held]}")
-        \\    let keys: list(Key) = counts.keys()
+        \\    let keys: list[Key] = counts.keys()
         \\    assert(len(keys) == 3)
         \\    assert(keys[0] == Key.up)
         \\    assert(keys[2] == Key.right)
         \\    for k in keys:
-        \\        print(string(k))
+        \\        print(str(k))
         \\    for k, count in counts:
-        \\        print(f"{string(k)} {count}")
+        \\        print(f"{str(k)} {count}")
         \\
     ,
         \\up=1
@@ -680,28 +680,28 @@ test "a key round trip survives every backing width, negative members included" 
     // three (docs/TYPES.md D4), and the narrowing back is a truncation:
     // a member at -2 that came back as 4294967294 would fail here.
     try agree.ok(
-        \\enum Small(byte):
+        \\enum Small(u8):
         \\    zero = 0
         \\    high = 255
         \\
-        \\enum Signed(short):
+        \\enum Signed(i16):
         \\    low = -32768
         \\    minus = -2
         \\    top = 32767
         \\
-        \\enum Wide(long):
+        \\enum Wide(i64):
         \\    far = 4294967296
         \\    near = 1
         \\
         \\func main():
-        \\    var small = new map(Small, long)
+        \\    var small = new map[Small, i64]
         \\    small[Small.high] = 1
         \\    assert(small.has(Small.high))
         \\    assert(not small.has(Small.zero))
         \\    for k in small:
         \\        assert(k == Small.high)
         \\
-        \\    var signed = new map(Signed, string)
+        \\    var signed = new map[Signed, str]
         \\    signed[Signed.low] = "low"
         \\    signed[Signed.minus] = "minus"
         \\    signed[Signed.top] = "top"
@@ -710,7 +710,7 @@ test "a key round trip survives every backing width, negative members included" 
         \\    for k in signed.keys():
         \\        assert(signed.has(k))
         \\
-        \\    var wide = new map(Wide, long)
+        \\    var wide = new map[Wide, i64]
         \\    wide[Wide.far] = 7
         \\    assert(wide[Wide.far] == 7)
         \\    assert(not wide.has(Wide.near))
@@ -730,12 +730,12 @@ test "a map keyed by one enum holds another" {
         \\    nothing
         \\
         \\func main():
-        \\    var bound = new map(Key, Intent)
+        \\    var bound = new map[Key, Intent]
         \\    bound[Key.left] = Intent.move_left
         \\    bound[Key.right] = Intent.move_right
         \\    for k in bound:
         \\        let intent = bound[k]
-        \\        print(f"{string(k)} -> {string(intent)}")
+        \\        print(f"{str(k)} -> {str(intent)}")
         \\    assert((bound.get(Key.left) else Intent.nothing) == Intent.move_left)
         \\
     ,
@@ -772,7 +772,7 @@ test "a const keymap lives in the program root, keyed by the enum" {
         \\    assert(len(bindings) == 2)
         \\    for k in bindings:
         \\        let held: Key = k
-        \\        print(f"{string(held)} {string(bindings[held])}")
+        \\        print(f"{str(held)} {str(bindings[held])}")
         \\
     ,
         \\left move_left
@@ -805,15 +805,15 @@ test "an enum-keyed map of lists is built and read" {
         \\    up
         \\
         \\func main():
-        \\    var runs = new map(Key, list(long))
-        \\    runs[Key.left] = new list(long)
+        \\    var runs = new map[Key, list[i64]]
+        \\    runs[Key.left] = new list[i64]
         \\    runs[Key.left].append(1)
         \\    runs[Key.left].append(2)
-        \\    runs[Key.up] = new list(long)
+        \\    runs[Key.up] = new list[i64]
         \\    runs[Key.up].append(3)
         \\    assert(len(runs[Key.left]) == 2)
         \\    assert(runs[Key.left][1] == 2)
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for k in runs:
         \\        for held in runs[k]:
         \\            total = total + held
@@ -826,12 +826,12 @@ test "an enum-keyed map of lists is built and read" {
 
 test "containers: an array of enums fills with the first member" {
     try agree.ok(
-        \\enum Cell(byte):
+        \\enum Cell(u8):
         \\    empty = 0
         \\    wall = 1
         \\
         \\func main():
-        \\    var grid = new array(Cell, 2, 2)
+        \\    var grid = new array[Cell](2, 2)
         \\    assert(grid[0, 0] == Cell.empty)
         \\    assert(grid[1, 1] == Cell.empty)
         \\    grid[1, 0] = Cell.wall
@@ -866,7 +866,7 @@ test "an enum is a parameter, a result, a multiple result, and a T?" {
         \\    stored = 0
         \\    deflated = 8
         \\
-        \\func both() -> (Method, long):
+        \\func both() -> (Method, i64):
         \\    return Method.deflated, 3
         \\
         \\func passed(m: Method) -> Method:

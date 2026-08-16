@@ -1629,8 +1629,8 @@ test "a name starts with a letter, and only the lone underscore passes" {
     );
     // The lone `_` is the array-shape wildcard, not a name, and lexes
     // clean; interior and trailing underscores are the house style.
-    try lexKinds(allocator, "array(long, _)\n", &.{
-        .identifier, .left_paren,  .identifier, .comma, .identifier, .right_paren,
+    try lexKinds(allocator, "array[i64, _]\n", &.{
+        .identifier, .left_bracket, .identifier, .comma, .identifier, .right_bracket,
         .newline,    .end_of_file,
     });
     try lexKinds(allocator, "word_end_ = fold_case\n", &.{

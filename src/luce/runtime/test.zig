@@ -7856,7 +7856,7 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
 test "C compound value doors preserve destinations through every allocation failure" {
     const old_field = "the old struct field remains after replacement refuses";
     const other_field = "the untouched struct field keeps its owned bytes";
-    const new_field = "the replacement struct field owns a separate long string";
+    const new_field = "the replacement struct field owns a separate i64 str";
     const map_key = "the fresh map key is copied before the zero value";
     const map_zero = "the fresh map zero is copied and returned as a borrow";
     const fill_text = "the array fill value is copied into every destination cell";

@@ -21,20 +21,20 @@ const testing = std.testing;
 test "a module encoded and decoded again is the same program on both engines" {
     var program = try agree.program(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    for i in range(0, 8):
         \\        xs.append(twice(i))
         \\    let here = Point(x = xs[3], y = len(xs))
         \\    assert(here.x == 6 and here.y == 8)
         \\    assert(twice(21) == 42)
-        \\    print(string(xs[7]) + " " + string(here.x))
+        \\    print(str(xs[7]) + " " + str(here.x))
         \\
     );
     defer program.deinit();
@@ -69,52 +69,52 @@ test "optimized object graphs execute after module round-trip" {
     // decoded program through both engines.
     var program = try agree.program(
         \\struct Item:
-        \\    prefix: string
-        \\    scale: long
-        \\    func render(value: long) -> string:
-        \\        return self.prefix + string(value * self.scale)
+        \\    prefix: str
+        \\    scale: i64
+        \\    func render(value: i64) -> str:
+        \\        return self.prefix + str(value * self.scale)
         \\
         \\union Work:
         \\    empty
-        \\    batch(items: list(Item))
+        \\    batch(items: list[Item])
         \\
         \\struct Plan:
         \\    work: Work
-        \\    finish: (func(long) -> string)? = none
+        \\    finish: (func(i64) -> str)? = none
         \\
-        \\func suffix(value: long) -> string:
-        \\    return "!" + string(value)
+        \\func suffix(value: i64) -> str:
+        \\    return "!" + str(value)
         \\
-        \\func consume(values: list(long)) -> long:
-        \\    var total: long = 0
+        \\func consume(values: list[i64]) -> i64:
+        \\    var total: i64 = 0
         \\    for value in values:
         \\        total = total + value
         \\    return total
         \\
         \\struct Counter:
-        \\    value: long
-        \\    func add(amount: long):
+        \\    value: i64
+        \\    func add(amount: i64):
         \\        self.value = self.value + amount
         \\
-        \\func evaluate(plan: Plan) -> string:
+        \\func evaluate(plan: Plan) -> str:
         \\    let finish = plan.finish
         \\    match plan.work:
         \\        empty:
         \\            return "empty"
         \\        batch(items):
-        \\            let render: func(long) -> string = items[0].render
+        \\            let render: func(i64) -> str = items[0].render
         \\            if finish != none:
         \\                return render(4) + finish(5)
         \\            return render(4)
         \\
         \\func main():
-        \\    var values: list(long) = [1, 2, 3]
+        \\    var values: list[i64] = [1, 2, 3]
         \\    assert(consume(values) == 6)
         \\    var counter = Counter(value = 1)
         \\    counter.add(2)
         \\    assert(counter.value == 3)
         \\
-        \\    var items = new list(Item)
+        \\    var items = new list[Item]
         \\    items.append(Item(prefix = "item", scale = 2))
         \\    let plan = Plan(work = Work.batch(items = items), finish = suffix)
         \\    print(evaluate(plan))

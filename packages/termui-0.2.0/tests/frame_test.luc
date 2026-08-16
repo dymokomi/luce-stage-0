@@ -22,7 +22,7 @@ func test_a_three_sided_frame_leaves_the_bottom_open():
     var view = surface.Surface.of(4, 6)
     let pane = frame.Frame(bottom = false)
     let inside = pane.draw(view, view.area())
-    # No bottom rule: the last row's ends are half-corners, not ┘/└.
+    # No bottom rule: the last row's ends are f16-corners, not ┘/└.
     assert(view.back[3, 0].text == "╵")
     assert(view.back[3, 5].text == "╵")
     assert(inside.rows == 3)
@@ -48,7 +48,7 @@ func test_a_title_sits_on_the_top_edge():
     assert(view.back[0, 7].text == "s")
     assert(view.back[0, 8].text == " ")
 
-# A title long enough to reach the far corner is clipped short of it —
+# A title i64 enough to reach the far corner is clipped i16 of it —
 # the corner glyph survives rather than being blanked by the trailing
 # space of the framed title.
 func test_a_long_title_never_erases_the_far_corner():

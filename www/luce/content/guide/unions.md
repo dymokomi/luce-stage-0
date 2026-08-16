@@ -26,10 +26,10 @@ caller that needs to decide what it means.
 ```luce run
 union Shape:
     empty
-    circle(radius: double)
-    rect(width: double, height: double)
+    circle(radius: f64)
+    rect(width: f64, height: f64)
 
-func area(shape: Shape) -> double:
+func area(shape: Shape) -> f64:
     match shape:
         empty:
             return 0.0
@@ -39,8 +39,8 @@ func area(shape: Shape) -> double:
             return width * height
 
 func main():
-    print(string(area(Shape.circle(radius = 2.0))))
-    print(string(area(Shape.rect(width = 3.0, height = 4.0))))
+    print(str(area(Shape.circle(radius = 2.0))))
+    print(str(area(Shape.rect(width = 3.0, height = 4.0))))
 ```
 
 ```output

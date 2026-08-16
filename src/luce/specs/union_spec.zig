@@ -37,10 +37,10 @@ test "construction and dispatch: bare, single-field, and multi-field members" {
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
-        \\func area(s: Shape) -> double:
+        \\func area(s: Shape) -> f64:
         \\    match s:
         \\        empty:
         \\            return 0.0
@@ -61,9 +61,9 @@ test "construction: defaults on payload fields fill the unwritten ones (D4)" {
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    rect(width: double, height: double = 2.0)
+        \\    rect(width: f64, height: f64 = 2.0)
         \\
-        \\func area(s: Shape) -> double:
+        \\func area(s: Shape) -> f64:
         \\    match s:
         \\        empty:
         \\            return 0.0
@@ -81,9 +81,9 @@ test "dispatch: an arm may name its member bare and bind nothing (D5)" {
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
-        \\func kind(s: Shape) -> long:
+        \\func kind(s: Shape) -> i64:
         \\    match s:
         \\        empty:
         \\            return 0
@@ -101,10 +101,10 @@ test "A4: with every member listed the last arm is the fallthrough, and each val
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
-        \\func name(s: Shape) -> string:
+        \\func name(s: Shape) -> str:
         \\    match s:
         \\        empty:
         \\            return "empty"
@@ -129,15 +129,15 @@ test "D10: a value payload binds as an ordinary copy, per arm and per type" {
     try agree.ok(
         \\union Reading:
         \\    missing
-        \\    scalar(value: double)
-        \\    labeled(value: string)
+        \\    scalar(value: f64)
+        \\    labeled(value: str)
         \\
-        \\func describe(r: Reading) -> string:
+        \\func describe(r: Reading) -> str:
         \\    match r:
         \\        missing:
         \\            return "missing"
         \\        scalar(value):
-        \\            return string(value)
+        \\            return str(value)
         \\        labeled(value):
         \\            return value
         \\
@@ -153,7 +153,7 @@ test "D10: an object payload binds as an alias — mutate through it, observe th
     try agree.ok(
         \\union Json:
         \\    null
-        \\    array(items: list(long))
+        \\    array(items: list[i64])
         \\
         \\func main():
         \\    let doc = Json.array(items = [1, 2])
@@ -188,8 +188,8 @@ test "D9: scope release frees whichever member a union holds, object-carrying or
     try agree.ok(
         \\union Json:
         \\    null
-        \\    number(value: double)
-        \\    array(items: list(long))
+        \\    number(value: f64)
+        \\    array(items: list[i64])
         \\
         \\func main():
         \\    var heavy = Json.array(items = [1, 2, 3])
@@ -208,10 +208,10 @@ test "S34: a caught error unwinds past carrying unions and the census stays clea
     try agree.ok(
         \\union Json:
         \\    null
-        \\    number(value: double)
-        \\    array(items: list(long))
+        \\    number(value: f64)
+        \\    array(items: list[i64])
         \\
-        \\func risky(ok: bool) -> long!:
+        \\func risky(ok: bool) -> i64!:
         \\    var doc = Json.array(items = [1, 2, 3])
         \\    var extra = Json.number(value = 2.0)
         \\    if not ok:
@@ -220,7 +220,7 @@ test "S34: a caught error unwinds past carrying unions and the census stays clea
         \\        null:
         \\            return 0
         \\        number(value):
-        \\            return long(value)
+        \\            return i64(value)
         \\        array(items):
         \\            return len(items)
         \\
@@ -237,7 +237,7 @@ test "S34: a trap mid-run aborts cleanly with union values in flight" {
     try agree.trap(
         \\union Json:
         \\    null
-        \\    array(items: list(long))
+        \\    array(items: list[i64])
         \\
         \\func main():
         \\    var doc = Json.array(items = [1, 2])
@@ -251,15 +251,15 @@ test "a union copies a function-valued field and dispatches both choices" {
     try agree.prints(
         \\union Job:
         \\    empty
-        \\    action(run: (func(long) -> long)?, label: string)
+        \\    action(run: (func(i64) -> i64)?, label: str)
         \\
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
-        \\func same(n: long) -> long:
+        \\func same(n: i64) -> i64:
         \\    return n
         \\
-        \\func apply(job: Job, n: long) -> long:
+        \\func apply(job: Job, n: i64) -> i64:
         \\    match job:
         \\        empty:
         \\            return -1
@@ -268,13 +268,13 @@ test "a union copies a function-valued field and dispatches both choices" {
         \\            return chosen(n + len(label))
         \\
         \\func main():
-        \\    var jobs = new list(Job)
+        \\    var jobs = new list[Job]
         \\    jobs.append(Job.action(run = twice, label = "!"))
         \\    jobs.append(Job.action(run = none, label = "?"))
         \\    let copied = jobs
-        \\    print(string(apply(copied[0], 20)))
-        \\    print(string(apply(copied[1], 20)))
-        \\    print(string(apply(jobs[0], 20)))
+        \\    print(str(apply(copied[0], 20)))
+        \\    print(str(apply(copied[1], 20)))
+        \\    print(str(apply(jobs[0], 20)))
         \\
     , "42\n21\n42\n");
 }
@@ -282,19 +282,19 @@ test "a union copies a function-valued field and dispatches both choices" {
 test "a trapped callback releases a union payload and its function run" {
     try agree.trap(
         \\union Job:
-        \\    run(action: (func(long) -> long)?, values: list(long))
+        \\    run(action: (func(i64) -> i64)?, values: list[i64])
         \\
-        \\func read(index: long) -> long:
-        \\    var values: list(long) = [3, 4]
+        \\func read(index: i64) -> i64:
+        \\    var values: list[i64] = [3, 4]
         \\    return values[index]
         \\
         \\func main():
-        \\    var payload: list(long) = [3, 4]
+        \\    var payload: list[i64] = [3, 4]
         \\    let job = Job.run(action = read, values = payload)
         \\    match job:
         \\        run(action, values):
         \\            if action != none:
-        \\                print(string(action(9)))
+        \\                print(str(action(9)))
         \\
     , .index_bounds);
 }
@@ -303,21 +303,21 @@ test "S34: catch releases a fallible union result before an early return" {
     try agree.ok(
         \\union Packet:
         \\    empty
-        \\    payload(action: (func(long) -> long)?, items: list(long))
+        \\    payload(action: (func(i64) -> i64)?, items: list[i64])
         \\
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
-        \\func identity(value: long) -> long:
+        \\func identity(value: i64) -> i64:
         \\    return value
         \\
         \\func risky(ok: bool) -> Packet!:
-        \\    var items: list(long) = [3, 4]
+        \\    var items: list[i64] = [3, 4]
         \\    if not ok:
         \\        error("packet unavailable")
         \\    return Packet.payload(action = twice, items = items)
         \\
-        \\func recover(ok: bool) -> long:
+        \\func recover(ok: bool) -> i64:
         \\    var packet: Packet
         \\    packet = risky(ok) catch:
         \\        return -1
@@ -338,13 +338,13 @@ test "S34: catch releases a fallible union result before an early return" {
 test "S34: break and continue release union payloads and callback runs" {
     try agree.ok(
         \\union Job:
-        \\    run(action: (func(long) -> long)?, items: list(long))
+        \\    run(action: (func(i64) -> i64)?, items: list[i64])
         \\
-        \\func twice(value: long) -> long:
+        \\func twice(value: i64) -> i64:
         \\    return value * 2
         \\
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for index in range(0, 8):
         \\        var job = Job.run(action = twice, items = [index])
         \\        if index == 2:
@@ -370,10 +370,10 @@ test "D13: a late var holds the first member with zeroed fields, payload-carryin
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\union Reading:
-        \\    sample(value: double, count: long)
+        \\    sample(value: f64, count: i64)
         \\    missing
         \\
         \\func main():
@@ -398,10 +398,10 @@ test "B2: every cell of a new array holds the union's zero, and a cell takes a n
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
-        \\    rect(width: double, height: double)
+        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
-        \\func kind(s: Shape) -> long:
+        \\func kind(s: Shape) -> i64:
         \\    match s:
         \\        empty:
         \\            return 0
@@ -411,7 +411,7 @@ test "B2: every cell of a new array holds the union's zero, and a cell takes a n
         \\            return 2
         \\
         \\func main():
-        \\    var cells = new array(Shape, 3)
+        \\    var cells = new array[Shape](3)
         \\    assert(kind(cells[0]) == 0)
         \\    assert(kind(cells[2]) == 0)
         \\    cells[1] = Shape.circle(radius = 5.0)
@@ -429,11 +429,11 @@ test "B2: a list of unions is handed the element zero, and elements come back wh
     try agree.ok(
         \\union Json:
         \\    null
-        \\    number(value: double)
-        \\    text(value: string)
+        \\    number(value: f64)
+        \\    text(value: str)
         \\
         \\func main():
-        \\    var xs = new list(Json)
+        \\    var xs = new list[Json]
         \\    xs.append(Json.null)
         \\    xs.append(Json.number(value = 2.5))
         \\    xs.append(Json.text(value = "kept words long enough to own outside bytes"))
@@ -460,23 +460,23 @@ test "D12: a Json tree builds through containers, walks recursively, and frees c
     try agree.ok(
         \\union Json:
         \\    null
-        \\    number(value: double)
-        \\    array(items: list(Json))
-        \\    object(fields: map(string, Json))
+        \\    number(value: f64)
+        \\    array(items: list[Json])
+        \\    object(fields: map[str, Json])
         \\
-        \\func total(j: Json) -> double:
+        \\func total(j: Json) -> f64:
         \\    match j:
         \\        null:
         \\            return 0.0
         \\        number(value):
         \\            return value
         \\        array(items):
-        \\            var sum: double = 0.0
+        \\            var sum: f64 = 0.0
         \\            for item in items:
         \\                sum = sum + total(item)
         \\            return sum
         \\        object(fields):
-        \\            var sum: double = 0.0
+        \\            var sum: f64 = 0.0
         \\            for key in fields.keys():
         \\                let item = fields.get(key)
         \\                if item != none:
@@ -484,11 +484,11 @@ test "D12: a Json tree builds through containers, walks recursively, and frees c
         \\            return sum
         \\
         \\func main():
-        \\    var items = new list(Json)
+        \\    var items = new list[Json]
         \\    items.append(Json.number(value = 1.5))
         \\    items.append(Json.number(value = 2.5))
         \\    items.append(Json.null)
-        \\    var fields = new map(string, Json)
+        \\    var fields = new map[str, Json]
         \\    fields["values"] = Json.array(items = items)
         \\    fields["extra"] = Json.number(value = 4.0)
         \\    let doc = Json.object(fields = fields)
@@ -507,7 +507,7 @@ test "D14: a Shape? holds none or a value, narrows on the test, and matches once
     try agree.ok(
         \\union Shape:
         \\    empty
-        \\    circle(radius: double)
+        \\    circle(radius: f64)
         \\
         \\func pick(want: bool) -> Shape?:
         \\    if want:
@@ -551,18 +551,18 @@ test "D16: string(u) answers the member's name for every member" {
         \\union Json:
         \\    null
         \\    boolean(value: bool)
-        \\    number(value: double)
-        \\    text(value: string)
-        \\    array(items: list(Json))
-        \\    object(fields: map(string, Json))
+        \\    number(value: f64)
+        \\    text(value: str)
+        \\    array(items: list[Json])
+        \\    object(fields: map[str, Json])
         \\
         \\func main():
-        \\    assert(string(Json.null) == "null")
-        \\    assert(string(Json.boolean(value = true)) == "boolean")
-        \\    assert(string(Json.number(value = 3.0)) == "number")
-        \\    assert(string(Json.text(value = "words")) == "text")
-        \\    assert(string(Json.array(items = new list(Json))) == "array")
-        \\    assert(string(Json.object(fields = new map(string, Json))) == "object")
+        \\    assert(str(Json.null) == "null")
+        \\    assert(str(Json.boolean(value = true)) == "boolean")
+        \\    assert(str(Json.number(value = 3.0)) == "number")
+        \\    assert(str(Json.text(value = "words")) == "text")
+        \\    assert(str(Json.array(items = new list[Json])) == "array")
+        \\    assert(str(Json.object(fields = new map[str, Json])) == "object")
         \\
     );
 }
@@ -587,8 +587,8 @@ test "D16: string(u) answers the member's name for every member" {
 test "S3: a call's result is matched whole, and released once after the arms" {
     var session = try agree.compare(
         \\union E:
-        \\    a(n: long)
-        \\    b(n: long)
+        \\    a(n: i64)
+        \\    b(n: i64)
         \\
         \\func make() -> E:
         \\    return E.b(n = 42)
@@ -596,9 +596,9 @@ test "S3: a call's result is matched whole, and released once after the arms" {
         \\func main():
         \\    match make():
         \\        a(n):
-        \\            print("a " + string(n))
+        \\            print("a " + str(n))
         \\        b(n):
-        \\            print("b " + string(n))
+        \\            print("b " + str(n))
         \\
     , .{});
     defer session.deinit();
@@ -612,7 +612,7 @@ test "S3: an enum-valued call is matched the same way, and nothing is left over"
         \\    stored
         \\    deflated
         \\
-        \\func chosen(raw: long) -> Method:
+        \\func chosen(raw: i64) -> Method:
         \\    if raw == 8:
         \\        return Method.deflated
         \\    return Method.stored
@@ -650,12 +650,12 @@ test "D16: a struct carrying a union is compared by matching what it carries" {
     // carry, which is the sentence the diagnostic says out loud.
     try agree.prints(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\union Shape:
         \\    at(p: Point)
-        \\    count(n: long)
+        \\    count(n: i64)
         \\
         \\struct Cell:
         \\    what: Shape
@@ -678,7 +678,7 @@ test "D16: a struct carrying a union is compared by matching what it carries" {
         \\        count(n):
         \\            return Point(x = 0, y = 0)
         \\
-        \\func countOf(s: Shape) -> long:
+        \\func countOf(s: Shape) -> i64:
         \\    match s:
         \\        at(p):
         \\            return 0
@@ -699,8 +699,8 @@ test "D16: a struct carrying a union is compared by matching what it carries" {
         \\    let a = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
         \\    let b = Cell(what = Shape.count(n = 3))
         \\    let c = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
-        \\    print(string(same(a.what, b.what)))
-        \\    print(string(same(a.what, c.what)))
+        \\    print(str(same(a.what, b.what)))
+        \\    print(str(same(a.what, c.what)))
         \\
     , "false\ntrue\n");
 }
@@ -716,8 +716,8 @@ test "D16: a container of unions is searched by what identifies the member" {
         \\    square
         \\
         \\union Shape:
-        \\    circle(radius: double)
-        \\    square(side: double)
+        \\    circle(radius: f64)
+        \\    square(side: f64)
         \\
         \\func kindOf(s: Shape) -> Kind:
         \\    match s:
@@ -727,14 +727,14 @@ test "D16: a container of unions is searched by what identifies the member" {
         \\            return Kind.square
         \\
         \\func main():
-        \\    var shapes = new list(Shape)
+        \\    var shapes = new list[Shape]
         \\    shapes.append(Shape.circle(radius = 1.0))
         \\    shapes.append(Shape.square(side = 2.0))
-        \\    var kinds = new list(Kind)
+        \\    var kinds = new list[Kind]
         \\    for s in shapes:
         \\        kinds.append(kindOf(s))
-        \\    print(string(kinds.contains(Kind.square)))
-        \\    print(string(kinds.find(Kind.circle) else -1))
+        \\    print(str(kinds.contains(Kind.square)))
+        \\    print(str(kinds.find(Kind.circle) else -1))
         \\
     , "true\n0\n");
 }

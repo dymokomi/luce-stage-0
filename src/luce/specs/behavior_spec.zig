@@ -101,11 +101,11 @@ test "references: a struct and a union carry, share, and release their fields" {
     // census, which is what proves the fields were released.
     try agreeOk(
         \\struct Box:
-        \\    items: list(int)
+        \\    items: list[i32]
         \\
         \\union Node:
-        \\    leaf(value: int)
-        \\    branch(kids: list(int))
+        \\    leaf(value: i32)
+        \\    branch(kids: list[i32])
         \\
         \\func make() -> Box:
         \\    let xs = [1, 2, 3]
@@ -137,7 +137,7 @@ test "the bit set: & | ^ ~ at both widths, in hex and binary spellings" {
         \\    assert(~0 == -1)
         \\    assert(~5 == -6)
         \\    assert(~(-1) == 0)
-        \\    let wide: long = 0xFFFF_FFFF
+        \\    let wide: i64 = 0xFFFF_FFFF
         \\    assert(wide & 0xFF == 0xFF)
         \\    assert(wide + 0 == 4_294_967_295)
         \\    # Negative operands operate on the representation.
@@ -157,11 +157,11 @@ test "the bit set: shifts transport bits, sign-extend, and check the count" {
         \\    # `>>` is arithmetic: the operands are signed (D3).
         \\    assert(-8 >> 1 == -4)
         \\    assert(-1 >> 5 == -1)
-        \\    # `<<` discards high bits without trapping (R2): at int,
+        \\    # `<<` discards high bits without trapping (R2): at i32,
         \\    # 1 << 31 lands on the sign bit.
         \\    var one = 1
         \\    assert(one << 31 == -2147483648)
-        \\    var wide: long = 1
+        \\    var wide: i64 = 1
         \\    assert(wide << 63 == -9223372036854775808)
         \\    assert(wide << 62 == 4611686018427387904)
         \\
@@ -207,10 +207,10 @@ test "the bit set: compound forms write back like every other operator" {
 test "the bit set: storage widths widen before the operator, like arithmetic" {
     try agreeOk(
         \\func main():
-        \\    var cells = new array(byte, 2)
+        \\    var cells = new array[u8](2)
         \\    cells[0] = 0xF0
         \\    cells[1] = 0x0F
-        \\    # A byte widens to int before the operator sees it (D2),
+        \\    # A u8 widens to i32 before the operator sees it (D2),
         \\    # so no expression ever has an 8-bit type.
         \\    assert(cells[0] | cells[1] == 0xFF)
         \\    assert(cells[0] >> 4 == 0xF)
@@ -231,8 +231,8 @@ test "the bit set: a shift count out of range traps, at either width and either 
     , .shift_out_of_range);
     try agree.trap(
         \\func main():
-        \\    var x: long = 1
-        \\    var count: long = 64
+        \\    var x: i64 = 1
+        \\    var count: i64 = 64
         \\    let y = x << count
         \\
     , .shift_out_of_range);
@@ -245,8 +245,8 @@ test "the bit set: a shift count out of range traps, at either width and either 
     , .shift_out_of_range);
     try agree.trap(
         \\func main():
-        \\    var x: long = 8
-        \\    var count: long = -3
+        \\    var x: i64 = 8
+        \\    var count: i64 = -3
         \\    let y = x >> count
         \\
     , .shift_out_of_range);
@@ -261,14 +261,14 @@ test "the bit set: a shift count out of range traps, at either width and either 
 test "string(x) prints every scalar, and builder.build() hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(string(42) == "42")
-        \\    assert(string(-7) == "-7")
-        \\    assert(string(2.5) == "2.5")
-        \\    assert(string(3.0) == "3")
-        \\    assert(string(true) == "true")
-        \\    assert(string(false) == "false")
-        \\    assert(string("already") == "already")
-        \\    var b = new builder()
+        \\    assert(str(42) == "42")
+        \\    assert(str(-7) == "-7")
+        \\    assert(str(2.5) == "2.5")
+        \\    assert(str(3.0) == "3")
+        \\    assert(str(true) == "true")
+        \\    assert(str(false) == "false")
+        \\    assert(str("already") == "already")
+        \\    var b = new builder
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -295,9 +295,9 @@ test "f-strings: a :.Nf spec writes a double to N decimal places" {
         \\    print(f"mean = {mean:.2f}")
         \\    let rate = 1.0 / 3.0
         \\    print(f"{3} rolls, {rate:.3f}/s")
-        \\    # Rounding is the language's, half away from zero.
+        \\    # Rounding is the language's, f16 away from zero.
         \\    print(f"{2.5:.0f} {-2.5:.0f}")
-        \\    # Promotion reaches the spec too: a long widens into it.
+        \\    # Promotion reaches the spec too: a i64 widens into it.
         \\    print(f"{7:.2f}")
         \\    # And a hole with no spec is unchanged.
         \\    print(f"{mean}")
@@ -319,31 +319,27 @@ test "f-strings: a colon inside brackets belongs to the brackets" {
     , budget, "2 b 3\nel\n");
 }
 
-test "str is a name a program may take now" {
-    // It left the reserved list with the builtin, so the language got
-    // one word smaller in both senses (docs/NUMERICS.md §7).
+test "str is the text type and conversion" {
     try agreeOk(
-        \\func str(n: long) -> long:
-        \\    return n * 2
-        \\
         \\func main():
-        \\    assert(str(21) == 42)
+        \\    let answer: str = str(21)
+        \\    assert(answer == "21")
         \\
     );
 }
 
-test "string(x) folds in a constant, in the same bytes a run would print" {
+test "str(x) folds in a constant, in the same bytes a run would print" {
     try agreeOk(
-        \\const count = string(42)
-        \\const ratio = string(2.5)
-        \\const flag = string(true)
-        \\const same = string("x")
+        \\const count = str(42)
+        \\const ratio = str(2.5)
+        \\const flag = str(true)
+        \\const same = str("x")
         \\const joined = count + " " + ratio + " " + flag + " " + same
         \\
         \\func main():
         \\    assert(joined == "42 2.5 true x")
-        \\    assert(string(42) == count)
-        \\    assert(string(2.5) == ratio)
+        \\    assert(str(42) == count)
+        \\    assert(str(2.5) == ratio)
         \\
     );
 }
@@ -357,26 +353,26 @@ test "string(x) folds in a constant, in the same bytes a run would print" {
 test "long(x) rounds half away from zero, and trunc keeps truncation" {
     try agreeOk(
         \\func main():
-        \\    assert(long(2.5) == 3)
-        \\    assert(long(-2.5) == -3)
-        \\    assert(long(0.5) == 1)
-        \\    assert(long(-0.5) == -1)
-        \\    assert(long(2.4) == 2)
-        \\    assert(long(-2.4) == -2)
-        \\    assert(long(2.6) == 3)
-        \\    assert(long(-2.6) == -3)
-        \\    assert(long(3.9) == 4)
-        \\    assert(long(-3.9) == -4)
-        \\    assert(long(7) == 7)
+        \\    assert(i64(2.5) == 3)
+        \\    assert(i64(-2.5) == -3)
+        \\    assert(i64(0.5) == 1)
+        \\    assert(i64(-0.5) == -1)
+        \\    assert(i64(2.4) == 2)
+        \\    assert(i64(-2.4) == -2)
+        \\    assert(i64(2.6) == 3)
+        \\    assert(i64(-2.6) == -3)
+        \\    assert(i64(3.9) == 4)
+        \\    assert(i64(-3.9) == -4)
+        \\    assert(i64(7) == 7)
         \\    # Toward zero has a spelling of its own again.
         \\    assert(trunc(2.9) == 2.0)
         \\    assert(trunc(-2.9) == -2.0)
-        \\    assert(long(trunc(-2.9)) == -2)
+        \\    assert(i64(trunc(-2.9)) == -2)
         \\    # And the four roundings are four different answers.
         \\    assert(floor(-2.5) == -3.0)
         \\    assert(ceil(-2.5) == -2.0)
         \\    assert(trunc(-2.5) == -2.0)
-        \\    assert(long(-2.5) == -3)
+        \\    assert(i64(-2.5) == -3)
         \\
     );
 }
@@ -390,13 +386,13 @@ test "long(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
         \\import std.math
         \\
         \\func main():
-        \\    var nearly: double = 0.49999999999999994
-        \\    assert(long(nearly) == 0)
+        \\    var nearly: f64 = 0.49999999999999994
+        \\    assert(i64(nearly) == 0)
         \\    assert(math.round(nearly) == 0.0)
         \\    assert(floor(nearly + 0.5) == 1.0)
         \\    for step in range(-40, 41):
-        \\        let x = double(step) / 4.0
-        \\        assert(double(long(x)) == math.round(x))
+        \\        let x = f64(step) / 4.0
+        \\        assert(f64(i64(x)) == math.round(x))
         \\
     );
 }
@@ -407,20 +403,20 @@ test "trap: long(x) still refuses NaN, the infinities, and out of range" {
         \\    var big = 1.0
         \\    while big < 1.0e30:
         \\        big = big * 10.0
-        \\    let bad = long(big)
+        \\    let bad = i64(big)
         \\
     , .conversion_range);
     try agreeTrap(
         \\func main():
         \\    var zero = 0.0
-        \\    let bad = long(zero / zero)
+        \\    let bad = i64(zero / zero)
         \\
     , .conversion_range);
     try agreeTrap(
         \\func main():
         \\    var zero = 0.0
         \\    var one = 1.0
-        \\    let bad = long(one / zero)
+        \\    let bad = i64(one / zero)
         \\
     , .conversion_range);
 }
@@ -459,8 +455,8 @@ test "integers: / never traps, and 1 / 0 is inf" {
         \\    assert(negative < -9.0e300)
         \\    let nan = zero / zero
         \\    assert(nan != nan)
-        \\    # And `minInt / -1`, which the long quotient could not hold.
-        \\    var low: long = -9223372036854775808
+        \\    # And `minInt / -1`, which the i64 quotient could not hold.
+        \\    var low: i64 = -9223372036854775808
         \\    var minus_one = -1
         \\    assert(low / minus_one > 9.0e18)
         \\
@@ -482,7 +478,7 @@ test "integers: // and % keep the trap / gave up" {
     , .divide_by_zero);
     try agreeTrap(
         \\func main():
-        \\    var low: long = -9223372036854775808
+        \\    var low: i64 = -9223372036854775808
         \\    var minus_one = -1
         \\    let bad = low // minus_one
         \\
@@ -492,8 +488,8 @@ test "integers: // and % keep the trap / gave up" {
     // (docs/TYPES.md §4), and the check is per-width or it is wrong.
     try agreeTrap(
         \\func main():
-        \\    var low: int = -2147483648
-        \\    var minus_one: int = -1
+        \\    var low: i32 = -2147483648
+        \\    var minus_one: i32 = -1
         \\    let bad = low // minus_one
         \\
     , .integer_overflow);
@@ -596,7 +592,7 @@ test "floats: % floors with the integer operator, and // is its floor" {
 test "integers: the long range is honored" {
     try agreeOk(
         \\func main():
-        \\    let high: long = 9223372036854775807
+        \\    let high: i64 = 9223372036854775807
         \\    assert(high > 0)
         \\    assert(high - 1 == 9223372036854775806)
         \\    let low = 0 - high
@@ -613,7 +609,7 @@ test "integers: the int range is honored, at its own end" {
     // together.
     try agreeOk(
         \\func main():
-        \\    let high: int = 2147483647
+        \\    let high: i32 = 2147483647
         \\    assert(high > 0)
         \\    assert(high - 1 == 2147483646)
         \\    let low = 0 - high
@@ -629,11 +625,11 @@ test "integers: long's minimum is written the way it reads" {
     // nobody can spell, so the sign folds into the literal first.
     try agreeOk(
         \\func main():
-        \\    let low: long = -9223372036854775808
+        \\    let low: i64 = -9223372036854775808
         \\    assert(low < 0)
         \\    assert(low + 1 == -9223372036854775807)
         \\    assert(low == 0 - 9223372036854775807 - 1)
-        \\    let step: long = -9223372036854775808 // 2
+        \\    let step: i64 = -9223372036854775808 // 2
         \\    assert(step == -4611686018427387904)
         \\
     );
@@ -644,11 +640,11 @@ test "integers: int's minimum is written the way it reads too" {
     // width, not only at the one the check used to be written for.
     try agreeOk(
         \\func main():
-        \\    let low: int = -2147483648
+        \\    let low: i32 = -2147483648
         \\    assert(low < 0)
         \\    assert(low + 1 == -2147483647)
         \\    assert(low == 0 - 2147483647 - 1)
-        \\    let step: int = -2147483648 // 2
+        \\    let step: i32 = -2147483648 // 2
         \\    assert(step == -1073741824)
         \\
     );
@@ -656,8 +652,8 @@ test "integers: int's minimum is written the way it reads too" {
 
 test "integers: long's minimum folds in a file-scope constant too" {
     try agreeOk(
-        \\const low: long = -9223372036854775808
-        \\const high: long = 9223372036854775807
+        \\const low: i64 = -9223372036854775808
+        \\const high: i64 = 9223372036854775807
         \\
         \\func main():
         \\    assert(low < high)
@@ -680,12 +676,12 @@ test "a minus does not move where a literal lands" {
     //     default `int` first — if it had, it would not have compiled.
     try agreeOk(
         \\func main():
-        \\    let small: double = -0.1
-        \\    let plain: double = 0.1
+        \\    let small: f64 = -0.1
+        \\    let plain: f64 = 0.1
         \\    assert(small == 0.0 - plain)
-        \\    let narrow: float = -0.1
+        \\    let narrow: f32 = -0.1
         \\    assert(narrow != small)
-        \\    let wide: long = -3000000000
+        \\    let wide: i64 = -3000000000
         \\    assert(wide + 3000000000 == 0)
         \\    assert(wide < -2147483648)
         \\
@@ -721,13 +717,13 @@ test "doubles: the same arithmetic, and an overflow bound only binary64 can stat
     // makes it worth writing down separately.
     try agreeOk(
         \\func main():
-        \\    let sum: double = 1.5 + 2.5
+        \\    let sum: f64 = 1.5 + 2.5
         \\    assert(sum == 4.0)
-        \\    let quarter: double = 1.0 / 4.0
+        \\    let quarter: f64 = 1.0 / 4.0
         \\    assert(quarter == 0.25)
-        \\    let nine: double = 9.0
+        \\    let nine: f64 = 9.0
         \\    assert(sqrt(nine) == 3.0)
-        \\    let infinity: double = 1.0 / 0.0
+        \\    let infinity: f64 = 1.0 / 0.0
         \\    assert(infinity > 9.0e300)
         \\    assert(0.0 - infinity < -9.0e300)
         \\
@@ -743,9 +739,9 @@ test "the conversions are still spelled where a program spells them" {
         \\func main():
         \\    let n = 7
         \\    let x = 2.0
-        \\    assert(double(n) / x == 3.5)
-        \\    assert(long(x) + n == 9)
-        \\    assert(double(long(3.9)) == 4.0)
+        \\    assert(f64(n) / x == 3.5)
+        \\    assert(i64(x) + n == 9)
+        \\    assert(f64(i64(3.9)) == 4.0)
         \\
     );
 }
@@ -775,13 +771,13 @@ test "mixing: a promoted operator answers a double, printed as one" {
     try agree.printsGiven(
         \\func main():
         \\    let n = 7
-        \\    print(string(n + 1.0))
-        \\    print(string(1 + 0.5))
-        \\    print(string(n / 2.0))
+        \\    print(str(n + 1.0))
+        \\    print(str(1 + 0.5))
+        \\    print(str(n / 2.0))
         \\    var f = 2.0
         \\    f += 1
         \\    f *= 2
-        \\    print(string(f / 8.0))
+        \\    print(str(f / 8.0))
         \\
     , budget, "8\n1.5\n3.5\n0.75\n");
 }
@@ -789,22 +785,22 @@ test "mixing: a promoted operator answers a double, printed as one" {
 test "mixing: promotion reaches annotations, arguments, returns, and fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func scale(by: double) -> double:
+        \\func scale(by: f64) -> f64:
         \\    return by * 2
         \\
-        \\func whole() -> double:
+        \\func whole() -> f64:
         \\    return 3
         \\
-        \\func maybe_whole(present: bool) -> double?:
+        \\func maybe_whole(present: bool) -> f64?:
         \\    if present:
         \\        return 4
         \\    return none
         \\
         \\func main():
-        \\    let f: double = 1
+        \\    let f: f64 = 1
         \\    assert(f == 1.0)
         \\    assert(scale(3) == 6.0)
         \\    assert(whole() == 3.0)
@@ -830,34 +826,34 @@ test "mixing: promotion reaches annotations, arguments, returns, and fields" {
 test "types: the language's own names are lowercase" {
     try agreeOk(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func total(xs: list(long)) -> long:
-        \\    var sum: long = 0
+        \\func total(xs: list[i64]) -> i64:
+        \\    var sum: i64 = 0
         \\    for x in xs:
         \\        sum += x
         \\    return sum
         \\
         \\func main():
-        \\    let n: long = 7
-        \\    let r: double = 2.5
-        \\    let s: string = "hi"
+        \\    let n: i64 = 7
+        \\    let r: f64 = 2.5
+        \\    let s: str = "hi"
         \\    let b: bool = true
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs.append(n)
         \\    xs.append(3)
-        \\    var grid = new array(double, 2, 2)
+        \\    var grid = new array[f64](2, 2)
         \\    grid[0, 0] = 1.5
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    counts["a"] = 1
-        \\    var text = new builder()
+        \\    var text = new builder
         \\    text.append(s)
         \\    let p = Point(x = 1, y = r)
         \\    assert(total(xs) == 10)
-        \\    assert(long(r) == 3)
-        \\    assert(double(n) == 7.0)
-        \\    assert(string(grid[0, 0] + p.x) == "2.5")
+        \\    assert(i64(r) == 3)
+        \\    assert(f64(n) == 7.0)
+        \\    assert(str(grid[0, 0] + p.x) == "2.5")
         \\    assert(counts["a"] == 1)
         \\    assert(text.build() == "hi")
         \\    assert(b)
@@ -874,15 +870,15 @@ test "types: the language's own names are lowercase" {
 // that used to refuse an integer spelling outright.
 test "literals: a number lands on the type its context names" {
     try agreeOk(
-        \\const whole: double = 7
-        \\const negative: double = -3
-        \\const folded: double = 2 * 3 + 1
+        \\const whole: f64 = 7
+        \\const negative: f64 = -3
+        \\const folded: f64 = 2 * 3 + 1
         \\const plain = 7
         \\
-        \\func takes(x: double) -> double:
+        \\func takes(x: f64) -> f64:
         \\    return x
         \\
-        \\func answers() -> double:
+        \\func answers() -> f64:
         \\    return 12
         \\
         \\func main():
@@ -890,9 +886,9 @@ test "literals: a number lands on the type its context names" {
         \\    assert(negative == -3.0)
         \\    assert(folded == 7.0)
         \\    assert(plain == 7)
-        \\    let local: double = 5
+        \\    let local: f64 = 5
         \\    assert(local == 5.0)
-        \\    let held: double? = 6
+        \\    let held: f64? = 6
         \\    assert(held == 6.0)
         \\    assert(takes(8) == 8.0)
         \\    assert(answers() == 12.0)
@@ -903,7 +899,7 @@ test "literals: a number lands on the type its context names" {
 test "mixing: promotion reaches container elements and min/max/clamp" {
     try agreeOk(
         \\func main():
-        \\    var xs: list(double) = [1, 2, 3]
+        \\    var xs: list[f64] = [1, 2, 3]
         \\    xs.append(4)
         \\    xs[0] = 9
         \\    assert(xs[0] == 9.0)
@@ -931,8 +927,8 @@ test "mixing: promotion reaches container elements and min/max/clamp" {
 test "mixing: comparison across the line is exact at 2^53, both sides" {
     try agreeOk(
         \\func main():
-        \\    var two53: long = 9007199254740992
-        \\    var as_float: double = 9007199254740992.0
+        \\    var two53: i64 = 9007199254740992
+        \\    var as_float: f64 = 9007199254740992.0
         \\    assert(two53 == as_float)
         \\    assert(two53 <= as_float)
         \\    assert(as_float == two53)
@@ -958,8 +954,8 @@ test "mixing: comparison across the line is exact at 2^53, both sides" {
 test "mixing: comparison across the line is exact at 2^24, for int against float" {
     try agreeOk(
         \\func main():
-        \\    var two24: int = 16777216
-        \\    var as_float: float = 16777216.0
+        \\    var two24: i32 = 16777216
+        \\    var as_float: f32 = 16777216.0
         \\    assert(two24 == as_float)
         \\    assert(two24 <= as_float)
         \\    assert(as_float == two24)
@@ -986,14 +982,14 @@ test "a constructor lands its argument, so double(0.1) is binary64's" {
     // reaches its place through a conversion the language allows.
     try agreeOk(
         \\func main():
-        \\    let annotated: double = 0.1
-        \\    assert(double(0.1) == annotated)
-        \\    assert(double(0.1) != double(float(0.1)))
-        \\    assert(float(0.1) != annotated)
+        \\    let annotated: f64 = 0.1
+        \\    assert(f64(0.1) == annotated)
+        \\    assert(f64(0.1) != f64(f32(0.1)))
+        \\    assert(f32(0.1) != annotated)
         \\    # And the integer direction: the constructor's own type is
-        \\    # the place, so a value past an `int` is not refused for
+        \\    # the place, so a value past an `i32` is not refused for
         \\    # overflowing one nobody wrote.
-        \\    assert(long(3000000000) == 3000000000)
+        \\    assert(i64(3000000000) == 3000000000)
         \\
     );
 }
@@ -1005,17 +1001,17 @@ test "the width-polymorphic builtins land their arguments too" {
     // makes this worth pinning rather than trusting.
     try agreeOk(
         \\func main():
-        \\    let two: double = 2.0
-        \\    let wide: double = sqrt(2.0)
+        \\    let two: f64 = 2.0
+        \\    let wide: f64 = sqrt(2.0)
         \\    assert(wide == sqrt(two))
-        \\    let narrow: float = sqrt(2.0)
+        \\    let narrow: f32 = sqrt(2.0)
         \\    assert(wide != narrow)
         \\    # abs, min, max and clamp keep the same rule.
-        \\    let held: double = abs(-0.1)
+        \\    let held: f64 = abs(-0.1)
         \\    assert(held == 0.1)
-        \\    let picked: double = min(0.1, 1.0)
+        \\    let picked: f64 = min(0.1, 1.0)
         \\    assert(picked == 0.1)
-        \\    let bounded: double = clamp(0.1, 0.0, 1.0)
+        \\    let bounded: f64 = clamp(0.1, 0.0, 1.0)
         \\    assert(bounded == 0.1)
         \\
     );
@@ -1029,10 +1025,10 @@ test "mixing: an int against a double is exact everywhere, ends included" {
     // answers are what may not move.
     try agreeOk(
         \\func main():
-        \\    var high: int = 2147483647
-        \\    var low: int = -2147483648
-        \\    var high_double: double = 2147483647.0
-        \\    var low_double: double = -2147483648.0
+        \\    var high: i32 = 2147483647
+        \\    var low: i32 = -2147483648
+        \\    var high_double: f64 = 2147483647.0
+        \\    var low_double: f64 = -2147483648.0
         \\    assert(high == high_double)
         \\    assert(not (high < high_double))
         \\    assert(not (high > high_double))
@@ -1066,11 +1062,11 @@ test "mixing: ordering, equality, and the fraction that breaks a tie" {
 test "mixing: infinity and NaN compare with a long without widening it" {
     try agreeOk(
         \\func main():
-        \\    var one: double = 1.0
-        \\    var zero: double = 0.0
+        \\    var one: f64 = 1.0
+        \\    var zero: f64 = 0.0
         \\    let infinity = one / zero
         \\    let nan = zero / zero
-        \\    var big: long = 9223372036854775807
+        \\    var big: i64 = 9223372036854775807
         \\    assert(big < infinity)
         \\    assert(infinity > big)
         \\    assert(0 - big - 1 > 0.0 - infinity)
@@ -1087,9 +1083,9 @@ test "mixing: infinity and NaN compare with a long without widening it" {
 
 test "mixing: an exact comparison folds the same way in a constant" {
     try agreeOk(
-        \\const two53: long = 9007199254740992
-        \\const after53: long = 9007199254740993
-        \\const as_double: double = 9007199254740992.0
+        \\const two53: i64 = 9007199254740992
+        \\const after53: i64 = 9007199254740993
+        \\const as_double: f64 = 9007199254740992.0
         \\const below = two53 == as_double
         \\const above = after53 == as_double
         \\const ordered = as_double < after53
@@ -1145,7 +1141,7 @@ test "compound assignment concatenates strings with +=" {
 test "compound assignment on struct fields and container elements" {
     try agreeOk(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
         \\func main():
         \\    var c = Counter(value = 1)
@@ -1155,11 +1151,11 @@ test "compound assignment on struct fields and container elements" {
         \\    var xs = [1, 2, 3]
         \\    xs[1] += 10
         \\    assert(xs[1] == 12)
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    grid[1, 1] += 7
         \\    grid[1, 1] -= 2
         \\    assert(grid[1, 1] == 5)
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["k"] = 5
         \\    m["k"] *= 4
         \\    assert(m["k"] == 20)
@@ -1181,17 +1177,17 @@ test "a let binding freezes the name, never the object it reached" {
     // that takes a container takes a `let`-bound name for it.
     try agreeOk(
         \\struct Cell:
-        \\    value: long
-        \\    label: string
+        \\    value: i64
+        \\    label: str
         \\
         \\struct Bag:
-        \\    cells: list(Cell)
+        \\    cells: list[Cell]
         \\
-        \\func bump(cells: list(Cell)):
+        \\func bump(cells: list[Cell]):
         \\    cells[0].value += 1
         \\
         \\func main():
-        \\    let cells: list(Cell) = [Cell(value = 1, label = "a")]
+        \\    let cells: list[Cell] = [Cell(value = 1, label = "a")]
         \\    cells[0].value = 10
         \\    cells[0].label = "b"
         \\    bump(cells)
@@ -1211,7 +1207,7 @@ test "a let binding freezes the name, never the object it reached" {
         \\    numbers.append(4)
         \\    assert(numbers[0] == 9 and len(numbers) == 4)
         \\
-        \\    let grid = new array(Cell, 2)
+        \\    let grid = new array[Cell](2)
         \\    grid[1].value = 5
         \\    assert(grid[1].value == 5)
         \\
@@ -1229,28 +1225,28 @@ test "a compound store into a missing map key begins from the value type's zero"
     // is the *value* — not an identity element chosen per operator.
     try agreeOk(
         \\func main():
-        \\    var ints = new map(string, int)
+        \\    var ints = new map[str, i32]
         \\    ints["k"] += 1
         \\    assert(ints["k"] == 1)
-        \\    var longs = new map(string, long)
+        \\    var longs = new map[str, i64]
         \\    longs["k"] += 2
         \\    assert(longs["k"] == 2)
-        \\    var floats = new map(string, float)
+        \\    var floats = new map[str, f32]
         \\    floats["k"] += 0.5
         \\    assert(floats["k"] == 0.5)
-        \\    var doubles = new map(string, double)
+        \\    var doubles = new map[str, f64]
         \\    doubles["k"] += 0.25
         \\    assert(doubles["k"] == 0.25)
-        \\    var words = new map(string, string)
+        \\    var words = new map[str, str]
         \\    words["k"] += "text"
         \\    assert(words["k"] == "text")
-        \\    var bytes = new map(string, byte)
+        \\    var bytes = new map[str, u8]
         \\    bytes["k"] += 7
         \\    assert(bytes["k"] == 7)
-        \\    var shorts = new map(string, short)
+        \\    var shorts = new map[str, i16]
         \\    shorts["k"] += 300
         \\    assert(shorts["k"] == 300)
-        \\    var halves = new map(string, half)
+        \\    var halves = new map[str, f16]
         \\    halves["k"] += 1.5
         \\    assert(halves["k"] == 1.5)
         \\
@@ -1264,7 +1260,7 @@ test "the zero a missing key begins from is the value, not an identity element" 
     // wearing the same syntax.
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["times"] *= 2
         \\    assert(m["times"] == 0)
         \\    m["minus"] -= 5
@@ -1281,8 +1277,8 @@ test "the zero a missing key begins from is the value, not an identity element" 
 test "a compound store defines exactly one entry and evaluates its key once" {
     try agreeOk(
         \\func main():
-        \\    var calls: list(long) = [0]
-        \\    var m = new map(string, long)
+        \\    var calls: list[i64] = [0]
+        \\    var m = new map[str, i64]
         \\    m[bump(calls)] += 5
         \\    assert(calls[0] == 1)
         \\    assert(len(m) == 1)
@@ -1292,7 +1288,7 @@ test "a compound store defines exactly one entry and evaluates its key once" {
         \\    assert(len(m) == 1)
         \\    assert(m["k"] == 10)
         \\
-        \\func bump(counter: list(long)) -> string:
+        \\func bump(counter: list[i64]) -> str:
         \\    counter[0] = counter[0] + 1
         \\    return "k"
         \\
@@ -1306,7 +1302,7 @@ test "a defined string value is owned: it grows from empty and frees once" {
     // rather than a rounding error.
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, string)
+        \\    var m = new map[str, str]
         \\    var at = 0
         \\    while at < 200:
         \\        m["a-key-far-past-the-small-string-bound-so-it-allocates"] += "chunk-"
@@ -1323,7 +1319,7 @@ test "the counter idiom, and the map it leaves behind" {
         \\
         \\func main():
         \\    let text = "the cat sat on the mat the end"
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    for word in text.split(" "):
         \\        counts[word] += 1
         \\    assert(counts["the"] == 3)
@@ -1338,10 +1334,10 @@ test "a compound store through a nested place defines its leaf too" {
     // does, so it has to mean the same thing.
     try agreeOk(
         \\struct Tally:
-        \\    counts: map(string, long)
+        \\    counts: map[str, i64]
         \\
         \\func main():
-        \\    var t = Tally(counts = new map(string, long))
+        \\    var t = Tally(counts = new map[str, i64])
         \\    t.counts["w"] += 1
         \\    t.counts["w"] += 1
         \\    assert(t.counts["w"] == 2)
@@ -1357,7 +1353,7 @@ test "trap: a plain read of a missing key is untouched by the compound rule" {
     // and it must, or every typo in a key would answer zero.
     try agreeTrap(
         \\func main():
-        \\    var counts = new map(string, long)
+        \\    var counts = new map[str, i64]
         \\    counts["word"] = counts["word"] + 1
         \\    assert(counts["word"] == 1)
         \\
@@ -1372,7 +1368,7 @@ test "trap: a compound store that defines an entry and then traps frees cleanly"
     // that map, and on giving it back.
     try agreeTrap(
         \\func main():
-        \\    var m = new map(string, byte)
+        \\    var m = new map[str, u8]
         \\    m["a"] = 1
         \\    m["b"] -= 1
         \\    assert(len(m) == 2)
@@ -1390,10 +1386,10 @@ test "trap: descending through a map key to reach a field is still a read" {
     // place defines.
     try agreeTrap(
         \\struct Cell:
-        \\    value: long
+        \\    value: i64
         \\
         \\func main():
-        \\    var m = new map(string, Cell)
+        \\    var m = new map[str, Cell]
         \\    m["a"] = Cell(value = 1)
         \\    m["b"].value += 5
         \\    assert(m["b"].value == 5)
@@ -1407,7 +1403,7 @@ test "trap: a compound store into a list index keeps its bounds trap" {
     // is the verb that grows a list.
     try agreeTrap(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    xs[0] += 1
         \\    assert(xs[0] == 1)
         \\
@@ -1417,7 +1413,7 @@ test "trap: a compound store into a list index keeps its bounds trap" {
 test "trap: a compound store into an array cell keeps its bounds trap" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array(long, 2)
+        \\    var cells = new array[i64](2)
         \\    cells[5] += 1
         \\    assert(cells[5] == 1)
         \\
@@ -1431,27 +1427,27 @@ test "compound assignment on a storage width combines at its arithmetic type" {
     // in `compoundCombine` and all four of them go through it.
     try agreeOk(
         \\struct Pixel:
-        \\    level: byte
+        \\    level: u8
         \\
         \\func main():
-        \\    var b: byte = 250
+        \\    var b: u8 = 250
         \\    b += 5
         \\    assert(b == 255)
         \\    b -= 255
         \\    assert(b == 0)
-        \\    var s: short = 32000
+        \\    var s: i16 = 32000
         \\    s += 767
         \\    assert(s == 32767)
-        \\    var h: half = 1.0
+        \\    var h: f16 = 1.0
         \\    h += 0.5
         \\    assert(h == 1.5)
         \\    var p = Pixel(level = 100)
         \\    p.level += 55
         \\    assert(p.level == 155)
-        \\    var shades = new array(byte, 2)
+        \\    var shades = new array[u8](2)
         \\    shades[0] += 200
         \\    assert(shades[0] == 200)
-        \\    var counts = new map(string, byte)
+        \\    var counts = new map[str, u8]
         \\    counts["k"] = 12
         \\    counts["k"] *= 20
         \\    assert(counts["k"] == 240)
@@ -1466,7 +1462,7 @@ test "trap: a storage-width compound assignment narrows back with the range chec
     // rather than wrapping.
     try agreeTrap(
         \\func main():
-        \\    var b: byte = 255
+        \\    var b: u8 = 255
         \\    b += 1
         \\    assert(b == 0)
         \\
@@ -1478,7 +1474,7 @@ test "a compound index target evaluates its index expression once" {
     // 2 and the wrong slot would change; once, it lands on 1.
     try agreeOk(
         \\func main():
-        \\    var calls: list(long) = [0]
+        \\    var calls: list[i64] = [0]
         \\    var xs = [100, 200, 300]
         \\    xs[bump(calls)] += 5
         \\    assert(calls[0] == 1)
@@ -1486,7 +1482,7 @@ test "a compound index target evaluates its index expression once" {
         \\    assert(xs[0] == 100)
         \\    assert(xs[2] == 300)
         \\
-        \\func bump(counter: list(long)) -> long:
+        \\func bump(counter: list[i64]) -> i64:
         \\    counter[0] = counter[0] + 1
         \\    return 1
         \\
@@ -1513,7 +1509,7 @@ test "booleans: logic, short-circuit, and comparison chains" {
 
 test "short-circuit does not evaluate the dead side" {
     try agreeOk(
-        \\func boom(x: long) -> bool:
+        \\func boom(x: i64) -> bool:
         \\    assert(x != 0)
         \\    return true
         \\
@@ -1532,7 +1528,7 @@ test "short-circuit does not evaluate the dead side" {
 
 test "if / elif / else selects exactly one arm" {
     try agreeOk(
-        \\func classify(n: long) -> long:
+        \\func classify(n: i64) -> i64:
         \\    if n < 0:
         \\        return 0 - 1
         \\    elif n == 0:
@@ -1568,7 +1564,7 @@ test "while loops, break, and continue" {
 test "for-range iterates the half-open interval" {
     try agreeOk(
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for i in range(0, 5):
         \\        total = total + i
         \\    assert(total == 10)
@@ -1600,12 +1596,12 @@ test "nested loops with labeled-free break only leave the inner loop" {
 
 test "functions: parameters, returns, and recursion" {
     try agreeOk(
-        \\func factorial(n: long) -> long:
+        \\func factorial(n: i64) -> i64:
         \\    if n <= 1:
         \\        return 1
         \\    return n * factorial(n - 1)
         \\
-        \\func fib(n: long) -> long:
+        \\func fib(n: i64) -> i64:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
@@ -1619,12 +1615,12 @@ test "functions: parameters, returns, and recursion" {
 
 test "mutual recursion resolves regardless of declaration order" {
     try agreeOk(
-        \\func is_even(n: long) -> bool:
+        \\func is_even(n: i64) -> bool:
         \\    if n == 0:
         \\        return true
         \\    return is_odd(n - 1)
         \\
-        \\func is_odd(n: long) -> bool:
+        \\func is_odd(n: i64) -> bool:
         \\    if n == 0:
         \\        return false
         \\    return is_even(n - 1)
@@ -1678,10 +1674,10 @@ test "strings: UTF-8 aware slicing and byte access" {
 test "conversions: string, parse, chr, ord" {
     try agreeOk(
         \\func main():
-        \\    assert(string(42) == "42")
-        \\    assert(string(0 - 7) == "-7")
-        \\    assert(string(true) == "true")
-        \\    assert(string(false) == "false")
+        \\    assert(str(42) == "42")
+        \\    assert(str(0 - 7) == "-7")
+        \\    assert(str(true) == "true")
+        \\    assert(str(false) == "false")
         \\    assert((parse_int("100") else 0) == 100)
         \\    assert((parse_float("1.5") else 0.0) == 1.5)
         \\    assert(chr(65) == "A")
@@ -1786,7 +1782,7 @@ test "f-strings compose with methods and calls in holes" {
     try agreeOk(
         \\import std.strings
         \\
-        \\func twice(n: long) -> long:
+        \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
         \\func main():
@@ -1806,8 +1802,8 @@ test "f-strings compose with methods and calls in holes" {
 test "structs: construction, field read, functional update, value copy" {
     try agreeOk(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
@@ -1826,8 +1822,8 @@ test "structs: construction, field read, functional update, value copy" {
 test "structs: namespaced functions and nested structs" {
     try agreeOk(
         \\struct Vec:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\    static func add(a: Vec, b: Vec) -> Vec:
         \\        return Vec(x = a.x + b.x, y = a.y + b.y)
@@ -1859,7 +1855,7 @@ test "structs: namespaced functions and nested structs" {
 
 test "returns: a shape is declared, returned, and bound" {
     try agreeOk(
-        \\func minmax(xs: list(long)) -> (long, long):
+        \\func minmax(xs: list[i64]) -> (i64, i64):
         \\    var low = xs[0]
         \\    var high = xs[0]
         \\    for value in xs:
@@ -1868,7 +1864,7 @@ test "returns: a shape is declared, returned, and bound" {
         \\    return low, high
         \\
         \\func main():
-        \\    var xs: list(long) = [3, 1, 4, 1, 5]
+        \\    var xs: list[i64] = [3, 1, 4, 1, 5]
         \\    let low, high = minmax(xs)
         \\    assert(low == 1 and high == 5)
         \\    # `var` governs the whole bind, and both names reassign.
@@ -1882,13 +1878,13 @@ test "returns: a shape is declared, returned, and bound" {
 
 test "returns: three values, mixed types, and a shape of shapes' worth of nesting" {
     try agreeOk(
-        \\func spread(n: long) -> (long, double, string):
-        \\    return n, double(n) / 2.0, string(n)
+        \\func spread(n: i64) -> (i64, f64, str):
+        \\    return n, f64(n) / 2.0, str(n)
         \\
         \\func main():
-        \\    let count, half, written = spread(7)
+        \\    let count, fraction, written = spread(7)
         \\    assert(count == 7)
-        \\    assert(half == 3.5)
+        \\    assert(fraction == 3.5)
         \\    assert(written == "7")
         \\
     );
@@ -1900,9 +1896,9 @@ test "returns: a discarded call is a statement temporary and dies with its state
     // struct temporary releases the whole shape.  The leak census is
     // what proves it.
     try agreeOk(
-        \\func two() -> (list(long), list(long)):
-        \\    var head: list(long) = [1]
-        \\    var tail: list(long) = [2]
+        \\func two() -> (list[i64], list[i64]):
+        \\    var head: list[i64] = [1]
+        \\    var tail: list[i64] = [2]
         \\    return head, tail
         \\
         \\func main():
@@ -1915,7 +1911,7 @@ test "returns: a discarded call is a statement temporary and dies with its state
 
 test "returns: each value moves, and the caller's two names own one each" {
     try agreeOk(
-        \\func halves(n: long) -> (list(long), list(long)):
+        \\func halves(n: i64) -> (list[i64], list[i64]):
         \\    var head = [n]
         \\    var tail = [n + 1]
         \\    return head, tail
@@ -1931,12 +1927,12 @@ test "returns: each value moves, and the caller's two names own one each" {
 
 test "returns: T! composes, and try is the only composition there is" {
     try agreeOk(
-        \\func pair(n: long) -> (long, long)!:
+        \\func pair(n: i64) -> (i64, i64)!:
         \\    if n < 0:
         \\        error("negative")
         \\    return n, n * 2
         \\
-        \\func doubled(n: long) -> (long, long)!:
+        \\func doubled(n: i64) -> (i64, i64)!:
         \\    let a, b = try pair(n)
         \\    return b, a
         \\
@@ -1958,13 +1954,13 @@ test "returns: T? is an ordinary element of a shape" {
     // at all — while `-> (long, long)?` is refused, because there the
     // `?` would be marking the shape (docs/RETURNS.md §2).
     try agreeOk(
-        \\func lookup(m: map(string, long), key: string) -> (long?, bool):
+        \\func lookup(m: map[str, i64], key: str) -> (i64?, bool):
         \\    if m.has(key):
         \\        return m[key], true
         \\    return none, false
         \\
         \\func main():
-        \\    var ages = new map(string, long)
+        \\    var ages = new map[str, i64]
         \\    ages["ada"] = 36
         \\    let found, present = lookup(ages, "ada")
         \\    assert(present and (found else 0) == 36)
@@ -1979,7 +1975,7 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
     // not disqualifying, and two `var`s carry a pair as well as one
     // struct did.
     try agreeOk(
-        \\func step(value: long, at: long) -> (long, long):
+        \\func step(value: i64, at: i64) -> (i64, i64):
         \\    return value + at, at + 1
         \\
         \\func main():
@@ -1995,22 +1991,22 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
 test "returns: existing vars receive one snapshot through every call surface" {
     try agreeOk(
         \\struct Pairs:
-        \\    static func swapped(left: long, right: long) -> (long, long):
+        \\    static func swapped(left: i64, right: i64) -> (i64, i64):
         \\        return right, left
         \\
         \\struct PairSource:
-        \\    left: long
-        \\    right: long
+        \\    left: i64
+        \\    right: i64
         \\
-        \\    func values() -> (long, long):
+        \\    func values() -> (i64, i64):
         \\        return self.left, self.right
         \\
-        \\func advanced(value: long, at: long) -> (long, long):
+        \\func advanced(value: i64, at: i64) -> (i64, i64):
         \\    return value + at, at + 1
         \\
         \\func main():
-        \\    var left: long = 10
-        \\    var right: long = 20
+        \\    var left: i64 = 10
+        \\    var right: i64 = 20
         \\    left, right = Pairs.swapped(left, right)
         \\    assert(left == 20 and right == 10)
         \\    left, right = advanced(left, right)
@@ -2024,24 +2020,24 @@ test "returns: existing vars receive one snapshot through every call surface" {
 
 test "returns: assignment fits each value and prepares all string storage before replacement" {
     try agreeOk(
-        \\func mixed() -> (int, long, long?):
+        \\func mixed() -> (i32, i64, i64?):
         \\    return 7, 9, none
         \\
-        \\func flipped(left: string, right: string) -> (string, string):
+        \\func flipped(left: str, right: str) -> (str, str):
         \\    return right, left
         \\
         \\func main():
-        \\    var wide: double = 0.0
-        \\    var present: long? = none
-        \\    var missing: long? = 1
+        \\    var wide: f64 = 0.0
+        \\    var present: i64? = none
+        \\    var missing: i64? = 1
         \\    wide, present, missing = mixed()
         \\    assert(wide == 7.0)
         \\    assert(present + 1 == 10)
         \\    assert((missing else 0) == 0)
-        \\    var short = "left"
+        \\    var inside = "left"
         \\    var outside = "a string long enough to own outside bytes"
-        \\    short, outside = flipped(short, outside)
-        \\    assert(short == "a string long enough to own outside bytes")
+        \\    inside, outside = flipped(inside, outside)
+        \\    assert(inside == "a string long enough to own outside bytes")
         \\    assert(outside == "left")
         \\
     );
@@ -2049,20 +2045,20 @@ test "returns: assignment fits each value and prepares all string storage before
 
 test "returns: try and catch commit both replacement stores or neither" {
     try agreeOk(
-        \\func pair(value: long) -> (long, long)!:
+        \\func pair(value: i64) -> (i64, i64)!:
         \\    if value < 0:
         \\        error("negative")
         \\    return value, value * 2
         \\
-        \\func forwarded(value: long) -> (long, long)!:
-        \\    var left: long = 100
-        \\    var right: long = 200
+        \\func forwarded(value: i64) -> (i64, i64)!:
+        \\    var left: i64 = 100
+        \\    var right: i64 = 200
         \\    left, right = try pair(value)
         \\    return left, right
         \\
         \\func main() -> !:
-        \\    var left: long = 10
-        \\    var right: long = 20
+        \\    var left: i64 = 10
+        \\    var right: i64 = 20
         \\    left, right = pair(3) catch:
         \\        assert(false)
         \\    assert(left == 3 and right == 6)
@@ -2079,20 +2075,20 @@ test "returns: try and catch commit both replacement stores or neither" {
 test "returns: a failed assignment keeps RHS side effects but commits no replacements" {
     try agreeOk(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
-        \\    func bump() -> long:
+        \\    func bump() -> i64:
         \\        self.value += 1
         \\        return self.value
         \\
-        \\func risky(value: long) -> (Counter, long)!:
+        \\func risky(value: i64) -> (Counter, i64)!:
         \\    if value >= 0:
         \\        error("failed")
         \\    return Counter(value = value), value
         \\
         \\func main():
         \\    var counter = Counter(value = 0)
-        \\    var result: long = 7
+        \\    var result: i64 = 7
         \\    counter, result = risky(counter.bump()) catch:
         \\        assert(counter.value == 1)
         \\        assert(result == 7)
@@ -2104,24 +2100,24 @@ test "returns: a failed assignment keeps RHS side effects but commits no replace
 
 test "returns: guarded assignment joins optional facts from both continuing paths" {
     try agreeOk(
-        \\func risky(ok: bool) -> (long, long)!:
+        \\func risky(ok: bool) -> (i64, i64)!:
         \\    if not ok:
         \\        error("no value")
         \\    return 4, 5
         \\
-        \\func fallback() -> (long, long):
+        \\func fallback() -> (i64, i64):
         \\    return 10, 20
         \\
-        \\func resolved(ok: bool) -> long:
-        \\    var left: long? = none
-        \\    var right: long = 0
+        \\func resolved(ok: bool) -> i64:
+        \\    var left: i64? = none
+        \\    var right: i64 = 0
         \\    left, right = risky(ok) catch:
         \\        left, right = fallback()
         \\    return left + right
         \\
-        \\func returned_handler(ok: bool) -> long:
-        \\    var left: long? = none
-        \\    var right: long = 0
+        \\func returned_handler(ok: bool) -> i64:
+        \\    var left: i64? = none
+        \\    var right: i64 = 0
         \\    left, right = risky(ok) catch:
         \\        return -1
         \\    return left + right
@@ -2145,10 +2141,10 @@ test "returns: guarded assignment joins optional facts from both continuing path
 test "methods: a receiver reads its struct beside a static namespace function" {
     try agreeOk(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\    func length() -> double:
+        \\    func length() -> f64:
         \\        return sqrt(self.x * self.x + self.y * self.y)
         \\
         \\    func plus(other: Point) -> Point:
@@ -2173,7 +2169,7 @@ test "methods: a receiver reads its struct beside a static namespace function" {
 test "methods: a reader sees the receiver value without changing it" {
     try agreeOk(
         \\struct Counter:
-        \\    count: long
+        \\    count: i64
         \\
         \\    func bumped() -> Counter:
         \\        var next = self
@@ -2193,9 +2189,9 @@ test "methods: a reader sees the receiver value without changing it" {
 test "methods: a receiver may be a field, an element, or a chain of both" {
     try agreeOk(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func doubled() -> long:
+        \\    func doubled() -> i64:
         \\        return self.x * 2
         \\
         \\struct Box:
@@ -2213,21 +2209,21 @@ test "methods: a receiver may be a field, an element, or a chain of both" {
 test "methods: a method may take and answer objects, and ownership is the plain-call rule" {
     try agreeOk(
         \\struct Tally:
-        \\    total: long
+        \\    total: i64
         \\
-        \\    func over(values: list(long)) -> long:
+        \\    func over(values: list[i64]) -> i64:
         \\        var sum = self.total
         \\        for value in values:
         \\            sum = sum + value
         \\        return sum
         \\
-        \\    func spread() -> list(long):
+        \\    func spread() -> list[i64]:
         \\        var made = [self.total, self.total]
         \\        return made
         \\
         \\func main():
         \\    let tally = Tally(total = 10)
-        \\    var numbers: list(long) = [1, 2, 3]
+        \\    var numbers: list[i64] = [1, 2, 3]
         \\    assert(tally.over(numbers) == 16)
         \\    var pair = tally.spread()
         \\    assert(len(pair) == 2 and pair[0] == 10)
@@ -2238,9 +2234,9 @@ test "methods: a method may take and answer objects, and ownership is the plain-
 test "methods: method arguments land at their declared types" {
     try agreeOk(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func pick(fallback: long?) -> long:
+        \\    func pick(fallback: i64?) -> i64:
         \\        return fallback else self.x
         \\
         \\func main():
@@ -2254,9 +2250,9 @@ test "methods: method arguments land at their declared types" {
 test "methods: a literal argument lands at the parameter's width" {
     try agreeOk(
         \\struct Gauge:
-        \\    reading: double
+        \\    reading: f64
         \\
-        \\    func matches(level: double) -> bool:
+        \\    func matches(level: f64) -> bool:
         \\        return self.reading == level
         \\
         \\func main():
@@ -2279,7 +2275,7 @@ test "methods: a literal argument lands at the parameter's width" {
 
 test "named arguments: a call may name, mix, and reorder its arguments" {
     try agreeOk(
-        \\func size(width: long, height: long, deep: bool) -> long:
+        \\func size(width: i64, height: i64, deep: bool) -> i64:
         \\    if deep:
         \\        return width * height * 2
         \\    return width * height
@@ -2300,15 +2296,15 @@ test "named arguments: evaluation stays in written order, binding lands by name"
     // runs one() first, and each value still lands on the slot it
     // names.
     try agreeOk(
-        \\func logged(log: list(long), value: long) -> long:
+        \\func logged(log: list[i64], value: i64) -> i64:
         \\    log.append(value)
         \\    return value
         \\
-        \\func pair(a: long, b: long) -> long:
+        \\func pair(a: i64, b: i64) -> i64:
         \\    return a * 10 + b
         \\
         \\func main():
-        \\    var log = new list(long)
+        \\    var log = new list[i64]
         \\    let got = pair(b = logged(log, 7), a = logged(log, 3))
         \\    assert(got == 37)
         \\    assert(log[0] == 7 and log[1] == 3)
@@ -2324,17 +2320,17 @@ test "named arguments: all four spellings of a user call take them" {
         \\import std.strings
         \\
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func plus(other: long, twice: bool) -> long:
+        \\    func plus(other: i64, twice: bool) -> i64:
         \\        if twice:
         \\            return self.x + other * 2
         \\        return self.x + other
         \\
-        \\    static func added(left: long, right: long) -> long:
+        \\    static func added(left: i64, right: i64) -> i64:
         \\        return left + right
         \\
-        \\func multiplied(left: long, right: long) -> long:
+        \\func multiplied(left: i64, right: i64) -> i64:
         \\    return left * right
         \\
         \\func main():
@@ -2354,8 +2350,8 @@ test "named arguments: a named literal lands at the slot it names" {
     // §4): `f(wide = 0.1)` with a double parameter reads binary64's
     // 0.1, not a reordered widening of binary32's.
     try agreeOk(
-        \\func held(narrow: float, wide: double) -> bool:
-        \\    return wide == 0.1 and double(narrow) != 0.1
+        \\func held(narrow: f32, wide: f64) -> bool:
+        \\    return wide == 0.1 and f64(narrow) != 0.1
         \\
         \\func main():
         \\    # binary32's 0.1 widened is not binary64's 0.1, so the
@@ -2374,7 +2370,7 @@ test "defaults: an omitted trailing argument is filled from the declaration" {
     // count or by name.  Container defaults instead share a program
     // root, as constants_spec proves.
     try agreeOk(
-        \\func grown(base: long, step: long = 5, twice: bool = false) -> long:
+        \\func grown(base: i64, step: i64 = 5, twice: bool = false) -> i64:
         \\    var total = base + step
         \\    if twice:
         \\        total = total * 2
@@ -2390,7 +2386,7 @@ test "defaults: an omitted trailing argument is filled from the declaration" {
     );
 }
 
-test "defaults: a constant, a string, a struct value, and none all serve" {
+test "defaults: a constant, a str, a struct value, and none all serve" {
     // The value-default forms exercised here are other file-scope
     // constants, string literals, value-struct construction and,
     // through D9, `none` where the parameter says what it is absent of.
@@ -2399,19 +2395,19 @@ test "defaults: a constant, a string, a struct value, and none all serve" {
         \\const step_default = 4
         \\
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
-        \\func stepped(base: long, step: long = step_default * 2) -> long:
+        \\func stepped(base: i64, step: i64 = step_default * 2) -> i64:
         \\    return base + step
         \\
-        \\func greet(name: string = "loom") -> string:
+        \\func greet(name: str = "loom") -> str:
         \\    return "hi " + name
         \\
-        \\func corner(p: Point = Point(x = 1, y = 2)) -> long:
+        \\func corner(p: Point = Point(x = 1, y = 2)) -> i64:
         \\    return p.x + p.y
         \\
-        \\func pick(value: long? = none, fallback: long = 7) -> long:
+        \\func pick(value: i64? = none, fallback: i64 = 7) -> i64:
         \\    return value else fallback
         \\
         \\func main():
@@ -2430,9 +2426,9 @@ test "defaults: a constant, a string, a struct value, and none all serve" {
 test "defaults: methods fill omitted slots after the implicit receiver" {
     try agreeOk(
         \\struct Counter:
-        \\    count: long
+        \\    count: i64
         \\
-        \\    func bumped(step: long = 1) -> long:
+        \\    func bumped(step: i64 = 1) -> i64:
         \\        return self.count + step
         \\
         \\func main():
@@ -2450,10 +2446,10 @@ test "struct field defaults: the declaration absorbs the invariant" {
     // a second construction site cannot get them wrong (D8).
     try agreeOk(
         \\struct State:
-        \\    path: string
-        \\    cursor: long = 0
+        \\    path: str
+        \\    cursor: i64 = 0
         \\    dirty: bool = false
-        \\    message: string = ""
+        \\    message: str = ""
         \\
         \\func main():
         \\    let fresh = State(path = "notes.txt")
@@ -2469,7 +2465,7 @@ test "struct field defaults: the declaration absorbs the invariant" {
 test "struct field defaults: a struct of nothing but defaults constructs bare" {
     try agreeOk(
         \\struct Options:
-        \\    depth: long = 3
+        \\    depth: i64 = 3
         \\    wide: bool = false
         \\
         \\func main():
@@ -2487,12 +2483,12 @@ test "struct field defaults: constants and parameter defaults reach them" {
     // defaults, and a parameter default may too.
     try agreeOk(
         \\struct Corner:
-        \\    x: long = 1
-        \\    y: long = 2
+        \\    x: i64 = 1
+        \\    y: i64 = 2
         \\
         \\const origin = Corner()
         \\
-        \\func shifted(by: Corner = Corner(y = 5)) -> long:
+        \\func shifted(by: Corner = Corner(y = 5)) -> i64:
         \\    return by.x + by.y
         \\
         \\func main():
@@ -2518,7 +2514,7 @@ test "builtins: the table is the signature, so a call may name its slots" {
         \\    assert(abs(value = -7) == 7)
         \\    assert(chr(code = 65) == "A")
         \\    assert(ord(text = "A") == 65)
-        \\    assert(long(value = 2.5) == 3)
+        \\    assert(i64(value = 2.5) == 3)
         \\
     );
 }
@@ -2526,14 +2522,14 @@ test "builtins: the table is the signature, so a call may name its slots" {
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:
-        \\    limit: long
+        \\    limit: i64
         \\
-        \\    func check(n: long) -> long!:
+        \\    func check(n: i64) -> i64!:
         \\        if n > self.limit:
         \\            error("over the limit")
         \\        return n
         \\
-        \\func under() -> long!:
+        \\func under() -> i64!:
         \\    let reader = Reader(limit = 5)
         \\    return try reader.check(3)
         \\
@@ -2556,10 +2552,10 @@ test "methods: a method can fail, and try and catch reach it through the receive
 test "methods: direct field and whole-self writes are inferred" {
     try agreeOk(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\    func scale(factor: double):
+        \\    func scale(factor: f64):
         \\        self.x = self.x * factor
         \\        self.y = self.y * factor
         \\
@@ -2584,13 +2580,13 @@ test "methods: direct field and whole-self writes are inferred" {
 test "methods: an inferred writer may return a value and call another writer" {
     try agreeOk(
         \\struct Rng:
-        \\    state: long
+        \\    state: i64
         \\
-        \\    func next() -> long:
+        \\    func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\    func in_range(low: long, high: long) -> long:
+        \\    func in_range(low: i64, high: i64) -> i64:
         \\        if high <= low:
         \\            trap("in_range needs low < high")
         \\        return low + self.next() % (high - low)
@@ -2616,7 +2612,7 @@ test "methods: an inferred writer may return a value and call another writer" {
 test "methods: a writer accepts a bare var receiver" {
     try agreeOk(
         \\struct Counter:
-        \\    n: long
+        \\    n: i64
         \\
         \\    func bump():
         \\        self.n = self.n + 1
@@ -2633,9 +2629,9 @@ test "methods: a writer accepts a bare var receiver" {
 test "methods: an error before a receiver write leaves it unchanged" {
     try agreeOk(
         \\struct Meter:
-        \\    reading: long
+        \\    reading: i64
         \\
-        \\    func take(n: long) -> long!:
+        \\    func take(n: i64) -> i64!:
         \\        if n < 0:
         \\            error("negative")
         \\        self.reading = self.reading + n
@@ -2656,9 +2652,9 @@ test "methods: an error before a receiver write leaves it unchanged" {
 test "methods: readers and writers share the method call surface" {
     try agreeOk(
         \\struct Point:
-        \\    x: long
+        \\    x: i64
         \\
-        \\    func doubled() -> long:
+        \\    func doubled() -> i64:
         \\        return self.x * 2
         \\
         \\    func grow():
@@ -2680,10 +2676,10 @@ test "methods: readers and writers share the method call surface" {
 test "chained assignment through nested struct fields" {
     try agreeOk(
         \\struct Inner:
-        \\    n: long
+        \\    n: i64
         \\
         \\struct Outer:
-        \\    label: string
+        \\    label: str
         \\    inner: Inner
         \\
         \\func main():
@@ -2703,7 +2699,7 @@ test "chained assignment through nested struct fields" {
 test "chained assignment into struct elements of lists and arrays" {
     try agreeOk(
         \\struct Cell:
-        \\    value: long
+        \\    value: i64
         \\
         \\func main():
         \\    var cells = [Cell(value = 10), Cell(value = 20)]
@@ -2712,7 +2708,7 @@ test "chained assignment into struct elements of lists and arrays" {
         \\    assert(cells[0].value == 10)
         \\    cells[0].value += 5
         \\    assert(cells[0].value == 15)
-        \\    var grid = new array(Cell, 2, 2)
+        \\    var grid = new array[Cell](2, 2)
         \\    grid[1, 1].value = 7
         \\    assert(grid[1, 1].value == 7)
         \\    assert(grid[0, 0].value == 0)
@@ -2723,14 +2719,14 @@ test "chained assignment into struct elements of lists and arrays" {
 test "a chained index place evaluates its subscript once" {
     try agreeOk(
         \\struct Cell:
-        \\    value: long
+        \\    value: i64
         \\
-        \\func bump(counter: list(long)) -> long:
+        \\func bump(counter: list[i64]) -> i64:
         \\    counter[0] = counter[0] + 1
         \\    return 1
         \\
         \\func main():
-        \\    var calls: list(long) = [0]
+        \\    var calls: list[i64] = [0]
         \\    var cells = [Cell(value = 100), Cell(value = 200)]
         \\    cells[bump(calls)].value += 5
         \\    assert(calls[0] == 1)
@@ -2779,21 +2775,21 @@ test "lists: the inline path answers what the call answered, at every width" {
     // another name also holds.
     try agreeOk(
         \\func main():
-        \\    var small = new list(byte)
-        \\    var wide = new list(long)
-        \\    var real = new list(double)
-        \\    var flags = new list(bool)
+        \\    var small = new list[u8]
+        \\    var wide = new list[i64]
+        \\    var real = new list[f64]
+        \\    var flags = new list[bool]
         \\    for i in range(0, 500):
-        \\        small.append(byte(i % 251))
+        \\        small.append(u8(i % 251))
         \\        wide.append(i * 7)
-        \\        real.append(double(i) / 4.0)
+        \\        real.append(f64(i) / 4.0)
         \\        flags.append(i % 3 == 0)
         \\    assert(len(small) == 500 and len(flags) == 500)
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    var set = 0
         \\    for i in range(0, 500):
-        \\        assert(small[i] == byte(i % 251))
-        \\        assert(real[i] == double(i) / 4.0)
+        \\        assert(small[i] == u8(i % 251))
+        \\        assert(real[i] == f64(i) / 4.0)
         \\        total += wide[i]
         \\        if flags[i]:
         \\            set += 1
@@ -2809,12 +2805,12 @@ test "lists: an append through one name is seen through the other" {
     // one — every call and every append end the run.  This is the
     // program that would catch a view kept one instruction too long.
     try agreeOk(
-        \\func grow(target: list(long), many: long):
+        \\func grow(target: list[i64], many: i64):
         \\    for i in range(0, many):
         \\        target.append(i)
         \\
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    let same = xs
         \\    xs.append(1)
         \\    same.append(2)
@@ -2837,7 +2833,7 @@ test "lists: an append through one name is seen through the other" {
 test "trap: an inline append refuses a list that was never made" {
     try agreeTrap(
         \\func main():
-        \\    var xs: list(long)
+        \\    var xs: list[i64]
         \\    xs.append(1)
         \\
     , .null_object);
@@ -2846,7 +2842,7 @@ test "trap: an inline append refuses a list that was never made" {
 test "maps: upsert, lookup, membership, keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["a"] = 3
@@ -2854,7 +2850,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
         \\    assert(m["a"] == 3)
         \\    assert(m.has("b"))
         \\    assert(not m.has("z"))
-        \\    var order = new builder()
+        \\    var order = new builder
         \\    for k in m.keys():
         \\        order.append(k)
         \\    assert(order.build() == "ab")
@@ -2867,12 +2863,12 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
 test "maps: for key, value iteration, values(), and get with default" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["c"] = 3
-        \\    var keys = new builder()
-        \\    var total: long = 0
+        \\    var keys = new builder
+        \\    var total: i64 = 0
         \\    for k, v in m:
         \\        keys.append(k)
         \\        total += v
@@ -2893,16 +2889,16 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
     try agreeOk(
         \\func main():
         \\    var xs = [10, 20, 30]
-        \\    var sum_index: long = 0
+        \\    var sum_index: i64 = 0
         \\    var sum_value = 0
         \\    for i, x in xs:
         \\        sum_index += i
         \\        sum_value += x
         \\    assert(sum_index == 0 + 1 + 2)
         \\    assert(sum_value == 60)
-        \\    var row = new array(long, 4)
+        \\    var row = new array[i64](4)
         \\    row.fill(5)
-        \\    var seen: long = 0
+        \\    var seen: i64 = 0
         \\    for i, v in row:
         \\        seen += i
         \\        assert(v == 5)
@@ -2914,10 +2910,10 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
 test "single-name for still binds keys for maps and elements for sequences" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(long, long)
+        \\    var m = new map[i64, i64]
         \\    m[7] = 70
         \\    m[8] = 80
-        \\    var key_sum: long = 0
+        \\    var key_sum: i64 = 0
         \\    for k in m:
         \\        key_sum += k
         \\    assert(key_sum == 15)
@@ -2933,12 +2929,12 @@ test "single-name for still binds keys for maps and elements for sequences" {
 test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
     try agreeOk(
         \\func main():
-        \\    var grid = new array(long, 3, 4)
+        \\    var grid = new array[i64](3, 4)
         \\    assert(grid.dim(0) == 3 and grid.dim(1) == 4)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(grid[2, 3] == 7)
-        \\    var row = new array(long, 5)
+        \\    var row = new array[i64](5)
         \\    row.fill(9)
         \\    assert(row[0] == 9 and row[4] == 9)
         \\    assert(len(row) == 5)
@@ -2949,7 +2945,7 @@ test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
 test "builders accumulate text" {
     try agreeOk(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -2967,13 +2963,13 @@ test "builders accumulate text" {
 test "file-scope value constants fold and inline" {
     try agreeOk(
         \\const width = 80
-        \\const half = width // 2
+        \\const midpoint = width // 2
         \\const name = "loom"
         \\const greeting = "hi " + name
         \\
         \\func main():
         \\    assert(width == 80)
-        \\    assert(half == 40)
+        \\    assert(midpoint == 40)
         \\    assert(greeting == "hi loom")
         \\
     );
@@ -3110,8 +3106,8 @@ test "equality: lists compare by identity, not contents" {
 test "equality: structs compare field by field (value semantics)" {
     try agreeOk(
         \\struct Pair:
-        \\    a: long
-        \\    b: long
+        \\    a: i64
+        \\    b: i64
         \\
         \\func main():
         \\    let p = Pair(a = 1, b = 2)
@@ -3167,9 +3163,9 @@ test "for-each over a list sums its elements in order" {
     try agreeOk(
         \\func main():
         \\    let xs = [4, 5, 6]
-        \\    var out = new builder()
+        \\    var out = new builder
         \\    for x in xs:
-        \\        out.append(string(x))
+        \\        out.append(str(x))
         \\    assert(out.build() == "456")
         \\
     );
@@ -3178,12 +3174,12 @@ test "for-each over a list sums its elements in order" {
 test "for-each over a rank-1 array visits every slot" {
     try agreeOk(
         \\func main():
-        \\    var row = new array(long, 4)
+        \\    var row = new array[i64](4)
         \\    row[0] = 1
         \\    row[1] = 2
         \\    row[2] = 3
         \\    row[3] = 4
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for v in row:
         \\        total = total + v
         \\    assert(total == 10)
@@ -3194,11 +3190,11 @@ test "for-each over a rank-1 array visits every slot" {
 test "for-each over map keys walks insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["x"] = 1
         \\    m["y"] = 2
         \\    m["z"] = 3
-        \\    var joined = new builder()
+        \\    var joined = new builder
         \\    for k in m.keys():
         \\        joined.append(k)
         \\    assert(joined.build() == "xyz")
@@ -3209,7 +3205,7 @@ test "for-each over map keys walks insertion order" {
 test "continue in a for-loop skips the rest of the body" {
     try agreeOk(
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for i in range(0, 10):
         \\        if i % 2 == 0:
         \\            continue
@@ -3240,17 +3236,17 @@ test "a nested try reconciles a fallible for-in temporary before propagating" {
         \\    second
         \\    third
         \\
-        \\func kinds() -> list(Kind)!:
-        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\func kinds() -> list[Kind]!:
+        \\    var values: list[Kind] = [Kind.first, Kind.second, Kind.third]
         \\    return values
         \\
-        \\func score(kind: Kind) -> long!:
+        \\func score(kind: Kind) -> i64!:
         \\    if kind == Kind.second:
         \\        error("stop")
         \\    return 1
         \\
-        \\func run() -> long!:
-        \\    var total: long = 0
+        \\func run() -> i64!:
+        \\    var total: i64 = 0
         \\    for kind in try kinds():
         \\        match kind:
         \\            first:
@@ -3278,17 +3274,17 @@ test "a nested catch reconciles a fallible for-in temporary on both arms" {
         \\    second
         \\    third
         \\
-        \\func kinds() -> list(Kind)!:
-        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\func kinds() -> list[Kind]!:
+        \\    var values: list[Kind] = [Kind.first, Kind.second, Kind.third]
         \\    return values
         \\
-        \\func score(kind: Kind) -> long!:
+        \\func score(kind: Kind) -> i64!:
         \\    if kind == Kind.second:
         \\        error("stop")
         \\    return 1
         \\
-        \\func run() -> long!:
-        \\    var total: long = 0
+        \\func run() -> i64!:
+        \\    var total: i64 = 0
         \\    for kind in try kinds():
         \\        match kind:
         \\            first:
@@ -3312,12 +3308,12 @@ test "continue in match preserves a fallible for-in iterable" {
         \\    second
         \\    third
         \\
-        \\func kinds() -> list(Kind)!:
-        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\func kinds() -> list[Kind]!:
+        \\    var values: list[Kind] = [Kind.first, Kind.second, Kind.third]
         \\    return values
         \\
-        \\func run() -> long!:
-        \\    var total: long = 0
+        \\func run() -> i64!:
+        \\    var total: i64 = 0
         \\    for kind in try kinds():
         \\        match kind:
         \\            first:
@@ -3341,12 +3337,12 @@ test "break in match releases a fallible for-in iterable at the loop exit" {
         \\    second
         \\    third
         \\
-        \\func kinds() -> list(Kind)!:
-        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\func kinds() -> list[Kind]!:
+        \\    var values: list[Kind] = [Kind.first, Kind.second, Kind.third]
         \\    return values
         \\
-        \\func run() -> long!:
-        \\    var total: long = 0
+        \\func run() -> i64!:
+        \\    var total: i64 = 0
         \\    for kind in try kinds():
         \\        match kind:
         \\            first:
@@ -3370,12 +3366,12 @@ test "return in match releases a fallible for-in iterable immediately" {
         \\    second
         \\    third
         \\
-        \\func kinds() -> list(Kind)!:
-        \\    var values: list(Kind) = [Kind.first, Kind.second, Kind.third]
+        \\func kinds() -> list[Kind]!:
+        \\    var values: list[Kind] = [Kind.first, Kind.second, Kind.third]
         \\    return values
         \\
-        \\func run() -> long!:
-        \\    var total: long = 0
+        \\func run() -> i64!:
+        \\    var total: i64 = 0
         \\    for kind in try kinds():
         \\        match kind:
         \\            first:
@@ -3394,7 +3390,7 @@ test "return in match releases a fallible for-in iterable immediately" {
 
 test "the explicit frame stack survives a deep iterative-recursive sum" {
     try agreeOk(
-        \\func sum_to(n: long) -> long:
+        \\func sum_to(n: i64) -> i64:
         \\    if n == 0:
         \\        return 0
         \\    return n + sum_to(n - 1)
@@ -3446,13 +3442,13 @@ test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
 test "string renders every scalar, and a builder hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(string(0) == "0")
-        \\    assert(string(1000000) == "1000000")
-        \\    assert(string(1.5) == "1.5")
-        \\    assert(string(3.0) == "3")
-        \\    assert(string(true) == "true")
-        \\    assert(string("already") == "already")
-        \\    var b = new builder()
+        \\    assert(str(0) == "0")
+        \\    assert(str(1000000) == "1000000")
+        \\    assert(str(1.5) == "1.5")
+        \\    assert(str(3.0) == "3")
+        \\    assert(str(true) == "true")
+        \\    assert(str("already") == "already")
+        \\    var b = new builder
         \\    b.append("bld")
         \\    assert(b.build() == "bld")
         \\
@@ -3467,7 +3463,7 @@ test "parse_int and parse_float accept signs and round-trip string" {
         \\    assert((parse_int("+7") else 0) == 7)
         \\    assert((parse_float("3.25") else 0.0) == 3.25)
         \\    assert((parse_float("-0.5") else 0.0) == 0.0 - 0.5)
-        \\    assert((parse_int(string(98765)) else 0) == 98765)
+        \\    assert((parse_int(str(98765)) else 0) == 98765)
         \\
     );
 }
@@ -3530,7 +3526,7 @@ test "lists: sort is stable — equal elements keep their order" {
     // detail: this test fails outright under an unstable sort.
     try agreeOk(
         \\func main():
-        \\    var xs: list(double) = []
+        \\    var xs: list[f64] = []
         \\    var i = 0
         \\    while i < 40:
         \\        xs.append(1.0)
@@ -3540,8 +3536,8 @@ test "lists: sort is stable — equal elements keep their order" {
         \\    xs.sort()
         \\    i = 0
         \\    while i < 40:
-        \\        assert(string(xs[i * 2]) == "-0")
-        \\        assert(string(xs[i * 2 + 1]) == "0")
+        \\        assert(str(xs[i * 2]) == "-0")
+        \\        assert(str(xs[i * 2 + 1]) == "0")
         \\        i += 1
         \\    assert(xs[80] == 1.0)
         \\
@@ -3588,10 +3584,10 @@ test "lists: value structs stored by copy are independent" {
     // slot is replaced whole with cells[i] = ..., not cells[i].v = ...)
     try agreeOk(
         \\struct Cell:
-        \\    v: long
+        \\    v: i64
         \\
         \\func main():
-        \\    var cells = new list(Cell)
+        \\    var cells = new list[Cell]
         \\    var c = Cell(v = 1)
         \\    cells.append(c)
         \\    cells.append(c)
@@ -3611,7 +3607,7 @@ test "lists: value structs stored by copy are independent" {
 test "maps: long keys, lookup, has, and len" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(long, string)
+        \\    var m = new map[i64, str]
         \\    m[1] = "one"
         \\    m[2] = "two"
         \\    m[10] = "ten"
@@ -3629,7 +3625,7 @@ test "maps: long keys, lookup, has, and len" {
 test "maps: removing an absent key is a no-op; clear empties" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m.remove("ghost")
@@ -3652,32 +3648,32 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
     // keys()), and it has to survive all of that.
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    var i = 0
         \\    while i < 300:
-        \\        m["k" + string(i)] = i
+        \\        m["k" + str(i)] = i
         \\        i += 1
         \\    assert(len(m) == 300)
         \\    var seen = 0
         \\    for key, held in m:
-        \\        assert(key == "k" + string(held))
+        \\        assert(key == "k" + str(held))
         \\        assert(held == seen)
         \\        seen += 1
         \\    assert(seen == 300)
         \\    i = 0
         \\    while i < 300:
-        \\        assert(m["k" + string(i)] == i)
-        \\        assert(m.has("k" + string(i)))
+        \\        assert(m["k" + str(i)] == i)
+        \\        assert(m.has("k" + str(i)))
         \\        i += 1
         \\    i = 0
         \\    while i < 300:
         \\        if i % 2 == 0:
-        \\            m.remove("k" + string(i))
+        \\            m.remove("k" + str(i))
         \\        i += 1
         \\    assert(len(m) == 150)
         \\    var next = 1
         \\    for key in m:
-        \\        assert(key == "k" + string(next))
+        \\        assert(key == "k" + str(next))
         \\        next += 2
         \\    assert((m.get("k5") else 0 - 1) == 5)
         \\    assert(m.get("k4") == none)
@@ -3688,7 +3684,7 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
 test "maps: long keys survive growth, negatives, and the extremes" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(long, long)
+        \\    var m = new map[i64, i64]
         \\    var i = 0 - 200
         \\    while i < 200:
         \\        m[i * 3] = i
@@ -3714,16 +3710,16 @@ test "maps: long keys survive growth, negatives, and the extremes" {
 test "arrays: ranks one through four report their dims and zero-init" {
     try agreeOk(
         \\func main():
-        \\    var a1 = new array(long, 5)
+        \\    var a1 = new array[i64](5)
         \\    assert(a1.dim(0) == 5 and a1[4] == 0)
-        \\    var a2 = new array(long, 2, 3)
+        \\    var a2 = new array[i64](2, 3)
         \\    assert(a2.dim(0) == 2 and a2.dim(1) == 3)
         \\    assert(a2[1, 2] == 0)
-        \\    var a3 = new array(long, 2, 2, 2)
+        \\    var a3 = new array[i64](2, 2, 2)
         \\    assert(a3.dim(2) == 2 and a3[1, 1, 1] == 0)
         \\    a3[1, 1, 1] = 7
         \\    assert(a3[1, 1, 1] == 7 and a3[0, 0, 0] == 0)
-        \\    var a4 = new array(long, 2, 2, 2, 2)
+        \\    var a4 = new array[i64](2, 2, 2, 2)
         \\    assert(a4.dim(3) == 2 and a4[1, 1, 1, 1] == 0)
         \\    a4[1, 1, 1, 1] = 9
         \\    assert(a4[1, 1, 1, 1] == 9)
@@ -3734,11 +3730,11 @@ test "arrays: ranks one through four report their dims and zero-init" {
 test "arrays: fill sets every slot; len is the first dimension" {
     try agreeOk(
         \\func main():
-        \\    var row = new array(double, 4)
+        \\    var row = new array[f64](4)
         \\    row.fill(1.5)
         \\    assert(row[0] == 1.5 and row[3] == 1.5)
         \\    assert(len(row) == 4)
-        \\    var grid = new array(long, 3, 5)
+        \\    var grid = new array[i64](3, 5)
         \\    assert(len(grid) == 3)
         \\
     );
@@ -3747,7 +3743,7 @@ test "arrays: fill sets every slot; len is the first dimension" {
 test "arrays: rank-1 sort, reverse, find, contains" {
     try agreeOk(
         \\func main():
-        \\    var row = new array(long, 4)
+        \\    var row = new array[i64](4)
         \\    row[0] = 3
         \\    row[1] = 1
         \\    row[2] = 4
@@ -3770,8 +3766,8 @@ test "arrays: rank-1 sort, reverse, find, contains" {
 test "structs: assigning a copy leaves the source untouched for value fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: long
-        \\    y: long
+        \\    x: i64
+        \\    y: i64
         \\
         \\func main():
         \\    var a = Point(x = 1, y = 2)
@@ -3791,11 +3787,11 @@ test "structs: nested value structs copy deeply" {
     // rejected — so the whole inner field is replaced instead.)
     try agreeOk(
         \\struct Inner:
-        \\    n: long
+        \\    n: i64
         \\
         \\struct Outer:
         \\    inner: Inner
-        \\    tag: long
+        \\    tag: i64
         \\
         \\func main():
         \\    var o = Outer(inner = Inner(n = 1), tag = 0)
@@ -3812,12 +3808,12 @@ test "structs: nested value structs copy deeply" {
 test "structs: namespaced functions can recurse and call peers" {
     try agreeOk(
         \\struct Math:
-        \\    dummy: long
+        \\    dummy: i64
         \\
-        \\    static func square(n: long) -> long:
+        \\    static func square(n: i64) -> i64:
         \\        return n * n
         \\
-        \\    static func hypot_sq(a: long, b: long) -> long:
+        \\    static func hypot_sq(a: i64, b: i64) -> i64:
         \\        return Math.square(a) + Math.square(b)
         \\
         \\func main():
@@ -3846,9 +3842,9 @@ test "ownership: give transfers an object into a new owner" {
 test "ownership: reassigning an owning var frees the old object with no leak" {
     try agreeOk(
         \\func main():
-        \\    var b = new builder()
+        \\    var b = new builder
         \\    b.append("first")
-        \\    b = new builder()
+        \\    b = new builder
         \\    b.append("second")
         \\    assert(b.build() == "second")
         \\
@@ -3858,7 +3854,7 @@ test "ownership: reassigning an owning var frees the old object with no leak" {
 test "ownership: a late-declared object slot can be filled and used" {
     try agreeOk(
         \\func main():
-        \\    var xs: list(long)
+        \\    var xs: list[i64]
         \\    xs = [7, 8, 9]
         \\    assert(len(xs) == 3)
         \\    xs.append(10)
@@ -3869,8 +3865,8 @@ test "ownership: a late-declared object slot can be filled and used" {
 
 test "ownership: return moves an object out of a function" {
     try agreeOk(
-        \\func make() -> list(long):
-        \\    var xs = new list(long)
+        \\func make() -> list[i64]:
+        \\    var xs = new list[i64]
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return xs
@@ -3885,14 +3881,14 @@ test "ownership: return moves an object out of a function" {
 
 test "ownership: a borrowed parameter is read without transfer" {
     try agreeOk(
-        \\func total(xs: list(long)) -> long:
-        \\    var sum: long = 0
+        \\func total(xs: list[i64]) -> i64:
+        \\    var sum: i64 = 0
         \\    for x in xs:
         \\        sum = sum + x
         \\    return sum
         \\
         \\func main():
-        \\    var xs: list(long) = [1, 2, 3, 4]
+        \\    var xs: list[i64] = [1, 2, 3, 4]
         \\    assert(total(xs) == 10)
         \\    assert(len(xs) == 4)
         \\    assert(total(xs) == 10)
@@ -3907,18 +3903,18 @@ test "ownership: a borrowed parameter is read without transfer" {
 test "late var declarations hold the zero value of their type" {
     try agreeOk(
         \\struct Vec3:
-        \\    x: long
-        \\    y: long
-        \\    z: long
+        \\    x: i64
+        \\    y: i64
+        \\    z: i64
         \\
         \\func main():
-        \\    var n: long
+        \\    var n: i64
         \\    assert(n == 0)
-        \\    var f: double
+        \\    var f: f64
         \\    assert(f == 0.0)
         \\    var flag: bool
         \\    assert(not flag)
-        \\    var s: string
+        \\    var s: str
         \\    assert(s == "")
         \\    assert(len(s) == 0)
         \\    var v: Vec3
@@ -3929,8 +3925,8 @@ test "late var declarations hold the zero value of their type" {
 
 test "a late var can be assigned after a branch decides its value" {
     try agreeOk(
-        \\func pick(flag: bool) -> long:
-        \\    var out: long
+        \\func pick(flag: bool) -> i64:
+        \\    var out: i64
         \\    if flag:
         \\        out = 10
         \\    else:
@@ -3955,8 +3951,8 @@ test "constants of every scalar type fold and inline" {
         \\const enabled = true and not false
         \\const prefix = "id_"
         \\
-        \\func label(n: long) -> string:
-        \\    return prefix + string(n)
+        \\func label(n: i64) -> str:
+        \\    return prefix + str(n)
         \\
         \\func main():
         \\    assert(limit == 12)
@@ -3989,14 +3985,14 @@ test "constants reference earlier constants" {
 
 test "a T? holds either a value or none, and says which" {
     try agreeOk(
-        \\func passthrough(n: long?) -> long?:
+        \\func passthrough(n: i64?) -> i64?:
         \\    return n
         \\
-        \\func text(t: string?) -> string?:
+        \\func text(t: str?) -> str?:
         \\    return t
         \\
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    assert(n == none)
         \\    assert(not (n != none))
         \\    n = 7
@@ -4004,7 +4000,7 @@ test "a T? holds either a value or none, and says which" {
         \\    # a real one again.
         \\    assert(passthrough(n) != none)
         \\    assert(not (passthrough(n) == none))
-        \\    var t: string? = "hi"
+        \\    var t: str? = "hi"
         \\    assert(text(t) != none)
         \\    t = none
         \\    assert(t == none)
@@ -4016,7 +4012,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
     try agreeOk(
         \\func main():
         \\    let n = parse_int("41")
-        \\    var seen: long = 0
+        \\    var seen: i64 = 0
         \\    if n != none:
         \\        seen = n + 1
         \\    else:
@@ -4024,7 +4020,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
         \\    assert(seen == 42)
         \\
         \\    let bad = parse_int("x")
-        \\    var other: long = 0
+        \\    var other: i64 = 0
         \\    if bad == none:
         \\        other = 5
         \\    else:
@@ -4036,7 +4032,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
 
 test "narrowing: an early-return guard narrows the rest of the block" {
     try agreeOk(
-        \\func doubled(text: string) -> long:
+        \\func doubled(text: str) -> i64:
         \\    let n = parse_int(text)
         \\    if n == none:
         \\        return 0 - 1
@@ -4053,7 +4049,7 @@ test "narrowing: continue and break guards narrow what follows them" {
     try agreeOk(
         \\func main():
         \\    let inputs = ["1", "x", "3"]
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for text in inputs:
         \\        let n = parse_int(text)
         \\        if n == none:
@@ -4062,7 +4058,7 @@ test "narrowing: continue and break guards narrow what follows them" {
         \\    assert(total == 4)
         \\
         \\    var index = 0
-        \\    var first: long = 0
+        \\    var first: i64 = 0
         \\    while index < len(inputs):
         \\        let n = parse_int(inputs[index])
         \\        index = index + 1
@@ -4101,11 +4097,11 @@ test "narrowing: and carries the test into the rest of the condition" {
 test "narrowing: an assignment of a plain value proves the name present" {
     try agreeOk(
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    n = 3
         \\    assert(n * 2 == 6)
-        \\    var xs: list(long)? = none
-        \\    xs = new list(long)
+        \\    var xs: list[i64]? = none
+        \\    xs = new list[i64]
         \\    xs.append(4)
         \\    assert(len(xs) == 1)
         \\
@@ -4115,7 +4111,7 @@ test "narrowing: an assignment of a plain value proves the name present" {
 test "narrowing: a while condition narrows its body" {
     try agreeOk(
         \\func main():
-        \\    var countdown: long? = 3
+        \\    var countdown: i64? = 3
         \\    var steps = 0
         \\    while countdown != none:
         \\        steps = steps + 1
@@ -4145,7 +4141,7 @@ test "else supplies the fallback, lazily, and chains to the right" {
 
 test "else runs its fallback only when the value is absent" {
     try agreeOk(
-        \\func note(log: builder, mark: string) -> long:
+        \\func note(log: builder, mark: str) -> i64:
         \\    log.append(mark)
         \\    return 0
         \\
@@ -4177,15 +4173,15 @@ test "x else trap is the assert-unwrap" {
 test "an optional crosses a call, a return, and a struct field" {
     try agreeOk(
         \\struct Setting:
-        \\    name: string
-        \\    limit: long?
+        \\    name: str
+        \\    limit: i64?
         \\
-        \\func describe(limit: long?) -> string:
+        \\func describe(limit: i64?) -> str:
         \\    if limit == none:
         \\        return "unlimited"
-        \\    return string(limit)
+        \\    return str(limit)
         \\
-        \\func lookup(found: bool) -> long?:
+        \\func lookup(found: bool) -> i64?:
         \\    if found:
         \\        return 4
         \\    return none
@@ -4210,11 +4206,11 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
     // and no reference counting anywhere.
     try agreeOk(
         \\struct Node:
-        \\    value: long
+        \\    value: i64
         \\    next: Node?
         \\
-        \\func total(head: Node?) -> long:
-        \\    var sum: long = 0
+        \\func total(head: Node?) -> i64:
+        \\    var sum: i64 = 0
         \\    var walk = head
         \\    while walk != none:
         \\        sum = sum + walk.value
@@ -4234,12 +4230,12 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
 test "a compound assignment combines at the payload and stays present" {
     try agreeOk(
         \\func main():
-        \\    var n: long? = none
+        \\    var n: i64? = none
         \\    n = 10
         \\    n += 5
         \\    n *= 2
         \\    assert(n == 30)
-        \\    var s: string? = "a"
+        \\    var s: str? = "a"
         \\    s += "b"
         \\    assert(s == "ab")
         \\
@@ -4249,7 +4245,7 @@ test "a compound assignment combines at the payload and stays present" {
 test "absence survives a round trip through a struct field and a var" {
     try agreeOk(
         \\struct Slot:
-        \\    held: string?
+        \\    held: str?
         \\
         \\func main():
         \\    var slot = Slot(held = none)
@@ -4278,13 +4274,13 @@ test "absence survives a round trip through a struct field and a var" {
 test "trap: integer overflow on addition" {
     try agreeTrap(
         \\func main():
-        \\    var x: long = 9223372036854775807
+        \\    var x: i64 = 9223372036854775807
         \\    x = x + 1
         \\
     , .integer_overflow);
     try agreeTrap(
         \\func main():
-        \\    var x: int = 2147483647
+        \\    var x: i32 = 2147483647
         \\    x = x + 1
         \\
     , .integer_overflow);
@@ -4293,14 +4289,14 @@ test "trap: integer overflow on addition" {
 test "trap: integer overflow negating the minimum" {
     try agreeTrap(
         \\func main():
-        \\    var n: long = 0 - 9223372036854775807
+        \\    var n: i64 = 0 - 9223372036854775807
         \\    n = n - 1
         \\    let bad = 0 - n
         \\
     , .integer_overflow);
     try agreeTrap(
         \\func main():
-        \\    var n: int = 0 - 2147483647
+        \\    var n: i32 = 0 - 2147483647
         \\    n = n - 1
         \\    let bad = 0 - n
         \\
@@ -4310,14 +4306,14 @@ test "trap: integer overflow negating the minimum" {
 test "trap: integer overflow taking abs of the minimum" {
     try agreeTrap(
         \\func main():
-        \\    var n: long = 0 - 9223372036854775807
+        \\    var n: i64 = 0 - 9223372036854775807
         \\    n = n - 1
         \\    let bad = abs(n)
         \\
     , .integer_overflow);
     try agreeTrap(
         \\func main():
-        \\    var n: int = 0 - 2147483647
+        \\    var n: i32 = 0 - 2147483647
         \\    n = n - 1
         \\    let bad = abs(n)
         \\
@@ -4331,14 +4327,14 @@ test "trap: integer overflow multiplying, at the width that reaches it first" {
     // to when it has a `long` in it.
     try agreeTrap(
         \\func main():
-        \\    var n: int = 46341
+        \\    var n: i32 = 46341
         \\    let bad = n * n
         \\
     , .integer_overflow);
     // And the same program one rung up, where it simply computes.
     try agreeOk(
         \\func main():
-        \\    var n: long = 46341
+        \\    var n: i64 = 46341
         \\    assert(n * n == 2147488281)
         \\
     );
@@ -4368,7 +4364,7 @@ test "trap: float-to-int conversion out of range" {
         \\    var big = 1.0
         \\    while big < 1.0e30:
         \\        big = big * 10.0
-        \\    let bad = long(big)
+        \\    let bad = i64(big)
         \\
     , .conversion_range);
 }
@@ -4401,12 +4397,12 @@ test "a built trap message survives the frame that built it" {
     // program without it read the same dead slot and found it
     // untouched.
     try agree.trapSays(
-        \\func want(text: string) -> long:
+        \\func want(text: str) -> i64:
         \\    return parse_int(text) else trap("not a number: " + text)
         \\
         \\func main():
-        \\    print(string(want("41")))
-        \\    print(string(want("oops")))
+        \\    print(str(want("41")))
+        \\    print(str(want("oops")))
         \\
     , .explicit_trap, "not a number: oops");
 }
@@ -4416,7 +4412,7 @@ test "a built trap message survives at every length" {
     // the trap unwinds past.  Both are the frame's, and both have to
     // reach the report — one door, two forms of storage behind it.
     try agree.trapSays(
-        \\func stop(name: string):
+        \\func stop(name: str):
         \\    trap("stopped by " + name)
         \\
         \\func main():
@@ -4569,7 +4565,7 @@ test "bounds: pop empties a list before it has nothing to answer" {
 test "bounds: every axis of an array is checked on its own" {
     try agreeOk(
         \\func main():
-        \\    var grid = new array(long, 2, 3)
+        \\    var grid = new array[i64](2, 3)
         \\    var row = 1
         \\    var column = 2
         \\    grid[row, column] = 7
@@ -4578,21 +4574,21 @@ test "bounds: every axis of an array is checked on its own" {
     );
     try agreeTrap(
         \\func main():
-        \\    var grid = new array(long, 2, 3)
+        \\    var grid = new array[i64](2, 3)
         \\    var row = 2
         \\    let bad = grid[row, 0]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new array(long, 2, 3)
+        \\    var grid = new array[i64](2, 3)
         \\    var column = 3
         \\    let bad = grid[0, column]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new array(long, 2, 3)
+        \\    var grid = new array[i64](2, 3)
         \\    var below = -1
         \\    let bad = grid[0, below]
         \\
@@ -4602,7 +4598,7 @@ test "bounds: every axis of an array is checked on its own" {
 test "bounds: a map answers for a key it holds and traps for one it does not" {
     try agreeOk(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["a"] = 1
         \\    assert(m["a"] == 1)
         \\    assert(m.has("a"))
@@ -4614,7 +4610,7 @@ test "bounds: a map answers for a key it holds and traps for one it does not" {
     );
     try agreeTrap(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["a"] = 1
         \\    var wanted = "b"
         \\    let bad = m[wanted]
@@ -4658,7 +4654,7 @@ test "bounds: a string slice is checked at its length and on its boundaries" {
 test "trap: array index out of bounds" {
     try agreeTrap(
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    grid[2, 0] = 1
         \\
     , .index_bounds);
@@ -4667,7 +4663,7 @@ test "trap: array index out of bounds" {
 test "trap: missing map key" {
     try agreeTrap(
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    m["present"] = 1
         \\    let bad = m["absent"]
         \\
@@ -4677,7 +4673,7 @@ test "trap: missing map key" {
 test "trap: popping an empty list" {
     try agreeTrap(
         \\func main():
-        \\    var xs = new list(long)
+        \\    var xs = new list[i64]
         \\    let bad = xs.pop()
         \\
     , .empty_collection);
@@ -4713,7 +4709,7 @@ test "trap: slicing through the middle of a UTF-8 character" {
 test "trap: using an unfilled late object slot" {
     try agreeTrap(
         \\func main():
-        \\    var xs: list(long)
+        \\    var xs: list[i64]
         \\    let bad = len(xs)
         \\
     , .null_object);
@@ -4722,7 +4718,7 @@ test "trap: using an unfilled late object slot" {
 test "trap: unfilled object slot inside an array of objects" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array(list(long), 2)
+        \\    var cells = new array[list[i64]](2)
         \\    cells[0].append(1)
         \\
     , .null_object);
@@ -4731,14 +4727,14 @@ test "trap: unfilled object slot inside an array of objects" {
 test "arrays: fill retains one shared object for every cell" {
     try agree.prints(
         \\func main():
-        \\    var seed = new list(long)
+        \\    var seed = new list[i64]
         \\    seed.append(1)
-        \\    var cells = new array(list(long), 3)
+        \\    var cells = new array[list[i64]](3)
         \\    cells.fill(seed)
-        \\    seed = new list(long)
+        \\    seed = new list[i64]
         \\    cells[0].append(2)
-        \\    print(string(len(cells[1])))
-        \\    print(string(len(cells[2])))
+        \\    print(str(len(cells[1])))
+        \\    print(str(len(cells[2])))
         \\
     , "2\n2\n");
 }
@@ -4778,10 +4774,10 @@ const smiley = "\xF0\x9F\x99\x82";
 test "structs: a smooth pointer transform computes exactly" {
     try agreeOk(
         \\struct Point:
-        \\    x: double
-        \\    y: double
+        \\    x: f64
+        \\    y: f64
         \\
-        \\func smooth(current: Point, target: Point, amount: double) -> Point:
+        \\func smooth(current: Point, target: Point, amount: f64) -> Point:
         \\    return Point(
         \\        x = current.x + (target.x - current.x) * amount,
         \\        y = current.y + (target.y - current.y) * amount,
@@ -4800,10 +4796,10 @@ test "structs: a smooth pointer transform computes exactly" {
 test "structs: namespaced functions execute through qualified calls" {
     try agreeOk(
         \\struct Math:
-        \\    static func twice(value: long) -> long:
+        \\    static func twice(value: i64) -> i64:
         \\        return value * 2
         \\
-        \\    static func plus(left: long, right: long) -> long:
+        \\    static func plus(left: i64, right: i64) -> i64:
         \\        return left + right
         \\
         \\func main():
@@ -4814,13 +4810,13 @@ test "structs: namespaced functions execute through qualified calls" {
 
 test "loops, recursion, strings, and builtins compute" {
     try agreeOk(
-        \\func factorial(value: long) -> long:
+        \\func factorial(value: i64) -> i64:
         \\    if value <= 1:
         \\        return 1
         \\    return value * factorial(value - 1)
         \\
         \\func main():
-        \\    var total: long = 0
+        \\    var total: i64 = 0
         \\    for index in range(1, 11):
         \\        total = total + index
         \\    assert(total == 55)
@@ -4840,19 +4836,19 @@ test "checked string intrinsics slice and inspect UTF-8 bytes" {
 }
 
 test "string intrinsics implement multiline UTF-8-safe edits" {
-    try agreeOk("func continuation(byte: long) -> bool:\n" ++
-        "    return byte >= 128 and byte < 192\n" ++
+    try agreeOk("func continuation(code: i64) -> bool:\n" ++
+        "    return code >= 128 and code < 192\n" ++
         "\n" ++
-        "func previous(value: string, cursor: long) -> long:\n" ++
+        "func previous(value: str, cursor: i64) -> i64:\n" ++
         "    var at = cursor - 1\n" ++
         "    while at > 0 and continuation(value.byte_at(at)):\n" ++
         "        at = at - 1\n" ++
         "    return at\n" ++
         "\n" ++
-        "func inserted(text: string, cursor: long, added: string) -> string:\n" ++
+        "func inserted(text: str, cursor: i64, added: str) -> str:\n" ++
         "    return text[0:cursor] + added + text[cursor:len(text)]\n" ++
         "\n" ++
-        "func erased(text: string, cursor: long) -> string:\n" ++
+        "func erased(text: str, cursor: i64) -> str:\n" ++
         "    let before = previous(text, cursor)\n" ++
         "    return text[0:before] + text[cursor:len(text)]\n" ++
         "\n" ++
@@ -4888,11 +4884,11 @@ test "checked arithmetic and conversions trap" {
     // the conversion out of a value only binary64 holds says `double`
     // (docs/TYPES.md §1).
     const cases = [_]struct { body: []const u8, code: mir.TrapCode }{
-        .{ .body = "var n: long = 9223372036854775807\n    assert(n + 1 == 0)", .code = .integer_overflow },
-        .{ .body = "var n: int = 2147483647\n    assert(n + 1 == 0)", .code = .integer_overflow },
+        .{ .body = "var n: i64 = 9223372036854775807\n    assert(n + 1 == 0)", .code = .integer_overflow },
+        .{ .body = "var n: i32 = 2147483647\n    assert(n + 1 == 0)", .code = .integer_overflow },
         .{ .body = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
-        .{ .body = "var big: double = 1.0e300\n    assert(long(big) == 0)", .code = .conversion_range },
-        .{ .body = "var big: float = 1.0e30\n    assert(int(big) == 0)", .code = .conversion_range },
+        .{ .body = "var big: f64 = 1.0e300\n    assert(i64(big) == 0)", .code = .conversion_range },
+        .{ .body = "var big: f32 = 1.0e30\n    assert(i32(big) == 0)", .code = .conversion_range },
         .{ .body = "assert(1 == 0)", .code = .assertion_failed },
     };
     for (cases) |case| {
@@ -4919,7 +4915,7 @@ test "checked arithmetic and conversions trap" {
 
 test "unbounded recursion hits the call depth limit" {
     try agreeTrap(
-        \\func dive(depth: long) -> long:
+        \\func dive(depth: i64) -> i64:
         \\    return dive(depth + 1)
         \\
         \\func main():
@@ -4958,14 +4954,14 @@ test "lists grow, index, slice, iterate, and free explicitly" {
 test "maps upsert, look up, and iterate keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var ages = new map(string, long)
+        \\    var ages = new map[str, i64]
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    ages["ada"] = 37
         \\    assert(len(ages) == 2)
         \\    assert(ages["ada"] == 37)
         \\    assert(ages.has("alan"))
-        \\    var joined = new builder()
+        \\    var joined = new builder
         \\    for key in ages:
         \\        joined.append(key)
         \\    assert(joined.build() == "adaalan")
@@ -4979,20 +4975,20 @@ test "maps upsert, look up, and iterate keys in insertion order" {
 
 test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     try agreeOk(
-        \\func corner(grid: array(long, _, _)) -> long:
+        \\func corner(grid: array[i64, _, _]) -> i64:
         \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
-        \\    var grid = new array(long, 3, 4)
+        \\    var grid = new array[i64](3, 4)
         \\    assert(grid.dim(0) == 3)
         \\    assert(grid.dim(1) == 4)
         \\    assert(len(grid) == 3)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(corner(grid) == 7)
-        \\    var row = new array(double, 4)
+        \\    var row = new array[f64](4)
         \\    row[0] = 2.5
-        \\    var total: double = 0.0
+        \\    var total: f64 = 0.0
         \\    for value in row:
         \\        total = total + value
         \\    assert(total == 2.5)
@@ -5003,10 +4999,10 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
 test "conversions: string, parse_int, parse_float, chr, ord over every kind" {
     try agreeOk(
         \\func main():
-        \\    assert(string(42) == "42")
-        \\    assert(string(-7) == "-7")
-        \\    assert(string(true) == "true")
-        \\    assert(string(2.5) == "2.5")
+        \\    assert(str(42) == "42")
+        \\    assert(str(-7) == "-7")
+        \\    assert(str(true) == "true")
+        \\    assert(str(2.5) == "2.5")
         \\    assert((parse_int("123") else 0) == 123)
         \\    assert((parse_int("-9") else 0) == 0 - 9)
         \\    assert((parse_float("2.5") else 0.0) == 2.5)
@@ -5029,19 +5025,19 @@ test "collection misuse traps with stable codes" {
         , .code = .index_bounds },
         .{ .source =
         \\func main():
-        \\    var xs: list(long) = []
+        \\    var xs: list[i64] = []
         \\    let bad = xs.pop()
         \\
         , .code = .empty_collection },
         .{ .source =
         \\func main():
-        \\    var m = new map(string, long)
+        \\    var m = new map[str, i64]
         \\    let bad = m["ghost"]
         \\
         , .code = .key_missing },
         .{ .source =
         \\func main():
-        \\    var cells = new array(list(long), 2)
+        \\    var cells = new array[list[i64]](2)
         \\    cells[0].append(1)
         \\
         , .code = .null_object },
@@ -5052,7 +5048,7 @@ test "collection misuse traps with stable codes" {
         , .code = .bad_codepoint },
         .{ .source =
         \\func main():
-        \\    var grid = new array(long, 2, 2)
+        \\    var grid = new array[i64](2, 2)
         \\    grid[2, 0] = 1
         \\
         , .code = .index_bounds },
@@ -5065,7 +5061,7 @@ test "S33: ARC leaves no live objects after a clean run" {
         \\func main():
         \\    let kept = [1, 2, 3]
         \\    let copied = kept[0:2]
-        \\    var released = new builder()
+        \\    var released = new builder
         \\    assert(len(copied) == 2)
         \\
     );
@@ -5090,14 +5086,14 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    names.sort()
         \\    assert(names[0] == "amber")
         \\    assert(names[1] == "cyan")
-        \\    var row = new array(long, 4)
+        \\    var row = new array[i64](4)
         \\    row.fill(7)
         \\    assert(row[3] == 7)
         \\    assert(row.contains(7))
         \\    row[1] = 2
         \\    row.sort()
         \\    assert(row[0] == 2)
-        \\    var ages = new map(string, long)
+        \\    var ages = new map[str, i64]
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    var listed = ages.keys()
@@ -5124,7 +5120,7 @@ test "short-circuit operands survive block splits everywhere" {
         \\func main():
         \\    let a = true
         \\    let b = false
-        \\    var cells = new array(bool, 2, 2)
+        \\    var cells = new array[bool](2, 2)
         \\    cells[0, 1] = a == b or a
         \\    let chosen = pick(a and b, a or b)
         \\    let pair = Flags(left = a or b, right = a and b)
@@ -5147,8 +5143,8 @@ test "file-scope constants fold every value kind" {
         \\const greeting = "hello, " + "loom"
         \\const shout = greeting
         \\const half_width = width // 2 - 1
-        \\const truncated = long(tau)
-        \\const widened = double(width)
+        \\const truncated = i64(tau)
+        \\const widened = f64(width)
         \\const roomy = width >= 80 and tau > 6.0
         \\
         \\func main():
@@ -5173,13 +5169,13 @@ test "file-scope constants: an annotated none folds to the typed absence" {
     // closes: `T?` shipped without file-scope absences, for no reason
     // beyond the folder predating it.
     try agreeOk(
-        \\const missing: long? = none
+        \\const missing: i64? = none
         \\const fallback = 4
         \\
         \\func main():
         \\    assert((missing else fallback) == 4)
         \\    assert(missing == none)
-        \\    var slot: long? = missing
+        \\    var slot: i64? = missing
         \\    assert((slot else 0) == 0)
         \\    assert(slot == none)
         \\
@@ -5189,8 +5185,8 @@ test "file-scope constants: an annotated none folds to the typed absence" {
 test "struct constants: the Theme case" {
     try agreeOk(
         \\struct Theme:
-        \\    keyword: long
-        \\    comment: long
+        \\    keyword: i64
+        \\    comment: i64
         \\    bold: bool
         \\
         \\const theme = Theme(keyword = 114, comment = 238, bold = true)
@@ -5219,10 +5215,10 @@ test "struct constants: the Theme case" {
 
 test "a trap reports its statement's line and the full call trace" {
     var session = try agree.compare(
-        \\func divide(a: long, b: long) -> long:
+        \\func divide(a: i64, b: i64) -> i64:
         \\    return a // b
         \\
-        \\func ratio(n: long) -> long:
+        \\func ratio(n: i64) -> i64:
         \\    return divide(100, n)
         \\
         \\func main():
@@ -5242,7 +5238,7 @@ test "a trap reports its statement's line and the full call trace" {
 
 test "a stripped program still names its trap frames, without lines" {
     var compiled = try agree.program(
-        \\func boom() -> long:
+        \\func boom() -> i64:
         \\    return 1 // 0
         \\
         \\func main():
@@ -5286,7 +5282,7 @@ test "a runaway recursion reports a capped trace and counts the rest" {
     // Sixty-four frames kept, the rest counted — on both engines, from
     // the same depth limit.
     var session = try agree.compare(
-        \\func spiral(n: long) -> long:
+        \\func spiral(n: i64) -> i64:
         \\    return spiral(n + 1)
         \\
         \\func main():
@@ -5309,16 +5305,16 @@ test "a runaway recursion reports a capped trace and counts the rest" {
 test "storage: the three widths hold what the ladder says they hold" {
     try agreeOk(
         \\func main():
-        \\    let low: byte = 0
-        \\    let high: byte = 255
-        \\    let bottom: short = -32768
-        \\    let top: short = 32767
+        \\    let low: u8 = 0
+        \\    let high: u8 = 255
+        \\    let bottom: i16 = -32768
+        \\    let top: i16 = 32767
         \\    assert(low == 0)
         \\    assert(high == 255)
         \\    assert(bottom == -32768)
         \\    assert(top == 32767)
-        \\    assert(string(high) == "255")
-        \\    assert(string(bottom) == "-32768")
+        \\    assert(str(high) == "255")
+        \\    assert(str(bottom) == "-32768")
         \\
     );
 }
@@ -5329,13 +5325,13 @@ test "storage: an operator promotes, so nothing wraps at 8 or 16 bits" {
     // overflow, which is why `byte` needs no checked arithmetic.
     try agreeOk(
         \\func main():
-        \\    var a: byte = 255
-        \\    var b: byte = 1
+        \\    var a: u8 = 255
+        \\    var b: u8 = 1
         \\    assert(a + b == 256)
         \\    assert(a * a == 65025)
-        \\    var s: short = 32767
+        \\    var s: i16 = 32767
         \\    assert(s + s == 65534)
-        \\    var h: half = 0.5
+        \\    var h: f16 = 0.5
         \\    assert(h + h == 1.0)
         \\    assert(h * 4.0 == 2.0)
         \\
@@ -5348,12 +5344,12 @@ test "storage: a byte widens as a magnitude and a short as a sign" {
     // tells the two apart — as a signed 8-bit pattern it would be -128.
     try agreeOk(
         \\func main():
-        \\    var b: byte = 128
-        \\    var n: long = b
+        \\    var b: u8 = 128
+        \\    var n: i64 = b
         \\    assert(n == 128)
         \\    assert(b > 127)
-        \\    var s: short = -128
-        \\    var m: long = s
+        \\    var s: i16 = -128
+        \\    var m: i64 = s
         \\    assert(m == -128)
         \\    assert(s < 0)
         \\
@@ -5372,7 +5368,7 @@ test "storage: byte_at answers a byte, and the high bytes stay positive" {
         \\    assert(text.byte_at(1) == 169)
         \\    assert(text.byte_at(0) >= 128)
         \\    assert(text.byte_at(0) < 224)
-        \\    assert(string(text.byte_at(0)) == "195")
+        \\    assert(str(text.byte_at(0)) == "195")
         \\    let plain = "hi"
         \\    assert(plain.find_byte(105, 0) == 1)
         \\    assert(plain.find_byte(plain.byte_at(0), 0) == 0)
@@ -5385,14 +5381,14 @@ test "storage: byte_at answers a byte, and the high bytes stay positive" {
 test "storage: narrowing to a byte keeps its range and traps outside it" {
     try agreeOk(
         \\func main():
-        \\    assert(byte(0) == 0)
-        \\    assert(byte(255) == 255)
-        \\    assert(byte(254.6) == 255)
-        \\    assert(byte(0.4) == 0)
-        \\    assert(short(-32768) == -32768)
-        \\    assert(short(32767) == 32767)
-        \\    assert(int(byte(200)) == 200)
-        \\    assert(long(short(-300)) == -300)
+        \\    assert(u8(0) == 0)
+        \\    assert(u8(255) == 255)
+        \\    assert(u8(254.6) == 255)
+        \\    assert(u8(0.4) == 0)
+        \\    assert(i16(-32768) == -32768)
+        \\    assert(i16(32767) == 32767)
+        \\    assert(i32(u8(200)) == 200)
+        \\    assert(i64(i16(-300)) == -300)
         \\
     );
 }
@@ -5405,14 +5401,14 @@ test "storage: a byte reaches a float as a magnitude, not as a sign" {
     // inserts for itself.
     try agreeOk(
         \\func main():
-        \\    var high: byte = 200
-        \\    assert(double(high) == 200.0)
-        \\    assert(float(high) == 200.0)
+        \\    var high: u8 = 200
+        \\    assert(f64(high) == 200.0)
+        \\    assert(f32(high) == 200.0)
         \\    assert(high * 1.0 == 200.0)
-        \\    assert(double(byte(255)) == 255.0)
-        \\    var top: byte = 128
-        \\    assert(double(top) == 128.0)
-        \\    var widened: double = top
+        \\    assert(f64(u8(255)) == 255.0)
+        \\    var top: u8 = 128
+        \\    assert(f64(top) == 128.0)
+        \\    var widened: f64 = top
         \\    assert(widened == 128.0)
         \\
     );
@@ -5421,9 +5417,9 @@ test "storage: a byte reaches a float as a magnitude, not as a sign" {
 test "storage: byte(256) traps rather than wrapping to zero" {
     try agreeTrap(
         \\func main():
-        \\    var over: long = 256
-        \\    var narrowed = byte(over)
-        \\    print(string(narrowed))
+        \\    var over: i64 = 256
+        \\    var narrowed = u8(over)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
@@ -5431,9 +5427,9 @@ test "storage: byte(256) traps rather than wrapping to zero" {
 test "storage: byte(-1) traps rather than becoming 255" {
     try agreeTrap(
         \\func main():
-        \\    var under: long = -1
-        \\    var narrowed = byte(under)
-        \\    print(string(narrowed))
+        \\    var under: i64 = -1
+        \\    var narrowed = u8(under)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
@@ -5441,16 +5437,16 @@ test "storage: byte(-1) traps rather than becoming 255" {
 test "storage: short(32768) and short(-32769) both trap" {
     try agreeTrap(
         \\func main():
-        \\    var over: long = 32768
-        \\    var narrowed = short(over)
-        \\    print(string(narrowed))
+        \\    var over: i64 = 32768
+        \\    var narrowed = i16(over)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
     try agreeTrap(
         \\func main():
-        \\    var under: long = -32769
-        \\    var narrowed = short(under)
-        \\    print(string(narrowed))
+        \\    var under: i64 = -32769
+        \\    var narrowed = i16(under)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
@@ -5460,9 +5456,9 @@ test "storage: a float landing on a byte is checked after it rounds" {
     // to 256 and is refused rather than truncated back into range.
     try agreeTrap(
         \\func main():
-        \\    var edge: double = 255.5
-        \\    var narrowed = byte(edge)
-        \\    print(string(narrowed))
+        \\    var edge: f64 = 255.5
+        \\    var narrowed = u8(edge)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
@@ -5478,13 +5474,13 @@ test "half: the boundary values round-trip bit-exactly" {
     // all it takes to name this one.
     try agreeOk(
         \\func main():
-        \\    let biggest: half = 65504.0
-        \\    let smallest_normal: half = 0.00006103515625
-        \\    let smallest_subnormal: half = 0.000000059604644775390625
-        \\    assert(double(biggest) == 65504.0)
-        \\    assert(double(smallest_normal) == 0.00006103515625)
-        \\    assert(double(smallest_subnormal) == 0.000000059604644775390625)
-        \\    assert(string(biggest) == "65500")
+        \\    let biggest: f16 = 65504.0
+        \\    let smallest_normal: f16 = 0.00006103515625
+        \\    let smallest_subnormal: f16 = 0.000000059604644775390625
+        \\    assert(f64(biggest) == 65504.0)
+        \\    assert(f64(smallest_normal) == 0.00006103515625)
+        \\    assert(f64(smallest_subnormal) == 0.000000059604644775390625)
+        \\    assert(str(biggest) == "65500")
         \\
     );
 }
@@ -5492,10 +5488,10 @@ test "half: the boundary values round-trip bit-exactly" {
 test "half: integers are exact to 2048 and step by two after it" {
     try agreeOk(
         \\func main():
-        \\    assert(double(half(2048.0)) == 2048.0)
-        \\    assert(double(half(2049.0)) == 2048.0)
-        \\    assert(double(half(2050.0)) == 2050.0)
-        \\    assert(double(half(1025.0)) == 1025.0)
+        \\    assert(f64(f16(2048.0)) == 2048.0)
+        \\    assert(f64(f16(2049.0)) == 2048.0)
+        \\    assert(f64(f16(2050.0)) == 2050.0)
+        \\    assert(f64(f16(1025.0)) == 1025.0)
         \\
     );
 }
@@ -5507,12 +5503,12 @@ test "half: overflow reaches infinity rather than trapping" {
     // not grow a second story about infinity for it.
     try agreeOk(
         \\func main():
-        \\    var big: double = 1.0e300
-        \\    var over = half(big)
-        \\    assert(double(over) > 65504.0)
-        \\    assert(string(over) == "inf")
-        \\    var negative = half(-big)
-        \\    assert(string(negative) == "-inf")
+        \\    var big: f64 = 1.0e300
+        \\    var over = f16(big)
+        \\    assert(f64(over) > 65504.0)
+        \\    assert(str(over) == "inf")
+        \\    var negative = f16(-big)
+        \\    assert(str(negative) == "-inf")
         \\
     );
 }
@@ -5523,10 +5519,10 @@ test "half: rounds to nearest, ties to even" {
     // 2052 for the same reason.
     try agreeOk(
         \\func main():
-        \\    var a: double = 2049.0
-        \\    var b: double = 2051.0
-        \\    assert(double(half(a)) == 2048.0)
-        \\    assert(double(half(b)) == 2052.0)
+        \\    var a: f64 = 2049.0
+        \\    var b: f64 = 2051.0
+        \\    assert(f64(f16(a)) == 2048.0)
+        \\    assert(f64(f16(b)) == 2052.0)
         \\
     );
 }
@@ -5544,12 +5540,12 @@ test "half: double to half rounds once, not twice through binary32" {
     // answer 1.0.
     try agreeOk(
         \\func main():
-        \\    var just_above: double = 1.0004882821813226
-        \\    assert(double(half(just_above)) == 1.0009765625)
-        \\    var tie: double = 1.00048828125
-        \\    assert(double(half(tie)) == 1.0)
-        \\    var exact: double = 1.0009765625
-        \\    assert(double(half(exact)) == 1.0009765625)
+        \\    var just_above: f64 = 1.0004882821813226
+        \\    assert(f64(f16(just_above)) == 1.0009765625)
+        \\    var tie: f64 = 1.00048828125
+        \\    assert(f64(f16(tie)) == 1.0)
+        \\    var exact: f64 = 1.0009765625
+        \\    assert(f64(f16(exact)) == 1.0009765625)
         \\
     );
 }
@@ -5560,10 +5556,10 @@ test "half: a non-finite half landing on an integer traps" {
     // excluding it.
     try agreeTrap(
         \\func main():
-        \\    var big: double = 1.0e300
-        \\    var over = half(big)
-        \\    var narrowed = int(over)
-        \\    print(string(narrowed))
+        \\    var big: f64 = 1.0e300
+        \\    var over = f16(big)
+        \\    var narrowed = i32(over)
+        \\    print(str(narrowed))
         \\
     , .conversion_range);
 }
@@ -5573,10 +5569,10 @@ test "half: a non-finite half landing on an integer traps" {
 test "storage: an array of bytes stores and reads every value 0..255" {
     try agreeOk(
         \\func main():
-        \\    var cells = new array(byte, 256)
+        \\    var cells = new array[u8](256)
         \\    var at = 0
         \\    while at < 256:
-        \\        cells[at] = byte(at)
+        \\        cells[at] = u8(at)
         \\        at += 1
         \\    assert(cells[0] == 0)
         \\    assert(cells[128] == 128)
@@ -5594,17 +5590,17 @@ test "storage: an array of bytes stores and reads every value 0..255" {
 test "storage: arrays of short and half keep their own widths" {
     try agreeOk(
         \\func main():
-        \\    var shorts = new array(short, 4)
+        \\    var shorts = new array[i16](4)
         \\    shorts[0] = -32768
         \\    shorts[3] = 32767
         \\    assert(shorts[0] == -32768)
         \\    assert(shorts[3] == 32767)
         \\    assert(shorts[1] == 0)
-        \\    var halves = new array(half, 3)
+        \\    var halves = new array[f16](3)
         \\    halves[0] = 0.5
         \\    halves[1] = 65504.0
-        \\    assert(double(halves[0]) == 0.5)
-        \\    assert(double(halves[1]) == 65504.0)
+        \\    assert(f64(halves[0]) == 0.5)
+        \\    assert(f64(halves[1]) == 65504.0)
         \\    assert(halves[0] + halves[0] == 1.0)
         \\
     );
@@ -5613,10 +5609,10 @@ test "storage: arrays of short and half keep their own widths" {
 test "storage: a store past a byte element's range traps" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array(byte, 4)
-        \\    var over: long = 300
-        \\    cells[0] = byte(over)
-        \\    print(string(cells[0]))
+        \\    var cells = new array[u8](4)
+        \\    var over: i64 = 300
+        \\    cells[0] = u8(over)
+        \\    print(str(cells[0]))
         \\
     , .conversion_range);
 }
@@ -5627,7 +5623,7 @@ test "storage: a list of bytes round-trips through the boxed path" {
     // element takes and an array element does not.
     try agreeOk(
         \\func main():
-        \\    var xs = new list(byte)
+        \\    var xs = new list[u8]
         \\    xs.append(0)
         \\    xs.append(255)
         \\    xs.append(128)
@@ -5646,9 +5642,9 @@ test "storage: a list of bytes round-trips through the boxed path" {
 test "storage: a struct field may be a storage width" {
     try agreeOk(
         \\struct Pixel:
-        \\    red: byte
-        \\    green: byte
-        \\    blue: byte
+        \\    red: u8
+        \\    green: u8
+        \\    blue: u8
         \\
         \\func main():
         \\    let p = Pixel(red = 255, green = 128, blue = 0)
@@ -5662,15 +5658,15 @@ test "storage: a struct field may be a storage width" {
 
 test "storage: a parameter and a return may be a storage width" {
     try agreeOk(
-        \\func lighten(c: byte) -> byte:
+        \\func lighten(c: u8) -> u8:
         \\    if c > 200:
         \\        return 255
-        \\    return byte(c + 40)
+        \\    return u8(c + 40)
         \\
         \\func main():
         \\    assert(lighten(10) == 50)
         \\    assert(lighten(255) == 255)
-        \\    assert(lighten(byte(201)) == 255)
+        \\    assert(lighten(u8(201)) == 255)
         \\
     );
 }
@@ -5694,30 +5690,30 @@ test "failure: a call that raises leaves nothing where its value would have gone
     // — was fine.  This is the two engines saying the same thing.
     try agree.errors(
         \\struct Cursor:
-        \\    private position: long
+        \\    private position: i64
         \\
-        \\    func take(data: list(long)) -> long!:
+        \\    func take(data: list[i64]) -> i64!:
         \\        if self.position >= len(data):
         \\            error("out of bits")
         \\        let value = data[self.position]
         \\        self.position += 1
         \\        return value
         \\
-        \\    func drain(data: list(long), out: list(long)) -> !:
+        \\    func drain(data: list[i64], out: list[i64]) -> !:
         \\        while true:
         \\            let value = try self.take(data)
         \\            if value == 0:
         \\                return
         \\            out.append(value)
         \\
-        \\func run(data: list(long)) -> list(long)!:
+        \\func run(data: list[i64]) -> list[i64]!:
         \\    var cursor = Cursor(position = 0)
-        \\    var out: list(long) = []
+        \\    var out: list[i64] = []
         \\    try cursor.drain(data, out)
         \\    return out
         \\
         \\func main() -> !:
-        \\    var data: list(long) = [7, 9]
+        \\    var data: list[i64] = [7, 9]
         \\    let back = try run(data)
         \\
     , budget, .user_error, "out of bits");

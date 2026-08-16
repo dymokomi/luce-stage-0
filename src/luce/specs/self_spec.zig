@@ -9,9 +9,9 @@ const agree = @import("agree.zig");
 test "self: implied receiver reads and writes a bare var binding" {
     try agree.ok(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
-        \\    func read() -> long:
+        \\    func read() -> i64:
         \\        return self.value
         \\
         \\    func bump():
@@ -29,7 +29,7 @@ test "self: implied receiver reads and writes a bare var binding" {
 test "self: writer inference reaches a fixed point across forward transitive calls" {
     try agree.ok(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
         \\    func outer():
         \\        self.middle()
@@ -51,25 +51,25 @@ test "self: writer inference reaches a fixed point across forward transitive cal
 test "self: writer inference includes calls made while evaluating assignment places" {
     try agree.ok(
         \\struct Cell:
-        \\    value: long
+        \\    value: i64
         \\
         \\struct Cursor:
-        \\    at: long
+        \\    at: i64
         \\
-        \\    func write(items: list(long)):
+        \\    func write(items: list[i64]):
         \\        items[self.bump()] = 0
         \\
-        \\    func write_nested(cells: list(Cell)):
+        \\    func write_nested(cells: list[Cell]):
         \\        cells[self.bump()].value = 0
         \\
-        \\    func bump() -> long:
+        \\    func bump() -> i64:
         \\        let previous = self.at
         \\        self.at += 1
         \\        return previous
         \\
         \\func main():
         \\    var cursor = Cursor(at = 0)
-        \\    var items: list(long) = [7, 8, 9]
+        \\    var items: list[i64] = [7, 8, 9]
         \\    var cells = [Cell(value = 4), Cell(value = 5), Cell(value = 6)]
         \\    cursor.write(items)
         \\    cursor.write_nested(cells)
@@ -83,9 +83,9 @@ test "self: writer inference includes calls made while evaluating assignment pla
 test "self: mutating object contents is a reader and works through let" {
     try agree.ok(
         \\struct Bag:
-        \\    items: list(long)
+        \\    items: list[i64]
         \\
-        \\    func add(value: long):
+        \\    func add(value: i64):
         \\        self.items.append(value)
         \\
         \\func main():
@@ -100,13 +100,13 @@ test "self: mutating object contents is a reader and works through let" {
 test "self: an owning object-carry receiver may replace a field and its whole value" {
     try agree.ok(
         \\struct Box:
-        \\    items: list(long)
-        \\    label: string
+        \\    items: list[i64]
+        \\    label: str
         \\
-        \\    func replace_field(value: long):
+        \\    func replace_field(value: i64):
         \\        self.items = [value]
         \\
-        \\    func replace_whole(value: long):
+        \\    func replace_whole(value: i64):
         \\        self = Box(
         \\            items = [value, value + 1],
         \\            label = "a replacement label long enough to own outside bytes",
@@ -130,14 +130,14 @@ test "self: an owning object-carry receiver may replace a field and its whole va
 test "self: multi-return assignment to self infers an object-carrying writer" {
     try agree.ok(
         \\struct Box:
-        \\    items: list(long)
+        \\    items: list[i64]
         \\
-        \\    func refresh(value: long) -> long:
-        \\        var answer: long = 0
+        \\    func refresh(value: i64) -> i64:
+        \\        var answer: i64 = 0
         \\        self, answer = fresh_pair(value)
         \\        return answer
         \\
-        \\func fresh_pair(value: long) -> (Box, long):
+        \\func fresh_pair(value: i64) -> (Box, i64):
         \\    return Box(items = [value, value + 1]), value * 10
         \\
         \\func main():
@@ -153,7 +153,7 @@ test "self: multi-return assignment to self infers an object-carrying writer" {
 test "self: writes before a fallible method errors remain visible" {
     try agree.ok(
         \\struct Meter:
-        \\    reading: long
+        \\    reading: i64
         \\
         \\    func fail_after_write() -> !:
         \\        self.reading += 1
@@ -171,16 +171,16 @@ test "self: writes before a fallible method errors remain visible" {
 test "self: writers support zero one and multiple declared return values" {
     try agree.ok(
         \\struct Counter:
-        \\    value: long
+        \\    value: i64
         \\
         \\    func zero():
         \\        self.value += 1
         \\
-        \\    func one() -> long:
+        \\    func one() -> i64:
         \\        self.value += 1
         \\        return self.value
         \\
-        \\    func pair() -> (long, long):
+        \\    func pair() -> (i64, i64):
         \\        self.value += 1
         \\        return self.value, self.value * 2
         \\
@@ -223,11 +223,11 @@ test "self: an enum method may replace its whole implied receiver" {
 test "self: a static member is a function value and a spawn target" {
     try agree.ok(
         \\struct Math:
-        \\    static func twice(value: long) -> long:
+        \\    static func twice(value: i64) -> i64:
         \\        return value * 2
         \\
         \\func main():
-        \\    let chosen: func(long) -> long = Math.twice
+        \\    let chosen: func(i64) -> i64 = Math.twice
         \\    assert(chosen(5) == 10)
         \\    let work = spawn Math.twice(21)
         \\    assert(work.wait() == 42)
@@ -238,14 +238,14 @@ test "self: a static member is a function value and a spawn target" {
 test "self: writer results with owned storage survive binding and statement discard" {
     try agree.ok(
         \\struct Payload:
-        \\    items: list(long)
+        \\    items: list[i64]
         \\
         \\struct Maker:
-        \\    made: long
+        \\    made: i64
         \\
-        \\    func text() -> string:
+        \\    func text() -> str:
         \\        self.made += 1
-        \\        return "a heap-backed string returned from writer number " + string(self.made)
+        \\        return "a heap-backed string returned from writer number " + str(self.made)
         \\
         \\    func payload() -> Payload:
         \\        self.made += 1
@@ -271,17 +271,17 @@ test "self: an earlier optional string argument outlives a later receiver write"
         \\const replacement = "the replacement string is long enough to require outside owned storage too"
         \\
         \\struct Box:
-        \\    text: string?
+        \\    text: str?
         \\
-        \\    func clear() -> long:
+        \\    func clear() -> i64:
         \\        self.text = none
         \\        return 1
         \\
-        \\    func replace() -> long:
+        \\    func replace() -> i64:
         \\        self.text = replacement
         \\        return 2
         \\
-        \\func saw(value: string, effect: long, expected: string) -> bool:
+        \\func saw(value: str, effect: i64, expected: str) -> bool:
         \\    return value == expected and effect > 0
         \\
         \\func main():
@@ -301,9 +301,9 @@ test "self: writer arguments borrowed from the receiver outlive whole-self repla
         \\const replacement = "the replacement receiver string is also long enough to require outside storage"
         \\
         \\struct Box:
-        \\    text: string
+        \\    text: str
         \\
-        \\    func replace(previous_text: string, previous_box: Box) -> bool:
+        \\    func replace(previous_text: str, previous_box: Box) -> bool:
         \\        self = Box(text = replacement)
         \\        return previous_text == original and previous_box.text == original
         \\

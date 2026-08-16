@@ -30,14 +30,14 @@
 # A command runner for tools that deliberately belong to the host rather
 # than to Luce's semantics. `shell.run` captures standard output and
 # standard error and appends the command's exit status to the returned
-# text. A shell command is intentionally one string: callers that need
+# text. A shell command is intentionally one str: callers that need
 # argument boundaries should quote them for the host shell.
 #
 # This is the seam used by the Luce editor for Ctrl-B. Keeping it here
 # means programs do not have to know the raw host builtin or its ABI
 # shape, and gives future process helpers one standard home.
 struct shell:
-    static func run(command: string) -> string!:
+    static func run(command: str) -> str!:
         return try shell_run(command)
 
 # The terminal facade.  The raw names remain compiler-owned host services;
@@ -48,22 +48,22 @@ struct Term:
     ui: UI
     io: IO
 
-    func rows() -> long:
+    func rows() -> i64:
         return term_rows()
 
-    func cols() -> long:
+    func cols() -> i64:
         return term_cols()
 
     func clear():
         term_clear()
 
-    func move(row: long, column: long):
+    func move(row: i64, column: i64):
         term_move(row, column)
 
-    func style(foreground: long, background: long = -1, bold: bool = false):
+    func style(foreground: i64, background: i64 = -1, bold: bool = false):
         term_style(fg = foreground, bg = background, bold = bold)
 
-    func write(text: string):
+    func write(text: str):
         term_write(text)
 
     func flush():
@@ -75,31 +75,31 @@ struct Term:
 # data belonging to the event most recently returned by `read()`.
 struct IO:
     private:
-        token: long
+        token: i64
 
-    func read() -> string?:
+    func read() -> str?:
         return key_read()
 
-    func text() -> string:
+    func text() -> str:
         return key_text()
 
     # Coordinates are zero based.  For keyboard events these answer 0.
-    func row() -> long:
+    func row() -> i64:
         return term_event_data(0)
 
-    func column() -> long:
+    func column() -> i64:
         return term_event_data(1)
 
     # Mouse buttons are left=0, middle=1 and right=2.  A wheel event uses -1.
-    func button() -> long:
+    func button() -> i64:
         return term_event_data(2)
 
     # Modifier bits are shift=1, alt=2 and ctrl=4.
-    func modifiers() -> long:
+    func modifiers() -> i64:
         return term_event_data(3)
 
     # Wheel events answer +1 for up and -1 for down; other events answer 0.
-    func value() -> long:
+    func value() -> i64:
         return term_event_data(4)
 
 # Unicode terminal geometry belongs here rather than in every program that
@@ -109,27 +109,27 @@ struct IO:
 # terminal cell.
 struct UI:
     private:
-        token: long
+        token: i64
 
-    func horizontal() -> string:
+    func horizontal() -> str:
         return "─"
 
-    func vertical() -> string:
+    func vertical() -> str:
         return "│"
 
-    func top_left() -> string:
+    func top_left() -> str:
         return "┌"
 
-    func top_right() -> string:
+    func top_right() -> str:
         return "┐"
 
-    func bottom_left() -> string:
+    func bottom_left() -> str:
         return "└"
 
-    func bottom_right() -> string:
+    func bottom_right() -> str:
         return "┘"
 
-    func junction(top: bool, right: bool, bottom: bool, left: bool) -> string:
+    func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
         if top and right and bottom and left:
             return "┼"
         if top and right and bottom:
@@ -165,10 +165,10 @@ struct UI:
     # A light block makes a reliable one-cell shadow even on terminals that
     # do not render faint background colours consistently.  Programs can
     # combine it with a dim style for a softer shadow.
-    func shadow() -> string:
+    func shadow() -> str:
         return "░"
 
-    func shadow_dark() -> string:
+    func shadow_dark() -> str:
         return "▒"
 
 # One immutable facade value gives callers the requested `os.term.ui` path.
@@ -179,7 +179,7 @@ const term = Term(ui = UI(token = 0), io = IO(token = 0))
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the
 # program is held to.
-func total_memory() -> long:
+func total_memory() -> i64:
     return os_total_memory()
 
 # Bytes of memory the machine could still hand out.  This one moves:
@@ -194,7 +194,7 @@ func total_memory() -> long:
 # idle.  On Linux it is the kernel's own MemAvailable estimate where
 # that can be read, and free plus buffers otherwise.  Neither is a
 # promise: it is what was true at the moment of asking.
-func available_memory() -> long:
+func available_memory() -> i64:
     return os_available_memory()
 
 # How many processors the machine has, counting the ones the host
@@ -205,7 +205,7 @@ func available_memory() -> long:
 # may use it to bound a batch of independent `spawn` calls. It is here
 # at the raw machine seam because adding that fact in a later ABI
 # version would have cost every artifact a rebuild to learn one number.
-func cpu_count() -> long:
+func cpu_count() -> i64:
     return os_cpu_count()
 
 # Bytes of memory in use: everything the machine has, less what it
@@ -218,5 +218,5 @@ func cpu_count() -> long:
 # the machine moved in between.  A program that wants one consistent
 # pair should read `available_memory()` once and subtract it itself,
 # and even that pair is only as fresh as the moment it was taken.
-func used_memory() -> long:
+func used_memory() -> i64:
     return os_total_memory() - os_available_memory()

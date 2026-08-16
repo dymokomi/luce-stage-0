@@ -1,33 +1,33 @@
-# The integer half of the 32-bit pair: the same shape as
+# The integer f16 of the 32-bit pair: the same shape as
 # bench/arrays.luc — fill two arrays, then a repeated dot product —
-# but over `array(int, n)` rather than `array(double, n)`.  Four
-# `int`s go into the vector register that holds two `long`s, so this
+# but over `array[i32, n]` rather than `array[f64, n]`.  Four
+# `i32`s go into the vector register that holds two `i64`s, so this
 # is where a narrow *integer* has to pay for itself.
 #
 # Added rather than substituted (docs/TYPES.md D7).
 #
 # **The accumulator's width is the subject, so it is written down.**
 # Each product is at most 99 x 99, and the 200 000 of them sum to
-# 512 500 000 — a quarter of the way to an `int`'s ceiling, which is
+# 512 500 000 — a quarter of the way to an `i32`'s ceiling, which is
 # deliberate headroom: Luce's integer arithmetic is checked, so an
 # accumulator that outgrew i32 would *trap* rather than wrap, and a
 # benchmark whose failure mode is a trap is a benchmark that stops
-# measuring.  The 400 rep totals then go into a `long`, because
+# measuring.  The 400 rep totals then go into a `i64`, because
 # 205 billion does not fit anywhere else.  The C twin is
 # bench/arrays32.c.
 
 func main():
     let n = 200000
     let reps = 400
-    var a = new array(int, n)
-    var b = new array(int, n)
+    var a = new array[i32](n)
+    var b = new array[i32](n)
     for i in range(0, n):
-        a[i] = int(i % 100)
-        b[i] = int((i * 7) % 100)
-    var dot: long = 0
+        a[i] = i32(i % 100)
+        b[i] = i32((i * 7) % 100)
+    var dot: i64 = 0
     for r in range(0, reps):
-        var sum: int = 0
+        var sum: i32 = 0
         for i in range(0, n):
             sum += a[i] * b[i]
         dot += sum
-    print(string(dot))
+    print(str(dot))

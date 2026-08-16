@@ -54,7 +54,7 @@ though correctly compiled current source does not produce them.
 func main():
     var xs = [1, 2, 3]
     print("before")
-    print(string(xs[7]))
+    print(str(xs[7]))
 ```
 
 ```output
@@ -115,14 +115,14 @@ An uncaught error from `main() -> !` ends the run. The host reports the
 message, code, and the one raise location (not a stack of error frames).
 
 ```luce raise
-func check(n: long) -> long!:
+func check(n: i64) -> i64!:
     if n < 0:
         error(f"negative: {n}")
     return n
 
 func main() -> !:
-    print(string(try check(1)))
-    print(string(try check(-5)))
+    print(str(try check(1)))
+    print(str(try check(-5)))
 ```
 
 ```output

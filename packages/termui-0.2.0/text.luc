@@ -4,41 +4,41 @@
 # what a syntax highlighter produces (one Line per source row, its
 # keywords, strings and comments each their own Span) and what a label
 # or a status bar is.  Drawing measures **display width**, not bytes, so
-# a multi-byte character takes the one column it occupies on screen.
+# a multi-u8 character takes the one column it occupies on screen.
 
 import std.strings
 import termui
 import surface
 
 struct Span:
-    text: string = ""
+    text: str = ""
     style: termui.Style = termui.Style()
 
 # A row of spans, drawn left to right.  A Line is built for a frame and
 # drawn once; it does not retain the surface it draws into.
 struct Line:
-    spans: list(Span)
+    spans: list[Span]
 
     # How many display columns the whole line occupies.
-    func width() -> long:
-        var total: long = 0
+    func width() -> i64:
+        var total: i64 = 0
         for span in self.spans:
             total = total + span.text.width()
         return total
 
     # Draw the line at `row` inside `area`, each span after the last,
     # clipped to the rectangle.  The surface clips characters past the
-    # edge, so an over-long line is a normal draw and not a bounds bug.
-    func draw(into: surface.Surface, area: termui.Rect, row: long):
-        var column: long = 0
+    # edge, so an over-i64 line is a normal draw and not a bounds bug.
+    func draw(into: surface.Surface, area: termui.Rect, row: i64):
+        var column: i64 = 0
         for span in self.spans:
             if column >= area.columns:
                 return
             into.write(area, row, column, span.text, span.style)
             column = column + span.text.width()
 
-# A line of one span, the common case spelled short.
-func plain(text: string, style: termui.Style) -> Line:
-    var spans = new list(Span)
+# A line of one span, the common case spelled i16.
+func plain(text: str, style: termui.Style) -> Line:
+    var spans = new list[Span]
     spans.append(Span(text = text, style = style))
     return Line(spans = spans)

@@ -328,14 +328,14 @@ fn compoundCombine(
         try self.fail(
             "luce.sema.type",
             span,
-            "/ answers a double and this place is {s}; write '//=' for the integer quotient",
+            "/ answers f64 and this place is {s}; write '//=' for the integer quotient",
             .{try self.analyzer.typeName(place_type)},
         );
         return null;
     }
     const string_concat = op == .add and place_type == .string;
     if (!place_type.isNumeric() and !string_concat) {
-        try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on string){s}", .{
+        try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on str){s}", .{
             try self.analyzer.typeName(place_type),
             try refusals.absenceAdvice(self, place_type, null),
         });
@@ -350,7 +350,7 @@ fn compoundCombine(
                 try self.fail(
                     "luce.sema.type",
                     span,
-                    "{s} works on int and long; {s} has no bits a program may see",
+                    "{s} works on integers; {s} has no bits a program may see",
                     .{
                         context.operatorText(op),
                         try self.analyzer.typeName(place_type),
@@ -610,7 +610,7 @@ pub fn checkIndex(
     switch (descriptor) {
         .list => |element| {
             if (indices.len != 1 or !try self.widensInto(&indices[0], .long)) {
-                try self.fail("luce.sema.index", span, "lists index with one long", .{});
+                try self.fail("luce.sema.index", span, "lists index with one i64", .{});
                 return null;
             }
             return element;
@@ -625,7 +625,7 @@ pub fn checkIndex(
             }
             for (indices) |*index_value| {
                 if (!try self.widensInto(index_value, .long)) {
-                    try self.fail("luce.sema.index", span, "array indices are long", .{});
+                    try self.fail("luce.sema.index", span, "array indices are i64", .{});
                     return null;
                 }
             }

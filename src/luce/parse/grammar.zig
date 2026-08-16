@@ -887,7 +887,7 @@ pub const Parser = struct {
         try self.report(
             "luce.parse.expected",
             item.span,
-            "_ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name",
+            "_ is the array-shape wildcard, not a name (array[i64, _]); a binding needs a name",
             .{},
         );
     }
@@ -933,6 +933,18 @@ pub const Parser = struct {
     }
 
     pub fn typeName(self: *Parser) Error!?ast.TypeName {
+        return self.typeNameBeforeCall(false);
+    }
+
+    /// The type following `new`. A following `(` belongs to construction
+    /// values, not to the type, so this one stopping point differs from an
+    /// ordinary annotation. Recursive type arguments still use `typeName`
+    /// and therefore reject the retired parenthesized form.
+    pub fn constructionTypeName(self: *Parser) Error!?ast.TypeName {
+        return self.typeNameBeforeCall(true);
+    }
+
+    fn typeNameBeforeCall(self: *Parser, construction: bool) Error!?ast.TypeName {
         if (!try self.enter("type")) return null;
         defer self.leave();
 
@@ -950,27 +962,37 @@ pub const Parser = struct {
             });
             written.span = .{ .start = item.span.start, .end = member.span.end };
         }
-        if (self.peekKind() != .left_paren) return self.optionalSuffix(written);
-        const opener = self.advance(); // (
+        if (self.peekKind() == .left_paren) {
+            if (construction) return self.optionalSuffix(written);
+            try self.report(
+                "luce.parse.type",
+                self.peek().span,
+                "type arguments use brackets: write {s}[...]",
+                .{written.name},
+            );
+            return null;
+        }
+        if (self.peekKind() != .left_bracket) return self.optionalSuffix(written);
+        const opener = self.advance(); // [
 
-        // `task(...)` holds a **return shape**, not a type: what stands
+        // `task[...]` holds a **return shape**, not a type: what stands
         // inside is written exactly as it would be after `->`, because
-        // that is what it names (docs/THREADS.md).  So `task(double!)`
-        // and `task(!)` are spelled the way `-> double!` and `-> !`
+        // that is what it names (docs/THREADS.md).  So `task[f64!]`
+        // and `task[!]` are spelled the way `-> f64!` and `-> !`
         // are, and a bare `task` is a worker that answers nothing and
         // cannot fail.  Nothing else in the grammar takes a `!` here,
         // which is why this arm is by name rather than by shape.
         if (std.mem.eql(u8, written.name, "task")) {
             if (self.accept(.bang)) |marker| {
                 written.fallible = true;
-                const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+                const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
                 _ = marker;
                 written.span = .{ .start = item.span.start, .end = closing.span.end };
                 return self.optionalSuffix(written);
             }
             const answered = (try self.typeName()) orelse return null;
             written.fallible = self.accept(.bang) != null;
-            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+            const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
             const held = try self.arena.alloc(ast.TypeName, 1);
             held[0] = answered;
             written.arguments = held;
@@ -982,7 +1004,7 @@ pub const Parser = struct {
         defer arguments.deinit(self.arena);
         var wildcards: u8 = 0;
         var previous_end = opener.span.end;
-        while (!expr.endsList(self.peekKind(), .right_paren)) {
+        while (!expr.endsList(self.peekKind(), .right_bracket)) {
             if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "_")) {
                 const wildcard = self.advance();
                 if (wildcards == 255) {
@@ -996,7 +1018,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.type",
                         self.peek().span,
-                        "array shape wildcards come last: array(long, _, _)",
+                        "array rank wildcards come last: array[i64, _, _]",
                         .{},
                     );
                     return null;
@@ -1008,7 +1030,7 @@ pub const Parser = struct {
             if (self.accept(.comma) == null) break;
         }
         if (try self.missingSeparator(previous_end)) return null;
-        const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+        const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
         written.arguments = try arguments.toOwnedSlice(self.arena);
         written.wildcards = wildcards;
         written.span = .{ .start = item.span.start, .end = closing.span.end };

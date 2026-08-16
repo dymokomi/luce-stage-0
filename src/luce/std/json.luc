@@ -3,7 +3,7 @@
 # Parse text into a value, ask a value what it is with `match`, build
 # values directly, write one back out.  Nothing here is a builtin,
 # nothing here imports anything, and nothing here touches the host:
-# `parse` takes a string and answers a `Json`, and where the string
+# `parse` takes a str and answers a `Json`, and where the str
 # came from is the caller's business.
 #
 # **A JSON value is a union, because that is what a JSON value is.**
@@ -32,15 +32,15 @@
 # **parsing what `write` produced gives an equal value, and writing
 # that gives identical text.**
 #
-# **Memory is automatic.**  A `Json` carries objects — `list(Json)` and
-# `map(string, Json)` are reference-counted containers — and they are
+# **Memory is automatic.**  A `Json` carries objects — `list[Json]` and
+# `map[str, Json]` are reference-counted containers — and they are
 # freed when the last reference to them goes away.  There is no arena,
 # no collector and no `deinit` to remember.
 #
 # **Building one reads the way taking one apart does.**  The map and
 # the list *are* the builder:
 #
-#     var fields = new map(string, Json)
+#     var fields = new map[str, Json]
 #     fields["name"] = Json.text(value = "luce")
 #     fields["tags"] = Json.array(items = [Json.integer(value = 1)])
 #     let doc = Json.object(fields = fields)
@@ -62,7 +62,7 @@
 #     let doc = try json.parse(text)
 #
 # **UTF-8 needs no checking here** (RFC 8259 §8.1).  The input is a
-# Luce string, which is valid UTF-8 by construction, so the encoding
+# Luce str, which is valid UTF-8 by construction, so the encoding
 # question every other parser has to answer was answered before the
 # text arrived.  What is left is the grammar, and that is all this
 # module checks.
@@ -72,16 +72,16 @@
 #
 # * **A number is read by the notation it was written in.**  JSON has
 #   one number type and Luce has two, and a language with no implicit
-#   narrowing cannot hand a `long` out of a `double` without inventing
+#   narrowing cannot hand a `i64` out of a `f64` without inventing
 #   or discarding information.  So `42` is `Json.integer` and `4.2`,
 #   `42.0` and `4.2e1` are all `Json.real` — the rule `as_long` used
 #   to enforce by re-reading the text is now the member the value
 #   holds, checked by the compiler.  Zig's `std.json`, serde_json,
 #   Jackson and System.Text.Json all split the same way and for the
-#   same reason.  A whole number too large for a `long` is a `real`,
+#   same reason.  A whole number too large for a `i64` is a `real`,
 #   which is where its precision honestly is.
-# * **A number past what a `double` can hold is refused**, by name, at
-#   the byte (RFC 8259 §6: *"This specification allows implementations
+# * **A number past what a `f64` can hold is refused**, by name, at
+#   the u8 (RFC 8259 §6: *"This specification allows implementations
 #   to set limits on the range and precision of numbers accepted"*).
 #   The alternative, now that values are eager, would be storing an
 #   infinity — and infinity is not JSON, so it could never be written
@@ -91,7 +91,7 @@
 #   module's own parser and writer recurse once per level, and so will
 #   every caller that reads one — and loom lets a Luce program nest
 #   128 calls before it traps `call_depth_exceeded`
-#   (`src/apps/host.zig`).  Sixty-four is half of that: a document
+#   (`src/apps/host.zig`).  Sixty-four is f16 of that: a document
 #   this module accepts can be parsed, walked and written from a call
 #   stack that is already sixty deep.  The old bound was 128, chosen
 #   when the parser was iterative and only the *caller* recursed;
@@ -99,7 +99,7 @@
 #   stay true.
 # * **A duplicate member name resolves to the last one written**
 #   (RFC 8259 §4: names SHOULD be unique, and the behaviour when they
-#   are not is unpredictable).  An object is a `map(string, Json)`, so
+#   are not is unpredictable).  An object is a `map[str, Json]`, so
 #   the second `"a"` replaces the first in place — the same thing
 #   JavaScript's `JSON.parse`, Python's `json` and Go's
 #   `encoding/json` all do, and unlike the previous design the
@@ -108,9 +108,9 @@
 #   position is where it was first named.
 # * **An unpaired surrogate escape is refused** (RFC 8259 §8.2 warns
 #   about them; ECMA-404 permits the code unit sequence).  A Luce
-#   string is UTF-8 and there is no UTF-8 for half a surrogate pair,
+#   str is UTF-8 and there is no UTF-8 for f16 a surrogate pair,
 #   so the honest answers are "refuse" or "quietly substitute U+FFFD",
-#   and this module refuses by name at the byte where it happened.
+#   and this module refuses by name at the u8 where it happened.
 #   A well-formed pair — `𝄞` — is one codepoint, 𝄞, and is
 #   read as one.
 # * **NaN and Infinity are not JSON** (RFC 8259 §6 lists exactly one
@@ -119,7 +119,7 @@
 #   out of one traps on the way out, because there is no text this
 #   module could write that would read back as what it was given.
 #
-# Errors name a byte offset, because that is the position the parser
+# Errors name a u8 offset, because that is the position the parser
 # genuinely has and a line and column would be a second thing to keep
 # right.  `parse` answers `Json!` and not `Json?` because there are
 # many distinct ways for a document to be wrong and the one it met is
@@ -130,26 +130,26 @@
 # RFC 8259 §2: the six structural characters, the two quoting bytes,
 # and nothing else in this module is written as a bare number.
 
-private const quote_byte: byte = 34
-private const backslash: byte = 92
-private const brace_open: byte = 123
-private const brace_close: byte = 125
-private const bracket_open: byte = 91
-private const bracket_close: byte = 93
-private const colon: byte = 58
-private const comma: byte = 44
-private const minus: byte = 45
-private const plus: byte = 43
-private const point: byte = 46
-private const digit_zero: byte = 48
-private const digit_nine: byte = 57
-private const letter_e: byte = 101
-private const letter_e_capital: byte = 69
-private const letter_u: byte = 117
-private const letter_i: byte = 105
-private const letter_n: byte = 110
+private const quote_byte: u8 = 34
+private const backslash: u8 = 92
+private const brace_open: u8 = 123
+private const brace_close: u8 = 125
+private const bracket_open: u8 = 91
+private const bracket_close: u8 = 93
+private const colon: u8 = 58
+private const comma: u8 = 44
+private const minus: u8 = 45
+private const plus: u8 = 43
+private const point: u8 = 46
+private const digit_zero: u8 = 48
+private const digit_nine: u8 = 57
+private const letter_e: u8 = 101
+private const letter_e_capital: u8 = 69
+private const letter_u: u8 = 117
+private const letter_i: u8 = 105
+private const letter_n: u8 = 110
 
-# RFC 8259 §9 leaves the limit to the parser.  This one is half of
+# RFC 8259 §9 leaves the limit to the parser.  This one is f16 of
 # loom's call-depth policy, because a tree is walked by recursion and
 # both ends of that walk — this module and its caller — have to fit
 # inside the one budget.
@@ -163,21 +163,21 @@ private const max_depth = 64
 # Seven members for six kinds: JSON's one number type arrives here as
 # the two Luce has, and which one a value holds is the notation it was
 # written in.  `null` is first, so it is also the zero — what a
-# `var j: Json` starts at and what fills a `new array(Json, n)`.
+# `var j: Json` starts at and what fills a `new array[Json](n)`.
 #
-# The names are the specification's own except for the string kind:
-# `string` is a reserved name in Luce (it is the type, and the
-# conversion constructor named for it), so JSON's string is spelled
+# The names are the specification's own except for the str kind:
+# `str` is a reserved name in Luce (it is the type, and the
+# conversion constructor named for it), so JSON's str is spelled
 # `text` here — the same word `strings.from_bytes` uses for the same
 # thing.
 union Json:
     null
     boolean(value: bool)
-    integer(value: long)
-    real(value: double)
-    text(value: string)
-    array(items: list(Json))
-    object(fields: map(string, Json))
+    integer(value: i64)
+    real(value: f64)
+    text(value: str)
+    array(items: list[Json])
+    object(fields: map[str, Json])
 
     # True for JSON's `null` and nothing else — which is a different
     # question from "is this value missing", and that is the point of
@@ -203,29 +203,29 @@ union Json:
     # real is a real, and answering absence says so, where truncating
     # would throw information away silently and rounding would invent
     # it.
-    func as_long() -> long?:
+    func as_long() -> i64?:
         match self:
             integer(value):
                 return value
             else:
                 return none
 
-    # The number as a double, whichever way it was written — a whole
+    # The number as a f64, whichever way it was written — a whole
     # number widens, which is the one conversion Luce makes on its own
     # (docs/TYPES.md).
-    func as_double() -> double?:
+    func as_double() -> f64?:
         match self:
             integer(value):
-                return double(value)
+                return f64(value)
             real(value):
                 return value
             else:
                 return none
 
-    # The string, decoded — the escapes were spent on the way in, so
+    # The str, decoded — the escapes were spent on the way in, so
     # this is the text the document meant.  Absent for every other
     # member.
-    func as_text() -> string?:
+    func as_text() -> str?:
         match self:
             text(value):
                 return value
@@ -234,7 +234,7 @@ union Json:
 
     # How many members an object has, or elements an array has.  A
     # leaf answers 0.
-    func count() -> long:
+    func count() -> i64:
         match self:
             array(items):
                 return len(items)
@@ -248,10 +248,10 @@ union Json:
     # are the same news to a caller who was looking for a field.
     #
     # **The answer is a value**, read out of the container: a leaf that
-    # is a number or a string, or a subtree whose inner containers are
+    # is a number or a str, or a subtree whose inner containers are
     # references shared with the document.  A walk that only means to
     # *read* should say `match` and reach the map itself directly.
-    func member(name: string) -> Json?:
+    func member(name: str) -> Json?:
         match self:
             object(fields):
                 if fields.has(name):
@@ -269,7 +269,7 @@ union Json:
     # A copy, for `member`'s reason — and on an object it also walks
     # the names to find the position, so a loop that wants every
     # member should `match` and iterate the map once instead.
-    func element(index: long) -> Json:
+    func element(index: i64) -> Json:
         match self:
             array(items):
                 if index < 0 or index >= len(items):
@@ -289,18 +289,18 @@ union Json:
     # value is what survived that parse — but a re-encoding of the
     # value itself, so `parse(j.write())` is a value equal to `j` and
     # writing *that* gives the same bytes again.
-    func write() -> string:
-        var out = new builder()
+    func write() -> str:
+        var out = new builder
         put_value(out, self, 0, 0)
         return out.build()
 
     # The same, indented: every member and element on its own line,
     # `spaces` further in than its container.  `spaces` of 0 is
     # `write`.
-    func pretty(spaces: long) -> string:
+    func pretty(spaces: i64) -> str:
         if spaces < 0:
             trap("json: pretty needs spaces >= 0")
-        var out = new builder()
+        var out = new builder
         put_value(out, self, spaces, 0)
         return out.build()
 
@@ -310,8 +310,8 @@ union Json:
 # whitespace allowed around it).
 #
 # Everything that can be wrong with the text is an error naming the
-# byte it happened at.
-func parse(content: string) -> Json!:
+# u8 it happened at.
+func parse(content: str) -> Json!:
     let start = skip_blank(content, 0)
     if start >= len(content):
         error("json: there is no value in the text")
@@ -321,7 +321,7 @@ func parse(content: string) -> Json!:
         error(f"json: text after the document's one value, at byte {after}")
     return value
 
-# One value, and the byte after it.
+# One value, and the u8 after it.
 #
 # Recursive descent: the shape of the grammar is the shape of the
 # walk, and a union has no flat tape to walk instead.
@@ -335,7 +335,7 @@ func parse(content: string) -> Json!:
 # what lets the bound be a number worth having.  This is the one place
 # in the module where a function is longer than its parts because the
 # parts would cost something real (docs/CODING_GUIDE.md).
-private func read_value(content: string, from: long, depth: long) -> (Json, long)!:
+private func read_value(content: str, from: i64, depth: i64) -> (Json, i64)!:
     let at = skip_blank(content, from)
     if at >= len(content):
         error(f"json: a value was expected at byte {at}")
@@ -345,7 +345,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
     if head == bracket_open:
         if depth >= max_depth:
             error(f"json: values nested deeper than {max_depth}, at byte {at}")
-        var items = new list(Json)
+        var items = new list[Json]
         var in_list = skip_blank(content, at + 1)
         # The loop leaves with `in_list` on the closing bracket,
         # whichever way it got there, so the value is built once at the
@@ -371,7 +371,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
     if head == brace_open:
         if depth >= max_depth:
             error(f"json: values nested deeper than {max_depth}, at byte {at}")
-        var fields = new map(string, Json)
+        var fields = new map[str, Json]
         var in_map = skip_blank(content, at + 1)
         if in_map >= len(content) or content.byte_at(in_map) != brace_close:
             var mapped = false
@@ -421,7 +421,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
 # horizontal tab, line feed and carriage return.  Nothing else is
 # whitespace, which is why a vertical tab or a form feed between two
 # tokens is an error rather than a shrug.
-private func skip_blank(content: string, from: long) -> long:
+private func skip_blank(content: str, from: i64) -> i64:
     var at = from
     while at < len(content):
         let c = content.byte_at(at)
@@ -432,17 +432,17 @@ private func skip_blank(content: string, from: long) -> long:
 
 # --- strings, both directions ----------------------------------------
 
-# RFC 8259 §7.  Answers the text the token spells and the byte after
+# RFC 8259 §7.  Answers the text the token spells and the u8 after
 # the closing quote.
 #
-# Almost every string in almost every document holds no escape at all,
+# Almost every str in almost every document holds no escape at all,
 # and that one is a slice of the input and needs no builder.  The first
 # backslash hands the rest of the token to `read_escaped`, which does.
 # The two loops repeat two of §7's sentences — a control character must
-# be escaped, and a string must be closed — because they are asking
+# be escaped, and a str must be closed — because they are asking
 # different questions of the same bytes; folding them together would
-# mean building a string for every token that did not need one.
-private func read_string(content: string, from: long) -> (string, long)!:
+# mean building a str for every token that did not need one.
+private func read_string(content: str, from: i64) -> (str, i64)!:
     var at = from + 1
     while at < len(content):
         let c = content.byte_at(at)
@@ -453,14 +453,14 @@ private func read_string(content: string, from: long) -> (string, long)!:
             return decoded, after
         elif c < 32:
             # §7: the control characters must be escaped.  A raw
-            # newline inside a string is the usual way to meet this.
+            # newline inside a str is the usual way to meet this.
             error(f"json: an unescaped control character inside a string, at byte {at}")
         at += 1
     error(f"json: the string opened at byte {from} is never closed")
 
-# The rest of a string token, from its first backslash, decoded.
-private func read_escaped(content: string, from: long, first: long) -> (string, long)!:
-    var out = new builder()
+# The rest of a str token, from its first backslash, decoded.
+private func read_escaped(content: str, from: i64, first: i64) -> (str, i64)!:
+    var out = new builder
     out.append(content[from + 1:first])
     var at = first
     while at < len(content):
@@ -482,17 +482,17 @@ private func read_escaped(content: string, from: long, first: long) -> (string, 
     error(f"json: the string opened at byte {from} is never closed")
 
 # RFC 8259 §7's eight escapes and `\uXXXX`.  Puts what the escape
-# spells into `out` and answers the byte after it.
-private func put_decoded(out: builder, content: string, from: long) -> long!:
+# spells into `out` and answers the u8 after it.
+private func put_decoded(out: builder, content: str, from: i64) -> i64!:
     if from + 1 >= len(content):
         error(f"json: the text ends inside an escape, at byte {from}")
     let c = content.byte_at(from + 1)
     if c == letter_u:
-        # A high surrogate is half of a codepoint and must be followed
-        # by its low half (§7); a low one on its own is not a
+        # A high surrogate is f16 of a codepoint and must be followed
+        # by its low f16 (§7); a low one on its own is not a
         # codepoint at all (§8.2).  Refusing both is what keeps every
-        # string this module accepts decodable into UTF-8, which is
-        # the only thing a Luce string can be.
+        # str this module accepts decodable into UTF-8, which is
+        # the only thing a Luce str can be.
         var code = try read_hex4(content, from + 2)
         var next = from + 6
         if code >= 55296 and code <= 56319:
@@ -530,10 +530,10 @@ private func put_decoded(out: builder, content: string, from: long) -> long!:
     error(f"json: unknown escape at byte {from}")
 
 # Four hexadecimal digits, as the number they spell.
-private func read_hex4(content: string, from: long) -> long!:
+private func read_hex4(content: str, from: i64) -> i64!:
     if from + 4 > len(content):
         error(f"json: an escape at byte {from} wants four hexadecimal digits and the text ends first")
-    var value: long = 0
+    var value: i64 = 0
     for i in range(0, 4):
         let c = content.byte_at(from + i)
         var part = -1
@@ -548,10 +548,10 @@ private func read_hex4(content: string, from: long) -> long!:
         value = value * 16 + part
     return value
 
-# Text as a JSON string, quotes and escapes and all (RFC 8259 §7).
+# Text as a JSON str, quotes and escapes and all (RFC 8259 §7).
 #
 # The two escapes that are required — the quote and the backslash —
-# and the control characters, which the six short names cover where
+# and the control characters, which the six i16 names cover where
 # they can and `\u00xx` covers where they cannot.  Everything else
 # goes in as itself: the solidus needs no escape (§7 permits one and
 # does not ask for it), and a character outside ASCII is UTF-8 in the
@@ -560,13 +560,13 @@ private func read_hex4(content: string, from: long) -> long!:
 #
 # This is the door for a program that builds JSON text of its own out
 # of a builder rather than a value, and it is the same escaping
-# `write` puts around a string and a member name.
-func quote(content: string) -> string:
-    var out = new builder()
+# `write` puts around a str and a member name.
+func quote(content: str) -> str:
+    var out = new builder
     put_quoted(out, content)
     return out.build()
 
-private func put_quoted(out: builder, content: string):
+private func put_quoted(out: builder, content: str):
     out.append_ascii(quote_byte)
     var run = 0
     var at = 0
@@ -581,7 +581,7 @@ private func put_quoted(out: builder, content: string):
     out.append(content[run:])
     out.append_ascii(quote_byte)
 
-private func put_escape(out: builder, c: byte):
+private func put_escape(out: builder, c: u8):
     out.append_ascii(backslash)
     if c == quote_byte or c == backslash:
         out.append_ascii(c)
@@ -604,7 +604,7 @@ private func put_escape(out: builder, c: byte):
         out.append_ascii(hex_digit(c >> 4 & 15))
         out.append_ascii(hex_digit(c & 15))
 
-private func hex_digit(value: int) -> int:
+private func hex_digit(value: i32) -> i32:
     if value < 10:
         return digit_zero + value
     return 97 + value - 10
@@ -612,7 +612,7 @@ private func hex_digit(value: int) -> int:
 # --- numbers ---------------------------------------------------------
 
 # RFC 8259 §6, and the whole of it: an optional minus, an integer part
-# that is either a single zero or a digit string not starting with
+# that is either a single zero or a digit str not starting with
 # one, an optional fraction with at least one digit, and an optional
 # exponent with at least one digit.  `.5`, `5.`, `01`, `+1`, `1e`,
 # `0x10`, `NaN` and `Infinity` are all outside it, and none of them
@@ -620,10 +620,10 @@ private func hex_digit(value: int) -> int:
 #
 # The notation decides the member: written whole, it is an `integer`;
 # written with a fraction or an exponent, it is a `real`.  A whole
-# number too large for a `long` is a `real` too, because that is where
-# its precision honestly is — and a number too large for a `double` is
+# number too large for a `i64` is a `real` too, because that is where
+# its precision honestly is — and a number too large for a `f64` is
 # refused, since there is nothing left to hold it with.
-private func read_number(content: string, from: long) -> (Json, long)!:
+private func read_number(content: str, from: i64) -> (Json, i64)!:
     var at = from
     if content.byte_at(at) == minus:
         at += 1
@@ -663,13 +663,13 @@ private func read_number(content: string, from: long) -> (Json, long)!:
         return Json.real(value = measured), at
     error(f"json: the number at byte {from} is past what a double can hold")
 
-private func is_digit(c: byte) -> bool:
+private func is_digit(c: u8) -> bool:
     return c >= digit_zero and c <= digit_nine
 
-# True when `word` stands at `at`.  Byte by byte rather than by slice,
+# True when `word` stands at `at`.  Byte by u8 rather than by slice,
 # because a slice that ended inside a character would trap and the
 # text after a literal name is whatever the document says it is.
-private func word_at(content: string, at: long, word: string) -> bool:
+private func word_at(content: str, at: i64, word: str) -> bool:
     if at + len(word) > len(content):
         return false
     for i in range(0, len(word)):
@@ -685,14 +685,14 @@ private func word_at(content: string, at: long, word: string) -> bool:
 # the walk.  Every member of the union is written here and there is no
 # `else`, so the day a member is added this function stops compiling
 # and names it.
-private func put_value(out: builder, held: Json, spaces: long, depth: long):
+private func put_value(out: builder, held: Json, spaces: i64, depth: i64):
     match held:
         null:
             out.append("null")
         boolean(value):
-            out.append(string(value))
+            out.append(str(value))
         integer(value):
-            out.append(string(value))
+            out.append(str(value))
         real(value):
             put_real(out, value)
         text(value):
@@ -732,21 +732,21 @@ private func put_value(out: builder, held: Json, spaces: long, depth: long):
 
 # A real, written so that reading it back gives a real.
 #
-# `string(d)` answers the shortest decimal that reads back as the same
-# double, which is what a JSON writer wants — but a whole-valued one
+# `str(d)` answers the shortest decimal that reads back as the same
+# f64, which is what a JSON writer wants — but a whole-valued one
 # comes out with no fraction, and `42` read back is an `integer`.  So
 # the point is put on, the way Python's `json` does, and the member
 # survives the round trip.
 #
-# What `string(d)` does *not* do is write an exponent, so `1e300`
+# What `str(d)` does *not* do is write an exponent, so `1e300`
 # leaves here as its three hundred and one digits.  That is longer than
 # a JSON writer would choose and it is still the same number: the text
-# reads back as the identical double, which is the property this
-# module owes.  Shortening it is a job for `string(double)`, where
+# reads back as the identical f64, which is the property this
+# module owes.  Shortening it is a job for `str(f64)`, where
 # every other caller would get it too, and not for a private helper
 # here.
-private func put_real(out: builder, value: double):
-    let written = string(value)
+private func put_real(out: builder, value: f64):
+    let written = str(value)
     if written.find_byte(letter_i, 0) >= 0 or written.find_byte(letter_n, 0) >= 0:
         # "inf", "-inf", "nan": RFC 8259 §6 has no grammar for any of
         # them, so there is no text to write.  Nothing this module
@@ -759,7 +759,7 @@ private func put_real(out: builder, value: double):
 
 # A line break and one level of indentation, or nothing at all when
 # the caller asked for no spaces.
-private func put_break(out: builder, spaces: long, depth: long):
+private func put_break(out: builder, spaces: i64, depth: i64):
     if spaces <= 0:
         return
     out.append_ascii(10)
