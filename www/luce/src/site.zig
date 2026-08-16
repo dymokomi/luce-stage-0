@@ -62,7 +62,7 @@ pub const sections = [_]Section{
             .{ .slug = "functions", .title = "Functions and Closures", .part = "Language Guide", .blurb = "Parameters, returns, stored functions, closures, captures and bound methods." },
             .{ .slug = "enums", .title = "Enumerations", .part = "Language Guide", .blurb = "Named alternatives, numeric representation, exhaustive matching and methods." },
             .{ .slug = "structures", .title = "Structures and Methods", .part = "Language Guide", .blurb = "Keep data, behavior and invariants together in a value type." },
-            .{ .slug = "classes", .title = "Classes", .part = "Language Guide", .blurb = "Share mutable identity with ARC, weak references, interfaces and deterministic deinitialization." },
+            .{ .slug = "classes", .title = "Classes", .part = "Language Guide", .blurb = "Build shared identity with definite initialization, ARC, weak references, interfaces and deterministic teardown." },
             .{ .slug = "constants", .title = "Constants", .part = "Language Guide", .blurb = "File-scope values, compile-time folding, shared tables and immutability." },
             .{ .slug = "optionals", .title = "Optionals", .part = "Language Guide", .blurb = "Represent absence, narrow it safely and provide a fallback." },
             .{ .slug = "unions", .title = "Unions", .part = "Language Guide", .blurb = "Model several valid shapes and match their payloads safely." },

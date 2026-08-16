@@ -111,7 +111,11 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
                 return error.BadStruct;
         }
         for (layout.fields) |field| {
-            try verifyFieldType(program, field.field_type, layout.interface or layout.closure_storage);
+            try verifyFieldType(
+                program,
+                field.field_type,
+                layout.reference or layout.interface or layout.closure_storage,
+            );
             if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
                 return error.BadStruct;
         }
@@ -292,10 +296,11 @@ fn nominalType(program: *const Program, layout: u32) VerifyError!Type {
     return error.BadStruct;
 }
 
-/// Source structs cannot declare bare function fields, but compiler-generated
-/// interface witness layouts and closure storage use them as private slots.
-/// Keep the distinction in the module so a decoded ordinary struct cannot
-/// smuggle one through.
+/// Value structs and union members cannot declare bare function fields: they
+/// have no zero representation. Reference layouts are safe because the handle
+/// itself zeros to `none` and a class object is installed only after every
+/// field has been supplied. Compiler-generated interface witnesses and closure
+/// storage also use function values as private slots.
 fn verifyFieldType(program: *const Program, of: Type, allow_function: bool) VerifyError!void {
     if (of == .function and !allow_function) return error.BadStruct;
     try verifyType(program, of);

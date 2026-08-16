@@ -146,6 +146,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         // `class` declares a reference type beside `struct`'s value type
         // (docs/MEMORY.md), and wears its class.
         .keyword_class,
+        .keyword_init,
         .keyword_deinit,
         .keyword_interface,
         .keyword_alias,

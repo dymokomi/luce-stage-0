@@ -278,6 +278,24 @@ pub const OperandRun = struct {
     copied: []bool,
 };
 
+/// One stored field while an initializer body is being checked. Storage may
+/// be internally optional when the declared field has no zero, so every
+/// failure path owns a valid value and can unwind without a partly alive
+/// class object.
+pub const InitializerField = struct {
+    name: []const u8,
+    local_name: []const u8,
+    local: LocalId,
+    value_type: Type,
+    storage_type: Type,
+};
+
+pub const Initializer = struct {
+    layout: u32,
+    fields: []InitializerField = &.{},
+    prelude_done: bool = false,
+};
+
 pub const FunctionBuilder = struct {
     analyzer: *Analyzer,
     module: usize,
@@ -294,10 +312,13 @@ pub const FunctionBuilder = struct {
     /// try-pass-through check against (docs/FAILURE.md).
     fallible: bool = false,
     /// True only while checking a class's hidden `deinit:` function.
-    is_deinitializer: bool = false,
+    lifecycle: context.Lifecycle = .ordinary,
     /// A tightly scoped permission for the bare `self` borrow. Callers save
     /// and restore it around a direct receiver or weak-store expression.
     allow_deinitializer_self: bool = false,
+    /// Present while checking a class initializer. The lifecycle pass fills
+    /// the field slots when the outer body frame opens.
+    initializer: ?Initializer = null,
     /// This declaration sits inside a struct/enum but said `static`,
     /// so a use of `self` gets the teaching sentence rather than an
     /// ordinary unknown-name report.
@@ -1525,7 +1546,7 @@ pub const FunctionBuilder = struct {
             const value = lifecycle_value: {
                 const previous_permission = self.allow_deinitializer_self;
                 defer self.allow_deinitializer_self = previous_permission;
-                if (self.is_deinitializer and index == 0 and isBareSelf(expression)) {
+                if (self.lifecycle == .deinitializer and index == 0 and isBareSelf(expression)) {
                     switch (landing) {
                         .method => self.allow_deinitializer_self = true,
                         else => {},
@@ -1727,7 +1748,13 @@ pub const FunctionBuilder = struct {
                 };
             },
             .name => |name| {
-                if (self.is_deinitializer and
+                if (self.lifecycle == .initializer and std.mem.eql(u8, name.text, "self")) {
+                    // The initializer lifecycle pass already reported why
+                    // this bare self cannot exist. Stop ordinary name lookup
+                    // from adding an unrelated unknown-name diagnostic.
+                    return null;
+                }
+                if (self.lifecycle == .deinitializer and
                     std.mem.eql(u8, name.text, "self") and
                     !self.allow_deinitializer_self)
                 {

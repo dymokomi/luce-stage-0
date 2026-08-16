@@ -37,6 +37,9 @@ pub const Kind = enum {
     /// It runs at the last strong release while the instance fields are
     /// still alive.
     keyword_deinit,
+    /// `init(...)` inside a class — the construction lifecycle body.
+    /// It establishes every stored field before the class identity exists.
+    keyword_init,
     /// `interface Name:` — a named set of method contracts that a
     /// struct may explicitly implement.
     keyword_interface,
@@ -204,6 +207,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "class", .kind = .keyword_class },
     .{ .word = "deinit", .kind = .keyword_deinit },
+    .{ .word = "init", .kind = .keyword_init },
     .{ .word = "interface", .kind = .keyword_interface },
     .{ .word = "alias", .kind = .keyword_alias },
     .{ .word = "enum", .kind = .keyword_enum },

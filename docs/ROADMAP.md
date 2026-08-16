@@ -36,7 +36,8 @@ The completed ARC language now extends that foundation without weakening it:
 
 - `class` is a final ARC reference type with shared identity, mutation through
   stable `let` bindings, `is`, class/interface dispatch, zeroing weak edges,
-  deterministic `deinit`, and worker isolation.
+  definite custom initialization, deterministic `deinit`, and worker
+  isolation.
 - Interfaces work for explicit struct and class conformance, multiple methods,
   multi-value answers, directional failure effects, return values, optionals,
   and heterogeneous containers. Class witnesses may mutate shared identity;
@@ -115,7 +116,7 @@ The first complete class release includes:
 - mutation through a `let` binding, because the binding is stable while the
   object is mutable;
 - memberwise construction, including defaults and visibility already shared
-  with structs;
+  with structs, plus one definite `init` body that can replace that surface;
 - reference identity with Python-familiar `is`; `==` remains value equality
   and is not synthesized recursively for classes;
 - an optional `deinit` that runs exactly once at the last strong release,
@@ -124,9 +125,12 @@ The first complete class release includes:
 - deterministic behavior on success, recoverable error, and normal worker
   cleanup.
 
-Explicit `init` bodies can follow after memberwise construction is solid. They
-must use the same call syntax, establish every field before `self` escapes,
-and not introduce Swift's two-phase initializer hierarchy.
+An `init` body uses the class's ordinary call syntax, establishes every field
+on every successful path before an identity exists, and may be fallible with
+`-> !`. The compiler models it as a hidden factory with field locals, so a
+failure unwinds ordinary values without exposing or finalizing a partial
+object. There is one initializer, with no overloads, delegation, or Swift-style
+two-phase hierarchy.
 
 Classes have no inheritance, subclassing, `override`, or `super`. Reuse comes
 from composition and interfaces. Interface default methods are also outside
@@ -453,11 +457,11 @@ cycle and every successful case ends at the zero-live-object census.
    existing ARC machinery.
 2. Implement sharing, aggregate/container storage, optionals, returns, and
    reference mutation.
-3. Add `is`, memberwise construction, visibility behavior, and deterministic
-   `deinit`.
+3. Add `is`, memberwise and definite custom construction, visibility behavior,
+   and deterministic `deinit`.
 4. Prove unwinding and partial construction do not double-release or leak.
 5. Keep inheritance, computed properties, synthesized class equality/hashing,
-   and advanced initializer forms out.
+   and initializer overloads, delegation, and two-phase forms out.
 
 Exit: aliasing a class observes shared mutation, `deinit` runs once on every
 normal release path, and parent/child graphs use the already-proved weak
@@ -471,7 +475,11 @@ Weak class edges zero by generation, class witnesses preserve shared mutation,
 and worker transfer is refused while worker-local classes remain valid.
 `deinit` runs once before child fields release and is covered under normal
 scope exit, recoverable error, trap reporting, and worker-local teardown;
-compile-time and runtime guards prevent resurrection.
+compile-time and runtime guards prevent resurrection. One custom `init` body
+may replace memberwise construction; definite-initialization analysis covers
+branches, exhaustive matches, handled failure, early returns, defaults, weak
+fields, and loops, while the hidden factory publishes the ARC object only once
+every field exists.
 
 ### Phase 6 — replace interface values with owned existentials
 

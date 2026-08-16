@@ -658,11 +658,16 @@ fn planLocalCapture(
     span: Span,
     weak: bool,
 ) Error!bool {
+    if (self.lifecycle == .initializer and std.mem.eql(u8, name, "self")) {
+        // The initializer validator owns the lifecycle diagnostic. There is
+        // intentionally no receiver local for capture preparation to find.
+        return false;
+    }
     const found = self.findLocal(name) orelse {
         try self.fail("luce.sema.closure.capture", span, "{s} is not a local value available to this closure", .{name});
         return false;
     };
-    if (self.is_deinitializer and std.mem.eql(u8, name, "self")) {
+    if (self.lifecycle == .deinitializer and std.mem.eql(u8, name, "self")) {
         try self.fail(
             "luce.sema.class.lifecycle",
             span,

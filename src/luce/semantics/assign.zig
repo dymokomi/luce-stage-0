@@ -35,11 +35,93 @@ const Provenance = builder.Provenance;
 const Typed = builder.Typed;
 
 pub fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
+    if (self.initializer != null) {
+        switch (assign.target) {
+            .name => |name| if (std.mem.eql(u8, name.text, "self")) return,
+            .field => |field| if (std.mem.eql(u8, field.base, "self")) {
+                for (self.initializer.?.fields) |held| {
+                    if (!std.mem.eql(u8, held.name, field.field)) continue;
+                    if (assign.compound != null and !held.storage_type.eql(held.value_type)) {
+                        try flow.narrow(self, held.local);
+                    }
+                    return lowerAssignName(self, held.local_name, field.span, assign);
+                }
+                // The initializer validator already reported the unknown
+                // stored field, so do not turn it into an unknown local too.
+                return;
+            },
+            .chain => |chain| if (chainRootIsSelf(chain.place)) {
+                const rewritten = (try rewriteInitializerChain(self, chain.place)) orelse return;
+                return lowerAssignChain(self, .{ .place = rewritten, .span = chain.span }, assign);
+            },
+            else => {},
+        }
+    }
     switch (assign.target) {
         .name => |name| try lowerAssignName(self, name.text, name.span, assign),
         .field => |field| try lowerAssignField(self, field, assign),
         .index => |index| try lowerAssignIndex(self, index, assign),
         .chain => |chain| try lowerAssignChain(self, chain, assign),
+    }
+}
+
+fn chainRootIsSelf(expression: *const ast.Expression) bool {
+    return switch (expression.*) {
+        .name => |name| std.mem.eql(u8, name.text, "self"),
+        .field => |field| chainRootIsSelf(field.target),
+        .index => |index| chainRootIsSelf(index.target),
+        else => false,
+    };
+}
+
+/// Replace the first `self.field` in a nested assignment place with that
+/// field's hidden initializer local. The remaining field/index chain is the
+/// ordinary assignment algorithm's, so value rebuilding and ARC stores keep
+/// one implementation.
+fn rewriteInitializerChain(
+    self: *FunctionBuilder,
+    expression: *const ast.Expression,
+) Error!?*ast.Expression {
+    switch (expression.*) {
+        .field => |field| {
+            if (builder.isBareSelf(field.target)) {
+                for (self.initializer.?.fields) |held| {
+                    if (!std.mem.eql(u8, held.name, field.name)) continue;
+                    if (!held.storage_type.eql(held.value_type)) {
+                        try self.fail(
+                            "luce.sema.class.init",
+                            field.span,
+                            "assign the whole self.{s} field during init; its function-bearing value has no partial zero",
+                            .{field.name},
+                        );
+                        return null;
+                    }
+                    const rewritten = try self.arena().create(ast.Expression);
+                    rewritten.* = .{ .name = .{ .text = held.local_name, .span = field.span } };
+                    return rewritten;
+                }
+                return null;
+            }
+            const target = (try rewriteInitializerChain(self, field.target)) orelse return null;
+            const rewritten = try self.arena().create(ast.Expression);
+            rewritten.* = .{ .field = .{
+                .target = target,
+                .name = field.name,
+                .span = field.span,
+            } };
+            return rewritten;
+        },
+        .index => |index| {
+            const target = (try rewriteInitializerChain(self, index.target)) orelse return null;
+            const rewritten = try self.arena().create(ast.Expression);
+            rewritten.* = .{ .index = .{
+                .target = target,
+                .indices = index.indices,
+                .span = index.span,
+            } };
+            return rewritten;
+        },
+        else => return null,
     }
 }
 
@@ -453,7 +535,7 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
     const fitted = lifecycle_fit: {
         const previous_permission = self.allow_deinitializer_self;
         defer self.allow_deinitializer_self = previous_permission;
-        if (self.is_deinitializer and info.weak and builder.isBareSelf(assign.value)) {
+        if (self.lifecycle == .deinitializer and info.weak and builder.isBareSelf(assign.value)) {
             self.allow_deinitializer_self = true;
         }
         break :lifecycle_fit (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
@@ -568,7 +650,7 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
             self.allow_deinitializer_self = previous_permission;
             self.closure_destination = previous_destination;
         }
-        if (self.is_deinitializer and layout.fields[field_index].weak and builder.isBareSelf(assign.value)) {
+        if (self.lifecycle == .deinitializer and layout.fields[field_index].weak and builder.isBareSelf(assign.value)) {
             self.allow_deinitializer_self = true;
         }
         const holds_function = expected == .function or

@@ -36,6 +36,7 @@ const assign = @import("assign.zig");
 const builder = @import("builder.zig");
 const closures = @import("closures.zig");
 const flow = @import("flow.zig");
+const initializers = @import("initializers.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
@@ -48,8 +49,10 @@ const StorageClass = builder.StorageClass;
 const Typed = builder.Typed;
 
 pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
+    const initializer_body = self.initializer != null and !self.initializer.?.prelude_done;
     try self.pushScope();
     try recorder.openStatementFrame(self);
+    if (initializer_body) try initializers.lowerPrelude(self, block.span);
     try refuseUnreachable(self, block);
     for (block.statements) |statement| {
         // Fresh objects nothing adopted die with their statement
@@ -63,6 +66,9 @@ pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
         // `hir.lower`, because the driver stops at diagnostics
         // (nodes.Body.gaps).
         if (recorder.recordedStatementCount(self) == recorded_floor) self.recorded_gaps += 1;
+    }
+    if (initializer_body and !helpers.alwaysExits(block)) {
+        try initializers.lowerReturn(self, block.span);
     }
     self.recorded_block = try recorder.closeStatementFrame(self, block.span);
     self.popScope();
@@ -748,7 +754,7 @@ fn lowerBinding(
 ) Error!void {
     const previous_permission = self.allow_deinitializer_self;
     defer self.allow_deinitializer_self = previous_permission;
-    if (self.is_deinitializer and weak and builder.isBareSelf(value_expression)) {
+    if (self.lifecycle == .deinitializer and weak and builder.isBareSelf(value_expression)) {
         self.allow_deinitializer_self = true;
     }
     // A binding whose initializer failed still declares a name the
@@ -1433,6 +1439,12 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
 }
 
 fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
+    if (self.lifecycle == .initializer) {
+        // The lifecycle validator owns the diagnostic for a value-bearing
+        // return. A bare return materializes the class whole here.
+        if (returned.values.len != 0) return;
+        return initializers.lowerReturn(self, returned.span);
+    }
     if (returned.values.len >= 2) return lowerReturnShape(self, returned);
     if (returned.values.len == 1) {
         const expression = returned.values[0];

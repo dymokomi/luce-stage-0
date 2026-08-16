@@ -210,13 +210,13 @@ pub const Type = union(enum) {
         /// value** (docs/BINDING.md D7).
         ///
         /// A bare `func` type stands where a value is always present:
-        /// a parameter, a `let`.  A struct field, a container element
-        /// and a map value are slots that exist before anything fills
-        /// them, and a function value has no zero — every value of the
-        /// type names a function, and an empty slot names none.  So the
-        /// storable shape is the optional, whose zero is the absence
-        /// `T?` already means, and calling through one takes the
-        /// narrowing or the `else` any other optional takes.
+        /// a parameter, a `let`, or a custom-initialized class field.
+        /// A memberwise aggregate field and a container element are slots
+        /// that exist before anything fills them, and a function value has
+        /// no zero — every value of the type names a function, and an empty
+        /// slot names none. So those positions use the optional, whose zero
+        /// is the absence `T?` already means. (A map value is installed with
+        /// its key and uses the bare type.)
         ///
         /// The written spelling needs its parentheses: `func(i64) ->
         /// str?` is a function *answering* an optional, because a

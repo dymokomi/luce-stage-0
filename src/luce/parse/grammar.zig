@@ -1211,6 +1211,7 @@ pub const Parser = struct {
         defer fields.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
+        var initializer: ?ast.FuncDecl = null;
         var deinitializer: ?ast.FuncDecl = null;
         while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
             if (self.accept(.newline) != null) continue;
@@ -1221,7 +1222,7 @@ pub const Parser = struct {
             if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
                 // `private:` opens a region; `private` fronts one member.
                 if (self.peekAhead(1) == .colon) {
-                    try self.structRegion(&fields, &functions, &deinitializer);
+                    try self.structRegion(&fields, &functions, &initializer, &deinitializer);
                     continue;
                 }
                 const marker = self.advance();
@@ -1237,10 +1238,10 @@ pub const Parser = struct {
                 }
                 const visibility: ast.Visibility =
                     if (marker.kind == .keyword_private) .private else .public;
-                try self.structMember(&fields, &functions, &deinitializer, visibility);
+                try self.structMember(&fields, &functions, &initializer, &deinitializer, visibility);
                 continue;
             }
-            try self.structMember(&fields, &functions, &deinitializer, .none);
+            try self.structMember(&fields, &functions, &initializer, &deinitializer, .none);
         }
         _ = self.accept(.dedent);
         return .{
@@ -1248,6 +1249,7 @@ pub const Parser = struct {
             .name_span = name.span,
             .fields = try fields.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+            .initializer = initializer,
             .deinitializer = deinitializer,
             .interfaces = try interfaces.toOwnedSlice(self.arena),
             .kind = kind,
@@ -1409,6 +1411,7 @@ pub const Parser = struct {
         self: *Parser,
         fields: *std.ArrayList(ast.Field),
         functions: *std.ArrayList(ast.FuncDecl),
+        initializer: *?ast.FuncDecl,
         deinitializer: *?ast.FuncDecl,
         visibility: ast.Visibility,
     ) Error!void {
@@ -1416,6 +1419,7 @@ pub const Parser = struct {
         if (weak_marker != null and
             (self.peekKind() == .keyword_func or
                 self.peekKind() == .keyword_static or
+                self.peekKind() == .keyword_init or
                 self.peekKind() == .keyword_deinit))
         {
             try self.report(
@@ -1425,6 +1429,25 @@ pub const Parser = struct {
                 .{},
             );
             self.recover();
+            return;
+        }
+        if (self.peekKind() == .keyword_init) {
+            const parsed = (try self.initDecl()) orelse {
+                self.recover();
+                return;
+            };
+            if (initializer.* != null) {
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    parsed.span,
+                    "a class may declare init only once",
+                    .{},
+                );
+                return;
+            }
+            var marked = parsed;
+            marked.visibility = visibility;
+            initializer.* = marked;
             return;
         }
         if (self.peekKind() == .keyword_deinit) {
@@ -1453,15 +1476,16 @@ pub const Parser = struct {
             return;
         }
         if ((self.peekKind() == .keyword_static or self.peekKind() == .keyword_func) and
-            self.peekAhead(1) == .keyword_deinit)
+            (self.peekAhead(1) == .keyword_init or self.peekAhead(1) == .keyword_deinit))
         {
             const marker = self.advance();
             const lifecycle = self.advance();
+            const word = if (lifecycle.kind == .keyword_init) "init" else "deinit";
             try self.report(
                 "luce.sema.class.lifecycle",
                 .{ .start = marker.span.start, .end = lifecycle.span.end },
-                "deinit is an ARC lifecycle body, not a {s}; write 'deinit:'",
-                .{if (marker.kind == .keyword_static) "static member" else "method"},
+                "{s} is a class lifecycle body, not a {s}; remove '{s} '",
+                .{ word, if (marker.kind == .keyword_static) "static member" else "method", self.text(marker) },
             );
             self.recover();
             return;
@@ -1532,6 +1556,7 @@ pub const Parser = struct {
         self: *Parser,
         fields: *std.ArrayList(ast.Field),
         functions: *std.ArrayList(ast.FuncDecl),
+        initializer: *?ast.FuncDecl,
         deinitializer: *?ast.FuncDecl,
     ) Error!void {
         const label = self.advance(); // public or private
@@ -1559,17 +1584,51 @@ pub const Parser = struct {
                 try self.markerInRegion(word);
                 if (self.peekKind() == .keyword_func or
                     self.peekKind() == .keyword_static or
+                    self.peekKind() == .keyword_init or
                     self.peekKind() == .keyword_deinit or
                     self.peekKind() == .keyword_weak or
                     self.peekKind() == .identifier)
                 {
-                    try self.structMember(fields, functions, deinitializer, visibility);
+                    try self.structMember(fields, functions, initializer, deinitializer, visibility);
                 }
                 continue;
             }
-            try self.structMember(fields, functions, deinitializer, visibility);
+            try self.structMember(fields, functions, initializer, deinitializer, visibility);
         }
         _ = self.accept(.dedent);
+    }
+
+    /// `init(parameters):` or `init(parameters) -> !:`. The enclosing
+    /// class is the implicit successful result; `!` is the only result
+    /// marker source may write because it describes failure, not a value.
+    fn initDecl(self: *Parser) Error!?ast.FuncDecl {
+        const marker = self.advance(); // init
+        const opener = (try self.expect(.left_paren, "'(' opening the initializer parameter list")) orelse
+            return null;
+        const parameters = (try self.parameterList(opener)) orelse return null;
+
+        var fallible = false;
+        if (self.accept(.arrow) != null) {
+            if (self.accept(.bang) == null) {
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    self.peek().span,
+                    "init returns the new class implicitly; write '-> !' only when initialization can fail",
+                    .{},
+                );
+                return null;
+            }
+            fallible = true;
+        }
+        const body = (try self.block("init")) orelse return null;
+        return .{
+            .name = "init",
+            .name_span = marker.span,
+            .parameters = parameters,
+            .fallible = fallible,
+            .body = body,
+            .span = marker.span,
+        };
     }
 
     /// `deinit:` — deliberately smaller than a function declaration. The
@@ -1621,7 +1680,7 @@ pub const Parser = struct {
             .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .keyword_static => if (self.peekAhead(1) == .keyword_func and
                 self.peekAhead(2) == .identifier) self.tokenAhead(2) else null,
-            .keyword_deinit => self.peek(),
+            .keyword_init, .keyword_deinit => self.peek(),
             .keyword_weak => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .identifier => self.peek(),
             else => null,
@@ -2040,7 +2099,39 @@ pub const Parser = struct {
         try self.refuseWildcardName(name);
         const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse
             return null;
+        const parameters = (try self.parameterList(opener)) orelse return null;
 
+        // `-> T`, `-> T!`, `-> (A, B)`, `-> (A, B)!`, or a bare
+        // `-> !`: the mark says the call may fail, the list says what
+        // it hands back when it does not, and either may be absent
+        // (docs/FAILURE.md, docs/RETURNS.md).
+        var returns: std.ArrayList(ast.TypeName) = .empty;
+        defer returns.deinit(self.arena);
+        var fallible = false;
+        if (self.accept(.arrow) != null) {
+            if (self.peekKind() == .left_paren) {
+                if (!try self.returnShape(&returns)) return null;
+            } else if (self.peekKind() != .bang) {
+                const only = (try self.typeName()) orelse return null;
+                try returns.append(self.arena, only);
+            }
+            fallible = self.accept(.bang) != null;
+        }
+        const body = (try self.block("func")) orelse return null;
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .parameters = parameters,
+            .returns = try returns.toOwnedSlice(self.arena),
+            .fallible = fallible,
+            .body = body,
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// The one parameter grammar shared by functions and class
+    /// initializers. The opener has already been consumed.
+    fn parameterList(self: *Parser, opener: Token) Error!?[]ast.Parameter {
         var parameters: std.ArrayList(ast.Parameter) = .empty;
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
@@ -2112,33 +2203,7 @@ pub const Parser = struct {
         }
         if (try self.missingSeparator(previous_end)) return null;
         if ((try self.expectClose(.right_paren, opener)) == null) return null;
-
-        // `-> T`, `-> T!`, `-> (A, B)`, `-> (A, B)!`, or a bare
-        // `-> !`: the mark says the call may fail, the list says what
-        // it hands back when it does not, and either may be absent
-        // (docs/FAILURE.md, docs/RETURNS.md).
-        var returns: std.ArrayList(ast.TypeName) = .empty;
-        defer returns.deinit(self.arena);
-        var fallible = false;
-        if (self.accept(.arrow) != null) {
-            if (self.peekKind() == .left_paren) {
-                if (!try self.returnShape(&returns)) return null;
-            } else if (self.peekKind() != .bang) {
-                const only = (try self.typeName()) orelse return null;
-                try returns.append(self.arena, only);
-            }
-            fallible = self.accept(.bang) != null;
-        }
-        const body = (try self.block("func")) orelse return null;
-        return .{
-            .name = self.text(name),
-            .name_span = name.span,
-            .parameters = try parameters.toOwnedSlice(self.arena),
-            .returns = try returns.toOwnedSlice(self.arena),
-            .fallible = fallible,
-            .body = body,
-            .span = .{ .start = start.span.start, .end = name.span.end },
-        };
+        return try parameters.toOwnedSlice(self.arena);
     }
 
     /// `-> (A, B)` — two or more types a function answers together.
@@ -3215,6 +3280,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
         .keyword_class => "the keyword 'class'",
+        .keyword_init => "the keyword 'init'",
         .keyword_deinit => "the keyword 'deinit'",
         .keyword_interface => "the keyword 'interface'",
         .keyword_alias => "the keyword 'alias'",

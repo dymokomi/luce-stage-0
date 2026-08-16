@@ -8222,6 +8222,291 @@ test "class: a non-interface cannot be used as inheritance" {
     , "luce.sema.interface", "Parent is not an interface");
 }
 
+test "class: init is one class-only lifecycle body" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: i64
+        \\    init(x: i64):
+        \\        self.x = x
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "init belongs to a class");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        self.value = value
+        \\    init():
+        \\        self.value = 0
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "may declare init only once");
+}
+
+test "class: init has lifecycle syntax and an implicit class result" {
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    func init(value: i64):
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "not a method");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    static init(value: i64):
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "not a static member");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64) -> Box:
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "returns the new class implicitly");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        self.value = value
+        \\        return self
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "write bare 'return'");
+}
+
+test "class: init must establish every field on every successful path" {
+    try expectSaying(
+        \\class Triple:
+        \\    first: i64
+        \\    second: i64
+        \\    third: i64
+        \\    init(value: i64):
+        \\        self.first = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "without initializing fields second and third");
+    try expectSaying(
+        \\class Pair:
+        \\    left: i64
+        \\    right: i64
+        \\    init(value: i64):
+        \\        self.left = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "without initializing field right");
+    try expectSaying(
+        \\class Pair:
+        \\    left: i64
+        \\    right: i64
+        \\    init(value: i64, choose: bool):
+        \\        self.left = value
+        \\        if choose:
+        \\            self.right = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "without initializing field right");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(values: list[i64]):
+        \\        for value in values:
+        \\            self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "without initializing field value");
+}
+
+test "class: init cannot read a field before assigning it" {
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init():
+        \\        self.value = self.value + 1
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "self.value is read before init has assigned it");
+    try expectSaying(
+        \\struct Point:
+        \\    x: i64
+        \\class Scene:
+        \\    point: Point
+        \\    init():
+        \\        self.point.x = 42
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "self.point is read before init has assigned it");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init():
+        \\        self.value += 1
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "self.value is read before init has assigned it");
+}
+
+test "class: self cannot escape before init has made the class" {
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(self: i64):
+        \\        self.value = 42
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.self", "self is implied; remove the parameter");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        let self = value
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.expected", "'self' is a keyword and cannot be used as a name");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        let unfinished = self
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "class does not exist until initialization finishes");
+    try expectSaying(
+        \\func keep(box: Box):
+        \\    return
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        keep(self)
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "init may use self only to read or assign a stored field");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        let read: func() -> i64 = func():
+        \\            return self.value
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "init cannot capture self in a closure");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        self.reset()
+        \\        self.value = value
+        \\    func reset():
+        \\        self.value = 0
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "cannot call an instance method before the class exists");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        self = Box(value)
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "init cannot replace self");
+}
+
+test "class: a custom init is the class constructor surface" {
+    try expectSaying(
+        \\class Action:
+        \\    apply: func(i64) -> i64
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type", "a memberwise class field starts before anything fills it");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(number: i64):
+        \\        self.value = number
+        \\func main():
+        \\    let box = Box()
+        \\
+    , "luce.sema.call", "Box is missing number");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(number: i64):
+        \\        self.value = number
+        \\func main():
+        \\    let box = Box(value = 42)
+        \\
+    , "luce.sema.call", "has no parameter value");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(number: i64):
+        \\        self.value = number
+        \\func main():
+        \\    let box = Box.init(42)
+        \\
+    , "luce.sema.class.lifecycle", "call the class name directly");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64) -> !:
+        \\        self.value = value
+        \\func main():
+        \\    let box = Box(42)
+        \\
+    , "luce.sema.fallible", "write 'try Box(…)'");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\    init(value: i64):
+        \\        self.missing = value
+        \\        self.value = value
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.init", "Box has no stored field missing");
+}
+
+test "class: init bounds a flat expression rather than overflowing" {
+    const source = try longChain(
+        testing.allocator,
+        "class Box:\n    value: i64\n    init():\n        self.value = ",
+        "1",
+        5000,
+        "\nfunc main():\n    return\n",
+    );
+    defer testing.allocator.free(source);
+    try expectRejected(source, "luce.sema.nesting");
+}
+
 test "class: only classes may declare one bare deinit lifecycle body" {
     try expectSaying(
         \\struct Value:

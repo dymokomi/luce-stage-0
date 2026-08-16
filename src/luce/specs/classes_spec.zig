@@ -6,6 +6,246 @@
 
 const agree = @import("agree.zig");
 
+test "custom init computes several fields and keeps defaults and call defaults" {
+    try agree.ok(
+        \\class Rectangle:
+        \\    label: str = "rectangle"
+        \\    width: i64
+        \\    height: i64
+        \\    area: i64
+        \\    init(width: i64, height: i64 = 2):
+        \\        self.width = width
+        \\        self.height = height
+        \\        self.area = self.width * self.height
+        \\
+        \\func main():
+        \\    let first = Rectangle(6)
+        \\    let second = Rectangle(height = 7, width = 3)
+        \\    assert(first.label == "rectangle")
+        \\    assert(first.area == 12)
+        \\    assert(second.area == 21)
+        \\
+    );
+}
+
+test "custom init joins branches and permits a complete early return" {
+    try agree.ok(
+        \\class Number:
+        \\    value: i64
+        \\    sign: str
+        \\    init(value: i64):
+        \\        if value == 0:
+        \\            self.value = 0
+        \\            self.sign = "zero"
+        \\            return
+        \\        if value > 0:
+        \\            self.sign = "positive"
+        \\        else:
+        \\            self.sign = "negative"
+        \\        self.value = value
+        \\
+        \\func main():
+        \\    let zero = Number(0)
+        \\    let negative = Number(-4)
+        \\    assert(zero.value == 0 and zero.sign == "zero")
+        \\    assert(negative.value == -4 and negative.sign == "negative")
+        \\
+    );
+}
+
+test "custom init supports nested updates after the root field exists" {
+    try agree.ok(
+        \\struct Point:
+        \\    x: i64
+        \\    y: i64
+        \\
+        \\class Scene:
+        \\    point: Point
+        \\    values: list[i64]
+        \\    init(x: i64):
+        \\        self.point = Point(x = x, y = 1)
+        \\        self.point.x += 1
+        \\        self.values = new list[i64]
+        \\        self.values.append(self.point.x)
+        \\
+        \\func main():
+        \\    let scene = Scene(40)
+        \\    assert(scene.point.x == 41)
+        \\    assert(scene.values[0] == 41)
+        \\
+    );
+}
+
+test "custom init carries function fields aliases lists and maps" {
+    try agree.ok(
+        \\class Action:
+        \\    apply: func(i64) -> i64
+        \\    init(apply: func(i64) -> i64):
+        \\        self.apply = apply
+        \\    func run(value: i64) -> i64:
+        \\        return (self.apply)(value)
+        \\
+        \\func add_one(value: i64) -> i64:
+        \\    return value + 1
+        \\
+        \\alias Operation = Action
+        \\
+        \\func main():
+        \\    let action = Operation(add_one)
+        \\    let actions: list[Action] = [action]
+        \\    let table: map[str, Action] = {"add": action}
+        \\    assert(actions[0].run(20) == 21)
+        \\    assert(table["add"].run(41) == 42)
+        \\
+    );
+}
+
+test "fallible custom init cleans unfinished fields and finalizes only finished objects" {
+    try agree.prints(
+        \\class Resource:
+        \\    name: str
+        \\    values: list[i64]
+        \\    init(name: str, accept: bool) -> !:
+        \\        self.name = name
+        \\        self.values = [1, 2, 3]
+        \\        if not accept:
+        \\            error("refused " + name)
+        \\    deinit:
+        \\        print("closed " + self.name + " " + str(len(self.values)))
+        \\
+        \\func main() -> !:
+        \\    Resource("bad", false) catch reason:
+        \\        print(reason)
+        \\    if true:
+        \\        let resource = try Resource("good", true)
+        \\        assert(resource.name == "good")
+        \\
+    , "refused bad\nclosed good 3\n");
+}
+
+test "custom init joins exhaustive matches and handled assignments" {
+    try agree.ok(
+        \\enum Kind:
+        \\    exact
+        \\    recovered
+        \\
+        \\func load(ok: bool) -> i64!:
+        \\    if not ok:
+        \\        error("missing")
+        \\    return 41
+        \\
+        \\class Score:
+        \\    value: i64
+        \\    label: str
+        \\    init(kind: Kind, ok: bool):
+        \\        match kind:
+        \\            exact:
+        \\                self.value = 42
+        \\                self.label = "exact"
+        \\            recovered:
+        \\                self.value = load(ok) catch:
+        \\                    self.value = 41
+        \\                self.value += 1
+        \\                self.label = "recovered"
+        \\
+        \\func main():
+        \\    let exact = Score(Kind.exact, true)
+        \\    let recovered = Score(Kind.recovered, false)
+        \\    assert(exact.value == 42 and exact.label == "exact")
+        \\    assert(recovered.value == 42 and recovered.label == "recovered")
+        \\
+    );
+}
+
+test "custom initialized classes satisfy interfaces in heterogeneous containers" {
+    try agree.ok(
+        \\interface Named:
+        \\    func name() -> str
+        \\
+        \\class Person: Named:
+        \\    first: str
+        \\    last: str
+        \\    init(first: str, last: str):
+        \\        self.first = first
+        \\        self.last = last
+        \\    func name() -> str:
+        \\        return self.first + " " + self.last
+        \\
+        \\class Label: Named:
+        \\    text: str
+        \\    init(text: str):
+        \\        self.text = text
+        \\    func name() -> str:
+        \\        return self.text
+        \\
+        \\func main():
+        \\    var names = new list[Named]
+        \\    names.append(Person("Ada", "Lovelace"))
+        \\    names.append(Label("Luce"))
+        \\    var by_kind = new map[str, Named]
+        \\    by_kind["person"] = names[0]
+        \\    by_kind["language"] = names[1]
+        \\    assert(names[0].name() == "Ada Lovelace")
+        \\    assert(by_kind["language"].name() == "Luce")
+        \\
+    );
+}
+
+test "custom init handles recursive references weak defaults static helpers and empty classes" {
+    try agree.ok(
+        \\class Node:
+        \\    value: i64
+        \\    next: Node?
+        \\    weak parent: Node?
+        \\    init(value: i64, next: Node? = none):
+        \\        self.value = Node.normalize(value)
+        \\        self.next = next
+        \\    static func normalize(value: i64) -> i64:
+        \\        if value < 0:
+        \\            return 0
+        \\        return value
+        \\
+        \\class Marker:
+        \\    init():
+        \\        return
+        \\
+        \\func main():
+        \\    let tail = Node(-1)
+        \\    let head = Node(42, tail)
+        \\    let first = Marker()
+        \\    let second = Marker()
+        \\    assert(head.value == 42)
+        \\    let linked = head.next else head
+        \\    assert(linked.value == 0 and linked.parent == none)
+        \\    assert(not (first is second))
+        \\
+    );
+}
+
+test "a public custom initializer and private state cross a module boundary" {
+    const models: agree.File = .{ .name = "models", .source =
+        \\class User:
+        \\    private:
+        \\        name: str
+        \\    public:
+        \\        init(name: str):
+        \\            self.name = name
+        \\        func greeting() -> str:
+        \\            return "Hello, " + self.name
+        \\
+    };
+    var program = try agree.project(
+        \\import models
+        \\
+        \\func main():
+        \\    let user = models.User("Ada")
+        \\    assert(user.greeting() == "Hello, Ada")
+        \\
+    , &.{models});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
 test "class aliases observe shared field mutation through let bindings" {
     try agree.ok(
         \\class Counter:

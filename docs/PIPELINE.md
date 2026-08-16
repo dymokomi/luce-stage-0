@@ -53,9 +53,10 @@ keeps recovery local to a line or block, and reports the reader's correction
 rather than an internal parser state.
 
 Current syntax includes transparent aliases, interfaces, final classes,
-`deinit`, weak fields/locals, expression lambdas, block closures and capture
-lists. The parser does not decide conformance, ownership, capture kind, or
-class lifetime; those are semantic questions.
+`init`, `deinit`, weak fields/locals, expression lambdas, block closures and
+capture lists. The parser does not decide conformance, definite
+initialization, ownership, capture kind, or class lifetime; those are semantic
+questions.
 
 ## Semantics
 
@@ -76,6 +77,7 @@ Concern files expose small operations over one of those types:
 | `signatures.zig` / `receiver.zig` | function contracts, return shapes, implied receiver effects |
 | `interfaces.zig` | nominal conformance and witness construction |
 | `closures.zig` | capture planning, ARC environments, shared cells, cycle refusals |
+| `initializers.zig` | class factory lowering, definite fields, and pre-identity `self` restrictions |
 | `flow.zig` | optional narrowing and branch joins |
 | `ledger.zig` | statement temporaries and their release points |
 | `recorder.zig` | the only API that creates HIR nodes |
@@ -91,9 +93,10 @@ explicit. Aliases are erased here; HIR and every later stage see only the
 resolved target.
 
 This is also the last word on source-level rules: `let`, visibility,
-conformance, return paths, worker sendability, strong/weak/snapshot capture,
-class resurrection, and the host gate are checked here. The MIR verifier
-defends the instruction protocol; it does not reconstruct source intent.
+conformance, return paths, definite class construction, worker sendability,
+strong/weak/snapshot capture, class resurrection, and the host gate are
+checked here. The MIR verifier defends the instruction protocol; it does not
+reconstruct source intent.
 
 ## HIR
 

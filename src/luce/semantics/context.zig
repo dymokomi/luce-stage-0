@@ -366,6 +366,11 @@ pub const EnclosingLocal = struct {
 /// and the declaration fixed point promotes the ones that write self.
 pub const Receiver = enum { not, reads, writes };
 
+/// The three body roles represented in the shared function table. Lifecycle
+/// is one closed choice rather than independent booleans: an initializer can
+/// never accidentally also become a deinitializer.
+pub const Lifecycle = enum { ordinary, initializer, deinitializer };
+
 /// A collected function signature: everything a call site has to know
 /// before the body it belongs to has been walked.
 pub const FunctionDeclInfo = struct {
@@ -411,10 +416,10 @@ pub const FunctionDeclInfo = struct {
     /// (docs/FAILURE.md).
     fallible: bool,
     is_entry: bool,
-    /// The class-only, non-callable `deinit:` body. Its fixed signature is
-    /// still represented as an ordinary function so every checker and both
-    /// engines execute one body model.
-    is_deinitializer: bool = false,
+    /// Ordinary function, class construction body, or ARC finalizer. All
+    /// three use one function representation; this tag fixes the lifecycle
+    /// signature and the uses of `self` which are legal in the body.
+    lifecycle: Lifecycle = .ordinary,
     /// Set only on the function a **lambda** became (docs/FUNCTIONS.md
     /// D2): every local in scope where the lambda was written.
     ///
@@ -486,6 +491,9 @@ pub const StructDeclInfo = struct {
     /// precedent: what lowering needs lives in the layout, what
     /// checking needs lives here.
     field_visibility: []ast.Visibility = &.{},
+    /// Hidden factory function installed for `init(...)`, or null while the
+    /// class keeps its public memberwise constructor.
+    initializer: ?u32 = null,
 };
 
 /// A transparent type alias while its target is being resolved.  The state

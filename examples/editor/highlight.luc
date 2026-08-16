@@ -56,7 +56,7 @@ private const keyword_words = {
     "alias": true, "and": true, "break": true, "catch": true, "class": true,
     "const": true, "continue": true, "deinit": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
-    "if": true, "import": true, "in": true, "interface": true, "is": true,
+    "if": true, "import": true, "in": true, "init": true, "interface": true, "is": true,
     "let": true, "match": true, "new": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,

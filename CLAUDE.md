@@ -110,8 +110,9 @@ source -> lex -> parse -> semantics -> HIR lowering -> MIR -> optimize -> codege
 - `semantics/` resolves names and types, checks control flow and effects,
   diagnoses misuse, and records typed HIR. It emits no MIR instructions.
   Its files are concern modules over `Analyzer` or `FunctionBuilder`;
-  `closures.zig`, `interfaces.zig`, `assign.zig`, and `calls.zig` own those
-  subjects rather than scattering their rules through the walker.
+  `closures.zig`, `interfaces.zig`, `initializers.zig`, `assign.zig`, and
+  `calls.zig` own those subjects rather than scattering their rules through
+  the walker.
 - `hir/` is the checked-tree seam. `lower.zig` mechanically removes sugar and
   has only `OutOfMemory` failure; a user diagnostic at this stage is a design
   error because semantics should already have decided everything.
@@ -176,7 +177,9 @@ facts that architecture work must preserve:
   erased before HIR.
 - A `struct` is a value. A `class` is a final ARC reference with identity,
   mutation through a stable `let`, `is`, weak back-edges, interface
-  conformance, and one ARC-driven `deinit`. There is no class inheritance.
+  conformance, one definite `init` factory, and one ARC-driven `deinit`.
+  Initialization publishes no identity until every field exists. There is no
+  class inheritance.
 - Interfaces are nominal and support multiple methods, multi-value results,
   directional fallibility, class and struct conformers, optionals, returns,
   and heterogeneous collections. The current hidden bound-witness layout

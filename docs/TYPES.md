@@ -197,12 +197,13 @@ func main():
     print(str(p.x))
 ```
 
-A `class` declares fields and methods with the same memberwise construction
-shape, but its value is an ARC reference with identity. Assignment shares the
-object, `let` permits object-field mutation, and `left is right` compares
-identity. A class may conform to interfaces, appear in ordinary storage, and
-declare one ARC-driven `deinit`. [CLASSES.md](CLASSES.md) is the complete
-contract.
+A `class` declares fields and methods like a structure, but its value is an ARC
+reference with identity. Without `init` it uses memberwise construction; one
+`init(parameters)` body may replace that surface and must establish every
+field before the new identity exists. Assignment shares the object, `let`
+permits object-field mutation, and `left is right` compares identity. A class
+may conform to interfaces, appear in ordinary storage, and declare one
+ARC-driven `deinit`. [CLASSES.md](CLASSES.md) is the complete contract.
 
 An `enum` is a set of named constants stored at one integer width
 (`docs/ENUMS.md`); members are always namespaced, an explicit integer
@@ -224,9 +225,11 @@ A `union` is a tagged choice whose members may carry payload fields, and
 `match` is the only way to read one (`docs/UNION.md`). Enums and unions
 are value types.
 
-A **function value** — `func(T, ...) -> R`, or the storable form
+A **function value** — `func(T, ...) -> R`, or the optional slot form
 `(func(T, ...) -> R)?` — is also a value; it is covered in
-`docs/FUNCTIONS.md` and `docs/BINDING.md`.
+`docs/FUNCTIONS.md` and `docs/BINDING.md`. A custom-initialized class may hold
+a required bare function field because the object is created only after that
+field is present.
 
 ## The names the language answers to
 

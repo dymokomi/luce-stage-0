@@ -455,6 +455,16 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
     var value = (try primaryExpression(self)) orelse return null;
     while (true) {
         if (self.accept(.dot) != null) {
+            if (self.peekKind() == .keyword_init) {
+                const lifecycle = self.advance();
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    lifecycle.span,
+                    "init runs only through class construction; call the class name directly",
+                    .{},
+                );
+                return null;
+            }
             if (self.peekKind() == .keyword_deinit) {
                 const lifecycle = self.advance();
                 try self.report(

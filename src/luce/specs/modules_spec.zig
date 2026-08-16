@@ -130,6 +130,27 @@ test "a private type alias stays inside its declaring module" {
     , &.{hidden}, "Secret is private to hidden");
 }
 
+test "class: a private initializer is usable only inside its module" {
+    const models: agree.File = .{ .name = "models", .source =
+        \\class Token:
+        \\    value: i64
+        \\    private:
+        \\        init(value: i64):
+        \\            self.value = value
+        \\    public:
+        \\        static func make(value: i64) -> Token:
+        \\            return Token(value)
+        \\
+    };
+    try expectProjectPrivate(
+        \\import models
+        \\
+        \\func main():
+        \\    let token = models.Token(42)
+        \\
+    , &.{models}, "init is private to models");
+}
+
 fn expectProjectPrivate(
     root: []const u8,
     files: []const agree.File,

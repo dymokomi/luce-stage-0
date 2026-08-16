@@ -489,6 +489,9 @@ pub const StructDecl = struct {
     name_span: Span,
     fields: []Field,
     functions: []FuncDecl,
+    /// The class-only construction body. It takes ordinary call
+    /// parameters but answers the enclosing class implicitly.
+    initializer: ?FuncDecl = null,
     /// The class-only lifecycle hook. It uses the ordinary function body
     /// representation after the parser fixes its signature to implied
     /// `self`, no written parameters, no result, and no fallibility.

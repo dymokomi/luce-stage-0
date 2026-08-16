@@ -61,7 +61,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
         self.diagnostics.scope = module.file;
         for (module.tree.functions) |*declaration| {
             const qualified = try naming.qualify(self, module.prefix, declaration.name);
-            try collectFunction(self, declaration, qualified, module_index, true, null, false);
+            try collectFunction(self, declaration, qualified, module_index, true, null, .ordinary);
         }
         for (module.tree.structs) |*declaration| {
             const owner = self.struct_names.get(
@@ -86,8 +86,32 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                         else
                             .{ .strukt = index };
                     } else null,
-                    false,
+                    .ordinary,
                 );
+            }
+            if (declaration.initializer) |*initializer| {
+                if (declaration.kind == .reference) {
+                    if (owner) |layout| {
+                        const owner_type = try resolve.nominalType(self, layout);
+                        if (owner_type == .heap) {
+                            const member = try std.fmt.allocPrint(self.arena, "{s}.init", .{declaration.name});
+                            const qualified = try naming.qualify(self, module.prefix, member);
+                            const before = self.functions.items.len;
+                            try collectFunction(
+                                self,
+                                initializer,
+                                qualified,
+                                module_index,
+                                false,
+                                .{ .class = owner_type.heap },
+                                .initializer,
+                            );
+                            if (self.functions.items.len != before) {
+                                self.struct_decls.items[layout].initializer = @intCast(before);
+                            }
+                        }
+                    }
+                }
             }
             if (declaration.deinitializer) |*deinitializer| {
                 if (declaration.kind != .reference) continue;
@@ -104,7 +128,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     module_index,
                     false,
                     .{ .class = owner_type.heap },
-                    true,
+                    .deinitializer,
                 );
                 if (self.functions.items.len != before) {
                     self.structs.items[layout].deinitializer = @intCast(before);
@@ -131,7 +155,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     module_index,
                     false,
                     if (owner) |index| .{ .enumeration = self.enumType(index).enumeration } else null,
-                    false,
+                    .ordinary,
                 );
             }
         }
@@ -156,7 +180,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     module_index,
                     false,
                     if (owner) |index| .{ .variant = index } else null,
-                    false,
+                    .ordinary,
                 );
             }
         }
@@ -175,10 +199,10 @@ fn collectFunction(
     /// It is what gives `self` its type, and what makes `self` at
     /// file scope a diagnostic rather than a crash.
     enclosing: ?context.Enclosing,
-    is_deinitializer: bool,
+    lifecycle: context.Lifecycle,
 ) Error!void {
     const in_root = self.modules[module].prefix.len == 0;
-    if (!is_deinitializer and isReserved(declaration.name)) {
+    if (lifecycle == .ordinary and isReserved(declaration.name)) {
         try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
         return;
     }
@@ -235,7 +259,7 @@ fn collectFunction(
     // MIR still keeps self as logical parameter zero so every
     // existing method lookup keeps one shape (docs/SELF.md D1-D2).
     var receiver: context.Receiver = .not;
-    if (enclosing != null and !declaration.is_static) {
+    if (enclosing != null and !declaration.is_static and lifecycle != .initializer) {
         receiver = .reads;
         try parameter_types.append(self.arena, enclosing.?.asType());
         try parameter_defaults.append(self.arena, null);
@@ -302,6 +326,9 @@ fn collectFunction(
         }
         try results.append(self.arena, resolved);
     }
+    if (lifecycle == .initializer) {
+        try results.append(self.arena, enclosing.?.asType());
+    }
     // SELF retired the old receiver-at-result-zero channel.  A
     // writing receiver now travels through MIR's inout call edge;
     // the ordinary answer is exactly what the declaration says.
@@ -329,7 +356,7 @@ fn collectFunction(
         .return_type = return_type,
         .fallible = declaration.fallible,
         .is_entry = is_entry,
-        .is_deinitializer = is_deinitializer,
+        .lifecycle = lifecycle,
     });
 }
 

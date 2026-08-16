@@ -84,6 +84,7 @@ const shapes = @import("shapes.zig");
 const signatures = @import("signatures.zig");
 const interfaces = @import("interfaces.zig");
 const closures = @import("closures.zig");
+const initializers = @import("initializers.zig");
 
 // The check/lower seam's far side (hir.zig): the walk below checks
 // and records the typed tree, and `hir.lower` is the one emission —
@@ -486,12 +487,21 @@ pub const Analyzer = struct {
             .results = info.results,
             .return_type = info.return_type,
             .fallible = info.fallible,
-            .is_deinitializer = info.is_deinitializer,
-            .static_member = info.enclosing != null and info.receiver == .not,
+            .lifecycle = info.lifecycle,
+            .static_member = info.lifecycle == .ordinary and info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
             .closure_captures = info.closure_captures,
         };
         defer builder.deinitScratch();
+
+        if (info.lifecycle == .initializer) {
+            const heap = switch (info.enclosing.?) {
+                .class => |index| index,
+                else => unreachable,
+            };
+            builder.initializer = .{ .layout = self.heap_types.items[heap].class };
+            try initializers.validate(&builder, info.declaration);
+        }
 
         try closures.prepareFunction(&builder, info.declaration.body);
 
@@ -532,7 +542,10 @@ pub const Analyzer = struct {
         // written return type rather than the `func` line: in a long
         // function that is the claim being broken, and it is what the
         // reader has to change if they meant something else.
-        if (info.results.len != 0 and !helpers.returnsOnAllPaths(info.declaration.body)) {
+        if (info.lifecycle != .initializer and
+            info.results.len != 0 and
+            !helpers.returnsOnAllPaths(info.declaration.body))
+        {
             const at = info.declaration.returnsSpan() orelse info.declaration.span;
             try self.fail(
                 "luce.sema.return",

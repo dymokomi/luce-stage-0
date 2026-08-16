@@ -104,6 +104,9 @@ class Name:
     field: Type
     weak parent: Name?
 
+    init(parameter: Type):
+        self.field = parameter
+
     func method(...):
         ...
 
@@ -114,9 +117,16 @@ class Name: Interface, OtherInterface:
     ...
 ```
 
-A class has the same memberwise fields, defaults, visibility regions, methods,
-static namespace functions, and explicit interface-conformance list as a
-structure. Its values are ARC references: construction makes a new identity,
+A class has the same fields, defaults, visibility regions, methods, static
+namespace functions, and explicit interface-conformance list as a structure.
+Without `init`, it also has the same memberwise constructor. One
+`init(parameters)` or fallible `init(parameters) -> !` body replaces that call
+surface. It answers the class implicitly and must establish every stored field
+on every successful path before `self` can exist. During the body, `self` may
+only read or assign stored fields; it cannot escape or receive an instance
+method call. Construction calls the class name directly.
+
+Class values are ARC references: successful construction makes a new identity,
 assignment shares it, and methods may mutate the object through a `let`
 binding. `is` compares two references of the same nominal class type.
 
@@ -125,8 +135,8 @@ fallibility marker, visibility, or call syntax. ARC invokes it once at the
 last strong release before releasing fields. It may read or update fields and
 call methods, but cannot make its dying `self` strongly reachable again.
 
-Classes are final. There is no inheritance, `override`, `super`, custom
-initializer body, computed property, or class metatype.
+Classes are final. There is no inheritance, `override`, `super`, initializer
+overloading or delegation, computed property, or class metatype.
 
 ## interface {#interface}
 

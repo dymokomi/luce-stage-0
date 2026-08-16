@@ -14,8 +14,8 @@ The distinction is small and deliberate:
 
 ## Declare and construct a class
 
-Fields and methods look like structure members. Construction names every
-required field:
+Fields and methods look like structure members. Without an `init` body,
+construction names every required field:
 
 ```luce run
 class Counter:
@@ -42,8 +42,76 @@ name; it does not freeze the object. Use `var` only when the binding itself
 must later name another object.
 
 Fields without defaults are required. Fields with defaults may be omitted.
-Construction is memberwise: Luce does not currently have custom initializer
-bodies.
+This memberwise form is the shortest choice when construction only stores its
+arguments.
+
+## Control construction with `init`
+
+Declare one `init(parameters)` body when construction needs validation,
+derived fields, or a smaller public surface than the stored representation:
+
+```luce run
+class Rectangle:
+    label: str = "rectangle"
+    width: i64
+    height: i64
+    area: i64
+
+    init(width: i64, height: i64 = 1):
+        self.width = width
+        self.height = height
+        self.area = self.width * self.height
+
+func main():
+    let rectangle = Rectangle(6, height = 7)
+    print(rectangle.label)
+    print(str(rectangle.area))
+```
+
+```output
+rectangle
+42
+```
+
+The class name remains the constructor. `Rectangle.init(...)` is not a call;
+write `Rectangle(...)`. Initializer parameters follow the same positional,
+named, type, and trailing-default rules as function parameters. Declaring
+`init` replaces the memberwise call surface, so callers name parameters such
+as `width`, not private implementation fields such as `area`.
+
+Every successful path through `init` must establish every stored field. A
+field default and a weak field's implicit `none` already count. After assigning
+a field, the initializer may read or update it. Both arms of an `if` or an
+exhaustive `match` must establish a field before code after the branch can use
+it; a loop alone is not enough because it may run zero times. The compiler
+lists every field still missing.
+
+The object does not exist until initialization succeeds. During `init`, `self`
+can only read and assign stored fields: it cannot be passed, returned,
+captured, replaced, or used to call an instance method. Put reusable
+calculation in a static function. A bare `return` finishes a fully initialized
+object early; returning a value is invalid.
+
+An initializer that can reject input writes `-> !`:
+
+```luce module
+class Port:
+    number: i64
+
+    init(number: i64) -> !:
+        if number < 1:
+            error("port must be positive")
+        self.number = number
+
+func open() -> Port!:
+    return try Port(8080)
+```
+
+Callers handle it with the ordinary `try` or `catch` rules. Failure cleans any
+values already assigned without publishing a partial object or running
+`deinit`. An initializer may be `private`; code in the same module can then
+offer public static construction functions. Luce has one initializer per
+class—no overload set or multi-phase hierarchy.
 
 ## Compare identity with `is`
 
@@ -176,9 +244,9 @@ compiler and defended by the runtime.
 
 ## Deliberate limits
 
-Classes are final. There is no inheritance, `override`, `super`, custom
-initializer, computed property, synthesized equality, or class metatype.
-Reuse behavior with composition and nominal interfaces.
+Classes are final. There is no inheritance, `override`, `super`, initializer
+overloading or delegation, computed property, synthesized equality, or class
+metatype. Reuse behavior with composition and nominal interfaces.
 
 Continue with [Constants](/guide/constants/), or read the exact [class type
 rules](/guide/reference/types/#classes) and [ARC

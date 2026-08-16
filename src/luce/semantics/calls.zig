@@ -369,10 +369,19 @@ pub fn lowerCall(
     const resolved = (try self.resolveDeclared(call.callee, call.span, call.origin)) orelse
         return null;
     if (self.analyzer.alias_names.get(resolved)) |alias_index| {
-        return lowerAliasCall(self, call, alias_index);
+        return lowerAliasCall(self, call, alias_index, as_statement, fallible_allowed, shape_position);
     }
     if (self.analyzer.struct_names.get(resolved)) |layout_index| {
-        return construct.lowerConstruct(self, call.arguments, call.span, layout_index);
+        return lowerNominalConstruct(
+            self,
+            layout_index,
+            call.callee,
+            call.arguments,
+            call.span,
+            as_statement,
+            fallible_allowed,
+            shape_position,
+        );
     }
     if (self.analyzer.interface_names.get(resolved)) |interface_index| {
         return construct.lowerConstruct(
@@ -1026,6 +1035,11 @@ pub fn lowerMethod(
     fallible_allowed: bool,
     shape_position: ShapePosition,
 ) Error!?Typed {
+    if (self.lifecycle == .initializer and builder.isBareSelf(method.target)) {
+        // The initializer lifecycle validator already diagnosed the attempt
+        // to call a method before the class identity exists.
+        return null;
+    }
     switch (try methodNamespace(self, method)) {
         .resolved => |resolved| {
             if (self.analyzer.alias_names.get(resolved)) |alias_index| {
@@ -1034,10 +1048,19 @@ pub fn lowerMethod(
                     .arguments = method.arguments,
                     .span = method.span,
                 };
-                return lowerAliasCall(self, call, alias_index);
+                return lowerAliasCall(self, call, alias_index, as_statement, fallible_allowed, shape_position);
             }
             if (self.analyzer.struct_names.get(resolved)) |layout_index| {
-                return construct.lowerConstruct(self, method.arguments, method.span, layout_index);
+                return lowerNominalConstruct(
+                    self,
+                    layout_index,
+                    method.name,
+                    method.arguments,
+                    method.span,
+                    as_statement,
+                    fallible_allowed,
+                    shape_position,
+                );
             }
             if (self.analyzer.interface_names.get(resolved)) |interface_index| {
                 return construct.lowerConstruct(
@@ -1085,19 +1108,61 @@ pub fn lowerMethod(
     }
 }
 
-/// A type alias in a call-shaped expression.  Nominal construction and enum
+/// Build a nominal value. Classes with `init` route through their hidden
+/// factory function; every other class and every struct keeps the direct
+/// memberwise construction path. This is the one fork shared by bare,
+/// imported, and aliased type names.
+fn lowerNominalConstruct(
+    self: *FunctionBuilder,
+    layout: u32,
+    written_name: []const u8,
+    arguments: []const ast.Argument,
+    span: Span,
+    as_statement: bool,
+    fallible_allowed: bool,
+    shape_position: ShapePosition,
+) Error!?Typed {
+    if (self.analyzer.struct_decls.items[layout].initializer) |initializer| {
+        return lowerUserCall(
+            self,
+            initializer,
+            written_name,
+            arguments,
+            span,
+            as_statement,
+            fallible_allowed,
+            shape_position,
+            null,
+        );
+    }
+    return construct.lowerConstruct(self, arguments, span, layout);
+}
+
+/// A type alias in a call-shaped expression. Nominal construction and enum
 /// lookup use the original declaration table; scalar aliases use the same
-/// conversion lowering as their target.  Every other type remains a type,
-/// not a callable value, and receives a direct diagnostic.
+/// conversion lowering as their target. Every other type remains a type, not
+/// a callable value, and receives a direct diagnostic.
 fn lowerAliasCall(
     self: *FunctionBuilder,
     call: ast.Call,
     alias_index: u32,
+    as_statement: bool,
+    fallible_allowed: bool,
+    shape_position: ShapePosition,
 ) Error!?Typed {
     const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, call.span)) orelse
         return null;
     return switch (target) {
-        .strukt => |layout| construct.lowerConstruct(self, call.arguments, call.span, layout),
+        .strukt => |layout| lowerNominalConstruct(
+            self,
+            layout,
+            call.callee,
+            call.arguments,
+            call.span,
+            as_statement,
+            fallible_allowed,
+            shape_position,
+        ),
         .enumeration => |reference| construct.lowerEnumOfNumber(
             self,
             call.callee,
@@ -1112,7 +1177,16 @@ fn lowerAliasCall(
             if (target == .heap) {
                 const heap = self.analyzer.heapOf(target).?;
                 switch (heap) {
-                    .class => |layout| return construct.lowerConstruct(self, call.arguments, call.span, layout),
+                    .class => |layout| return lowerNominalConstruct(
+                        self,
+                        layout,
+                        call.callee,
+                        call.arguments,
+                        call.span,
+                        as_statement,
+                        fallible_allowed,
+                        shape_position,
+                    ),
                     .list, .map, .array, .builder => {
                         try self.fail(
                             "luce.sema.call",

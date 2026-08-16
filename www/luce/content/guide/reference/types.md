@@ -163,6 +163,12 @@ member constructors, and compatible bound methods can land in a
 function-typed place. Calls through a value are positional. Function values
 may be stored and returned, but have no equality or ordering.
 
+A zero-created field or container element uses `(func(...) -> R)?`, because a
+function value has no empty value. A map value uses bare `func(...) -> R`
+because the key's absence already represents a missing value. A custom class
+initializer may also establish a required bare function field: the object is
+created only after definite initialization proves that field is present.
+
 A one-expression lambda is `(parameters) -> expression`; it does not capture
 locals. A block closure is `func(parameters):` followed by an indented body and
 may capture enclosing locals. Its parameter and result types come from the
@@ -245,10 +251,9 @@ per-member marks follow the ordinary file visibility rules.
 
 ## Classes {#classes}
 
-A class is a final ARC reference aggregate. Construction is memberwise like a
-structure, but assignment, parameters, results, fields, optionals, and
-container elements retain and share one object. A stable `let` class binding
-may mutate that object.
+A class is a final ARC reference aggregate. Assignment, parameters, results,
+fields, optionals, and container elements retain and share one object. A stable
+`let` class binding may mutate that object.
 
 ```luce run
 class Counter:
@@ -277,8 +282,41 @@ conform to interfaces, use weak class fields, and declare one bare `deinit`
 body that runs at the last strong release before its fields release. `deinit`
 cannot resurrect its dying `self`.
 
-There is no class inheritance, `override`, `super`, custom initializer,
-computed property, or class metatype.
+Without an `init` declaration, a class uses the same memberwise constructor as
+a structure. One class-only initializer may replace it:
+
+```text
+class Name:
+    field: Type
+    defaulted: Type = constant
+
+    init(parameter: Type, optional: Type = constant):
+        self.field = parameter
+
+    init(parameter: Type) -> !:
+        ...
+```
+
+The two `init` forms above are alternatives, not overloads. The only permitted
+result marker is bare `-> !`; success answers the enclosing class implicitly.
+Calls use `Name(...)`, with ordinary positional, named, trailing-default,
+fallibility, and visibility rules. `Name.init(...)` is invalid.
+
+Every successful fallthrough or bare `return` must have initialized all stored
+fields. Declared defaults and implicit weak-field defaults begin initialized.
+Facts intersect across continuing `if`, `match`, and guarded-call branches;
+loop assignments do not establish facts after the loop. A read, compound
+assignment, index, or nested update requires its root field to be initialized
+on the current path.
+
+Before success, `self` is only a namespace for those field slots. It cannot be
+used as a value, captured, passed, returned, replaced, or used as an instance
+method receiver. Successful return creates the ARC object as one complete
+value. Failure unwinds initialized slots and creates no object, so `deinit`
+does not run for failed construction.
+
+There is no class inheritance, `override`, `super`, initializer overloading or
+delegation, computed property, or class metatype.
 
 ## Enums {#enum}
 

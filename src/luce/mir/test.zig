@@ -1412,7 +1412,7 @@ test "recursive heap and function type tables are rejected before names render" 
     try verify_mod.verify(testing.allocator, &program);
 }
 
-test "bare function fields are rejected while optional function fields remain storable" {
+test "bare function fields require whole-object or compiler-owned storage" {
     var program = try programOf(.{
         .instructions = &.{.{ .ret = null }},
         .result_types = &.{.none},
@@ -1444,16 +1444,21 @@ test "bare function fields are rejected while optional function fields remain st
 
     // A closure environment is private compiler storage. It may hold the
     // function value directly, but only when it is also an ARC reference
-    // layout; neither source structs nor value-shaped forged environments
-    // inherit this exception.
+    // layout; a value-shaped forged environment does not inherit this
+    // exception.
     struct_fields[0].field_type = .{ .function = 0 };
     program.structs[0].closure_storage = true;
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
     program.structs[0].reference = true;
     try verify_mod.verify(testing.allocator, &program);
+
+    // An ordinary class has the same sound storage property: its nullable
+    // handle is the zero, and construction installs the object as a whole.
+    // This is what permits a custom initializer to supply a required callback.
     program.structs[0].closure_storage = false;
-    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    try verify_mod.verify(testing.allocator, &program);
     program.structs[0].reference = false;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
     const member_fields = try arena.dupe(types.StructField, &.{.{
         .name = "callback",

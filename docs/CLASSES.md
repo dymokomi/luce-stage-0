@@ -14,8 +14,9 @@ This is the distinction from a `struct`:
 
 ## Declaring and constructing a class
 
-A class declares fields and methods with the same memberwise construction and
-visibility rules as a structure:
+A class declares fields, methods, defaults, and visibility with the same
+member grammar as a structure. Without an `init` body, construction is
+memberwise:
 
 ```luce
 class Counter:
@@ -38,9 +39,72 @@ that object through either alias. A `var` is needed only when the binding
 itself must later name a different object.
 
 Fields without defaults must be supplied to the memberwise constructor.
-Defaulted and private fields follow the structure rules. Luce does not yet
-have custom `init` bodies; construction is memberwise and fully checked before
-the object becomes visible.
+Defaulted and private fields follow the structure rules.
+
+## Custom initialization
+
+One `init(parameters)` body replaces the memberwise constructor with a
+purpose-built call surface:
+
+```luce
+class Rectangle:
+    label: str = "rectangle"
+    width: i64
+    height: i64
+    area: i64
+
+    init(width: i64, height: i64 = 1):
+        self.width = width
+        self.height = height
+        self.area = self.width * self.height
+
+func main():
+    let rectangle = Rectangle(6, height = 7)
+    assert(rectangle.label == "rectangle")
+    assert(rectangle.area == 42)
+```
+
+Initializer parameters use the ordinary argument rules: their types are
+explicit, defaults are trailing, and a call may be positional or switch once
+to names. Call the class name, not `Class.init`. The initializer's visibility
+controls whether another module may construct the class. A private initializer
+can therefore expose construction through a public static function.
+
+Every successful path must establish every stored field. A declared field
+default and a weak field's implicit `none` count as established. A field may
+be read or updated only after the current path has assigned it. Assignments in
+both arms of an `if` or exhaustive `match` establish a field after the branch;
+an assignment inside a loop does not, because the loop may run zero times.
+The compiler reports all fields still missing at a bare `return` or at the end
+of the body.
+
+`self` is deliberately narrow during `init`: it may only read or assign stored
+fields. The class identity does not exist yet, so `self` cannot be passed,
+returned, captured, replaced, or used to call an instance method. A static
+function is the appropriate reusable helper. On success the compiler creates
+the object once, with every field present; an initializer that fails never
+publishes a partly initialized object and never runs `deinit`.
+
+A fallible initializer writes `-> !` and uses the ordinary `try`/`catch`
+rules:
+
+```luce
+class Port:
+    number: i64
+
+    init(number: i64) -> !:
+        if number < 1:
+            error("port must be positive")
+        self.number = number
+
+func open() -> Port!:
+    return try Port(8080)
+```
+
+`init` answers the finished class implicitly. A written early return is bare
+`return`; an explicit return value is invalid. Luce has one initializer per
+class, not overloads, delegation, inheritance-oriented phases, or a second
+partially initialized object model.
 
 ## Identity
 
@@ -174,9 +238,9 @@ the runtime. A trap in `deinit` is a program trap with the ordinary call trace.
 ## Deliberate boundaries
 
 The current class model has no inheritance, `override`, `super`, synthesized
-equality or hashing, custom initializers, computed properties, or class
-metatypes. Reuse is composition plus nominal interfaces. These are explicit
-boundaries, not partially implemented alternate object models.
+equality or hashing, initializer overloads or delegation, computed properties,
+or class metatypes. Reuse is composition plus nominal interfaces. These are
+explicit boundaries, not partially implemented alternate object models.
 
 Positive behavior is exercised in
 [`src/luce/specs/classes_spec.zig`](../src/luce/specs/classes_spec.zig); class

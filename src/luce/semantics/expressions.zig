@@ -793,6 +793,37 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
 }
 
 pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
+    // During init, `self.field` names the compiler-owned field slot. There
+    // is no receiver object yet: the object is made only at the successful
+    // return after all of these slots are established.
+    if (self.initializer) |state| {
+        if (builder.isBareSelf(field.target)) {
+            for (state.fields) |held| {
+                if (!std.mem.eql(u8, held.name, field.name)) continue;
+                if (held.storage_type.eql(held.value_type)) {
+                    return .{
+                        .node = try recorder.recordNode(self, .{ .local_get = .{
+                            .local = held.local,
+                            .result = held.value_type,
+                            .span = field.span,
+                        } }),
+                        .value_type = held.value_type,
+                    };
+                }
+                return .{
+                    .node = try recorder.recordNode(self, .{ .narrowed_get = .{
+                        .local = held.local,
+                        .payload = held.value_type,
+                        .result = held.value_type,
+                        .span = field.span,
+                    } }),
+                    .value_type = held.value_type,
+                };
+            }
+            // Validation already named the unknown stored field.
+            return null;
+        }
+    }
     // A dotted chain whose head is a bare declaration name is a
     // namespace, exactly as it is in front of a call
     // (`methodNamespace`).  Without this the whole access falls
@@ -866,7 +897,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
     const target = lifecycle_target: {
         const previous_permission = self.allow_deinitializer_self;
         defer self.allow_deinitializer_self = previous_permission;
-        if (self.is_deinitializer and builder.isBareSelf(field.target)) {
+        if (self.lifecycle == .deinitializer and builder.isBareSelf(field.target)) {
             self.allow_deinitializer_self = true;
         }
         break :lifecycle_target (try self.lowerExpression(field.target, false)) orelse return null;

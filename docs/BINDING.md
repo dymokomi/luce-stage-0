@@ -74,11 +74,10 @@ an enum beside the values and search that.
 
 ## A function value is storable
 
-A function value lives in a struct field, a list element, an
-array cell, a union payload field, and a map value. In the four slots that
-exist before anything fills them it is written as an **optional**,
-`(func(...) -> R)?`, because a function value has no zero and absence is
-the zero `T?` already means:
+A function value lives in an aggregate field, a list element, an array cell,
+a union payload field, and a map value. In a slot that exists before anything
+fills it, the type is **optional**, `(func(...) -> R)?`, because a function
+value has no zero and absence is the zero `T?` already means:
 
 ```luce
 struct Button:
@@ -116,11 +115,28 @@ may therefore be returned, placed in an aggregate, or called after the
 original receiver binding has ended. Destroying the function value releases
 those references exactly once.
 
+A class with a custom `init` body is constructed whole rather than zeroed and
+filled memberwise. Such an initializer may therefore supply a required bare
+function field:
+
+```luce
+class Action:
+    apply: func(i64) -> i64
+
+    init(apply: func(i64) -> i64):
+        self.apply = apply
+```
+
+The initializer's definite-assignment proof guarantees that `apply` exists
+before an `Action` exists. A class without `init` still needs an optional
+function field because its memberwise storage retains the ordinary zero rule.
+
 ### Where a function value stands, and why the map is different
 
 | slot | written | why |
 |---|---|---|
-| struct field | `(func(...) -> R)?` | `var row: Row` creates it zeroed |
+| struct or memberwise class field | `(func(...) -> R)?` | zero construction must have an empty value |
+| custom-initialized class field | `func(...) -> R` | the class is published only after every field is supplied |
 | array cell | `(func(...) -> R)?` | `new array[T](n)` creates it filled |
 | list element | `(func(...) -> R)?` | uniform with the two above |
 | union payload field | `(func(...) -> R)?` | a union's zero is its first member, fields at their own zeros |

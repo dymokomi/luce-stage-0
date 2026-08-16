@@ -199,11 +199,12 @@ A `deinit` body cannot capture its dying `self`.
 
 ## Storage and boundaries
 
-A function value may be returned, placed in an optional, stored in a struct or
-union, and used in lists, maps, and arrays. Slots that need an empty state use
-`(func(...) -> R)?`; a map value is written bare because `map.get` already
-provides the optional layer. [BINDING.md](BINDING.md) specifies these shapes
-and bound receiver ownership.
+A function value may be returned, placed in an optional, stored in an
+aggregate, and used in lists, maps, and arrays. Slots that need an empty state
+use `(func(...) -> R)?`; a map value is written bare because `map.get` already
+provides the optional layer. A custom initializer may establish a bare
+function-valued class field before the class exists. [BINDING.md](BINDING.md)
+specifies these shapes and bound receiver ownership.
 
 Function values have no equality or ordering. `str(function)` answers the
 function's name for diagnostics and display, not a stable identity key.

@@ -474,6 +474,14 @@ pub fn collectStructs(self: *Analyzer) Error!void {
     for (self.struct_decls.items) |info| {
         const declaration = info.declaration;
         self.diagnostics.scope = self.modules[info.module].file;
+        if (declaration.initializer != null and declaration.kind != .reference) {
+            try self.fail(
+                "luce.sema.class.lifecycle",
+                declaration.initializer.?.span,
+                "init belongs to a class; a struct is built directly from its named fields",
+                .{},
+            );
+        }
         if (declaration.deinitializer != null and declaration.kind != .reference) {
             try self.fail(
                 "luce.sema.class.lifecycle",
@@ -501,7 +509,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             // participates in the same trailing-default rule as a written
             // one.
             const defaulted = field.default != null or field.weak;
-            if (!defaulted) {
+            if (!defaulted and declaration.initializer == null) {
                 if (first_defaulted) |earlier| {
                     try self.fail(
                         "luce.sema.struct",
@@ -511,7 +519,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                     );
                     continue;
                 }
-            } else if (first_defaulted == null) {
+            } else if (defaulted and first_defaulted == null) {
                 first_defaulted = field.name;
             }
             var duplicate = false;
@@ -529,7 +537,20 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             // A struct that carries behaviour is dispatch, and
             // dispatch is a question of its own — deferred rather
             // than refused (docs/FUNCTIONS.md S2).
-            if (try resolve.refuseFunctionPart(self, field_type, field.type_name.span, "struct field")) continue;
+            // A custom-initialized class is materialized only after every
+            // field exists, so a required function field never needs the
+            // zero ordinary aggregate storage would require. The initializer
+            // keeps an internal optional until that final construction.
+            if (!(declaration.kind == .reference and declaration.initializer != null) and
+                try resolve.refuseFunctionPart(
+                    self,
+                    field_type,
+                    field.type_name.span,
+                    if (declaration.kind == .reference) "memberwise class field" else "struct field",
+                ))
+            {
+                continue;
+            }
             if (field.weak and !shapes.weakTarget(self, field_type)) {
                 if (field_type.held() == null) {
                     try self.fail(
@@ -592,7 +613,11 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                 }
             }
         }
-        if (fields.items.len == 0 and declaration.functions.len == 0 and declaration.deinitializer == null) {
+        if (fields.items.len == 0 and
+            declaration.functions.len == 0 and
+            declaration.initializer == null and
+            declaration.deinitializer == null)
+        {
             try self.fail(
                 "luce.sema.struct",
                 declaration.span,

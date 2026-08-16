@@ -177,10 +177,14 @@ member rules.
 
 A `class` is a final ARC reference type. Assignment shares identity, fields
 and methods may mutate through a stable `let`, and `is` compares identity.
-Classes use memberwise construction, may conform to interfaces, may appear in
-ordinary storage, and may declare one bare `deinit` that ARC runs once before
-releasing fields. Resurrection from `deinit` is refused. Classes do not cross
-workers and have no inheritance or synthesized equality.
+Without `init`, construction is memberwise. One `init(parameters)` body may
+instead define the class's call surface; every successful path establishes
+every field before the compiler creates and returns the object. A fallible
+initializer writes `-> !`. During initialization `self` may access stored
+fields but cannot escape or call instance methods. Classes may conform to
+interfaces, appear in ordinary storage, and declare one bare `deinit` that ARC
+runs once before releasing fields. Resurrection from `deinit` is refused.
+Classes do not cross workers and have no inheritance or synthesized equality.
 [CLASSES.md](CLASSES.md) is the complete contract.
 
 ### Enumerations

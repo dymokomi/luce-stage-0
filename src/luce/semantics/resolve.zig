@@ -395,10 +395,10 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
 /// (docs/FUNCTIONS.md S2).
 ///
 /// **A bare function type stands where a value is always present**: a
-/// parameter, a `let`, a return.  Where a slot exists before anything
-/// fills it — a struct field, a container element, a map value — the
-/// type is written `(func(...) -> R)?` and `refuseFunctionPart` says
-/// so (docs/BINDING.md D7).
+/// parameter, a `let`, a return, a map value installed with its key, or a
+/// custom-initialized class field. Where a zero-created slot exists before
+/// anything fills it — a memberwise aggregate field or container element —
+/// the type is written `(func(...) -> R)?` (docs/BINDING.md D7).
 fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
     const parameters = try self.arena.alloc(types.Signature.Parameter, written.arguments.len);
     for (written.arguments, parameters) |part, *parameter| {
@@ -414,12 +414,12 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
 
 /// The `?` a function type is told to wear where it stands in a slot.
 ///
-/// A struct field, a container element and a map value all exist
-/// before anything fills them, and a function value has no zero: every
-/// value of the type names a function, and an empty slot names none.
-/// So the storable form is `(func(...) -> R)?`, whose zero is absence
-/// (docs/BINDING.md D7) — one sentence, said by every position that
-/// holds a slot, naming the spelling rather than a wall.
+/// A memberwise aggregate field and a container element exist before anything
+/// fills them, and a function value has no zero: every value of the type names
+/// a function, and an empty slot names none. So those positions use
+/// `(func(...) -> R)?`, whose zero is absence (docs/BINDING.md D7). A
+/// custom-initialized class is the deliberate exception: it is published only
+/// after its hidden factory has supplied every field.
 pub fn refuseFunctionPart(
     self: *Analyzer,
     part: Type,

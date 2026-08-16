@@ -14,8 +14,9 @@ from work that is still design. The [Tour](/tour/), [Guide](/guide/), and
 - Transparent `alias Name = Type` declarations, including chains, forward
   references, visibility, constructors, member namespaces, and re-exports.
 - Structures, enumerations, tagged unions, and final ARC classes. Classes
-  share mutable identity, compare identity with `is`, support weak edges and
-  run `deinit` once at the last strong release.
+  share mutable identity, compare identity with `is`, support definite custom
+  initialization and weak edges, and run `deinit` once at the last strong
+  release.
 - Named functions, one-expression lambdas, bound methods, and ARC block
   closures. Closures retain immutable captures, share mutable cells, and
   support explicit snapshot and zeroing weak captures.

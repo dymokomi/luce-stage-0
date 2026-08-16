@@ -838,7 +838,7 @@ pub fn build(b: *std.Build) void {
     const mir_function_shape_tests = b.addTest(.{
         .root_module = luce,
         .filters = &.{
-            "bare function fields are rejected while optional function fields remain storable",
+            "bare function fields require whole-object or compiler-owned storage",
             "map values cannot be optional while bare function values remain legal",
             "ownership instructions cannot fabricate values or bind non-carrying shapes",
             "borrowed parameters cannot become object owners in decoded MIR",

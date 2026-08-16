@@ -213,6 +213,18 @@ be returned, placed in optional fields, and stored in lists, maps, and arrays.
 A function type has no zero value, so an optional is useful for an initially
 empty slot: `(func(i64) -> i64)?`.
 
+A class initializer can instead require a present function field and assign it
+before the object exists. That field uses the bare type; the compiler's
+definite-initialization check supplies the guarantee that a zero could not:
+
+```luce module
+class Action:
+    apply: func(i64) -> i64
+
+    init(apply: func(i64) -> i64):
+        self.apply = apply
+```
+
 Parentheses matter. `(func(i64) -> i64)?` is an optional function;
 `func(i64) -> i64?` is a present function whose result may be absent.
 
