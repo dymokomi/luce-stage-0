@@ -24,10 +24,10 @@ different commit.
 ## The archive and installer boundary
 
 `www/luce/archive.sh` creates a canonical tar/gzip stream: member order,
-ownership, modes, timestamps, and the gzip header are fixed. A second complete
-assembly of the 0.18 release at commit `4b29f354b7f6508cfe811bec54266acf2b30f551`
+ownership, modes, timestamps, and the gzip header are fixed. Two complete
+assemblies of the 0.18 release at commit `4f0e36f1b9933c2dc768eab2737d80bea649f9f1`
 produced byte-for-byte identical macOS ARM64, Linux ARM64, and Linux x86-64
-archives.
+archives and checksums.
 
 Before replacing an installation, `install.sh`:
 
@@ -72,4 +72,3 @@ From a clean checkout at the intended commit:
 The release command must pass the full macOS 15+ ARM64 and glibc Linux 2.28+
 ARM64/x86-64 build matrix, archive checks, and isolated two-install smoke for
 each target. Save the checksums and manifest with the published archives.
-
