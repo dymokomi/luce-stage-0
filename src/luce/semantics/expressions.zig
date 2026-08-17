@@ -29,6 +29,7 @@ const Type = types.Type;
 const assign = @import("assign.zig");
 const builder = @import("builder.zig");
 const calls = @import("calls.zig");
+const construct = @import("construct.zig");
 const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
@@ -199,7 +200,13 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
     };
 }
 
-pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
+pub fn lowerNew(
+    self: *FunctionBuilder,
+    new: ast.NewObject,
+    as_statement: bool,
+    fallible_allowed: bool,
+    shape_position: builder.ShapePosition,
+) Error!?Typed {
     var object_type: Type = undefined;
     var recorded_dims: []nodes.Operand = &.{};
     if (types.builtinNamed(new.type_name.name) == .array) {
@@ -219,17 +226,30 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         if (try resolve.refuseOptionalPart(self.analyzer, element, new.type_name.arguments[0], "array element")) {
             return null;
         }
-        recorded_dims = (try lowerArrayDimensions(self, new, null)) orelse return null;
+        const dims = (try arrayDimensions(self, new)) orelse return null;
+        recorded_dims = (try lowerArrayDimensions(self, new, dims, null)) orelse return null;
         object_type = try resolve.internHeapType(self.analyzer, .{
-            .array = .{ .element = element, .rank = @intCast(new.dims.len) },
+            .array = .{ .element = element, .rank = @intCast(dims.len) },
         });
     } else {
         object_type = (try resolve.resolveType(self.analyzer, self.module, new.type_name)) orelse return null;
         if (object_type != .heap) {
+            if (object_type == .strukt and self.analyzer.interfaceForLayout(object_type.strukt) != null) {
+                try self.fail(
+                    "luce.sema.interface",
+                    new.span,
+                    "interfaces cannot be constructed; implement the interface on a struct and pass that struct",
+                    .{},
+                );
+                return null;
+            }
+            if (object_type == .variant) {
+                return construct.failVariantAsCallee(self, new.type_name.name, object_type.variant, new.span);
+            }
             try self.fail(
                 "luce.sema.new",
                 new.span,
-                "new builds list, map, array, or builder; {s} is a value type and is constructed as {s}(...) without new",
+                "new makes a reference: a class, list, map, array, or builder; {s} is a value type and is constructed as {s}(...) without new",
                 .{ try self.analyzer.typeName(object_type), new.type_name.name },
             );
             return null;
@@ -260,9 +280,27 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
             return null;
         }
         const descriptor = self.analyzer.heap_types.items[object_type.heap];
+        // `new Counter(...)` — the class construction spelling. The
+        // shared fork owns memberwise fields, the `init` factory, and
+        // visibility, so `new` adds nothing but the reference-identity
+        // requirement it exists to state.
+        if (descriptor == .class) {
+            return calls.lowerNominalConstruct(
+                self,
+                descriptor.class,
+                new.type_name.name,
+                new.arguments,
+                new.span,
+                as_statement,
+                fallible_allowed,
+                shape_position,
+                true,
+            );
+        }
         if (descriptor == .array) {
-            recorded_dims = (try lowerArrayDimensions(self, new, descriptor.array.rank)) orelse return null;
-        } else if (new.dims.len != 0) {
+            const dims = (try arrayDimensions(self, new)) orelse return null;
+            recorded_dims = (try lowerArrayDimensions(self, new, dims, descriptor.array.rank)) orelse return null;
+        } else if (new.arguments.len != 0) {
             try self.fail(
                 "luce.sema.container.type",
                 new.span,
@@ -289,9 +327,10 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
 fn lowerArrayDimensions(
     self: *FunctionBuilder,
     new: ast.NewObject,
+    dims: []*ast.Expression,
     rank: ?u8,
 ) Error!?[]nodes.Operand {
-    if (new.dims.len == 0 or new.dims.len > 4) {
+    if (dims.len == 0 or dims.len > 4) {
         try self.fail(
             "luce.sema.container.type",
             new.span,
@@ -301,25 +340,44 @@ fn lowerArrayDimensions(
         return null;
     }
     if (rank) |expected| {
-        if (new.dims.len != expected) {
+        if (dims.len != expected) {
             try self.fail(
                 "luce.sema.container.type",
                 new.span,
                 "new {s} needs {d} dimension sizes, got {d}",
-                .{ new.type_name.name, expected, new.dims.len },
+                .{ new.type_name.name, expected, dims.len },
             );
             return null;
         }
     }
-    const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(dims, .nothing)) orelse return null;
     const dimensions = run.values;
-    for (dimensions, new.dims) |dimension, expression| {
+    for (dimensions, dims) |dimension, expression| {
         if (!dimension.value_type.eql(.i64)) {
             try self.fail("luce.sema.container.type", expression.span(), "array dimensions are i64", .{});
             return null;
         }
     }
     return @as(?[]nodes.Operand, try recorder.recordOperandRun(self, dimensions, run.copied));
+}
+
+/// An array's construction values are positional sizes. A name would
+/// be a field of a nominal construction, and an array has none.
+fn arrayDimensions(self: *FunctionBuilder, new: ast.NewObject) Error!?[]*ast.Expression {
+    for (new.arguments) |argument| {
+        if (argument.name != null) {
+            try self.fail(
+                "luce.sema.container.type",
+                argument.span,
+                "array sizes are positional: new array[i64](5, 5)",
+                .{},
+            );
+            return null;
+        }
+    }
+    const dims = try self.arena().alloc(*ast.Expression, new.arguments.len);
+    for (new.arguments, dims) |argument, *slot| slot.* = argument.value;
+    return dims;
 }
 
 /// `[a, b, c]`.  A list place keeps it a list; a rank-1 array place

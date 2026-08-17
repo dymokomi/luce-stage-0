@@ -347,7 +347,7 @@ func dispatch(node: View, event: input.Event, area: model.Rect) -> model.Respons
                     return dispatch(first(cursor_children), event, area)
 
 func snapshot(content: View, rows: i64, columns: i64) -> canvas.Snapshot:
-    let surface = canvas.Surface(rows, columns)
+    let surface = new canvas.Surface(rows, columns)
     surface.clear()
     let cursor = draw(content, surface, surface.area())
     return surface.snapshot(cursor)

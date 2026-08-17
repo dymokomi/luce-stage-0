@@ -258,7 +258,8 @@ caller should ignore.
 
 ## Use classes for shared identity
 
-A `class` is a final ARC reference type. Its initializer establishes the
+A `class` is a final ARC reference type. Construction writes `new`, the
+keyword that creates every reference identity. The initializer establishes the
 object before identity escapes. Assignment shares the same object, and `is`
 compares that identity.
 
@@ -278,7 +279,7 @@ class Counter:
             return self.next()
 
 func main():
-    let counter = Counter(start = 40)
+    let counter = new Counter(start = 40)
     let same = counter
     let next: func() -> i64 = counter.reader()
     assert(counter is same)
@@ -324,7 +325,7 @@ class User: Named:
 func main():
     var values = new list[Named]
     values.append(FileName(path = "notes.luc"))
-    values.append(User(label = "Ada"))
+    values.append(new User(label = "Ada"))
     for value in values:
         print(value.name())
 ```

@@ -1543,7 +1543,7 @@ test "a class heap descriptor and hidden deinitializer round-trip together" {
         \\        self.value += 1
         \\
         \\func main():
-        \\    let resource = Resource(value = 1)
+        \\    let resource = new Resource(value = 1)
         \\
     );
     defer program.deinit();

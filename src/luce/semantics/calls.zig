@@ -380,6 +380,7 @@ pub fn lowerCall(
             as_statement,
             fallible_allowed,
             shape_position,
+            false,
         );
     }
     if (self.analyzer.interface_names.get(resolved)) |interface_index| {
@@ -1083,6 +1084,7 @@ pub fn lowerMethod(
                     as_statement,
                     fallible_allowed,
                     shape_position,
+                    false,
                 );
             }
             if (self.analyzer.interface_names.get(resolved)) |interface_index| {
@@ -1143,8 +1145,13 @@ fn isStandardIntrinsicCall(self: *FunctionBuilder, method: ast.Method) bool {
 /// Build a nominal value. Classes with `init` route through their hidden
 /// factory function; every other class and every struct keeps the direct
 /// memberwise construction path. This is the one fork shared by bare,
-/// imported, and aliased type names.
-fn lowerNominalConstruct(
+/// imported, aliased, and `new`-constructed type names.
+///
+/// `via_new` says the construction was written `new Name(...)`. A class
+/// makes a new reference identity and must be written with `new`; a
+/// value type must not be. Every call route converges here, so this is
+/// the single place that rule is enforced.
+pub fn lowerNominalConstruct(
     self: *FunctionBuilder,
     layout: u32,
     written_name: []const u8,
@@ -1153,12 +1160,29 @@ fn lowerNominalConstruct(
     as_statement: bool,
     fallible_allowed: bool,
     shape_position: ShapePosition,
+    via_new: bool,
 ) Error!?Typed {
+    if (self.analyzer.structs.items[layout].reference and !via_new) {
+        try self.fail(
+            "luce.sema.new",
+            span,
+            "a class makes a new identity: write new {s}(...)",
+            .{written_name},
+        );
+        return null;
+    }
     if (self.analyzer.struct_decls.items[layout].initializer) |initializer| {
+        // Diagnostics about the construction — a missing argument, a
+        // missing `try` — should spell it the way the reader must
+        // write it, and for a class that spelling includes `new`.
+        const spelled = if (self.analyzer.structs.items[layout].reference)
+            try std.fmt.allocPrint(self.arena(), "new {s}", .{written_name})
+        else
+            written_name;
         return lowerUserCall(
             self,
             initializer,
-            written_name,
+            spelled,
             arguments,
             span,
             as_statement,
@@ -1194,6 +1218,7 @@ fn lowerAliasCall(
             as_statement,
             fallible_allowed,
             shape_position,
+            false,
         ),
         .enumeration => |reference| construct.lowerEnumOfNumber(
             self,
@@ -1218,6 +1243,7 @@ fn lowerAliasCall(
                         as_statement,
                         fallible_allowed,
                         shape_position,
+                        false,
                     ),
                     .list, .map, .array, .builder => {
                         try self.fail(

@@ -12,7 +12,7 @@ func fresh() -> state.Editor:
     buffers.append(document.Buffer(path = "f.luc"))
     var histories = new list[history.Stacks]
     histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-    return state.Editor(
+    return new state.Editor(
         buffers = buffers,
         histories = histories,
         names = new list[str],

@@ -157,7 +157,7 @@ test "file and handle are a program's own words, not the language's" {
         \\
         \\func main():
         \\    let a = file(x = 40)
-        \\    let b = handle(n = 2)
+        \\    let b = new handle(n = 2)
         \\    print(str(a.x + b.n))
         \\
     , "42\n");

@@ -92,7 +92,9 @@ Transparency includes expression sites that name the type:
 - an alias of an enum or union may reach its members and methods;
 - an alias of a numeric type or `str` may be used as that conversion
   constructor;
-- an alias of `list`, `map`, `array`, or `builder` may follow `new`.
+- an alias of a class, `list`, `map`, `array`, or `builder` may follow `new`;
+- an alias of a class constructs it only through `new`: the bare call is
+  refused with the class's own rule.
 
 The target still decides how values are created. An alias of `task[...]` is
 created by `spawn` and never becomes callable or constructible with `new`.

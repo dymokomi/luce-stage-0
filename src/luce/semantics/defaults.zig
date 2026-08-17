@@ -386,8 +386,8 @@ fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expres
         },
         .unary => |unary| return parameterRead(declaration, unary.operand),
         .new_object => |made| {
-            for (made.dims) |dim| {
-                if (parameterRead(declaration, dim)) |read| return read;
+            for (made.arguments) |argument| {
+                if (parameterRead(declaration, argument.value)) |read| return read;
             }
             return null;
         },

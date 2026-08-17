@@ -457,8 +457,9 @@ new list[T]
 new map[K, V]
 new array[T](size, ...)
 new builder
-Struct(field = expr, ...)  every field, by name
-Class(field = expr, ...)   one new class identity; every required field, by name
+Struct(field = expr, ...)      every field, by name
+new Class(field = expr, ...)   one new class identity; every required field, by name
+new Class(args)                through the class's custom init surface
 ```
 
 A map literal evaluates its entries in written order and creates a
@@ -470,9 +471,12 @@ an immutable [constant container](../statements/#file-scope-constants).
 
 ## Reference construction and sharing
 
-`new list[T]`, `new map[K, V]`, `new array[T](...)`, `new builder`, and a class
-constructor create reference objects. List and map literals also create fresh
-reference objects. A capturing block closure creates an ARC environment.
+`new` makes every reference identity: `new list[T]`, `new map[K, V]`,
+`new array[T](...)`, `new builder`, and `new Class(...)` create reference
+objects, while value types construct without it. A bare `Class(...)` call is
+a compile error—a class makes a new identity: write `new Class(...)`. List
+and map literals also create fresh reference objects. A capturing block
+closure creates an ARC environment.
 Assignment, calls, returns, fields, optionals, and container stores retain and
 share these references; no ownership operator appears in the expression.
 

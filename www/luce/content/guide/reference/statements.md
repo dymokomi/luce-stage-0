@@ -119,14 +119,15 @@ class Name: Interface, OtherInterface:
 
 A class has the same fields, defaults, visibility regions, methods, static
 namespace functions, and explicit interface-conformance list as a structure.
-Without `init`, it also has the same memberwise constructor. One
+Without `init`, it also takes the same memberwise arguments. One
 `init(parameters)` or fallible `init(parameters) -> !` body replaces that call
 surface. It answers the class implicitly and must establish every stored field
 on every successful path before `self` can exist. During the body, `self` may
 only read or assign stored fields; it cannot escape or receive an instance
-method call. Construction calls the class name directly.
+method call. Construction writes `new Name(...)`; a bare `Name(...)` call on
+a class is a compile error.
 
-Class values are ARC references: successful construction makes a new identity,
+Class values are ARC references: successful `new` makes a new identity,
 assignment shares it, and methods may mutate the object through a `let`
 binding. `is` compares two references of the same nominal class type.
 

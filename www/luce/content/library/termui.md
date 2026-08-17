@@ -54,7 +54,7 @@ class Counter: termui.Application:
         return termui.Panel("counter", content).on_event(self.pressed)
 
 func main():
-    termui.run(Counter())
+    termui.run(new Counter())
 ```
 
 Build the file normally. The executable enters the terminal application when

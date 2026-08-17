@@ -1028,7 +1028,7 @@ test "every literal form parses" {
     try testing.expectEqualStrings("builder", body.statements[10].let.value.new_object.type_name.name);
     try testing.expectEqualStrings("i64", body.statements[11].let.value.new_object.type_name.arguments[0].name);
     try testing.expectEqualStrings("map", body.statements[12].let.value.new_object.type_name.name);
-    try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.dims.len);
+    try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.arguments.len);
 }
 
 test "map literals parse in constant and runtime positions, across lines and with a trailing comma" {
@@ -1117,7 +1117,7 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
 
     const array_new = body.statements[2].variable.value.?.new_object;
     try testing.expectEqualStrings("array", array_new.type_name.name);
-    try testing.expectEqual(@as(usize, 2), array_new.dims.len);
+    try testing.expectEqual(@as(usize, 2), array_new.arguments.len);
 
     try testing.expectEqual(@as(usize, 1), body.statements[4].assign.target.index.indices.len);
     try testing.expectEqual(@as(usize, 2), body.statements[5].assign.target.index.indices.len);

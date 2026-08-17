@@ -191,7 +191,7 @@ fn scanExpression(
             try scanExpression(self, binary.right, mutable, inside);
         },
         .unary => |unary| try scanExpression(self, unary.operand, mutable, inside),
-        .new_object => |made| for (made.dims) |dimension| try scanExpression(self, dimension, mutable, inside),
+        .new_object => |made| for (made.arguments) |argument| try scanExpression(self, argument.value, mutable, inside),
         .list_literal => |literal| for (literal.elements) |element| try scanExpression(self, element, mutable, inside),
         .map_literal => |literal| for (literal.entries) |entry| {
             try scanExpression(self, entry.key, mutable, inside);
@@ -587,7 +587,7 @@ const Collector = struct {
                 try c.expression(binary.right);
             },
             .unary => |unary| try c.expression(unary.operand),
-            .new_object => |made| for (made.dims) |dimension| try c.expression(dimension),
+            .new_object => |made| for (made.arguments) |argument| try c.expression(argument.value),
             .list_literal => |literal| for (literal.elements) |element| try c.expression(element),
             .map_literal => |literal| for (literal.entries) |entry| {
                 try c.expression(entry.key);

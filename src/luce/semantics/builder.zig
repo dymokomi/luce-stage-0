@@ -1870,7 +1870,7 @@ pub const FunctionBuilder = struct {
             },
             .unary => |unary| return expressions.lowerUnary(self, unary, wanted),
             .method => |method| return calls.lowerMethod(self, method, as_statement, fallible_allowed, shape_position),
-            .new_object => |new| return expressions.lowerNew(self, new),
+            .new_object => |new| return expressions.lowerNew(self, new, as_statement, fallible_allowed, shape_position),
             .list_literal => |literal| return expressions.lowerListLiteral(self, literal, wanted_container),
             .map_literal => |literal| return expressions.lowerMapLiteral(self, literal, wanted_container),
             .index => |index| return expressions.lowerIndex(self, index),

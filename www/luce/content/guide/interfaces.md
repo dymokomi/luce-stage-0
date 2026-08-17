@@ -255,7 +255,7 @@ func advance(sequence: Sequence) -> i64:
     return sequence.next()
 
 func main():
-    let counter = Counter(value = 40)
+    let counter = new Counter(value = 40)
     print(str(advance(counter)))
     print(str(counter.value))
 ```

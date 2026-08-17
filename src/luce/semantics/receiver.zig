@@ -181,8 +181,8 @@ fn expressionWritesReceiver(
             break :blk false;
         },
         .new_object => |new| blk: {
-            for (new.dims) |dimension| {
-                if (expressionWritesReceiver(self, info, dimension)) break :blk true;
+            for (new.arguments) |argument| {
+                if (expressionWritesReceiver(self, info, argument.value)) break :blk true;
             }
             break :blk false;
         },

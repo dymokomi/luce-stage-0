@@ -94,8 +94,8 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
             break :blk false;
         },
         .new_object => |new| blk: {
-            for (new.dims) |dimension| {
-                if (mayMutateContainers(dimension)) break :blk true;
+            for (new.arguments) |argument| {
+                if (mayMutateContainers(argument.value)) break :blk true;
             }
             break :blk false;
         },

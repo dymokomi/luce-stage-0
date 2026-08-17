@@ -13,7 +13,7 @@ func model_of() -> state.Editor:
     buffers.append(document.Buffer(path = "sample.luc"))
     var histories = new list[history.Stacks]
     histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-    let model = state.Editor(
+    let model = new state.Editor(
         buffers = buffers,
         histories = histories,
         names = ["a.luc", "b.luc"],
@@ -26,7 +26,7 @@ func model_of() -> state.Editor:
     return model
 
 func test_body_describes_source_status_and_cursor():
-    let app = application.App(model_of())
+    let app = new application.App(model_of())
     let screen = termui.snapshot(app.body(), 12, 60)
     assert(strings.contains(screen.line(0), "1 func main():"))
     assert(strings.contains(screen.line(1), "2     let x = 42"))
@@ -37,7 +37,7 @@ func test_body_describes_source_status_and_cursor():
     assert(cursor.column == 5)
 
 func test_optional_panes_are_composed_by_the_same_body():
-    let app = application.App(model_of())
+    let app = new application.App(model_of())
     app.model.file_pane = true
     app.model.output_pane = true
     let screen = termui.snapshot(app.body(), 18, 78)
@@ -48,7 +48,7 @@ func test_optional_panes_are_composed_by_the_same_body():
     assert(strings.contains(screen.line(17), "sample.luc"))
 
 func test_source_events_update_the_model_and_the_next_body():
-    let app = application.App(model_of())
+    let app = new application.App(model_of())
     app.model.cursor = len(app.model.content)
     let response = app.source_event(
         termui.Event.text(typed = "!"),
@@ -60,7 +60,7 @@ func test_source_events_update_the_model_and_the_next_body():
     assert(strings.contains(screen.line(1), "let x = 42!"))
 
 func test_global_commands_and_search_are_reflected_declaratively():
-    let app = application.App(model_of())
+    let app = new application.App(model_of())
     assert(app.global_event(
         termui.Event.key(pressed = termui.Key.ctrl_f),
         termui.Rect(rows = 12, columns = 60),
@@ -75,7 +75,7 @@ func test_global_commands_and_search_are_reflected_declaratively():
     assert(strings.contains(screen.line(11), "1 of 1"))
 
 func test_divider_drag_state_lives_at_the_application_boundary():
-    let app = application.App(model_of())
+    let app = new application.App(model_of())
     app.model.file_pane = true
     let pane = termui.Rect(rows = 11, columns = 20)
     assert(app.files_frame_event(

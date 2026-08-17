@@ -110,8 +110,8 @@ containers, structures, interfaces, enums and unions. They can refer forward
 and form chains; cycles are rejected.
 
 The target decides construction. An alias of a structure can construct it, an
-enum or union alias can reach its members, and an owning-container alias
-follows `new` as above. [Type aliases](/guide/reference/types/#type-aliases)
+enum or union alias can reach its members, and a class or owning-container
+alias follows `new` as above. [Type aliases](/guide/reference/types/#type-aliases)
 has the exact visibility, module, and diagnostic rules.
 
 ## Scalar types

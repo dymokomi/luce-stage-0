@@ -12,8 +12,10 @@ when assignment should make an independent outer value instead.
 
 ## Declaring a class
 
-Fields and methods use the same member syntax as a structure. Without a custom
-initializer, construction names required fields and may omit defaulted fields:
+Fields and methods use the same member syntax as a structure. Construction
+writes `new`—the keyword that creates every reference identity, containers
+and classes alike. Without a custom initializer, the `new` call names required
+fields and may omit defaulted fields:
 
 ```luce run
 class Counter:
@@ -24,7 +26,7 @@ class Counter:
         return self.value
 
 func main():
-    let counter = Counter()
+    let counter = new Counter()
     print(str(counter.add(2)))
     print(str(counter.add(3)))
 ```
@@ -34,8 +36,10 @@ func main():
 5
 ```
 
-The constructor creates one ARC object. One custom `init` body may replace the
-memberwise call surface and establish derived or validated fields before the
+The `new` expression creates one ARC object; a bare `Counter(...)` call is a
+compile error because a class makes a new identity. One custom `init` body may
+replace the memberwise call surface and establish derived or validated fields
+before the
 object exists. [Initialization](/guide/initialization/) covers memberwise
 construction, defaults, definite initialization, fallible calls, visibility,
 and the restrictions on `self` before identity is published.
@@ -53,7 +57,7 @@ func change(counter: Counter):
     counter.value = 42
 
 func main():
-    let first = Counter(value = 1)
+    let first = new Counter(value = 1)
     let second = first
     change(second)
     print(str(first.value))
@@ -82,11 +86,11 @@ class Box:
     value: i64
 
 func main():
-    let stable = Box(value = 1)
+    let stable = new Box(value = 1)
     stable.value = 2
 
-    var replaceable = Box(value = 10)
-    replaceable = Box(value = 20)
+    var replaceable = new Box(value = 10)
+    replaceable = new Box(value = 20)
     print(f"{stable.value} {replaceable.value}")
 ```
 
@@ -107,9 +111,9 @@ class Token:
     value: i64
 
 func main():
-    let first = Token(value = 7)
+    let first = new Token(value = 7)
     let same = first
-    let separate = Token(value = 7)
+    let separate = new Token(value = 7)
     print(str(first is same))
     print(str(first is separate))
 ```
@@ -152,7 +156,7 @@ class Scene:
     origin: Point
 
 func main():
-    let scene = Scene(origin = Point(x = 1, y = 2))
+    let scene = new Scene(origin = Point(x = 1, y = 2))
     scene.origin.x = 40
     print(str(scene.origin.x + scene.origin.y))
 ```
@@ -182,9 +186,9 @@ func find(items: list[Item], name: str) -> Item?:
     return none
 
 func main():
-    let apples = Item(name = "apple", count = 1)
+    let apples = new Item(name = "apple", count = 1)
     let items: list[Item] = [apples]
-    let found = find(items, "apple") else Item(name = "missing", count = 0)
+    let found = find(items, "apple") else new Item(name = "missing", count = 0)
     found.count += 2
     print(str(apples.count))
 ```
@@ -209,8 +213,8 @@ class Node:
 func main():
     weak var observed: Node?
     if true:
-        let parent = Node(value = 41)
-        let child = Node(value = 1, parent = parent)
+        let parent = new Node(value = 41)
+        let child = new Node(value = 1, parent = parent)
         observed = parent
         let live = child.parent else child
         print(str(live.value + child.value))
@@ -251,7 +255,7 @@ func apply(item: Adjustable, amount: i64) -> i64:
     return item.adjust(amount)
 
 func main():
-    let counter = Counter(value = 1)
+    let counter = new Counter(value = 1)
     print(str(apply(counter, 41)))
     print(str(counter.value))
 ```

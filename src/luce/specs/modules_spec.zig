@@ -139,14 +139,14 @@ test "class: a private initializer is usable only inside its module" {
         \\            self.value = value
         \\    public:
         \\        static func make(value: i64) -> Token:
-        \\            return Token(value)
+        \\            return new Token(value)
         \\
     };
     try expectProjectPrivate(
         \\import models
         \\
         \\func main():
-        \\    let token = models.Token(42)
+        \\    let token = new models.Token(42)
         \\
     , &.{models}, "init is private to models");
 }

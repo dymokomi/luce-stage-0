@@ -202,8 +202,9 @@ func main():
 ```
 
 A `class` declares fields and methods like a structure, but its value is an ARC
-reference with identity. Without `init` it uses memberwise construction; one
-`init(parameters)` body may replace that surface and must establish every
+reference with identity. Construction requires `new`—`new Name(...)`—like
+every other reference identity. Without `init` the `new` call is memberwise;
+one `init(parameters)` body may replace that surface and must establish every
 field before the new identity exists. Assignment shares the object, `let`
 permits object-field mutation, and `left is right` compares identity. A class
 may conform to interfaces, appear in ordinary storage, and declare one

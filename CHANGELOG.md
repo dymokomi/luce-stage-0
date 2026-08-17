@@ -6,6 +6,14 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Class construction now requires `new`: `var app = new Application()`,
+  `try new File(path)`, and bare `new VStack` when no arguments are
+  needed. `new` is the one keyword that makes a reference identity —
+  it already builds containers (`new list[str]`, `new map[K, V]`,
+  `new array[i64](5)`, `new builder`) and now builds classes the same
+  way. Structs, enums, and unions keep plain call syntax
+  (`Point(x = 1)`). A bare `ClassName(...)` call is a compile error:
+  a class makes a new identity — write `new ClassName(...)`.
 - `std.http` arrives: the HTTP/1.1 client in pure Luce over the
   transport. `get` and `post` answer a `Response` whose status is
   data — a 404 is an answer, not an error — with lowercased headers

@@ -315,7 +315,7 @@ fn validateExpression(self: *FunctionBuilder, initialized: []const bool, express
             try validateExpression(self, initialized, binary.right);
         },
         .unary => |unary| try validateExpression(self, initialized, unary.operand),
-        .new_object => |made| for (made.dims) |dimension| try validateExpression(self, initialized, dimension),
+        .new_object => |made| for (made.arguments) |argument| try validateExpression(self, initialized, argument.value),
         .list_literal => |literal| for (literal.elements) |element| try validateExpression(self, initialized, element),
         .map_literal => |literal| for (literal.entries) |entry| {
             try validateExpression(self, initialized, entry.key);
@@ -404,7 +404,7 @@ fn containsSelf(expression: *const ast.Expression) bool {
         .value_call => |call| containsSelf(call.callee) or anyArgumentContainsSelf(call.arguments),
         .binary => |binary| containsSelf(binary.left) or containsSelf(binary.right),
         .unary => |unary| containsSelf(unary.operand),
-        .new_object => |made| anyExpressionContainsSelf(made.dims),
+        .new_object => |made| anyArgumentContainsSelf(made.arguments),
         .list_literal => |literal| anyExpressionContainsSelf(literal.elements),
         .map_literal => |literal| blk: {
             for (literal.entries) |entry| {

@@ -399,7 +399,7 @@ func open(paths: list[str]) -> App:
         if loaded.recovered:
             histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
     let first = buffers[0]
-    let model = state.Editor(
+    let model = new state.Editor(
         buffers = buffers,
         histories = histories,
         names = new list[str],
@@ -411,4 +411,4 @@ func open(paths: list[str]) -> App:
         scroll = first.scroll,
         dirty = first.dirty,
     )
-    return App(model)
+    return new App(model)

@@ -53,7 +53,7 @@ test "closure: capturing self keeps a class alive until the function dies" {
         \\        print("closed")
         \\
         \\func make_reader() -> func() -> i64:
-        \\    let counter = Counter(value = 42)
+        \\    let counter = new Counter(value = 42)
         \\    return counter.reader()
         \\
         \\func main():
@@ -87,10 +87,10 @@ test "closure: a weak capture zeros while a strong capture retains" {
         \\    var weak_read: (func() -> i64)? = none
         \\    var strong_read: (func() -> i64)? = none
         \\    if true:
-        \\        let weak_item = Item(value = 7)
-        \\        let strong_item = Item(value = 35)
+        \\        let weak_item = new Item(value = 7)
+        \\        let strong_item = new Item(value = 35)
         \\        weak_read = [weak weak_item] func():
-        \\            let live = weak_item else Item(value = 0)
+        \\            let live = weak_item else new Item(value = 0)
         \\            return live.value
         \\        strong_read = func():
         \\            return strong_item.value
@@ -352,7 +352,7 @@ test "closure: an interface capture retains its complete dispatch state" {
         \\        return item.score(value)
         \\
         \\func main():
-        \\    let scale = Scale(factor = 2)
+        \\    let scale = new Scale(factor = 2)
         \\    let calculate: func(i64) -> i64 = wrap(scale)
         \\    assert(calculate(21) == 42)
         \\
@@ -371,7 +371,7 @@ test "closure: a bound-method capture retains and releases its receiver" {
         \\        return operation(value)
         \\
         \\func main():
-        \\    let scale = Scale(factor = 2)
+        \\    let scale = new Scale(factor = 2)
         \\    let bound: func(i64) -> i64 = scale.score
         \\    let calculate: func(i64) -> i64 = wrap(bound)
         \\    assert(calculate(21) == 42)
@@ -419,7 +419,7 @@ test "closure: weak self breaks a stored callback cycle and zeros afterward" {
         \\    callback: (func() -> i64)?
         \\    func install():
         \\        self.callback = [weak self] func():
-        \\            let live = self else Node(value = 0, callback = none)
+        \\            let live = self else new Node(value = 0, callback = none)
         \\            return live.value
         \\    deinit:
         \\        print("closed " + str(self.value))
@@ -427,7 +427,7 @@ test "closure: weak self breaks a stored callback cycle and zeros afterward" {
         \\func main():
         \\    var callback: (func() -> i64)? = none
         \\    if true:
-        \\        let node = Node(value = 42, callback = none)
+        \\        let node = new Node(value = 42, callback = none)
         \\        node.install()
         \\        let installed = node.callback else () -> -1
         \\        callback = installed

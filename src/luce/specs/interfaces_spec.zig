@@ -433,7 +433,7 @@ test "an interface method can return another owned interface value" {
         \\struct Maker: Factory:
         \\    offset: i64
         \\    func make(value: i64) -> Named:
-        \\        return Item(value = value + self.offset)
+        \\        return new Item(value = value + self.offset)
         \\
         \\func main():
         \\    let factory: Factory = Maker(offset = 1)
@@ -468,9 +468,9 @@ test "replacing heterogeneous class witnesses releases the old receiver first" {
         \\        print("closed second")
         \\
         \\func main():
-        \\    var current: Reading = First(value = 1)
+        \\    var current: Reading = new First(value = 1)
         \\    print(current.kind() + ":" + str(current.read()))
-        \\    current = Second(value = 42)
+        \\    current = new Second(value = 42)
         \\    print(current.kind() + ":" + str(current.read()))
         \\    print("leaving")
         \\
@@ -572,7 +572,7 @@ test "copied class existentials retain shared identity" {
         \\        return self.current
         \\
         \\func main():
-        \\    var first: Counter = Shared(current = 1)
+        \\    var first: Counter = new Shared(current = 1)
         \\    var second = first
         \\    first.add(41)
         \\    print(str(second.value()))

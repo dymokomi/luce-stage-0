@@ -69,6 +69,18 @@ pub fn lowerConstruct(
         return null;
     }
     if (layout.fields.len == 0) {
+        // A fieldless class has nothing for memberwise construction to
+        // fill; an init is its only door.  A fieldless struct is a
+        // function namespace and was never constructible.
+        if (layout.reference) {
+            try self.fail(
+                "luce.sema.construct",
+                span,
+                "{s} has no fields to construct; give it an init to make instances",
+                .{layout.name},
+            );
+            return null;
+        }
         try self.fail(
             "luce.sema.construct",
             span,

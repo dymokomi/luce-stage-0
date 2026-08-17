@@ -136,7 +136,7 @@ pub const CallOrigin = enum {
 };
 pub const Binary = struct { op: BinaryOp, left: *Expression, right: *Expression, span: Span };
 pub const Unary = struct { op: UnaryOp, operand: *Expression, span: Span };
-pub const NewObject = struct { type_name: TypeName, dims: []*Expression, span: Span };
+pub const NewObject = struct { type_name: TypeName, arguments: []Argument, span: Span };
 pub const ListLiteral = struct { elements: []*Expression, span: Span };
 /// One `key: value` pair in a map literal.  Both expressions and the
 /// pair itself are arena-owned with the program.
@@ -214,8 +214,10 @@ pub const Expression = union(enum) {
     binary: Binary,
     unary: Unary,
     /// new list[i64], new map[str, i64], new array[i64](5, 5),
-    /// new builder. Type arguments live in `type_name`; an array's
-    /// runtime dimension expressions live in `dims`.
+    /// new builder, new Counter(count = 0) — every construction that
+    /// makes a new reference identity. Type arguments live in
+    /// `type_name`; an array's runtime dimension expressions and a
+    /// class's construction values live in `arguments`.
     new_object: NewObject,
     /// [1, 2, 3] — a list literal typed by its elements.
     list_literal: ListLiteral,

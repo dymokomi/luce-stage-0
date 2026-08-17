@@ -1,9 +1,10 @@
 # Initialization
 
 Initialization establishes every stored field before a value or object can be
-used. Structures use memberwise construction. Classes use the same memberwise
-form by default and may replace it with one custom `init` body when construction
-needs validation, derived state, or a smaller public surface.
+used. Structures use memberwise construction. Classes construct through
+`new`, use the same memberwise form by default, and may replace it with one
+custom `init` body when construction needs validation, derived state, or a
+smaller public surface.
 
 There is no uninitialized object that escapes and becomes somebody else’s
 problem.
@@ -41,7 +42,9 @@ or partially initialized storage behind the constructor.
 
 ## Memberwise class construction
 
-A class without `init` uses the same field-named surface:
+A class without `init` uses the same field-named surface behind `new`, the
+keyword that creates every reference identity. A bare `User(...)` call is a
+compile error—a class makes a new identity: write `new User(...)`.
 
 ```luce run
 class User:
@@ -49,7 +52,7 @@ class User:
     visits: i64 = 0
 
 func main():
-    let user = User(name = "Ada")
+    let user = new User(name = "Ada")
     user.visits += 1
     print(f"{user.name} {user.visits}")
 ```
@@ -58,7 +61,7 @@ func main():
 Ada 1
 ```
 
-The completed call creates one ARC object. A `let` binding keeps naming that
+The completed `new` call creates one ARC object. A `let` binding keeps naming that
 object while its fields remain mutable. Use memberwise construction when the
 stored representation is already the right public construction API.
 
@@ -84,7 +87,7 @@ class Rectangle:
         self.area = self.width * self.height
 
 func main():
-    let rectangle = Rectangle(6, height = 7)
+    let rectangle = new Rectangle(6, height = 7)
     print(rectangle.label)
     print(str(rectangle.area))
 ```
@@ -94,7 +97,7 @@ rectangle
 42
 ```
 
-Call the class name—`Rectangle(...)`—rather than `Rectangle.init(...)`.
+Write `new Rectangle(...)` rather than `Rectangle.init(...)`.
 Initializer parameters follow the ordinary function rules: each has a type,
 trailing parameters may have compile-time defaults, positional arguments come
 first, and named arguments may be reordered.
@@ -173,8 +176,8 @@ class Port:
         self.number = number
 
 func main() -> !:
-    let web = try Port(8080)
-    Port(70000) catch reason:
+    let web = try new Port(8080)
+    new Port(70000) catch reason:
         print(reason)
     print(str(web.number))
 ```
@@ -186,7 +189,7 @@ port out of range
 
 A failed initializer releases fields and temporaries already established on
 that path, publishes no class object, and does not run `deinit`. The caller
-handles the call with `try` or `catch` because the class call itself is
+handles the call with `try` or `catch` because the `new` call itself is
 fallible.
 
 ## Visibility and factories

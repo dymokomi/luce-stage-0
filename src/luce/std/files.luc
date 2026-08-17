@@ -223,15 +223,15 @@ private const chunk = 65536
 
 # Open a file to read from the start.  The file must be there.
 func open(path: str) -> File!:
-    return File(raw = try Builtin.file_open(path, mode_read))
+    return new File(raw = try Builtin.file_open(path, mode_read))
 
 # Open a file to write from the start, creating it and emptying it.
 func create(path: str) -> File!:
-    return File(raw = try Builtin.file_open(path, mode_write))
+    return new File(raw = try Builtin.file_open(path, mode_write))
 
 # Open a file to write at its end, creating it if it is not there.
 func append_to(path: str) -> File!:
-    return File(raw = try Builtin.file_open(path, mode_append))
+    return new File(raw = try Builtin.file_open(path, mode_append))
 
 # The whole file, as bytes.  Nothing here asks whether the bytes are
 # text — that is what `strings.from_bytes` is for — so this reads a

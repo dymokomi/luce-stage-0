@@ -23,7 +23,7 @@ class Session:
 
 func main():
     if true:
-        let first = Session(name = "work")
+        let first = new Session(name = "work")
         let second = first
         print(second.name)
     print("after scope")
@@ -63,7 +63,7 @@ class Parent:
 
 func main():
     if true:
-        let parent = Parent(child = Child(name = "one"))
+        let parent = new Parent(child = new Child(name = "one"))
         print(parent.child.name)
     print("done")
 ```
@@ -134,8 +134,8 @@ class Node:
 func main():
     weak var observed: Node?
     if true:
-        let parent = Node(value = 1)
-        let child = Node(value = 2, parent = parent)
+        let parent = new Node(value = 1)
+        let child = new Node(value = 2, parent = parent)
         observed = parent
         assert((child.parent else child) is parent)
     print(str(observed == none))

@@ -179,8 +179,11 @@ member rules.
 
 A `class` is a final ARC reference type. Assignment shares identity, fields
 and methods may mutate through a stable `let`, and `is` compares identity.
-Without `init`, construction is memberwise. One `init(parameters)` body may
-instead define the class's call surface; every successful path establishes
+Construction requires `new`—`new Name(...)`—the same keyword that creates
+every other reference identity; a bare `Name(...)` call on a class is
+rejected. Without `init`, the `new` call is memberwise. One `init(parameters)`
+body may instead define the class's construction surface; every successful
+path establishes
 every field before the compiler creates and returns the object. A fallible
 initializer writes `-> !`. During initialization `self` may access stored
 fields but cannot escape or call instance methods. Classes may conform to

@@ -272,7 +272,7 @@ class Counter:
         return self.value
 
 func main():
-    let first = Counter(value = 1)
+    let first = new Counter(value = 1)
     let same = first
     assert(first is same)
     print(str(same.add(41)))
@@ -290,8 +290,11 @@ conform to interfaces, use weak class fields, and declare one bare `deinit`
 body that runs at the last strong release before its fields release. `deinit`
 cannot resurrect its dying `self`.
 
-Without an `init` declaration, a class uses the same memberwise constructor as
-a structure. One class-only initializer may replace it:
+Construction requires `new`—`new Name(...)`—the keyword that creates every
+reference identity; a bare `Name(...)` call on a class is a compile error.
+Without an `init` declaration, the `new` call takes the same memberwise
+arguments as a structure constructor. One class-only initializer may replace
+that surface:
 
 ```text
 class Name:
@@ -307,8 +310,9 @@ class Name:
 
 The two `init` forms above are alternatives, not overloads. The only permitted
 result marker is bare `-> !`; success answers the enclosing class implicitly.
-Calls use `Name(...)`, with ordinary positional, named, trailing-default,
-fallibility, and visibility rules. `Name.init(...)` is invalid.
+Construction writes `new Name(...)`, with ordinary positional, named,
+trailing-default, fallibility, and visibility rules. `Name.init(...)` and a
+bare `Name(...)` call are invalid.
 
 Every successful fallthrough or bare `return` must have initialized all stored
 fields. Declared defaults and implicit weak-field defaults begin initialized.

@@ -140,7 +140,7 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
             anyDeeperArgument(written.arguments, left),
         .method => |method| deeperThan(method.target, left) or
             anyDeeperArgument(method.arguments, left),
-        .new_object => |new| anyDeeper(new.dims, left),
+        .new_object => |new| anyDeeperArgument(new.arguments, left),
         .list_literal => |literal| anyDeeper(literal.elements, left),
         .map_literal => |literal| for (literal.entries) |entry| {
             if (deeperThan(entry.key, left) or deeperThan(entry.value, left)) break true;

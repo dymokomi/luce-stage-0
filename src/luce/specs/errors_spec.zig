@@ -1888,7 +1888,7 @@ test "closure: deinit cannot capture its dying self" {
         \\            return self.value
         \\
         \\func main():
-        \\    let resource = Resource(value = 42)
+        \\    let resource = new Resource(value = 42)
         \\
     , "luce.sema.class.lifecycle", "deinit cannot capture self in a closure");
 }
@@ -1903,7 +1903,7 @@ test "closure: storing a strong self capture diagnoses the direct ARC cycle" {
         \\            return self.value
         \\
         \\func main():
-        \\    let node = Node(value = 42, callback = none)
+        \\    let node = new Node(value = 42, callback = none)
         \\    node.install()
         \\
     , "luce.sema.closure.cycle", "strongly captures self creates an ARC cycle");
@@ -3320,11 +3320,90 @@ test "luce.sema.field: a nested place checks each field on the way down" {
     , "luce.sema.field");
 }
 
-test "luce.sema.new: new builds only the heap constructors" {
+test "luce.sema.new: new builds only the reference constructors" {
     try expectSaying(
         "struct Point:\n    x: i64\n\nfunc main():\n    let a = new Point()\n",
         "luce.sema.new",
         "Point is a value type",
+    );
+    // An enum is a value; the sentence names the family the way the
+    // struct refusal does.
+    try expectSaying(
+        "enum Mode:\n    fast\n    slow\n\nfunc main():\n    let m = new Mode\n",
+        "luce.sema.new",
+        "is a value type",
+    );
+    // A transparent alias of a value type is refused as the value it
+    // names, spelled the way the reader wrote it.
+    try expectSaying(
+        "struct Point:\n    x: i64\n\nalias Spot = Point\n\nfunc main():\n    let a = new Spot(x = 1)\n",
+        "luce.sema.new",
+        "is a value type",
+    );
+}
+
+test "luce.sema.new: a class is constructed with new, and only with new" {
+    try expectSaying(
+        \\class Counter:
+        \\    count: i64
+        \\
+        \\func main():
+        \\    let a = Counter(count = 1)
+        \\
+    , "luce.sema.new", "a class makes a new identity: write new Counter(...)");
+    // The alias spelling is refused with the alias's own name.
+    try expectSaying(
+        \\class Action:
+        \\    value: i64
+        \\
+        \\alias Operation = Action
+        \\
+        \\func main():
+        \\    let a = Operation(value = 3)
+        \\
+    , "luce.sema.new", "write new Operation(...)");
+}
+
+test "luce.sema.interface: new cannot construct an interface" {
+    try expectSaying(
+        \\interface Speaker:
+        \\    func speak() -> str
+        \\
+        \\func main():
+        \\    let s = new Speaker
+        \\
+    , "luce.sema.interface", "interfaces cannot be constructed");
+}
+
+test "luce.sema.union: new cannot construct a union" {
+    try expectSaying(
+        \\union Shape:
+        \\    circle(radius: f64)
+        \\    dot
+        \\
+        \\func main():
+        \\    let s = new Shape
+        \\
+    , "luce.sema.union", "a member is the only way in");
+}
+
+test "luce.sema.construct: a fieldless class needs an init, not memberwise new" {
+    try expectSaying(
+        \\class Nothing:
+        \\    func poke() -> i64:
+        \\        return 7
+        \\
+        \\func main():
+        \\    let a = new Nothing
+        \\
+    , "luce.sema.construct", "give it an init to make instances");
+}
+
+test "luce.sema.container.type: array dimensions after new are positional" {
+    try expectSaying(
+        "func main():\n    var xs = new array[i64](rows = 2)\n",
+        "luce.sema.container.type",
+        "array sizes are positional",
     );
 }
 
@@ -8339,8 +8418,8 @@ test "class: value equality points to identity syntax" {
         \\    value: i64
         \\
         \\func main():
-        \\    let left = Box(value = 1)
-        \\    let right = Box(value = 1)
+        \\    let left = new Box(value = 1)
+        \\    let right = new Box(value = 1)
         \\    assert(left == right)
         \\
     , "luce.sema.class.equality", "write 'left is right'");
@@ -8362,7 +8441,7 @@ test "class: is rejects value types and names the offending side" {
         \\    value: i64
         \\
         \\func main():
-        \\    let box = Box(value = 1)
+        \\    let box = new Box(value = 1)
         \\    assert(box is 1)
         \\
     , "luce.sema.class.identity", "right side of 'is' is i64, not a class reference");
@@ -8377,8 +8456,8 @@ test "class: is rejects references of different nominal classes" {
         \\    value: i64
         \\
         \\func main():
-        \\    let left = Left(value = 1)
-        \\    let right = Right(value = 1)
+        \\    let left = new Left(value = 1)
+        \\    let right = new Right(value = 1)
         \\    assert(left is right)
         \\
     , "luce.sema.class.identity", "same class, got Left and Right");
@@ -8632,7 +8711,7 @@ test "class: self cannot escape before init has made the class" {
         \\class Box:
         \\    value: i64
         \\    init(value: i64):
-        \\        self = Box(value)
+        \\        self = new Box(value)
         \\func main():
         \\    return
         \\
@@ -8653,7 +8732,7 @@ test "class: a custom init is the class constructor surface" {
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
-        \\    let box = Box()
+        \\    let box = new Box()
         \\
     , "luce.sema.call", "Box is missing number");
     try expectSaying(
@@ -8662,7 +8741,7 @@ test "class: a custom init is the class constructor surface" {
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
-        \\    let box = Box(value = 42)
+        \\    let box = new Box(value = 42)
         \\
     , "luce.sema.call", "has no parameter value");
     try expectSaying(
@@ -8673,16 +8752,16 @@ test "class: a custom init is the class constructor surface" {
         \\func main():
         \\    let box = Box.init(42)
         \\
-    , "luce.sema.class.lifecycle", "call the class name directly");
+    , "luce.sema.class.lifecycle", "write new ClassName(...)");
     try expectSaying(
         \\class Box:
         \\    value: i64
         \\    init(value: i64) -> !:
         \\        self.value = value
         \\func main():
-        \\    let box = Box(42)
+        \\    let box = new Box(42)
         \\
-    , "luce.sema.fallible", "write 'try Box(…)'");
+    , "luce.sema.fallible", "write 'try new Box(…)'");
     try expectSaying(
         \\class Box:
         \\    value: i64
@@ -8778,7 +8857,7 @@ test "class: deinit is not a method static member or callable value" {
         \\    deinit:
         \\        return
         \\func main():
-        \\    let resource = Resource()
+        \\    let resource = new Resource()
         \\    resource.deinit()
         \\
     , "luce.sema.class.lifecycle", "called only by ARC");
@@ -8790,7 +8869,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        let copy = self
         \\func main():
-        \\    let resource = Resource()
+        \\    let resource = new Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -8800,7 +8879,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        keep(self)
         \\func main():
-        \\    let resource = Resource()
+        \\    let resource = new Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -8809,7 +8888,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        self.next = self
         \\func main():
-        \\    let resource = Resource()
+        \\    let resource = new Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -8818,7 +8897,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        self.items.append(self)
         \\func main():
-        \\    let resource = Resource(items = new list[Resource])
+        \\    let resource = new Resource(items = new list[Resource])
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -8826,7 +8905,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        return self
         \\func main():
-        \\    let resource = Resource()
+        \\    let resource = new Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
 }

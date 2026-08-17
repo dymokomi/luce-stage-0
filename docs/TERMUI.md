@@ -57,7 +57,7 @@ class Counter: termui.Application:
         return termui.Panel("counter", content).on_event(self.pressed)
 
 func main():
-    termui.run(Counter())
+    termui.run(new Counter())
 ```
 
 The program contains no loop. `run` asks for `body`, draws it, reads one event,

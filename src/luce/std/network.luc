@@ -49,7 +49,7 @@ class Listener:
         raw: handle
 
     func accept() -> Connection!:
-        return Connection(raw = try Builtin.socket_accept(self.raw))
+        return new Connection(raw = try Builtin.socket_accept(self.raw))
 
     # The port this listener actually holds — the answer to
     # `listen(0)`, which asks the host for any free port.
@@ -61,10 +61,10 @@ class Listener:
 # it finds; a world that refuses every road answers the error with the
 # reason it gave.
 func connect(host: str, port: i64) -> Connection!:
-    return Connection(raw = try Builtin.socket_connect(host, port))
+    return new Connection(raw = try Builtin.socket_connect(host, port))
 
 # Open a door on `port`, on every interface.  Port 0 asks for any free
 # port; `listener.port()` says which one landed.  A port another
 # program holds is the world saying no.
 func listen(port: i64) -> Listener!:
-    return Listener(raw = try Builtin.socket_listen(port))
+    return new Listener(raw = try Builtin.socket_listen(port))

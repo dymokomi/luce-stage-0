@@ -25,7 +25,7 @@ class Counter: termui.Application:
         return termui.VStack(items)
 
 func test_the_public_facade_describes_and_updates_an_application():
-    let app = Counter(41)
+    let app = new Counter(41)
     let first = termui.snapshot(app.body(), 3, 10)
     assert(first.line(2) == "count 41  ")
     let response = app.increment(

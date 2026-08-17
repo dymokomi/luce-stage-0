@@ -460,7 +460,7 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
                 try self.report(
                     "luce.sema.class.lifecycle",
                     lifecycle.span,
-                    "init runs only through class construction; call the class name directly",
+                    "init runs only through class construction; write new ClassName(...)",
                     .{},
                 );
                 return null;
@@ -1016,35 +1016,29 @@ fn mapLiteral(self: *Parser) Error!?*ast.Expression {
     } });
 }
 
-/// `new TYPE` or `new TYPE(dimensions...)`. Square brackets inside TYPE
-/// carry type arguments; parentheses carry only construction values. The
-/// analyzer decides which resolved heap shape accepts dimensions.
+/// `new TYPE`, `new TYPE(dimensions...)`, or `new TYPE(arguments...)`.
+/// Square brackets inside TYPE carry type arguments; parentheses carry
+/// construction values — an array's dimensions, or a class's fields or
+/// init arguments. The analyzer decides which resolved shape accepts
+/// which, so the parser records one shared argument list.
 fn newObject(self: *Parser) Error!?*ast.Expression {
     const start = self.advance(); // new
     if (self.peekKind() != .identifier) {
-        _ = try self.expect(.identifier, "list, map, array, or builder after new");
+        _ = try self.expect(.identifier, "a class, list, map, array, or builder after new");
         return null;
     }
     const written = (try self.constructionTypeName()) orelse return null;
-    var dims: std.ArrayList(*ast.Expression) = .empty;
-    defer dims.deinit(self.arena);
+    var arguments: []ast.Argument = &.{};
     var closing_end = written.span.end;
     if (self.accept(.left_paren)) |opener| {
-        var previous_end = opener.span.end;
-        while (!endsList(self.peekKind(), .right_paren)) {
-            const dimension = (try expression(self)) orelse return null;
-            try dims.append(self.arena, dimension);
-            previous_end = dimension.span().end;
-            if (self.accept(.comma) == null) break;
-        }
-        if (try self.missingSeparator(previous_end)) return null;
-        const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
-        closing_end = closing.span.end;
+        const listed = (try argumentList(self, opener)) orelse return null;
+        arguments = listed.arguments;
+        closing_end = listed.closing.span.end;
     }
 
     return make(self, .{ .new_object = .{
         .type_name = written,
-        .dims = try dims.toOwnedSlice(self.arena),
+        .arguments = arguments,
         .span = .{ .start = start.span.start, .end = closing_end },
     } });
 }
