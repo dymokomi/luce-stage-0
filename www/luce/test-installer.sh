@@ -166,4 +166,24 @@ if ! grep -Fq 'release archive contains a link or special file' "$archive_output
     exit 1
 fi
 
-echo "installer contract: platform version, libc, linker, path, and archive refusals passed"
+# Archive bytes must not depend on the builder's clock, umask, or directory
+# traversal order.  The helper normalizes those inputs; changing them between
+# two assemblies is the regression test for that promise.
+repro_base="$work/repro"
+repro_tree="$repro_base/luce-$version"
+mkdir -p "$repro_tree/bin/nested"
+printf '%s\n' executable >"$repro_tree/bin/luce"
+printf '%s\n' data >"$repro_tree/bin/nested/data"
+chmod 755 "$repro_tree/bin/luce"
+"$here/archive.sh" "$repro_base" "luce-$version" "$work/repro-one.tar.gz"
+find "$repro_tree" -exec touch -h -t 202501010000.00 {} +
+chmod 700 "$repro_tree" "$repro_tree/bin" "$repro_tree/bin/nested"
+chmod 744 "$repro_tree/bin/luce"
+chmod 600 "$repro_tree/bin/nested/data"
+"$here/archive.sh" "$repro_base" "luce-$version" "$work/repro-two.tar.gz"
+if ! cmp -s "$work/repro-one.tar.gz" "$work/repro-two.tar.gz"; then
+    echo "installer contract: reproducible archive bytes changed" >&2
+    exit 1
+fi
+
+echo "installer contract: platform version, libc, linker, path, archive safety, and reproducibility passed"

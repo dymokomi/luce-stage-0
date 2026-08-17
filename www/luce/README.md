@@ -109,6 +109,13 @@ inherit the builder's LLVM packages. All three archives have one layout and
 carry the same compiler, runner, editor, runtime/start libraries, TermUI,
 licenses, and dependency-free VS Code extension.
 
+Archive assembly is canonical: file order, ownership, modes, timestamps, and
+the gzip header are normalized, and `BUILD-MANIFEST` records the source
+commit, source timestamp, toolchain versions, package versions, and archive
+format. Rebuilding one clean commit therefore produces the same archive bytes
+and SHA-256 digest; `test-installer.sh` changes the fixture's clock and umask
+between two assemblies to keep that promise executable.
+
 The release then runs the public installer twice for each target in an
 isolated home—Linux smokes use containers with no LLVM installation—and proves
 checksum verification, fresh replacement, singular PATH and `LUCE_LIB`

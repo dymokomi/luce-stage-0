@@ -256,8 +256,17 @@ manifest="$release/share/luce/BUILD-MANIFEST"
 if [ ! -f "$manifest" ] ||
     ! grep -Fxq 'format luce-build-manifest-1' "$manifest" ||
     ! grep -Fxq "version $version" "$manifest" ||
-    ! grep -Fxq "platform $platform" "$manifest"; then
+    ! grep -Fxq "platform $platform" "$manifest" ||
+    ! grep -Fxq 'archive-format reproducible-tar-gzip-1' "$manifest" ||
+    ! grep -Fxq 'archive-mtime 2000-01-01T00:00:00Z' "$manifest" ||
+    ! grep -Fxq "termui $termui_version" "$manifest" ||
+    ! grep -Fxq "vscode-extension $extension_version" "$manifest"; then
     echo "luce: release archive has no matching build manifest" >&2
+    exit 1
+fi
+source_epoch=$(awk '$1 == "source-date-epoch" { print $2; exit }' "$manifest")
+if ! printf '%s\n' "$source_epoch" | awk '$0 ~ /^[0-9]+$/ { ok = 1 } END { exit ok ? 0 : 1 }'; then
+    echo "luce: release archive has an invalid source timestamp" >&2
     exit 1
 fi
 source_commit=$(awk '$1 == "source" { print $2; exit }' "$manifest")

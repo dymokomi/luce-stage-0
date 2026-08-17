@@ -6,6 +6,14 @@ source_root=${LUCE_RELEASE_SOURCE:-/source}
 output=${LUCE_RELEASE_OUTPUT:-/output}
 architecture=${LUCE_RELEASE_ARCH:?LUCE_RELEASE_ARCH is required}
 source_commit=${LUCE_RELEASE_SOURCE_COMMIT:?LUCE_RELEASE_SOURCE_COMMIT is required}
+source_epoch=$(git -C "${LUCE_RELEASE_SOURCE:-/source}" show -s --format=%ct "$source_commit")
+case "$source_epoch" in
+    ''|*[!0-9]*)
+        echo "linux release: source commit has no numeric timestamp" >&2
+        exit 1
+        ;;
+esac
+export SOURCE_DATE_EPOCH="$source_epoch"
 
 if ! printf '%s\n' "$source_commit" | awk '
     (length($0) == 40 || length($0) == 64) && $0 !~ /[^0-9a-f]/ { ok = 1 }

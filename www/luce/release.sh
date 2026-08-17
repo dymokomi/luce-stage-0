@@ -6,6 +6,8 @@ set -eu
 # headers. Linux tar ignores those headers but prints warnings during the
 # one-command install, so public archives contain product files only.
 export COPYFILE_DISABLE=1
+export LC_ALL=C
+umask 022
 
 here=$(CDPATH= cd "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd "$here/../.." && pwd)
@@ -30,6 +32,14 @@ if [ -n "$(git -C "$root" status --porcelain --untracked-files=normal)" ]; then
     echo "luce release: source tree is not clean" >&2
     exit 1
 fi
+source_epoch=$(git -C "$root" show -s --format=%ct "$source_commit")
+case "$source_epoch" in
+    ''|*[!0-9]*)
+        echo "luce release: cannot read the source commit timestamp" >&2
+        exit 1
+        ;;
+esac
+export SOURCE_DATE_EPOCH="$source_epoch"
 module_format=$(awk '/pub const format_version: u32 =/ { value = $6; gsub(/;/, "", value); print value; exit }' "$root/src/luce/mir/module.zig")
 host_abi=$(awk '/pub const version: u32 =/ { value = $6; gsub(/;/, "", value); print value; exit }' "$root/src/luce/codegen/abi.zig")
 if [ -z "$module_format" ] || [ -z "$host_abi" ]; then
@@ -149,6 +159,7 @@ assemble_archive() {
         'format luce-build-manifest-1' \
         "version $release_version" \
         "source $source_commit" \
+        "source-date-epoch $source_epoch" \
         "platform $platform" \
         "platform-floor $platform_floor" \
         "optimize ReleaseSafe" \
@@ -156,6 +167,10 @@ assemble_archive() {
         "llvm $llvm_version" \
         "module-format $module_format" \
         "host-abi $host_abi" \
+        "termui $termui_version" \
+        "vscode-extension $extension_version" \
+        'archive-format reproducible-tar-gzip-1' \
+        'archive-mtime 2000-01-01T00:00:00Z' \
         >"$release_tree/share/luce/BUILD-MANIFEST"
     cp "$root/LICENSE-MIT" "$release_tree/share/licenses/luce/LICENSE-MIT"
     cp "$root/LICENSE-APACHE" "$release_tree/share/licenses/luce/LICENSE-APACHE"
@@ -186,9 +201,7 @@ assemble_archive() {
     cp "$extension_source/README.md" "$extension_tree/README.md"
     cp "$extension_source/syntaxes/luce.tmLanguage.json" "$extension_tree/syntaxes/luce.tmLanguage.json"
 
-    tar --no-xattrs --no-mac-metadata \
-        -czf "$release_output/$archive" \
-        -C "$tree_root" "luce-$release_version"
+    "$here/archive.sh" "$tree_root" "luce-$release_version" "$release_output/$archive"
     checksum_archive "$archive"
     tar -tzf "$release_output/$archive" >/dev/null
     echo "release: $release_output/$archive"

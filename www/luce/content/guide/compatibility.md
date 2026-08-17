@@ -61,7 +61,7 @@ sandbox for hostile machine code.
 
 The compiler’s internal `.lcm` form is verified serialized MIR, used as a seam
 and cache input rather than a distribution format. Its current format version
-is 55. Changes to serialized instructions, types, or layouts bump that number;
+is 56. Changes to serialized instructions, types, or layouts bump that number;
 old modules are refused and rebuilt from source.
 
 Native programs and libraries call the published host table. Its current ABI
