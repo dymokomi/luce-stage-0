@@ -127,6 +127,19 @@ synthesize `==`, ordering, or hashing from their fields. Compare a stable
 field explicitly when the program needs value equality; use `is` when object
 identity is the question.
 
+## No method overrides
+
+Classes are final. Luce has no subclassing, `override`, or `super`, so a method
+with the same spelling in two classes is not a replacement relationship and
+there is no runtime dispatch through a parent class. Writing `override func`
+is rejected explicitly.
+
+When several concrete types should answer the same operation, declare an
+`interface` and make each type conform to it. When behavior should be reused
+without a shared contract, compose a helper or store a function value. These
+choices keep the call graph visible and avoid base-class lifecycle, ownership,
+and initialization coupling.
+
 ## Methods, nested places, and bound methods
 
 An instance method has an implied `self`. Class methods may write fields even

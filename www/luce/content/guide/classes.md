@@ -124,6 +124,17 @@ not synthesize `==`, ordering, or hashing from their fields. Compare a stable
 field explicitly when the application needs value equality; use `is` only
 when shared identity is the actual question.
 
+## No method overrides
+
+Classes are final. Luce has no subclassing, `override`, or `super`; a method
+with the same name in another class is a separate method, not a replacement
+for a parent implementation. The compiler rejects `override func` instead of
+silently creating a second dispatch model.
+
+Use an explicit `interface` when different concrete types should answer the
+same contract. Use composition or a function value when the goal is code
+reuse. This keeps ownership, initialization, and call flow visible.
+
 Both operands of `is` have the same nominal class type. It is not a runtime
 cast or a general pointer comparison.
 

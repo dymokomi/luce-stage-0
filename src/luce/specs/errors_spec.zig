@@ -8426,6 +8426,18 @@ test "class: a non-interface cannot be used as inheritance" {
     , "luce.sema.interface", "Parent is not an interface");
 }
 
+test "class: method override syntax is rejected explicitly" {
+    try expectSaying(
+        \\class Child:
+        \\    override func render() -> i64:
+        \\        return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.override", "classes are final: method overrides and inheritance are not supported");
+}
+
 test "class: init is one class-only lifecycle body" {
     try expectSaying(
         \\struct Point:

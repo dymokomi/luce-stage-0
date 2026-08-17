@@ -71,6 +71,11 @@ badge:42
 that belonged to the concrete value that created it. The same pattern works
 with `map[str, Drawable]`, arrays, and struct fields.
 
+An interface is explicit polymorphism, not a base class. It supplies no
+inherited implementation and creates no override relationship: every
+conforming type writes each required method, and `override func` is rejected.
+Use composition when you want to share code without a contract.
+
 The conversion is implicit at an interface-typed destination. There is no
 cast syntax and no structural conformance: a declaration must write
 `struct Name: Drawable:` or `class Name: Drawable:`. A conforming type may

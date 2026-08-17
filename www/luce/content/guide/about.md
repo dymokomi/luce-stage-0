@@ -108,12 +108,12 @@ contain data races.
 
 ## A deliberately bounded language
 
-Luce currently has no class inheritance, interface default methods, operator
-overloading, unsafe pointers, reflection, macros, tracing garbage collector,
-or shared mutable worker state. User-defined generics are a post-1.0 proposal,
-not part of the first release. Interfaces are usable today, including owned
-value witnesses, shared class witnesses, multiple methods and results, and
-`mutating` dispatch through a mutable local.
+Luce currently has no class inheritance or method overrides, interface default
+methods, operator overloading, unsafe pointers, reflection, macros, tracing
+garbage collector, or shared mutable worker state. User-defined generics are a
+post-1.0 proposal, not part of the first release. Interfaces are usable today,
+including owned value witnesses, shared class witnesses, multiple methods and
+results, and `mutating` dispatch through a mutable local.
 
 Those boundaries are documented because a user should never have to infer
 whether a missing feature is unsupported, unfinished, or merely hidden in a

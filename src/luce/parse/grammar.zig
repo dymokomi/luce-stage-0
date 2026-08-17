@@ -1445,6 +1445,24 @@ pub const Parser = struct {
         deinitializer: *?ast.FuncDecl,
         visibility: ast.Visibility,
     ) Error!void {
+        // Classes are final. Keep the tempting inheritance spelling from
+        // turning into a confusing "field named override" diagnostic: there
+        // is no override dispatch, `super`, or subclassing in Luce. Explicit
+        // interfaces are the only polymorphic method surface.
+        if (self.peekKind() == .identifier and
+            std.mem.eql(u8, self.text(self.peek()), "override") and
+            (self.peekAhead(1) == .keyword_func or self.peekAhead(1) == .keyword_static))
+        {
+            const marker = self.advance();
+            try self.report(
+                "luce.parse.override",
+                marker.span,
+                "classes are final: method overrides and inheritance are not supported; use an interface or composition",
+                .{},
+            );
+            self.recover();
+            return;
+        }
         const weak_marker = self.accept(.keyword_weak);
         if (self.peekKind() == .keyword_mutating) {
             const marker = self.advance();

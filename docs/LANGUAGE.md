@@ -184,7 +184,9 @@ initializer writes `-> !`. During initialization `self` may access stored
 fields but cannot escape or call instance methods. Classes may conform to
 interfaces, appear in ordinary storage, and declare one bare `deinit` that ARC
 runs once before releasing fields. Resurrection from `deinit` is refused.
-Classes do not cross workers and have no inheritance or synthesized equality.
+Classes do not cross workers and have no inheritance, method overrides, or
+synthesized equality. A class is final; use an explicit interface for
+polymorphism and composition for reuse.
 [CLASSES.md](CLASSES.md) is the complete contract.
 
 ### Enumerations
@@ -297,9 +299,9 @@ another path.
 ## Deliberate boundaries
 
 The current language has no tuples or user-defined generics; generics are a
-post-1.0 design proposal. It also has no class inheritance, interface
-inheritance/default bodies, operator overloading, mutable globals, unsafe
-pointers, unsafe unowned references, tracing garbage collector, reflection,
+post-1.0 design proposal. It also has no class inheritance, method overrides,
+interface inheritance/default bodies, operator overloading, mutable globals,
+unsafe pointers, unsafe unowned references, tracing garbage collector, reflection,
 macros, exceptions separate from `T!`, or shared mutable state between
 workers. [ROADMAP.md](ROADMAP.md) records the completed ARC, class, closure,
 TermUI, editor, and owned-existential proofs, plus the separate native-UI,
