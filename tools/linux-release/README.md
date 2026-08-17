@@ -27,8 +27,10 @@ the x86-64 image runs under emulation and is correspondingly slower.
 
 Rosetta can lose short-lived child-process notifications during LLVM's CMake
 configuration. The manual `Linux x86-64 release prefix` GitHub Actions
-workflow runs this same builder on a native x86-64 host. Download and extract
-its tarball, then let the site release reuse that verified prefix:
+workflow runs this same builder on a native x86-64 host. Its first pinned LLVM
+build is allowed up to three hours on GitHub's standard runner; this workflow
+is a release operation, not part of the routine test gate. Download and
+extract its tarball, then let the site release reuse that verified prefix:
 
 ```sh
 LUCE_LINUX_X86_64_PREFIX=/absolute/path/to/prefix ./www/luce/release.sh

@@ -22,8 +22,17 @@ smoke_profile="$smoke/profile"
 smoke_program="$smoke/hello.luc"
 smoke_home="$smoke/home"
 
-rm -rf "$smoke"
-mkdir -p "$smoke" "$smoke_home"
+case "$smoke" in
+    ''|/)
+        echo "installer smoke: refusing unsafe smoke directory: $smoke" >&2
+        exit 1
+        ;;
+esac
+mkdir -p "$smoke"
+# The Linux release runs this script with $smoke as a bind-mount root. Empty
+# that directory without trying to remove the mount point itself.
+find "$smoke" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+mkdir -p "$smoke_home"
 
 run_installer() {
     HOME="$smoke_home" \

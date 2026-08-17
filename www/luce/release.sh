@@ -2,6 +2,11 @@
 # Build and prove every public Luce archive in www/luce/out.
 set -eu
 
+# macOS copy and archive tools otherwise preserve Finder metadata as pax
+# headers. Linux tar ignores those headers but prints warnings during the
+# one-command install, so public archives contain product files only.
+export COPYFILE_DISABLE=1
+
 here=$(CDPATH= cd "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd "$here/../.." && pwd)
 release_version=$(tr -d '[:space:]' <"$root/VERSION")
@@ -123,7 +128,9 @@ assemble_archive() {
     cp "$extension_source/README.md" "$extension_tree/README.md"
     cp "$extension_source/syntaxes/luce.tmLanguage.json" "$extension_tree/syntaxes/luce.tmLanguage.json"
 
-    tar -czf "$release_output/$archive" -C "$tree_root" "luce-$release_version"
+    tar --no-xattrs --no-mac-metadata \
+        -czf "$release_output/$archive" \
+        -C "$tree_root" "luce-$release_version"
     checksum_archive "$archive"
     tar -tzf "$release_output/$archive" >/dev/null
     echo "release: $release_output/$archive"
