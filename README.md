@@ -167,17 +167,16 @@ statically typed with inference and has value `struct`s,
 or literals, and `file`/`task` reference resources. ARC shares references,
 destroys objects on last release, closes or joins resources deterministically,
 and copies permitted object graphs safely across worker runtimes
-(docs/MEMORY.md).
-User-defined class references, `weak`, and capturing closures are the
-next language milestone, not features claimed by this README
-(docs/ROADMAP.md). The language also has slices and
-checked traps — `docs/LANGUAGE.md` is the reference.  Effects — console,
+(docs/MEMORY.md). Final class references, `weak` fields and captures,
+block closures, and nominal interfaces are part of that same current model.
+The language also has slices and
+checked traps — `docs/LANGUAGE.md` is the reference. Effects — console,
 files and the screen — only exist as host builtins that loom, the
 trusted boundary, implements; arguments are instead handed to `main` as
 its parameter.  The language itself stays pure:
 
 ```python
-func main(args: list(string)):
+func main(args: list[str]):
     var name = "loom"
     if len(args) > 0:
         name = args[0]

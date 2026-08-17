@@ -13,6 +13,7 @@ examples_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$examples_root/.." && pwd)
 luce=${LUCE_BIN:-"$root/build/luce"}
 output_root=${EXAMPLES_BUILD_DIR:-"$root/build/examples"}
+luce_lib=${LUCE_LIB:-"$root/build/lib:$root/packages"}
 
 if [ ! -x "$luce" ]; then
     echo "examples: $luce is missing; run ./build.sh first" >&2
@@ -27,5 +28,5 @@ for example in "$examples_root"/*; do
 
     output="$output_root/$name/$name"
     mkdir -p "$(dirname "$output")"
-    "$luce" build "$source" --emit=exe --release -o "$output"
+    LUCE_LIB="$luce_lib" "$luce" build "$source" --emit=exe --release -o "$output"
 done
