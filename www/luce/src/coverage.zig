@@ -1026,6 +1026,55 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     }
 }
 
+test "the public release label is consistent" {
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const version_file = try repository.read("VERSION");
+    defer gpa.free(version_file);
+    const version = std.mem.trim(u8, version_file, " \t\r\n");
+    if (version.len == 0) return error.ReleaseVersionMissing;
+
+    const installer_path = try std.fmt.allocPrint(gpa, "www/luce/install/{s}/install.sh", .{version});
+    defer gpa.free(installer_path);
+    const installer = try repository.read(installer_path);
+    defer gpa.free(installer);
+    const installer_version = try std.fmt.allocPrint(gpa, "version={s}", .{version});
+    defer gpa.free(installer_version);
+    try std.testing.expect(std.mem.indexOf(u8, installer, installer_version) != null);
+
+    const changelog = try repository.read("CHANGELOG.md");
+    defer gpa.free(changelog);
+    const changelog_heading = try std.fmt.allocPrint(gpa, "## {s} ", .{version});
+    defer gpa.free(changelog_heading);
+    try std.testing.expect(std.mem.indexOf(u8, changelog, changelog_heading) != null);
+
+    const installer_url = try std.fmt.allocPrint(gpa, "install/{s}/install.sh", .{version});
+    defer gpa.free(installer_url);
+    const release_text = try std.fmt.allocPrint(gpa, "release {s}", .{version});
+    defer gpa.free(release_text);
+    const current_label = try std.fmt.allocPrint(gpa, "Current release label: **{s}**", .{version});
+    defer gpa.free(current_label);
+    const references = [_]struct { path: []const u8, needle: []const u8 }{
+        .{ .path = "README.md", .needle = version },
+        .{ .path = "www/luce/content/index.md", .needle = installer_url },
+        .{ .path = "www/luce/content/tour/index.md", .needle = installer_url },
+        .{ .path = "www/luce/content/tools/command-line.md", .needle = installer_url },
+        .{ .path = "www/luce/content/tools/command-line.md", .needle = current_label },
+        .{ .path = "www/luce/content/guide/compatibility.md", .needle = installer_url },
+        .{ .path = "www/luce/content/guide/reference/index.md", .needle = release_text },
+        .{ .path = "www/luce/content/status/index.md", .needle = release_text },
+    };
+    for (references) |reference| {
+        const source = try repository.read(reference.path);
+        defer gpa.free(source);
+        if (std.mem.indexOf(u8, source, reference.needle) != null) continue;
+        std.debug.print("{s} does not name the current release with {s}\n", .{ reference.path, reference.needle });
+        return error.ReleaseLabelDisagrees;
+    }
+}
+
 test "the reference keeps existing-name multi-return assignment visible" {
     // The implementation can be correct while the prose still says
     // the old refusal. Pin both the receiving syntax and the guarded

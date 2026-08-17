@@ -19,6 +19,10 @@ claimed result fails the build.  Links, anchors and selected
 compiler-to-reference vocabulary are checked too; prose beyond those
 checks remains human-reviewed.
 
+The current release notes are in [`CHANGELOG.md`](CHANGELOG.md). Luce is
+pre-1.0, so the notes describe the candidate surface rather than promise
+source compatibility.
+
 v2 is language-first: the language is the part that enables everything
 else, so it comes first and the environment is built on top of it.  The
 plan is [docs/V2.md](docs/V2.md); the language itself is
