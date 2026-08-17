@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the Luce 0.18 toolchain for macOS or glibc Linux.
+# Install the Luce 0.18 toolchain for macOS 15+ or glibc Linux.
 #
 # Usage:
 #
@@ -55,6 +55,21 @@ for tool in awk cp curl date dirname grep mkdir mktemp mv rm tar tr uname; do
         exit 1
     fi
 done
+
+if [ "$system" = Darwin ]; then
+    if ! command -v sw_vers >/dev/null 2>&1; then
+        echo "luce: cannot determine the macOS version (sw_vers is missing)" >&2
+        exit 1
+    fi
+    macos_version=$(sw_vers -productVersion 2>/dev/null || true)
+    if ! printf '%s\n' "$macos_version" | awk -F. '
+        NF >= 1 && $1 ~ /^[0-9]+$/ { ok = ($1 >= 15) }
+        END { exit ok ? 0 : 1 }
+    '; then
+        echo "luce: this release requires macOS 15 or newer; found ${macos_version:-unknown}" >&2
+        exit 1
+    fi
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
     checksum_tool=sha256sum

@@ -7,8 +7,8 @@ the details on a first read.
 
 ## Install Luce
 
-The current release supports macOS on Apple Silicon and glibc Linux 2.28+ on
-x86-64 or ARM64. It installs the compiler, runtime, terminal editor,
+The current release supports macOS 15 or newer on Apple Silicon and glibc Linux
+2.28+ on x86-64 or ARM64. It installs the compiler, runtime, terminal editor,
 maintained packages, and Luce highlighting for local VS Code, VS Code
 Insiders, or Cursor:
 

@@ -30,12 +30,12 @@ Running the command again always downloads a fresh copy and replaces the
 previous installation only after the archive's checksum and contents have
 been checked.
 
-The same command selects the right archive for macOS on Apple Silicon or for
-glibc Linux 2.28+ on x86-64 or ARM64. Luce asks the system C driver (`cc`) to
-finish native links. The installer checks for it before replacing anything
-and, when it is missing, prints the exact Xcode, Debian/Ubuntu, Fedora/RHEL, or
-Arch command that supplies it. Linux with musl and macOS on Intel are not
-released yet.
+The same command selects the right archive for macOS 15 or newer on Apple
+Silicon, or for glibc Linux 2.28+ on x86-64 or ARM64. Luce asks the system C
+driver (`cc`) to finish native links. The installer checks the operating-system
+version and linker before replacing anything and, when the linker is missing,
+prints the exact Xcode, Debian/Ubuntu, Fedora/RHEL, or Arch command that supplies
+it. Linux with musl and macOS on Intel are not released yet.
 
 The language, compiler, terminal editor, TermUI, and non-graphical standard
 library run on all three released targets. `std.ui` and `std.gpu` still have a

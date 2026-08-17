@@ -61,9 +61,9 @@ tree, or `--no-path` to leave shell profiles unchanged. Tests and benchmarks
 continue to invoke `build/luce` and `build/loom` explicitly, so installing a
 snapshot cannot change what repository development exercises.
 
-The published release supports macOS on Apple Silicon and glibc Linux 2.28+
-on ARM64 and x86-64. It also installs the Luce VS Code and Cursor syntax
-extension in one step:
+The published release supports macOS 15 or newer on Apple Silicon and glibc
+Linux 2.28+ on ARM64 and x86-64. It also installs the Luce VS Code and Cursor
+syntax extension in one step:
 
 ```sh
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash

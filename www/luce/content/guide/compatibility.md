@@ -24,12 +24,13 @@ package, and VS Code extension therefore move together. Keep those pieces from
 one release rather than combining a new compiler with copied libraries from an
 older archive.
 
-The installer publishes one coherent release for macOS on Apple Silicon and
-for glibc Linux 2.28+ on x86-64 or ARM64. It chooses the archive itself. The
-Linux compiler contains its pinned LLVM and does not depend on a distribution
-LLVM package; it does require the host's `cc` driver to finish native links.
-Linux with musl, macOS on Intel, and Windows do not yet have the same release
-contract.
+The installer publishes one coherent release for macOS 15 or newer on Apple
+Silicon and for glibc Linux 2.28+ on x86-64 or ARM64. It chooses the archive
+itself and refuses an older operating system before changing an installation.
+The Linux compiler contains its pinned LLVM and does not depend on a
+distribution LLVM package; it does require the host's `cc` driver to finish
+native links. Linux with musl, macOS on Intel, and Windows do not yet have the
+same release contract.
 
 ## Source compatibility before 1.0
 

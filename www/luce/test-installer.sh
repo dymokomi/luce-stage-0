@@ -51,9 +51,19 @@ printf '%s\n' \
     'fi' >"$full_bin/getconf"
 cp "$full_bin/getconf" "$no_cc_bin/getconf"
 
+printf '%s\n' \
+    '#!/bin/sh' \
+    'if [ "$1" = -productVersion ]; then' \
+    '    printf "%s\n" "${TEST_MACOS:-15.0}"' \
+    'else' \
+    '    exit 1' \
+    'fi' >"$full_bin/sw_vers"
+cp "$full_bin/sw_vers" "$no_cc_bin/sw_vers"
+
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$full_bin/cc"
-chmod +x "$full_bin/uname" "$full_bin/getconf" "$full_bin/cc" \
-    "$no_cc_bin/uname" "$no_cc_bin/getconf"
+chmod +x "$full_bin/uname" "$full_bin/getconf" "$full_bin/sw_vers" \
+    "$full_bin/cc" "$no_cc_bin/uname" "$no_cc_bin/getconf" \
+    "$no_cc_bin/sw_vers"
 
 expect_failure() {
     name=$1
@@ -80,6 +90,8 @@ expect_failure unsupported-os 'supports macOS and Linux, not FreeBSD' "$full_bin
     TEST_SYSTEM=FreeBSD TEST_MACHINE=x86_64
 expect_failure unsupported-linux-arch 'supports x86-64 and arm64, not riscv64' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=riscv64
+expect_failure old-macos 'requires macOS 15 or newer; found 14.7' "$full_bin" \
+    TEST_SYSTEM=Darwin TEST_MACHINE=arm64 TEST_MACOS=14.7
 expect_failure old-glibc 'requires glibc 2.28 or newer' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=x86_64 TEST_GLIBC=2.27
 expect_failure musl 'musl is not supported yet' "$full_bin" \
@@ -91,4 +103,4 @@ expect_failure relative-prefix 'LUCE_INSTALL_DIR must be an absolute path' "$ful
 expect_failure system-prefix 'refusing unsafe install directory: /var/lib/luce' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=x86_64 LUCE_INSTALL_DIR=/var/lib/luce
 
-echo "installer contract: platform, libc, linker, and path refusals passed"
+echo "installer contract: platform version, libc, linker, and path refusals passed"

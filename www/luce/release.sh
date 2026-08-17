@@ -19,6 +19,7 @@ termui_source="$root/packages/termui-$termui_version"
 extension_source="$root/tools/vscode-luce"
 extension_version=$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }' "$extension_source/package.json")
 extension_id=luciaos.luce-language
+macos_minimum=15.0
 linux_aarch64_prefix_override=${LUCE_LINUX_AARCH64_PREFIX:-}
 linux_x86_64_prefix_override=${LUCE_LINUX_X86_64_PREFIX:-}
 
@@ -136,16 +137,36 @@ assemble_archive() {
     echo "release: $release_output/$archive"
 }
 
+verify_macos_minimum() {
+    prefix=$1
+    command -v otool >/dev/null 2>&1 || {
+        echo "luce release: otool is required to verify the macOS deployment target" >&2
+        exit 1
+    }
+    for tool in luce loom editor; do
+        minimum=$(otool -l "$prefix/$tool" | awk '
+            $1 == "cmd" && $2 == "LC_BUILD_VERSION" { in_build = 1; next }
+            in_build && $1 == "minos" { print $2; exit }
+        ')
+        if [ "$minimum" != "$macos_minimum" ]; then
+            echo "luce release: $tool targets macOS ${minimum:-unknown}, expected $macos_minimum" >&2
+            exit 1
+        fi
+    done
+    echo "release: macOS tools require macOS $macos_minimum"
+}
+
 echo "==> macOS arm64 toolchain"
 macos_prefix="$release_work/prefix-macos-aarch64"
 macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
 (cd "$root" && zig build \
     --prefix "$macos_prefix" \
-    -Dtarget=aarch64-macos \
+    -Dtarget=aarch64-macos.15.0 \
     -Doptimize=ReleaseSafe \
     -Dsysroot="$macos_sdk" \
     --global-cache-dir "$zig_global_cache" \
     --summary all)
+verify_macos_minimum "$macos_prefix"
 assemble_archive macos-aarch64 "$macos_prefix"
 
 for architecture in aarch64 x86_64; do

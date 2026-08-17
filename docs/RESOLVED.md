@@ -31,3 +31,12 @@ loading now grows until its allocator reports exhaustion, with a regression
 that retains 128 imported modules. Shell tokenization grows with the input and
 has a 128-argument regression. Structural recursion and hostile-input limits
 remain where they protect the compiler rather than ration ordinary programs.
+
+## 2026-08-16 — released macOS tools disagreed on their minimum system
+
+An unversioned cross-target build produced `luce` and `loom` with a macOS 13
+load command while the editor required macOS 15. The release now targets
+`aarch64-macos.15.0` explicitly, audits every shipped tool's Mach-O minimum,
+and refuses macOS 14 or older before downloading. A ReleaseSafe archive-shaped
+build proves `luce`, `loom`, the editor, and generated Luce artifacts all carry
+the 15.0 deployment target.
