@@ -9,8 +9,9 @@ root=$(CDPATH= cd "$here/../.." && pwd)
 version=$(tr -d '[:space:]' <"$root/VERSION")
 installer="$here/install/$version/install.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/luce-installer-contract.XXXXXX")
+archive_external="/tmp/luce-installer-contract.$$"
 cleanup() {
-    rm -rf "$work"
+    rm -rf "$work" "$archive_external"
 }
 trap cleanup 0 HUP INT TERM
 
@@ -103,4 +104,66 @@ expect_failure relative-prefix 'LUCE_INSTALL_DIR must be an absolute path' "$ful
 expect_failure system-prefix 'refusing unsafe install directory: /var/lib/luce' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=x86_64 LUCE_INSTALL_DIR=/var/lib/luce
 
-echo "installer contract: platform version, libc, linker, and path refusals passed"
+# A checksum only authenticates the archive bytes. Exercise the extraction
+# boundary with a complete (but deliberately malicious) fixture so a future
+# change cannot reintroduce path traversal or link extraction.
+archive_base="$work/archive"
+archive_tree="$archive_base/luce-$version"
+archive_name="luce-${version}-linux-x86_64.tar.gz"
+mkdir -p "$archive_tree/bin" "$archive_tree/lib/termui-0.3.0" \
+    "$archive_tree/share/licenses/third-party" \
+    "$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0/syntaxes" \
+    "$archive_tree/share/luce"
+printf '%s\n' "$version" >"$archive_tree/VERSION"
+archive_source=0123456789012345678901234567890123456789
+printf '%s\n' \
+    'format luce-build-manifest-1' \
+    "version $version" \
+    'platform linux-x86_64' \
+    "source $archive_source" >"$archive_tree/share/luce/BUILD-MANIFEST"
+for tool in luce loom editor; do
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = "--build-info" ]; then' \
+        "    printf '%s\\n' '$tool $version' 'source $archive_source'" \
+        'fi' >"$archive_tree/bin/$tool"
+    chmod +x "$archive_tree/bin/$tool"
+done
+: >"$archive_tree/lib/libluce_rt.a"
+: >"$archive_tree/lib/libluce_start.a"
+for notice in THIRD_PARTY_NOTICES.md LLVM-LICENSE.txt ZIG-LICENSE.txt \
+    GCC-GPL-3.txt GCC-RUNTIME-EXCEPTION.txt; do
+    printf '%s\n' fixture >"$archive_tree/share/licenses/third-party/$notice"
+done
+for package_file in luce.yaml termui.luc model.luc input.luc layout.luc \
+    canvas.luc view.luc runtime.luc; do
+    printf '%s\n' fixture >"$archive_tree/lib/termui-0.3.0/$package_file"
+done
+extension_tree="$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0"
+printf '%s\n' '{}' >"$extension_tree/package.json"
+printf '%s\n' fixture >"$extension_tree/extension.js"
+printf '%s\n' fixture >"$extension_tree/language-configuration.json"
+printf '%s\n' '{}' >"$extension_tree/syntaxes/luce.tmLanguage.json"
+ln -s /tmp/luce-installer-outside "$archive_tree/unsafe-link"
+(cd "$archive_base" && tar -czf "$archive_name" "luce-$version")
+if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$archive_base" && sha256sum "$archive_name" >"$archive_name.sha256")
+else
+    (cd "$archive_base" && shasum -a 256 "$archive_name" >"$archive_name.sha256")
+fi
+archive_output="$work/archive-output.txt"
+if env PATH="$full_bin" HOME="$work/archive-home" \
+    LUCE_INSTALL_BASE_URL="file://$archive_base" \
+    LUCE_INSTALL_DIR="$archive_external/install" \
+    LUCE_INSTALL_EDITOR_EXTENSIONS_DIR="$archive_external/extensions" \
+    LUCE_INSTALL_PROFILE="$archive_external/profile" \
+    LUCE_INSTALL_NO_PATH=1 "$installer" >"$archive_output" 2>&1; then
+    echo "installer contract: unsafe archive unexpectedly succeeded" >&2
+    exit 1
+fi
+if ! grep -Fq 'release archive contains a link or special file' "$archive_output"; then
+    echo "installer contract: archive refusal had unexpected output" >&2
+    cat "$archive_output" >&2
+    exit 1
+fi
+
+echo "installer contract: platform version, libc, linker, path, and archive refusals passed"

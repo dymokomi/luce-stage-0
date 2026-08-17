@@ -206,8 +206,44 @@ fi
 
 unpack="$tmp/unpack"
 mkdir "$unpack"
-tar -xzf "$archive" -C "$unpack"
 release="$unpack/luce-$version"
+
+# A checksum authenticates the bytes we downloaded; it does not make an
+# archive safe if the release endpoint or its signing process is compromised.
+# Keep extraction confined to the expected release directory and refuse links
+# or device entries, which could otherwise redirect a later file check or
+# replacement outside the temporary tree.
+members="$tmp/members"
+if ! tar -tzf "$archive" >"$members"; then
+    echo "luce: release archive cannot be listed" >&2
+    exit 1
+fi
+if ! awk -v root="luce-$version" '
+    function unsafe(path, count, parts, i) {
+        if (path ~ /^\//) return 1
+        count = split(path, parts, "/")
+        for (i = 1; i <= count; i++) if (parts[i] == "..") return 1
+        return 0
+    }
+    {
+        path = $0
+        sub(/\/$/, "", path)
+        if (path == "" || unsafe(path)) bad = 1
+        if (path != root && index(path, root "/") != 1) bad = 1
+    }
+    END { exit bad ? 1 : 0 }
+' "$members"; then
+    echo "luce: release archive contains an unsafe member path" >&2
+    exit 1
+fi
+if ! tar -tvzf "$archive" | awk '
+    length($0) > 0 && substr($0, 1, 1) !~ /^[-d]$/ { bad = 1 }
+    END { exit bad ? 1 : 0 }
+'; then
+    echo "luce: release archive contains a link or special file" >&2
+    exit 1
+fi
+tar -xzf "$archive" -C "$unpack"
 if [ ! -d "$release" ]; then
     echo "luce: release archive has no luce-$version directory" >&2
     exit 1
