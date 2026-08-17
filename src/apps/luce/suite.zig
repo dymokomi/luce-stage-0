@@ -343,8 +343,11 @@ fn runOne(
     name: []const u8,
     tally: *Tally,
 ) !void {
-    // Whatever the report has said so far goes out before the test
-    // does, so the test's own output lands under its own name.
+    // Name the call before entering it, then force that progress out.
+    // A slow or hung test must identify itself, and a redirected report
+    // keeps the same two-line lifecycle as a terminal instead of relying
+    // on cursor movement to rewrite one line in place.
+    try announce(out, name);
     try out.flush();
 
     // The test's own two channels: `print` onto the report's stream,
@@ -409,6 +412,10 @@ fn runOne(
         .unknown => try out.print("{s}it returned an unknown status\n", .{under_the_name}),
     }
     tally.failed += 1;
+}
+
+fn announce(out: *std.Io.Writer, name: []const u8) !void {
+    try out.print("  test  {s}\n", .{name});
 }
 
 fn pass(out: *std.Io.Writer, palette: Palette, name: []const u8) !void {
@@ -524,18 +531,27 @@ test "the summary is green only when nothing went wrong" {
     }
 }
 
-test "a verdict line names the test, and colours only the verdict" {
+test "a test has a progress line followed by its verdict" {
     var written: std.Io.Writer.Allocating = .init(testing.allocator);
     defer written.deinit();
 
+    try announce(&written.writer, "test_area");
     try pass(&written.writer, .{}, "test_area");
     try fail(&written.writer, .{}, "test_bounds");
-    // Two columns wide enough that the names line up under each other.
-    try testing.expectEqualStrings("  ok    test_area\n  FAIL  test_bounds\n", written.written());
+    // Progress is plain and both verdict columns are wide enough that
+    // the names line up under each other.
+    try testing.expectEqualStrings(
+        "  test  test_area\n  ok    test_area\n  FAIL  test_bounds\n",
+        written.written(),
+    );
 
     written.clearRetainingCapacity();
+    try announce(&written.writer, "test_area");
     try pass(&written.writer, .{ .enabled = true }, "test_area");
-    try testing.expectEqualStrings("  \x1b[32mok\x1b[0m    test_area\n", written.written());
+    try testing.expectEqualStrings(
+        "  test  test_area\n  \x1b[32mok\x1b[0m    test_area\n",
+        written.written(),
+    );
 }
 
 test "a test passes by returning with nothing left behind, and fails every other way" {

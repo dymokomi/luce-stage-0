@@ -84,10 +84,11 @@ and raise location. Leaks and a program that calls `exit` also fail the test.
 The process exits non-zero when compilation, discovery, or any test fails.
 
 One failed test does not prevent later discovered tests from running. The
-report names each source file, prints `ok` or `FAIL` for every executed test,
-and ends with passed, failed, test, and file counts. Compile or discovery
-failures are counted as files not run, so a partially executed suite cannot
-finish green.
+report names each source file, flushes a `test` line before entering every
+call, prints `ok` or `FAIL` when that call finishes, and ends with passed,
+failed, test, and file counts. A slow or hung test therefore identifies itself.
+Compile or discovery failures are counted as files not run, so a partially
+executed suite cannot finish green.
 
 If a test is checking a fallible operation, handle it explicitly:
 
@@ -142,10 +143,11 @@ for each discovered test. Calls run in declaration order, files in sorted
 order, and tests are not parallelized. `luce test` always builds debug
 artifacts so trap locations are available, and it accepts no build options.
 
-The file name is flushed before its tests execute, and output produced by a
-test appears in report order. A result line is printed when the test returns,
-traps, or raises. Color is used only on a terminal and `NO_COLOR` disables it,
-so redirected reports remain stable text.
+The file name and each test's progress line are flushed before the test enters.
+Output produced by the test appears after that line and before its verdict. A
+result line is printed when the test returns, traps, or raises. Color is used
+only on a terminal and `NO_COLOR` disables it, so redirected reports retain the
+same stable text layout.
 
 This design keeps tests ordinary Luce programs. They use normal imports and
 the normal host gate; the runner adds discovery and isolation, not another

@@ -133,9 +133,23 @@ test "a command line with nothing to do prints usage and fails" {
         if (arguments.len == 1 and std.mem.eql(u8, arguments[0], "package")) {
             try testing.expect(ran.saysErr("luce package new"));
         } else {
-            for ([_][]const u8{ "luce build", "luce check", "luce ir", "luce package" }) |form| {
+            for ([_][]const u8{
+                "luce --version",
+                "luce build FILE [-o OUT] [--release] [--emit=WHAT]",
+                "luce check FILE",
+                "luce ir FILE [--full]",
+                "luce test [PATH ...]",
+                "luce package new NAME [VERSION]",
+                "luce package version NAME VERSION",
+                "luce package publish NAME",
+            }) |form| {
                 try testing.expect(ran.saysErr(form));
             }
+            try testing.expect(ran.saysErr(
+                "--emit says which shape to write. The default is exe;\n" ++
+                    "all three forms walk the same compiler pipeline:\n",
+            ));
+            try testing.expect(!ran.saysErr("exe differs between them"));
         }
     }
 }
@@ -868,10 +882,18 @@ test "luce test compiles a tests tree, runs each test on its own, and scores the
         at = found;
     }
 
-    // A passing test, and the test's own output arriving under its own
-    // name rather than after the verdict.
-    try testing.expect(ran.saysOut("  ok    test_area_of_unit_square\n"));
-    try testing.expect(std.mem.indexOf(u8, ran.out, "checking 5 x 5\n  ok    test_area_of_square") != null);
+    // Every call is announced before entry. The test's own output then
+    // lands between that progress line and the final verdict, in the
+    // same order in a captured report as it has on a terminal.
+    try testing.expect(ran.saysOut(
+        "  test  test_area_of_unit_square\n" ++
+            "  ok    test_area_of_unit_square\n",
+    ));
+    try testing.expect(std.mem.indexOf(
+        u8,
+        ran.out,
+        "  test  test_area_of_square\nchecking 5 x 5\n  ok    test_area_of_square",
+    ) != null);
 
     // A trap, rendered as every trap is, indented under the name that
     // took it — and with the *called* frames in it, which is what makes
@@ -919,7 +941,10 @@ test "a green run says so and exits 0" {
     var ran = try runLuceHere(gpa, &tree, &.{"test"});
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), ran.status);
-    try testing.expect(ran.saysOut("  ok    test_arithmetic\n"));
+    try testing.expect(ran.saysOut(
+        "  test  test_arithmetic\n" ++
+            "  ok    test_arithmetic\n",
+    ));
     try testing.expect(ran.saysOut("1 passed, 0 failed, 1 test in 1 file\n"));
     try testing.expectEqualStrings("", ran.err);
 }

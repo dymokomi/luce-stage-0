@@ -21,7 +21,7 @@ Start with [V2.md](V2.md) for the product north star and
 [ROADMAP.md](ROADMAP.md) for the dated state audit and ordered path to 1.0.
 Use [LANGUAGE.md](LANGUAGE.md) and the current pages below when working on the
 compiler. Confirmed incorrect behavior belongs in [MISSING.md](MISSING.md),
-and only there.
+and completed repairs move to the compact [RESOLVED.md](RESOLVED.md) record.
 
 User-facing documentation lives at
 [luce.luciaos.com](https://luce.luciaos.com), built from
@@ -80,6 +80,6 @@ selected surface roster is checked during the site build.
 
 ## Decision records
 
-There are no decision records in the current tree. The unreleased TermUI
-rewrite plans were removed once `TERMUI.md` became the single current
-description of the package.
+| File | Boundary preserved |
+|---|---|
+| [RESOLVED.md](RESOLVED.md) | Confirmed bugs after their repair and proof land. |

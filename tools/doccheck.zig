@@ -446,11 +446,11 @@ test "every Luce sample in every catalogued document compiles" {
     // Written down rather than derived: a document list that empties
     // itself passes vacuously, which is exactly the failure this guard
     // exists to prevent.
-    try testing.expectEqual(@as(usize, 41), documents.len);
+    try testing.expectEqual(@as(usize, 42), documents.len);
     try testing.expect(census.found >= 40);
-    // Every catalogued document is now current reference or a plan. The
-    // historical exemption remains understood for fixtures, but no live
-    // document receives it; plans use `text` for future syntax.
+    // Living reference and plans are always checked strictly. A record may
+    // use the explicit historical exemption, so stop before that section;
+    // plans use `text` for future syntax.
     var current_and_plan_census: Census = .{};
     var living_problems = try survey(
         gpa,

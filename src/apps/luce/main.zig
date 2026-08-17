@@ -263,6 +263,7 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
             "  luce ir FILE [--full]\n" ++
+            "  luce test [PATH ...]\n" ++
             "  luce package new NAME [VERSION]\n" ++
             "  luce package version NAME VERSION\n" ++
             "  luce package publish NAME\n" ++
@@ -273,9 +274,8 @@ fn usage(err: *std.Io.Writer) !u8 {
             "something to ship; loom writes one when it needs a\n" ++
             "program compiled.\n" ++
             "\n" ++
-            "--emit says which shape to write; the default is exe\n" ++
-            "differs between them — the same program walks the same\n" ++
-            "pipeline either way:\n" ++
+            "--emit says which shape to write. The default is exe;\n" ++
+            "all three forms walk the same compiler pipeline:\n" ++
             "\n" ++
             "  exe      FILE      a standalone native executable (default)\n" ++
             "  library  FILE.lc   a native artifact loom runs\n" ++

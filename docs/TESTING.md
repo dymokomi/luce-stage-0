@@ -128,8 +128,11 @@ bracketed by the per-call loop; its `print_error` is its own and still
 goes to standard error. Output is the shell palette's when writing to a
 terminal, plain otherwise.
 
-Per file, per test: the name, `ok` or `FAIL`, and on failure the
-rendering indented under the name. A test fails by:
+Per file, per test: a plain `test` line is flushed before the call, then an
+`ok` or `FAIL` verdict follows when it completes. A slow or hung call therefore
+identifies itself, while redirected and terminal reports retain the same stable
+layout. On failure, the rendering is indented under the verdict. A test fails
+by:
 
 - **trap** — rendered as every trap is: code, message,
   `file:line:column`, and call trace;

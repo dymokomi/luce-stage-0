@@ -64,8 +64,10 @@ pub const plans = [_][]const u8{
 };
 
 /// Ratified historical boundaries whose reasoning remains useful. Superseded
-/// pre-release plans do not qualify; the current tree has no such record.
-pub const records = [_][]const u8{};
+/// pre-release plans do not qualify.
+pub const records = [_][]const u8{
+    "docs/RESOLVED.md",
+};
 
 /// Every catalogued document.
 pub const all = living ++ plans ++ records;
