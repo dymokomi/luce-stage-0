@@ -39,6 +39,10 @@ ARM64/x86-64 archive matrix. The latter uses pinned Docker builders and is
 intentionally not part of every documentation edit; `www/luce/deploy.sh` runs
 both before publishing.
 
+User support and private vulnerability reports follow [SUPPORT.md](SUPPORT.md)
+and [SECURITY.md](SECURITY.md). Never turn a security report into a public
+issue before coordinated disclosure.
+
 `build.zig` finds LLVM by asking `llvm-config`, on `PATH` or in the
 usual Homebrew and distribution prefixes; `-Dllvm-config=PATH` points
 it somewhere else.  When the system LLVM is the wrong one,

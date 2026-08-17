@@ -1,0 +1,110 @@
+name: Quality gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS 15 ARM64
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Restore the pinned Zig toolchain
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/zig-0.16.0
+          key: zig-0.16.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Zig 0.16.0
+        run: |
+          tools/ci/install-zig.sh "$RUNNER_TEMP/zig-0.16.0"
+          echo "$RUNNER_TEMP/zig-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Install the compiler dependencies
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Record the toolchain
+        run: |
+          zig version
+          llvm-config --version
+          node --version
+          cc --version
+
+      - name: Build the ReleaseSafe installed product
+        run: ./build.sh --global-cache-dir "$RUNNER_TEMP/luce-zig-global-release"
+
+      - name: Run the complete Debug release gate
+        run: zig build test -j1 --summary all --global-cache-dir "$RUNNER_TEMP/luce-zig-global-debug"
+
+      - name: Build and verify every documentation page
+        run: ./www/luce/build.sh --fast
+
+  linux:
+    name: Linux ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: x86-64
+          - runner: ubuntu-24.04-arm
+            architecture: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Restore the pinned Zig toolchain
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/zig-0.16.0
+          key: zig-0.16.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Zig 0.16.0
+        run: |
+          tools/ci/install-zig.sh "$RUNNER_TEMP/zig-0.16.0"
+          echo "$RUNNER_TEMP/zig-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 22 and the test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl gnupg nodejs zip unzip
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.gpg.key"
+          fingerprint=$(gpg --show-keys --with-colons "$RUNNER_TEMP/llvm.gpg.key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          test "$fingerprint" = 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+          gpg --dearmor < "$RUNNER_TEMP/llvm.gpg.key" > "$RUNNER_TEMP/llvm.gpg"
+          sudo install -m 0644 "$RUNNER_TEMP/llvm.gpg" /usr/share/keyrings/llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main' | sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-22-dev libpolly-22-dev
+          echo '/usr/lib/llvm-22/bin' >> "$GITHUB_PATH"
+
+      - name: Record the toolchain
+        run: |
+          zig version
+          llvm-config --version
+          node --version
+          cc --version
+
+      - name: Build the ReleaseSafe installed product
+        run: ./build.sh --global-cache-dir "$RUNNER_TEMP/luce-zig-global-release"
+
+      - name: Run the complete Debug release gate
+        run: zig build test -j1 --summary all --global-cache-dir "$RUNNER_TEMP/luce-zig-global-debug"

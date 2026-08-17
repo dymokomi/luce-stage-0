@@ -240,6 +240,21 @@ census; a structural test pins an exact MIR invariant; a runtime test attacks
 allocation, malformed values, or graph depth directly. Counting all three as
 interchangeable “tests” would hide what is actually proved.
 
+### Automatic platform gate
+
+Every push to `main` and every pull request runs the complete gate on macOS 15
+ARM64, Linux x86-64, and Linux ARM64. Each job first builds the installed
+ReleaseSafe product, then runs the complete Debug gate; macOS also builds every
+checked documentation page with that installed product. The workflow downloads
+the exact Zig 0.16.0 archive named by `build.zig.zon`, verifies its published
+SHA-256, verifies the apt.llvm.org signing-key fingerprint on Linux, and pins
+GitHub actions by commit rather than a mutable tag.
+
+The automatic gate proves source commits. The separate manual Linux release
+workflow builds the pinned, static-LLVM glibc 2.28 prefix used for publication;
+archive assembly and clean-installer smokes remain release operations rather
+than work repeated for an ordinary prose edit.
+
 ### Where a test belongs
 
 - A test of observable Luce behavior belongs in `src/luce/specs/` and

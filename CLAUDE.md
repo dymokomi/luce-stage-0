@@ -83,7 +83,7 @@ There is one shipping engine: LLVM-generated machine code linked with
 used by the specification suite. There is no JIT, bytecode VM, handwritten
 emitter, or runtime fallback.
 
-The serialized MIR module format is **54**. The published host ABI is **23**.
+The serialized MIR module format is **55**. The published host ABI is **24**.
 The declarations in `src/luce/mir/module.zig` and
 `src/luce/codegen/abi.zig` are authoritative; never copy the numbers into a
 new compatibility check.

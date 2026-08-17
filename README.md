@@ -262,6 +262,12 @@ stay deferred until the language and terminal are excellent.  The
 runtime and host C ABI used internally by compiled artifacts is
 already built.
 
+## Support and security
+
+Support requests follow [SUPPORT.md](SUPPORT.md). Please report
+vulnerabilities privately through [SECURITY.md](SECURITY.md), not in a public
+issue or discussion.
+
 ## License
 
 Luce and loom are distributed under the terms of both the MIT license
