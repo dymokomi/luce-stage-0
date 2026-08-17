@@ -10,14 +10,16 @@
 # negative number of milliseconds.  That is not a bug and does not
 # trap: there is no time left to wait, so the wait returns.
 
+import std.os
+
 const frame_ms = 80
 
 struct World:
     static func rows() -> i64:
-        return clamp(term_rows() - 2, 8, 40)
+        return clamp(os.term.rows() - 2, 8, 40)
 
     static func cols() -> i64:
-        return clamp((term_cols() - 1) // 2, 8, 60)
+        return clamp((os.term.cols() - 1) // 2, 8, 60)
 
     static func seed(grid: array[bool, _, _]):
         # A glider...
@@ -60,19 +62,19 @@ struct World:
         return next
 
     static func draw(grid: array[bool, _, _], generation: i64):
-        term_clear()
+        os.term.clear()
         for row in range(0, grid.dim(0)):
-            term_move(row, 0)
+            os.term.move(row, 0)
             for col in range(0, grid.dim(1)):
                 if grid[row, col]:
-                    term_style(114)
-                    term_write("██")
+                    os.term.style(114)
+                    os.term.write("██")
                 else:
-                    term_style(238)
-                    term_write(" ·")
-        term_move(grid.dim(0), 0)
-        term_style(252, 237)
-        term_write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
+                    os.term.style(238)
+                    os.term.write(" ·")
+        os.term.move(grid.dim(0), 0)
+        os.term.style(252, 237)
+        os.term.write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
     var grid = new array[bool](World.rows(), World.cols())
@@ -84,15 +86,15 @@ func main():
         # `none` is the keyboard running dry, which ends the run for
         # the same reason Ctrl-Q does: nobody is going to ask for
         # another generation.
-        let key = key_read()
+        let key = os.term.io.read()
         if key == none or key == "ctrl_q":
             running = false
         else:
             var steps = 1
-            if key == "text" and key_text() == " ":
+            if key == "text" and os.term.io.text() == " ":
                 steps = 100
             for tick in range(0, steps):
-                let began = clock_ms()
+                let began = os.clock_ms()
                 grid = World.step(grid)   # the old grid frees right here (S5)
                 generation = generation + 1
                 if steps > 1:
@@ -100,4 +102,4 @@ func main():
                     # What is left of this frame's share of a second.
                     # A slow machine leaves nothing, or less than
                     # nothing, and the wait simply returns.
-                    sleep_ms(frame_ms - (clock_ms() - began))
+                    os.sleep_ms(frame_ms - (os.clock_ms() - began))

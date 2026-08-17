@@ -30,6 +30,54 @@ const mir = luce.mir;
 
 const testing = std.testing;
 
+/// Host-boundary specifications exercise the language's public standard
+/// modules. Keeping the shared imports here makes each program body show the
+/// operation under test without copying the same two setup lines hundreds of
+/// times; the line offset is fixed and intentional for trace assertions.
+const hosted = struct {
+    const imports = "import std.files\nimport std.os\n\n";
+
+    fn source(body: []const u8) ![]u8 {
+        return std.fmt.allocPrint(testing.allocator, "{s}{s}", .{ imports, body });
+    }
+
+    fn compare(body: []const u8, provided: agree.Provided) !agree.Session {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.compare(program, provided);
+    }
+
+    fn ok(body: []const u8) !void {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.ok(program);
+    }
+
+    fn prints(body: []const u8, expected: []const u8) !void {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.prints(program, expected);
+    }
+
+    fn printsGiven(body: []const u8, provided: agree.Provided, expected: []const u8) !void {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.printsGiven(program, provided, expected);
+    }
+
+    fn trapGiven(body: []const u8, provided: agree.Provided, code: mir.TrapCode) !void {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.trapGiven(program, provided, code);
+    }
+
+    fn exits(body: []const u8, provided: agree.Provided, status: i64) !void {
+        const program = try source(body);
+        defer testing.allocator.free(program);
+        return agree.exits(program, provided, status);
+    }
+};
+
 /// One argument, and it names the file this world holds.
 const one_argument = [_][]const u8{"notes.txt"};
 
@@ -38,7 +86,7 @@ const one_argument = [_][]const u8{"notes.txt"};
 // ---------------------------------------------------------------------------
 
 test "a host builtin with no host at all traps host_unavailable" {
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
         \\    print("hello")
         \\
@@ -48,9 +96,9 @@ test "a host builtin with no host at all traps host_unavailable" {
 test "host text ingress rejects invalid UTF-8 before constructing str" {
     var world: agree.World = .{};
     world.lines = &.{"a\x80b"};
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
-        \\    let line = read_line("") else ""
+        \\    let line = os.read_line("") else ""
         \\    print(line)
         \\
     , .{ .world = world }, .host_unavailable);
@@ -60,13 +108,13 @@ test "print, arguments, and files flow through the host" {
     var world: agree.World = .withFile("notes.txt", "file body");
     world.arguments = &one_argument;
 
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main(args: list[str]) -> !:
         \\    print("args: " + str(len(args)))
         \\    let path = args[0]
-        \\    if (try path_kind(path)) != 0:
-        \\        print(try file_read(path))
-        \\    try file_write("out.txt", "saved")
+        \\    if (try files.kind(path)) != none:
+        \\        print(try files.read(path))
+        \\    try files.write("out.txt", "saved")
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -83,9 +131,9 @@ test "an argument out of range traps, and a refused write is an error" {
     // and a write the world would not take is not (docs/FAILURE.md).
     // The command line is an ordinary list now, so the first of those
     // is the language's own bounds trap (docs/LANGUAGE.md).
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main(args: list[str]):
-        \\    file_write("out.txt", "ignored") catch:
+        \\    files.write("out.txt", "ignored") catch:
         \\        print("refused")
         \\    let missing = args[5]
         \\
@@ -112,7 +160,7 @@ test "main receives the command line, and args[0] is the first user argument" {
     var world: agree.World = .{};
     world.arguments = &one_argument;
 
-    try agree.printsGiven(
+    try hosted.printsGiven(
         \\func main(args: list[str]):
         \\    print(str(len(args)))
         \\    print(args[0])
@@ -123,7 +171,7 @@ test "main receives the command line, and args[0] is the first user argument" {
 test "args iterates, slices and joins like any other list[str]" {
     // The point of the parameter over `arg(index)`: it composes with
     // everything `list` already has.
-    try agree.printsGiven(
+    try hosted.printsGiven(
         \\import std.strings
         \\
         \\func main(argv: list[str]):
@@ -138,7 +186,7 @@ test "args iterates, slices and joins like any other list[str]" {
 test "a host with no arguments to offer hands main an empty list, not a trap" {
     // Fail-closed for the host builtins means a trap; `args` is not one
     // of them, and the entry cannot fail before `main` starts.
-    try agree.printsGiven(
+    try hosted.printsGiven(
         \\func main(args: list[str]):
         \\    print(str(len(args)))
         \\
@@ -149,7 +197,7 @@ test "reading past the end of args is the language's own bounds trap" {
     var world: agree.World = .{};
     world.arguments = &one_argument;
 
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main(args: list[str]):
         \\    print(args[1])
         \\
@@ -160,9 +208,9 @@ test "main's args compose with the raising entry" {
     var world: agree.World = .withFile("notes.txt", "file body");
     world.arguments = &one_argument;
 
-    try agree.printsGiven(
+    try hosted.printsGiven(
         \\func main(args: list[str]) -> !:
-        \\    print(try file_read(args[0]))
+        \\    print(try files.read(args[0]))
         \\
     , .{ .world = world }, "file body\n");
 }
@@ -175,14 +223,14 @@ test "read_line answers a line, then absence; the prompt goes out in front" {
     // Three reads, three prompts: the third is what discovered the end
     // of input.  Prompts are recorded in the transcript, so the order
     // of prompt against line is compared too.
-    try agree.prints(
+    try hosted.prints(
         \\func main():
         \\    var count = 0
-        \\    var line = read_line("> ")
+        \\    var line = os.read_line("> ")
         \\    while line != none:
         \\        count = count + 1
         \\        print(str(count) + ":" + line)
-        \\        line = read_line("> ")
+        \\        line = os.read_line("> ")
         \\    print("done")
         \\
     , "[prompt]> \n" ++
@@ -197,16 +245,16 @@ test "the clock, the wait and the environment reach the host" {
     // A duration that has already elapsed still reaches the host,
     // which is what decides there is no time left to wait — the
     // language does not make that a trap.
-    try agree.prints(
+    try hosted.prints(
         \\func main():
-        \\    let started = clock_ms()
-        \\    sleep_ms(30)
-        \\    print("elapsed " + str(clock_ms() - started))
-        \\    sleep_ms(0)
-        \\    sleep_ms(-5)
-        \\    print_error("to stderr")
-        \\    print(env("LUCE_MODE") else "(unset)")
-        \\    print(env("NOTHING") else "(unset)")
+        \\    let started = os.clock_ms()
+        \\    os.sleep_ms(30)
+        \\    print("elapsed " + str(os.clock_ms() - started))
+        \\    os.sleep_ms(0)
+        \\    os.sleep_ms(-5)
+        \\    os.print_error("to stderr")
+        \\    print(os.env("LUCE_MODE") else "(unset)")
+        \\    print(os.env("NOTHING") else "(unset)")
         \\
     ,
         \\[sleep]30
@@ -231,9 +279,9 @@ test "the clock, the wait and the environment reach the host" {
 // race.
 
 test "dir_create makes the directory, and the parents leading to it" {
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main() -> !:
-        \\    try dir_create("store/packages/geo-1.2.0")
+        \\    try files.make_directory("store/packages/geo-1.2.0")
         \\    print("made")
         \\
     , .{});
@@ -254,11 +302,11 @@ test "a directory already there is success, not an error" {
     // on with the work.  If the second call raised, every caller would
     // write an existence check in front of it, and that check is a
     // race (docs/FAILURE.md).
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main() -> !:
-        \\    try dir_create("papers")
-        \\    try dir_create("papers")
-        \\    dir_create("papers") catch:
+        \\    try files.make_directory("papers")
+        \\    try files.make_directory("papers")
+        \\    files.make_directory("papers") catch:
         \\        print("refused")
         \\    print("still one")
         \\
@@ -276,9 +324,9 @@ test "a file in the way is an error the caller can catch" {
     // The one refusal idempotence must not swallow: something is
     // there, and it is not a directory.  News rather than a trap, like
     // everything else the world decides.
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main() -> !:
-        \\    try dir_create("notes.txt")
+        \\    try files.make_directory("notes.txt")
         \\
     , .{ .world = .withFile("notes.txt", "body") });
     defer session.deinit();
@@ -288,9 +336,9 @@ test "a file in the way is an error the caller can catch" {
 }
 
 test "a world that refuses writes makes no directory at all" {
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
-        \\    dir_create("a/b/c") catch:
+        \\    files.make_directory("a/b/c") catch:
         \\        print("refused")
         \\
     , .{ .world = .{ .refuse_writes = true } });
@@ -307,9 +355,10 @@ test "a world that refuses writes makes no directory at all" {
 //
 // The one question `file_exists` could not ask (docs/FILESYSTEM.md
 // D11).  Three things can happen and the language has exactly three
-// ways to say them, so each gets its own: a number for what is there,
-// zero for nothing there, and the error channel for a world that would
-// not say.  These specs hold all three apart.
+// ways to say them, so each gets its own: an enum for what is there,
+// none for nothing there, and the error channel for a world that would
+// not say. These specs hold all three apart through `std.files`, rather
+// than exposing the host's numeric wire codes to a program.
 
 test "path_kind names what is there, and nothing there is an answer" {
     var world: agree.World = .withFile("notes.txt", "body");
@@ -318,19 +367,24 @@ test "path_kind names what is there, and nothing there is an answer" {
         .{ .path = "papers", .kind = .directory },
         .{ .path = "wire", .kind = .other },
     };
-    var session = try agree.compare(
+    var session = try hosted.compare(
+        \\func say(path: str) -> !:
+        \\    let what = try files.kind(path)
+        \\    if what == none:
+        \\        print("none")
+        \\        return
+        \\    print(str(what))
+        \\
         \\func main() -> !:
-        \\    print(str(try path_kind("notes.txt")))
-        \\    print(str(try path_kind("papers")))
-        \\    print(str(try path_kind("wire")))
-        \\    print(str(try path_kind("ghost.txt")))
+        \\    try say("notes.txt")
+        \\    try say("papers")
+        \\    try say("wire")
+        \\    try say("ghost.txt")
         \\
     , .{ .world = world });
     defer session.deinit();
 
-    // 1 file, 2 directory, 3 other, 0 nothing — and the zero arrived
-    // as a `yes`, which is the whole point: absence is an answer.
-    try testing.expectEqualStrings("1\n2\n3\n0\n", session.printed());
+    try testing.expectEqualStrings("file\ndirectory\nother\nnone\n", session.printed());
 }
 
 test "a world that will not say is an error, not an absence" {
@@ -340,9 +394,9 @@ test "a world that will not say is an error, not an absence" {
     // sentences.
     var world: agree.World = .{};
     world.refused_kinds = &[_][]const u8{"locked"};
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main() -> !:
-        \\    try path_kind("locked/inside.txt")
+        \\    try files.kind("locked/inside.txt")
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -361,10 +415,10 @@ test "epoch_ms answers what time it is, and never goes backwards" {
     // since 1970 — long past the epoch, not yet the far future — and
     // two readings in order.  What the *real* calendar says is
     // `apps/host.zig`'s business, and its own test's.
-    try agree.prints(
+    try hosted.prints(
         \\func main():
-        \\    let first = epoch_ms()
-        \\    let second = epoch_ms()
+        \\    let first = os.epoch_ms()
+        \\    let second = os.epoch_ms()
         \\    assert(first > 1000000000000)
         \\    assert(first < 100000000000000)
         \\    assert(second >= first)
@@ -378,12 +432,12 @@ test "the two clocks are two questions" {
     // is why they are two builtins and not one: this world's monotonic
     // clock starts at a thousand and its calendar in 2025, and a
     // program reading both gets both.
-    try agree.prints(
+    try hosted.prints(
         \\func main():
-        \\    print(str(clock_ms()))
-        \\    print(str(epoch_ms()))
-        \\    print(str(clock_ms()))
-        \\    print(str(epoch_ms()))
+        \\    print(str(os.clock_ms()))
+        \\    print(str(os.epoch_ms()))
+        \\    print(str(os.clock_ms()))
+        \\    print(str(os.epoch_ms()))
         \\
     ,
         \\1000
@@ -400,9 +454,9 @@ test "a host with no calendar refuses rather than inventing a date" {
     // could not see through (`apps/machine.zig`'s rule).
     var provided: agree.Provided = .{};
     provided.world.timeless = true;
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
-        \\    print(str(epoch_ms()))
+        \\    print(str(os.epoch_ms()))
         \\
     , provided, .host_unavailable);
 }
@@ -410,68 +464,69 @@ test "a host with no calendar refuses rather than inventing a date" {
 test "every host service fails closed when the host withholds it" {
     const cases = [_][]const u8{
         \\func main():
-        \\    print(read_line("") else "x")
+        \\    print(os.read_line("") else "x")
         \\
         ,
         \\func main():
-        \\    print_error("x")
+        \\    os.print_error("x")
         \\
         ,
         \\func main():
-        \\    print(str(clock_ms()))
+        \\    print(str(os.clock_ms()))
         \\
         ,
         \\func main():
-        \\    sleep_ms(1)
+        \\    os.sleep_ms(1)
         \\
         ,
         \\func main():
-        \\    print(env("X") else "y")
+        \\    print(os.env("X") else "y")
         \\
         ,
         \\func main() -> !:
-        \\    try file_append("x", "y")
+        \\    try files.append("x", "y")
         \\
         ,
         \\func main() -> !:
-        \\    try file_delete("x")
+        \\    try files.delete("x")
         \\
         ,
         \\func main() -> !:
-        \\    try file_rename("x", "y")
+        \\    try files.rename("x", "y")
         \\
         ,
         \\func main() -> !:
-        \\    let names = try dir_list(".")
+        \\    let names = try files.list(".")
         \\
         ,
         \\func main() -> !:
-        \\    try dir_create("x")
+        \\    try files.make_directory("x")
         \\
         ,
         \\func main() -> !:
-        \\    print(str(try path_kind("x")))
+        \\    let what = try files.kind("x")
+        \\    print(str(what == none))
         \\
         ,
         \\func main():
-        \\    print(str(epoch_ms()))
+        \\    print(str(os.epoch_ms()))
         \\
         ,
         \\func main():
-        \\    print(str(os_total_memory()))
+        \\    print(str(os.total_memory()))
         \\
         ,
         \\func main():
-        \\    print(str(os_available_memory()))
+        \\    print(str(os.available_memory()))
         \\
         ,
         \\func main():
-        \\    print(str(os_cpu_count()))
+        \\    print(str(os.cpu_count()))
         \\
         ,
     };
     for (cases) |source| {
-        try agree.trapGiven(source, .console_only, .host_unavailable);
+        try hosted.trapGiven(source, .console_only, .host_unavailable);
     }
 }
 
@@ -480,9 +535,9 @@ test "every host service fails closed when the host withholds it" {
 // ---------------------------------------------------------------------------
 
 test "an uncaught error names its code, its words, and where it was raised" {
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func save(path: str) -> !:
-        \\    try file_write(path, "body")
+        \\    try files.write(path, "body")
         \\
         \\func main() -> !:
         \\    print("before")
@@ -497,11 +552,13 @@ test "an uncaught error names its code, its words, and where it was raised" {
     try testing.expectEqualStrings("before\n", session.printed());
     // One position, and it is the raise site rather than a stack: the
     // `try file_write` inside `save`, not the `try save` in `main`.
-    try testing.expectEqualStrings("save test.luc:2:5\n", session.trace());
+    // The public standard wrapper is the operation that raised. Its raw
+    // `Builtin.file_write` implementation name remains hidden.
+    try testing.expectEqualStrings("files.write std/files.luc:115:5\n", session.trace());
 }
 
 test "error() raises the program's own words, and catch discards them" {
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative: " + str(n))
@@ -529,7 +586,7 @@ test "catch NAME: binds the words the error carried, whichever code it was" {
     // which: `error(...)` raises the program's own words and a refused
     // write raises the library's, and the handler reads a `str`
     // either way (docs/FAILURE.md).
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative: " + str(n))
@@ -538,7 +595,7 @@ test "catch NAME: binds the words the error carried, whichever code it was" {
         \\func main():
         \\    check(-4) catch reason:
         \\        print("user: " + reason)
-        \\    file_write("out.txt", "body") catch reason:
+        \\    files.write("out.txt", "body") catch reason:
         \\        print("io: " + reason)
         \\
     , .{ .world = .{ .refuse_writes = true } });
@@ -556,11 +613,11 @@ test "the assignment form takes a binding too, and the place keeps its old value
     // handler attaches to, and the handler runs where the call raised
     // — so the assignment never happened and `text` still holds what
     // it held (docs/FAILURE.md).
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
         \\    var text = "unchanged"
         \\    var note = ""
-        \\    text = file_read("missing.txt") catch reason:
+        \\    text = files.read("missing.txt") catch reason:
         \\        note = reason
         \\    print(text)
         \\    print(note)
@@ -597,7 +654,7 @@ test "a call site that raised after it returned gives nothing back twice" {
     // The store stands on the returning side now, so the failing edge
     // leaves the slot holding the emptied value its own release wrote
     // back — and releasing that frees nothing.
-    try agree.ok(
+    try hosted.ok(
         \\struct Turn:
         \\    at: i64 = 0
         \\    note: str = "start"
@@ -624,7 +681,7 @@ test "the caught error is consumed: the binding reads it, forget still clears it
     // A `catch` that read the words must still leave the channel empty
     // — the run finishes rather than ending errored, and the caller
     // above it sees nothing pending.
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("negative")
@@ -653,7 +710,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
     // and really has to release — at the end of the block, and on the
     // `return` that leaves it early (S1).  A leak fails the run under
     // the testing allocator; the census fails it too.
-    try agree.ok(
+    try hosted.ok(
         \\func check(n: i64) -> i64!:
         \\    if n < 0:
         \\        error("a message far too long to live inside a value: " + str(n))
@@ -687,7 +744,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
 }
 
 test "catches nest: each handler reads the error its own call raised" {
-    try agree.ok(
+    try hosted.ok(
         \\func inner() -> !:
         \\    error("from inner")
         \\
@@ -716,18 +773,18 @@ test "terminal builtins drive the host screen and key queue" {
         .{ .name = "text", .text = "λ" },
         .{ .name = "ctrl_q" },
     };
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
-        \\    term_clear()
-        \\    term_move(1, 2)
-        \\    term_style(114, -1, true)
-        \\    term_write("hi ")
-        \\    term_write(key_read() else "?")
-        \\    term_write(key_text())
-        \\    let quit = key_read()
-        \\    term_flush()
+        \\    os.term.clear()
+        \\    os.term.move(1, 2)
+        \\    os.term.style(114, -1, true)
+        \\    os.term.write("hi ")
+        \\    os.term.write(os.term.io.read() else "?")
+        \\    os.term.write(os.term.io.text())
+        \\    let quit = os.term.io.read()
+        \\    os.term.flush()
         \\    print(quit else "?")
-        \\    print(str(term_rows()) + "x" + str(term_cols()))
+        \\    print(str(os.term.rows()) + "x" + str(os.term.cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();
@@ -749,12 +806,12 @@ test "term_style's defaults fill from the table, on both engines" {
     // the fifteen-call corpus was writing out by hand.  The host log
     // shows the same three values whichever way the call spelled
     // them.
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
-        \\    term_style(114)
-        \\    term_style(200, bold = true)
-        \\    term_style(bold = true, fg = 15, bg = 3)
-        \\    term_flush()
+        \\    os.term.style(114)
+        \\    os.term.style(200, bold = true)
+        \\    os.term.style(bold = true, foreground = 15, background = 3)
+        \\    os.term.flush()
         \\
     , .{});
     defer session.deinit();
@@ -771,19 +828,19 @@ test "a keyboard with nothing left on it answers none, and empties key_text with
     // stop, rather than the host being asked again forever because
     // "no key yet" and "no key ever" arrived as the same answer.
     //
-    // `key_text()` is checked *after* the dry read on purpose.  The
+    // `os.term.io.text()` is checked *after* the dry read on purpose.  The
     // payload of a key that never came is "", not the one before it —
     // otherwise a program that reads the name and the text separately
     // sees a key that is half there.
     const keys = [_]agree.World.Key{.{ .name = "text", .text = "x" }};
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
-        \\    let first = key_read()
-        \\    print((first else "none") + "/" + key_text())
-        \\    let second = key_read()
-        \\    print((second else "none") + "/" + key_text())
-        \\    let third = key_read()
-        \\    print((third else "none") + "/" + key_text())
+        \\    let first = os.term.io.read()
+        \\    print((first else "none") + "/" + os.term.io.text())
+        \\    let second = os.term.io.read()
+        \\    print((second else "none") + "/" + os.term.io.text())
+        \\    let third = os.term.io.read()
+        \\    print((third else "none") + "/" + os.term.io.text())
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();
@@ -812,7 +869,7 @@ test "exit ends the run with its status, and everything before it happened" {
     // statically — `luce.sema.unreachable` names the exit that leaves
     // first (the errors_spec has the row) — so the dead branch here is
     // behind a condition the analyzer cannot fold.
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
         \\    print("before")
         \\    var stopping = true
@@ -827,7 +884,7 @@ test "exit ends the run with its status, and everything before it happened" {
 }
 
 test "exit(0) is exited, not finished — the program said so" {
-    try agree.exits(
+    try hosted.exits(
         \\func main():
         \\    exit(0)
         \\
@@ -839,7 +896,7 @@ test "exit unwinds through nested calls, and the census counts what stood" {
     // engines: the list `main` owns and the one `stop` owns are both
     // standing when the run ends, and `settle` holds the two engines
     // to the same census.
-    try agree.exits(
+    try hosted.exits(
         \\func stop(code: i64):
         \\    var mine = [1, 2, 3]
         \\    print("stopping " + str(len(mine)))
@@ -854,7 +911,7 @@ test "exit unwinds through nested calls, and the census counts what stood" {
 }
 
 test "exit unwinds a union carrying a callback and an owned list" {
-    try agree.exits(
+    try hosted.exits(
         \\union Job:
         \\    run(action: (func(i64) -> i64)?, items: list[i64])
         \\
@@ -876,12 +933,12 @@ test "a negative and a large status cross the boundary intact" {
     // The host receives the i64 the program wrote; what an OS does
     // with it is the loader's business (POSIX keeps the low byte),
     // and the boundary itself does not editorialize.
-    try agree.exits(
+    try hosted.exits(
         \\func main():
         \\    exit(-1)
         \\
     , .{}, -1);
-    try agree.exits(
+    try hosted.exits(
         \\func main():
         \\    exit(70000)
         \\
@@ -889,7 +946,7 @@ test "a negative and a large status cross the boundary intact" {
 }
 
 test "exit fails closed: a host that cannot carry a status refuses the call" {
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
         \\    exit(1)
         \\
@@ -906,11 +963,11 @@ test "exit fails closed: a host that cannot carry a status refuses the call" {
 // builtins directly; `std_spec.zig` exercises `std.os` over them.
 
 test "the three machine facts reach the host and come back as written" {
-    try agree.prints(
+    try hosted.prints(
         \\func main():
-        \\    print(str(os_total_memory()))
-        \\    print(str(os_available_memory()))
-        \\    print(str(os_cpu_count()))
+        \\    print(str(os.total_memory()))
+        \\    print(str(os.available_memory()))
+        \\    print(str(os.cpu_count()))
         \\
     ,
         \\8589934592
@@ -926,12 +983,12 @@ test "a fact asked twice is asked twice, not folded to one call" {
     // The seeded world answers the same number both times, so what
     // this actually holds is that the second call still *happens* and
     // still crosses both engines the same way.
-    try agree.prints(
+    try hosted.prints(
         \\func main():
         \\    var seen = 0
         \\    for round in range(0, 3):
         \\        seen = seen + 1
-        \\        print(str(os_available_memory()))
+        \\        print(str(os.available_memory()))
         \\    print("read " + str(seen))
         \\
     ,
@@ -949,14 +1006,14 @@ test "a host that cannot tell refuses exactly as one without the slot does" {
     // offered the service, because in neither case did anyone measure
     // anything.
     const unmeasurable: agree.Provided = .{ .world = .{ .unmeasurable = true } };
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
-        \\    print(str(os_total_memory()))
+        \\    print(str(os.total_memory()))
         \\
     , unmeasurable, .host_unavailable);
-    try agree.trapGiven(
+    try hosted.trapGiven(
         \\func main():
-        \\    print(str(os_total_memory()))
+        \\    print(str(os.total_memory()))
         \\
     , .{ .machine = false }, .host_unavailable);
 }
@@ -965,10 +1022,10 @@ test "a refused fact stops the program where it stood" {
     // Fail-closed means the trap lands at the call, before the number
     // could reach anything: the print after it never runs, on either
     // engine.
-    var session = try agree.compare(
+    var session = try hosted.compare(
         \\func main():
         \\    print("asking")
-        \\    let available = os_available_memory()
+        \\    let available = os.available_memory()
         \\    print("got " + str(available))
         \\
     , .{ .world = .{ .unmeasurable = true } });

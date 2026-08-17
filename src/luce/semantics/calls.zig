@@ -359,7 +359,7 @@ pub fn lowerCall(
     // reserved names keep user declarations out of their way.
     if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
         if (conversionNamed(call.callee) != null) return construct.lowerConvert(self, call);
-        switch (try construct.lowerIntrinsic(self, call, as_statement, fallible_allowed, wanted)) {
+        switch (try construct.lowerIntrinsic(self, call, as_statement, fallible_allowed, wanted, .prelude)) {
             .not_builtin => {},
             .failed => return null,
             .value => |value| return value,
@@ -1040,6 +1040,30 @@ pub fn lowerMethod(
         // to call a method before the class identity exists.
         return null;
     }
+    // Embedded `std` alone sees the compiler bridge.  `Builtin` is not an
+    // import and not a user namespace: source provenance is the capability,
+    // so a project or package that writes the same text follows ordinary
+    // name resolution and cannot reach an intrinsic.
+    if (isStandardIntrinsicCall(self, method)) {
+        const call: ast.Call = .{
+            .callee = method.name,
+            .arguments = method.arguments,
+            .span = method.span,
+        };
+        switch (try construct.lowerIntrinsic(self, call, as_statement, fallible_allowed, null, .standard)) {
+            .not_builtin => {
+                try self.fail(
+                    "luce.sema.call",
+                    method.span,
+                    "unknown compiler intrinsic Builtin.{s}",
+                    .{method.name},
+                );
+                return null;
+            },
+            .failed => return null,
+            .value => |value| return value,
+        }
+    }
     switch (try methodNamespace(self, method)) {
         .resolved => |resolved| {
             if (self.analyzer.alias_names.get(resolved)) |alias_index| {
@@ -1106,6 +1130,17 @@ pub fn lowerMethod(
         .reported => return null,
         .value => return lowerValueMethod(self, method, as_statement, fallible_allowed, shape_position),
     }
+}
+
+fn isStandardIntrinsicCall(self: *FunctionBuilder, method: ast.Method) bool {
+    const name = switch (method.target.*) {
+        .name => |name| name.text,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, name, "Builtin")) return false;
+    const file = self.analyzer.modules[self.module].file;
+    const source = self.analyzer.diagnostics.sources.at(file) orelse return false;
+    return source.kind == .standard;
 }
 
 /// Build a nominal value. Classes with `init` route through their hidden

@@ -111,7 +111,7 @@ every program, decoded or freshly compiled.
 
 An uncaught **error** reads the same tables and follows the same
 rule, for one position instead of a stack: a debug build says `raised
-in Scan.number (calc.luc:35:13)` and a `--release` build says `raised
+in Scan.number (calc.luc:57:13)` and a `--release` build says `raised
 in Scan.number`. An error records that position once, where it was raised, and
 never assembles a trace — which is what keeps the *success* path of a
 `try` free of anything to save and restore (docs/FAILURE.md).

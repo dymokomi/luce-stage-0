@@ -26,7 +26,7 @@ Management](/guide/reference/memory/#m7).
 | `files.write(path: str, text: str) -> !` | creates or replaces a text file |
 | `files.read_lines(path: str) -> list[str]!` | lines without newline bytes; a final newline adds no empty line |
 | `files.write_lines(path: str, lines: list[str]) -> !` | writes one newline after each line; an empty list writes an empty file |
-| `files.append_text(path: str, text: str) -> !` | appends text and creates the file if needed |
+| `files.append(path: str, text: str) -> !` | appends text and creates the file if needed |
 | `files.append_lines(path: str, lines: list[str]) -> !` | appends newline-terminated lines; an empty list does nothing |
 | `files.delete(path: str) -> !` | removes a path; absence is an `io_failed` error |
 | `files.rename(from: str, to: str) -> !` | moves a path and replaces an existing target |

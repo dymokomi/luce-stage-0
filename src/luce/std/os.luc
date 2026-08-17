@@ -1,31 +1,44 @@
-# os — the Luce standard system-facts module.
+# os — the Luce standard boundary for console, time, environment,
+# terminal, process and machine services.
 #
-# What machine is this?  Three questions with numeric answers, over
-# the host builtins that ask them: how much physical memory the
-# machine has, how much of it is still available to ask for, and how
-# many processors it has.  A program reads `os.total_memory()` instead
-# of remembering a builtin name, the way `files.read` stands in front
-# of `file_read`.
+# Every public name here is an ordinary Luce declaration.  The host's raw
+# implementation vocabulary lives behind the compiler-only `Builtin`
+# namespace, which only embedded standard-library source may use.  A project
+# can therefore use names such as `clock_ms` or `term_rows` for its own
+# functions without colliding with the runtime.
 #
-# The host gate applies, because a machine's size is the world's
-# business and not the program's: importing this module in a host-less
-# context and calling one of these is a compile error, which is the
-# truth.  A host that cannot tell — a platform whose numbers it does
-# not know how to ask for — refuses the call with `host_unavailable`
-# rather than inventing a number, so nothing here can quietly answer
-# zero.
-#
-# Nothing here can fail in the `!` sense and nothing answers `none`.
-# A fact the host knows is a number; a fact it does not know is a
-# refusal, which is a trap, because a program that asks a host for
-# something it does not have has asked the wrong host (docs/FAILURE.md).
-#
-# What these numbers are **for** is reporting and sizing, not
-# deciding: memory moves under a program's feet between the reading
-# and the use of it, so `available_memory()` is a gauge and never a
-# guarantee.  Luce allocates through the runtime, which traps on
-# exhaustion with a code; that is what a program checks against, and
-# this module is what a program prints.
+# The host gate still applies.  A host that withholds a requested channel
+# traps with `host_unavailable`; ordinary absence (`read_line` at end of
+# input, or an unset environment variable) is `none`; shell launch and I/O
+# failures use `!`.
+
+# Read one line after writing `prompt`, without the trailing newline. End of
+# input is absence rather than an error.
+func read_line(prompt: str) -> str?:
+    return Builtin.read_line(prompt)
+
+# Write one sanitized line to standard error. Standard output remains the
+# small universal `print` prelude operation.
+func print_error(text: str):
+    Builtin.print_error(text)
+
+# Read one environment variable, or none when it is unset.
+func env(name: str) -> str?:
+    return Builtin.env(name)
+
+# A monotonic millisecond reading for elapsed-time measurements. Only the
+# difference between two readings has meaning.
+func clock_ms() -> i64:
+    return Builtin.clock_ms()
+
+# Milliseconds since the Unix epoch: a wall-clock timestamp, not a duration.
+func epoch_ms() -> i64:
+    return Builtin.epoch_ms()
+
+# Wait at least this many milliseconds. Zero and negative values return
+# immediately.
+func sleep_ms(milliseconds: i64):
+    Builtin.sleep_ms(milliseconds)
 
 # A command runner for tools that deliberately belong to the host rather
 # than to Luce's semantics. `shell.run` captures standard output and
@@ -34,11 +47,11 @@
 # argument boundaries should quote them for the host shell.
 #
 # This is the seam used by the Luce editor for Ctrl-B. Keeping it here
-# means programs do not have to know the raw host builtin or its ABI
+# means programs do not have to know the compiler-only host intrinsic or its ABI
 # shape, and gives future process helpers one standard home.
 struct shell:
     static func run(command: str) -> str!:
-        return try shell_run(command)
+        return try Builtin.shell_run(command)
 
 # The terminal facade.  The raw names remain compiler-owned host services;
 # this value gives Luce programs one stable home for them and leaves room for
@@ -49,25 +62,25 @@ struct Term:
     io: IO
 
     func rows() -> i64:
-        return term_rows()
+        return Builtin.term_rows()
 
     func cols() -> i64:
-        return term_cols()
+        return Builtin.term_cols()
 
     func clear():
-        term_clear()
+        Builtin.term_clear()
 
     func move(row: i64, column: i64):
-        term_move(row, column)
+        Builtin.term_move(row, column)
 
     func style(foreground: i64, background: i64 = -1, bold: bool = false):
-        term_style(fg = foreground, bg = background, bold = bold)
+        Builtin.term_style(fg = foreground, bg = background, bold = bold)
 
     func write(text: str):
-        term_write(text)
+        Builtin.term_write(text)
 
     func flush():
-        term_flush()
+        Builtin.term_flush()
 
 # Terminal input is one event stream.  `read()` answers a stable event name:
 # text, enter, ctrl_s, mouse_press, mouse_release, mouse_drag, mouse_move,
@@ -78,29 +91,29 @@ struct IO:
         token: i64
 
     func read() -> str?:
-        return key_read()
+        return Builtin.key_read()
 
     func text() -> str:
-        return key_text()
+        return Builtin.key_text()
 
     # Coordinates are zero based.  For keyboard events these answer 0.
     func row() -> i64:
-        return term_event_data(0)
+        return Builtin.term_event_data(0)
 
     func column() -> i64:
-        return term_event_data(1)
+        return Builtin.term_event_data(1)
 
     # Mouse buttons are left=0, middle=1 and right=2.  A wheel event uses -1.
     func button() -> i64:
-        return term_event_data(2)
+        return Builtin.term_event_data(2)
 
     # Modifier bits are shift=1, alt=2 and ctrl=4.
     func modifiers() -> i64:
-        return term_event_data(3)
+        return Builtin.term_event_data(3)
 
     # Wheel events answer +1 for up and -1 for down; other events answer 0.
     func value() -> i64:
-        return term_event_data(4)
+        return Builtin.term_event_data(4)
 
 # Unicode terminal geometry belongs here rather than in every program that
 # draws a pane.  `junction` takes the four sides that continue through the
@@ -180,7 +193,7 @@ const term = Term(ui = UI(token = 0), io = IO(token = 0))
 # run — this is the hardware's size, not a quota and not a limit the
 # program is held to.
 func total_memory() -> i64:
-    return os_total_memory()
+    return Builtin.os_total_memory()
 
 # Bytes of memory the machine could still hand out.  This one moves:
 # ask it twice and expect two answers, because everything else running
@@ -195,7 +208,7 @@ func total_memory() -> i64:
 # that can be read, and free plus buffers otherwise.  Neither is a
 # promise: it is what was true at the moment of asking.
 func available_memory() -> i64:
-    return os_available_memory()
+    return Builtin.os_available_memory()
 
 # How many processors the machine has, counting the ones the host
 # would schedule work onto — logical processors, so a machine with
@@ -206,7 +219,7 @@ func available_memory() -> i64:
 # at the raw machine seam because adding that fact in a later ABI
 # version would have cost every artifact a rebuild to learn one number.
 func cpu_count() -> i64:
-    return os_cpu_count()
+    return Builtin.os_cpu_count()
 
 # Bytes of memory in use: everything the machine has, less what it
 # could still hand out.  Never negative — `available_memory()` is a
@@ -219,4 +232,4 @@ func cpu_count() -> i64:
 # pair should read `available_memory()` once and subtract it itself,
 # and even that pair is only as fresh as the moment it was taken.
 func used_memory() -> i64:
-    return os_total_memory() - os_available_memory()
+    return Builtin.os_total_memory() - Builtin.os_available_memory()

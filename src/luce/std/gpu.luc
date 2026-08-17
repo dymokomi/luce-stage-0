@@ -25,13 +25,13 @@ struct Surface:
         return Surface(handle = handle)
 
     func width() -> i64!:
-        return try gpu_surface_size(self.handle, 0)
+        return try Builtin.gpu_surface_size(self.handle, 0)
 
     func height() -> i64!:
-        return try gpu_surface_size(self.handle, 1)
+        return try Builtin.gpu_surface_size(self.handle, 1)
 
     func clear(red: i64, green: i64, blue: i64, alpha: i64 = 255) -> !:
-        try gpu_surface_clear(self.handle, red, green, blue, alpha)
+        try Builtin.gpu_surface_clear(self.handle, red, green, blue, alpha)
 
     func fill_rect(
         x: i64,
@@ -43,7 +43,7 @@ struct Surface:
         blue: i64,
         alpha: i64 = 255,
     ) -> !:
-        try gpu_surface_fill_rect(
+        try Builtin.gpu_surface_fill_rect(
             self.handle,
             x,
             y,
@@ -56,10 +56,10 @@ struct Surface:
         )
 
     func present() -> !:
-        try gpu_surface_present(self.handle)
+        try Builtin.gpu_surface_present(self.handle)
 
 func backend() -> Backend:
-    let code = gpu_backend()
+    let code = Builtin.gpu_backend()
     if code == 0:
         return Backend.metal
     if code == 1:

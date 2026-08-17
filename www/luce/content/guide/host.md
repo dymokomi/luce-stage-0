@@ -184,18 +184,22 @@ func main() -> !:
 
 ## Input, errors, and time
 
-`read_line(prompt)` returns `str?`; end of input is `none`. `env(name)`
-also returns `str?`. `print_error` writes to standard error. `clock_ms`
-is monotonic, `sleep_ms` waits for a duration, and neither is fallible.
+These services live in `std.os`; they are not global names.
+`os.read_line(prompt)` returns `str?`, with `none` at end of input, and
+`os.env(name)` returns `str?` for one environment variable.
+`os.print_error` writes to standard error. `os.clock_ms` is monotonic and
+`os.sleep_ms` waits for a duration.
 
 ```luce run
+import std.os
+
 func main():
-    let started = clock_ms()
-    print(f"PATH is set: {env("PATH") != none}")
-    print(f"nonsense: {env("LUCE_NOT_A_REAL_VARIABLE") else "(unset)"}")
-    print(f"typed: {read_line("") else "(end of input)"}")
-    sleep_ms(started - clock_ms())
-    print_error("this line went to standard error")
+    let started = os.clock_ms()
+    print(f"PATH is set: {os.env("PATH") != none}")
+    print(f"nonsense: {os.env("LUCE_NOT_A_REAL_VARIABLE") else "(unset)"}")
+    print(f"typed: {os.read_line("") else "(end of input)"}")
+    os.sleep_ms(started - os.clock_ms())
+    os.print_error("this line went to standard error")
 ```
 
 ```output
@@ -207,12 +211,12 @@ this line went to standard error
 
 ## The terminal
 
-Terminal dimensions, drawing, and key input are host services available when
-running in a terminal. `key_read` returns a `str?`; an empty input stream
-therefore ends a draw loop cleanly. Terminal output is sanitized by the
+Terminal dimensions, drawing, and input are grouped under `os.term` (or the
+shorter `std.term` facade). `os.term.io.read()` returns a `str?`, so an empty
+input stream ends a draw loop cleanly. Terminal output is sanitized by the
 host. These services need a real terminal and are not demonstrated by the
-site's non-interactive examples. The [editor example](/tools/programs/)
-uses them in a complete program.
+site's non-interactive examples. The [editor example](/tools/programs/) uses
+them in a complete program.
 
 ## The host gate
 

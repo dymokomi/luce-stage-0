@@ -75,23 +75,10 @@ private const type_words = {
 
 private const builtin_words = {
     "abs": true, "assert": true, "ceil": true,
-    "clamp": true, "clock_ms": true, "dir_create": true, "dir_list": true,
-    "epoch_ms": true, "env": true,
-    "error": true, "exit": true, "file_append": true, "file_delete": true,
-    "path_kind": true, "file_open": true, "file_read": true,
-    "file_rename": true, "file_write": true, "floor": true,
-    "key_read": true, "key_text": true, "len": true, "max": true,
-    "min": true, "os_available_memory": true,
-    "os_cpu_count": true, "os_total_memory": true, "parse_f64": true,
+    "clamp": true, "error": true, "exit": true, "floor": true,
+    "len": true, "max": true, "min": true, "parse_f64": true,
     "parse_i64": true, "parse_str": true, "print": true,
-    "print_error": true, "range": true, "read_line": true,
-    "shell_run": true, "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
-    "term_event_data": true, "term_flush": true, "term_move": true,
-    "term_rows": true, "term_style": true, "term_write": true,
-    "trap": true, "trunc": true,
-    "gpu_backend": true, "ui_window_open": true, "ui_window_surface": true,
-    "gpu_surface_size": true, "gpu_surface_clear": true,
-    "gpu_surface_fill_rect": true, "gpu_surface_present": true,
+    "range": true, "sqrt": true, "trap": true, "trunc": true,
 }
 
 # What a run of source is.  A `match` on this in `theme` and `paint`

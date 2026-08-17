@@ -164,7 +164,7 @@ func main():
 | `write(path, text)` | `-> !` | replaces the file's contents |
 | `read_lines(path)` | `-> list[str]!` | the file's lines, with newlines stripped; a trailing final newline makes no phantom empty line |
 | `write_lines(path, lines)` | `-> !` | the lines joined with newlines and ended with one; `[]` writes an empty file |
-| `append_text(path, text)` | `-> !` | adds text to the end, creating the file if absent |
+| `append(path, text)` | `-> !` | adds text to the end, creating the file if absent |
 | `append_lines(path, lines)` | `-> !` | adds the lines, each ending in a newline; `[]` adds nothing |
 | `delete(path)` | `-> !` | removes the file |
 | `rename(from, to)` | `-> !` | moves the file, replacing an existing `to` |
@@ -331,15 +331,11 @@ f.close()
 | `os.path.exists(p)` returning `False` on refusal | `files.exists(p) -> bool!`, `catch false` for Python's behaviour | a refusal has somewhere to go |
 | `os.mkdir` / `os.makedirs` | `files.make_directory(p)` | one call that makes parents and is idempotent |
 
-## Not yet built
+## Possible extensions
 
-Three shapes are designed but not built; they change no signature above
-when they land:
+These convenience shapes can be added without changing the existing
+signatures:
 
-- **A free `open(path, mode)` builtin** with a predeclared `FileMode`
-  enum (`read`/`write`/`append`), to sit beside the whole-file
-  conveniences the way Python's `open` sits beside `os`. Today the
-  streaming doors are `files.open`, `files.create`, and `files.append_to`.
 - **Text and byte convenience methods on the `file`** —
   `read_text`, `read_bytes`, `read_line`, `read_lines`, `write_text`,
   `write_bytes`, `write_lines` — over a read buffer inside `libluce_rt`.

@@ -329,7 +329,10 @@ discipline: an internal is marked, everything else says nothing.
   and the field `Rng.state` `private`; the generator is constructed
   through the public factory `math.rng(seed)` rather than by reaching
   through `Rng(state = …)`.
-- `files` has no internals to mark.
+- `files` marks its open modes, byte chunk, and shared send loop `private`.
+  Its `Builtin.NAME` calls are not declarations at all: they are a
+  compiler-only capability of embedded standard source and cannot enter a
+  program's namespace.
 
 The standing principle behind these calls: an idiom that requires an
 internal member to be public is evidence of a missing public constructor

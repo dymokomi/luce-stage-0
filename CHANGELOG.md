@@ -22,6 +22,10 @@ checked installer under
 - `std.ui` and `std.gpu` expose the current low-level host surfaces. Native
   window and Metal support is available on the published macOS target; other
   hosts fail closed where the service is unavailable.
+- Host implementation operations are compiler-private to embedded standard
+  modules. Programs use the namespaced `std.files`, `std.os`, `std.ui`, and
+  `std.gpu` APIs, while names such as `clock_ms`, `dir_create`, and `append`
+  remain available for their own declarations.
 - The installer supplies `luce`, `loom`, the editor, runtime libraries,
   TermUI, and the VS Code/Cursor syntax extension on macOS 15+ ARM64 and glibc
   Linux 2.28+ ARM64/x86-64. Archives carry source identity, toolchain and

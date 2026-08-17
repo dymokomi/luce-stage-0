@@ -40,6 +40,8 @@
 # accumulator is two `var`s now and the body is shorter, because only
 # the value differed between the arms (docs/RETURNS.md §6).
 
+import std.os
+
 struct Scan:
     static func skip_spaces(text: str, at: i64) -> i64:
         var here = at
@@ -142,12 +144,12 @@ func repl():
     print("calc — an expression a line, blank line to quit")
     var running = true
     while running:
-        let typed = read_line("calc> ")
+        let typed = os.read_line("calc> ")
         if typed == none or typed == "":
             running = false
         else:
             evaluate(typed) catch reason:
-                print_error("cannot compute: " + reason)
+                os.print_error("cannot compute: " + reason)
 
 func main(args: list[str]) -> !:
     if len(args) == 0:

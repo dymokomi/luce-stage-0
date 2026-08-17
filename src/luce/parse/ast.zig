@@ -286,7 +286,7 @@ pub const Target = union(enum) {
 /// at the name; a diagnostic about the declaration points at the
 /// declaration.  With one span they all pointed at the declaration,
 /// so `let print = 3` underlined `= 3` as part of a complaint about
-/// the word `print`, and `func term_rows():` underlined the `func`.
+/// the word `print`, and `func len():` underlined the `func`.
 pub const Binding = struct {
     name: []const u8,
     name_span: Span,

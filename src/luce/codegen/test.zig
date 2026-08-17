@@ -39,6 +39,44 @@ const runBuilt = spec.runBuilt;
 const agree = spec.agree;
 const agreeGiven = spec.agreeGiven;
 
+/// Backend tests that cross the host boundary do so through the public
+/// standard modules. The shared prefix keeps those tests focused on emitted
+/// behavior while still compiling exactly the source surface users get.
+const standard_host_imports = "import std.files\nimport std.os\n\n";
+
+fn standardHostSource(source: []const u8) ![]u8 {
+    return std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ standard_host_imports, source });
+}
+
+fn renderHost(source: []const u8) !?[]const u8 {
+    const program = try standardHostSource(source);
+    defer std.testing.allocator.free(program);
+    return spec.render(program);
+}
+
+fn runHostBuilt(
+    source: []const u8,
+    capture: *Capture,
+    provided: Provided,
+    mode: spec.Mode,
+) !abi.Status {
+    const program = try standardHostSource(source);
+    defer std.testing.allocator.free(program);
+    return spec.runBuilt(program, capture, provided, mode);
+}
+
+fn agreeHost(source: []const u8) !void {
+    const program = try standardHostSource(source);
+    defer std.testing.allocator.free(program);
+    return spec.agree(program);
+}
+
+fn agreeHostGiven(source: []const u8, provided: Provided) !void {
+    const program = try standardHostSource(source);
+    defer std.testing.allocator.free(program);
+    return spec.agreeGiven(program, provided);
+}
+
 // ---------------------------------------------------------------------------
 // The shape of what is generated
 // ---------------------------------------------------------------------------
@@ -93,7 +131,7 @@ test "an optional lowers to its payload beside a presence bit" {
 
 test "floats, structs, and the host services all lower" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(
+    const rendered = (try renderHost(
         \\struct Point:
         \\    x: f64
         \\    y: f64
@@ -101,9 +139,9 @@ test "floats, structs, and the host services all lower" {
         \\func main(args: list[str]) -> !:
         \\    let p = Point(x = 1.5, y = -0.0)
         \\    print(str(p.x * 2.0) + str(i64(p.y)) + str(sqrt(f32(4.0))) + str(sqrt(p.x)))
-        \\    print(args[0] + str(len(args)) + str(try path_kind("nowhere")))
-        \\    term_move(term_rows(), term_cols())
-        \\    term_flush()
+        \\    print(args[0] + str(len(args)) + str((try files.kind("nowhere")) != none))
+        \\    os.term.move(os.term.rows(), os.term.cols())
+        \\    os.term.flush()
         \\
     )).?;
     defer gpa.free(rendered);
@@ -1023,9 +1061,9 @@ test "a compiled host rejects an unknown Answer before continuing" {
 test "a compiled host rejects an out-of-range path kind" {
     var capture: Capture = .{};
 
-    const status = try runBuilt(
+    const status = try runHostBuilt(
         \\func main() -> !:
-        \\    print(str(try path_kind(".")))
+        \\    print(str((try files.kind(".")) != none))
         \\
     , &capture, .{ .malformed_path_kind = true }, .debug);
 
@@ -1104,19 +1142,19 @@ test "a store that traps still owns what it was handed" {
 }
 
 test "a fallible call's result is carried, not taken, and still agrees" {
-    try agree(
+    try agreeHost(
         \\func main():
         \\    # A fallible call's result crosses the branch on its
         \\    # outcome in a slot that is *reloaded*, so that slot keeps
         \\    # owning its storage and the stores below copy out of it
         \\    # (docs/STRINGS.md).
-        \\    file_write("notes.txt", "a string comfortably past the inline threshold") catch:
+        \\    files.write("notes.txt", "a string comfortably past the inline threshold") catch:
         \\        print("no write")
         \\        return
         \\    var xs: list[str] = []
-        \\    let text = file_read("notes.txt") catch "(none)"
+        \\    let text = files.read("notes.txt") catch "(none)"
         \\    xs.append(text)
-        \\    xs.append(file_read("notes.txt") catch "(none)")
+        \\    xs.append(files.read("notes.txt") catch "(none)")
         \\    xs.append(text + "!")
         \\    print(str(len(xs)) + " " + str(len(xs[0])) + " " + str(len(xs[2])))
         \\
@@ -1859,22 +1897,22 @@ test "the null object put in a T? is present, because absence is not a handle" {
 // ---------------------------------------------------------------------------
 
 test "files, arguments, the screen, and the keyboard agree" {
-    try agree(
+    try agreeHost(
         \\func main(args: list[str]) -> !:
         \\    print(str(len(args)) + " " + args[0] + "," + args[1])
-        \\    print(str(try path_kind("notes.txt")))
-        \\    try file_write("notes.txt", "hello world")
-        \\    print(str(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
-        \\    print(str(term_rows()) + "x" + str(term_cols()))
-        \\    term_clear()
-        \\    term_move(2, 3)
-        \\    term_style(114, 236, true)
-        \\    term_write("drawn")
-        \\    term_flush()
+        \\    print(str((try files.kind("notes.txt")) != none))
+        \\    try files.write("notes.txt", "hello world")
+        \\    print(str((try files.kind("notes.txt")) != none) + " " + try files.read("notes.txt"))
+        \\    print(str(os.term.rows()) + "x" + str(os.term.cols()))
+        \\    os.term.clear()
+        \\    os.term.move(2, 3)
+        \\    os.term.style(114, 236, true)
+        \\    os.term.write("drawn")
+        \\    os.term.flush()
         \\    var pressed = 0
         \\    while pressed < 4:
-        \\        let name = key_read()
-        \\        print((name else "<end of input>") + "/" + key_text())
+        \\        let name = os.term.io.read()
+        \\        print((name else "<end of input>") + "/" + os.term.io.text())
         \\        pressed = pressed + 1
         \\
     );
@@ -1890,15 +1928,15 @@ test "a keyboard that has run dry answers none on both engines" {
     // This is the case that used to have no answer at all.  `no` from
     // the host was read by nobody, so a program at the end of its
     // input asked again forever.
-    try agree(
+    try agreeHost(
         \\func main():
         \\    var pressed = 0
         \\    while pressed < 5:
-        \\        let name = key_read()
+        \\        let name = os.term.io.read()
         \\        if name == none:
-        \\            print("dry/" + key_text())
+        \\            print("dry/" + os.term.io.text())
         \\        else:
-        \\            print(name + "/" + key_text())
+        \\            print(name + "/" + os.term.io.text())
         \\        pressed = pressed + 1
         \\
     );
@@ -1908,10 +1946,10 @@ test "a file that was never written errors on both engines" {
     // The world said no, so this is news and not a bug: the two
     // engines have to agree on the code, the words, and the one line
     // the error records (docs/FAILURE.md).
-    try agree(
+    try agreeHost(
         \\func main() -> !:
         \\    print("before")
-        \\    print(try file_read("nothing-here.txt"))
+        \\    print(try files.read("nothing-here.txt"))
         \\
     );
 }
@@ -1921,64 +1959,64 @@ test "a file that was never written errors on both engines" {
 // ---------------------------------------------------------------------------
 
 test "standard input, standard error, the clock and the environment agree" {
-    try agree(
+    try agreeHost(
         \\func main():
-        \\    let first = read_line("> ") else "(nothing)"
-        \\    let second = read_line("> ") else "(nothing)"
-        \\    let third = read_line("> ") else "(nothing)"
+        \\    let first = os.read_line("> ") else "(nothing)"
+        \\    let second = os.read_line("> ") else "(nothing)"
+        \\    let third = os.read_line("> ") else "(nothing)"
         \\    print(first + "|" + second + "|" + third)
-        \\    print_error("something went sideways")
-        \\    let started = clock_ms()
-        \\    sleep_ms(25)
-        \\    let ended = clock_ms()
+        \\    os.print_error("something went sideways")
+        \\    let started = os.clock_ms()
+        \\    os.sleep_ms(25)
+        \\    let ended = os.clock_ms()
         \\    print("elapsed " + str(ended - started))
-        \\    sleep_ms(0)
-        \\    sleep_ms(-1)
-        \\    print(env("LUCE_MODE") else "(unset)")
-        \\    print("[" + (env("EMPTY") else "(unset)") + "]")
-        \\    print(env("NOT_SET_ANYWHERE") else "(unset)")
+        \\    os.sleep_ms(0)
+        \\    os.sleep_ms(-1)
+        \\    print(os.env("LUCE_MODE") else "(unset)")
+        \\    print("[" + (os.env("EMPTY") else "(unset)") + "]")
+        \\    print(os.env("NOT_SET_ANYWHERE") else "(unset)")
         \\
     );
 }
 
 test "end of input is absence, and narrowing sees it on both engines" {
-    try agree(
+    try agreeHost(
         \\func main():
         \\    var count = 0
-        \\    var line = read_line("")
+        \\    var line = os.read_line("")
         \\    while line != none:
         \\        count = count + 1
         \\        print(str(count) + ": " + line)
-        \\        line = read_line("")
+        \\        line = os.read_line("")
         \\    print("read " + str(count) + " lines, then nothing")
         \\
     );
 }
 
 test "the file services beyond read and write agree, and so does what they refuse" {
-    try agree(
+    try agreeHost(
         \\func main() -> !:
-        \\    try file_write("notes.txt", "one\n")
-        \\    try file_append("notes.txt", "two\n")
-        \\    print(try file_read("notes.txt"))
-        \\    try file_rename("notes.txt", "kept.txt")
-        \\    print(str(try path_kind("notes.txt")) + " " + str(try path_kind("kept.txt")))
-        \\    try file_delete("kept.txt")
-        \\    print(str(try path_kind("kept.txt")))
-        \\    file_delete("kept.txt") catch:
+        \\    try files.write("notes.txt", "one\n")
+        \\    try files.append("notes.txt", "two\n")
+        \\    print(try files.read("notes.txt"))
+        \\    try files.rename("notes.txt", "kept.txt")
+        \\    print(str((try files.kind("notes.txt")) != none) + " " + str((try files.kind("kept.txt")) != none))
+        \\    try files.delete("kept.txt")
+        \\    print(str((try files.kind("kept.txt")) != none))
+        \\    files.delete("kept.txt") catch:
         \\        print("nothing to delete")
-        \\    file_rename("gone.txt", "elsewhere.txt") catch:
+        \\    files.rename("gone.txt", "elsewhere.txt") catch:
         \\        print("nothing to rename")
-        \\    try file_append("fresh.txt", "made by append\n")
-        \\    print(try file_read("fresh.txt"))
+        \\    try files.append("fresh.txt", "made by append\n")
+        \\    print(try files.read("fresh.txt"))
         \\
     );
 }
 
 test "a directory listing is a list[str] the program owns, on both engines" {
-    try agree(
+    try agreeHost(
         \\func main() -> !:
-        \\    let names = try dir_list(".")
+        \\    let names = try files.list(".")
         \\    print(str(len(names)))
         \\    for name in names:
         \\        print(name)
@@ -1989,10 +2027,10 @@ test "a directory listing is a list[str] the program owns, on both engines" {
 }
 
 test "a directory that will not list is an error on both engines" {
-    try agree(
+    try agreeHost(
         \\func main() -> !:
         \\    print("before")
-        \\    let names = try dir_list("nowhere")
+        \\    let names = try files.list("nowhere")
         \\
     );
 }
@@ -2000,10 +2038,10 @@ test "a directory that will not list is an error on both engines" {
 test "a caught listing failure leaks nothing on either engine" {
     // The failing side parks a value nobody reads, and the value it
     // parks must not be an object the census then counts.
-    try agree(
+    try agreeHost(
         \\func main():
         \\    var found: i64 = 0
-        \\    let names = dir_list("nowhere") catch new list[str]
+        \\    let names = files.list("nowhere") catch new list[str]
         \\    found = len(names)
         \\    print("caught, " + str(found) + " names")
         \\
@@ -2011,59 +2049,59 @@ test "a caught listing failure leaks nothing on either engine" {
 }
 
 test "each new host service fails closed on its own" {
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print(read_line("> ") else "x")
+        \\    print(os.read_line("> ") else "x")
         \\
     , .{ .input = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print_error("nobody is listening")
+        \\    os.print_error("nobody is listening")
         \\
     , .{ .diagnostics = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print(str(clock_ms()))
+        \\    print(str(os.clock_ms()))
         \\
     , .{ .clock = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    sleep_ms(5)
+        \\    os.sleep_ms(5)
         \\
     , .{ .clock = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print(env("PATH") else "x")
+        \\    print(os.env("PATH") else "x")
         \\
     , .{ .environment = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main() -> !:
-        \\    try file_append("x.txt", "y")
+        \\    try files.append("x.txt", "y")
         \\
     , .{ .files = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main() -> !:
-        \\    try file_delete("x.txt")
+        \\    try files.delete("x.txt")
         \\
     , .{ .files = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main() -> !:
-        \\    try file_rename("x.txt", "y.txt")
+        \\    try files.rename("x.txt", "y.txt")
         \\
     , .{ .files = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main() -> !:
-        \\    let names = try dir_list(".")
+        \\    let names = try files.list(".")
         \\
     , .{ .files = false });
 }
 
 test "a caught error is handled and the run finishes clean" {
-    try agree(
+    try agreeHost(
         \\func main():
-        \\    let text = file_read("nothing-here.txt") catch "(none)"
+        \\    let text = files.read("nothing-here.txt") catch "(none)"
         \\    print(text)
-        \\    file_write("/nowhere/at/all/notes.txt", "x") catch:
+        \\    files.write("/nowhere/at/all/notes.txt", "x") catch:
         \\        print("write refused")
         \\    print("still running")
         \\
@@ -2094,13 +2132,13 @@ test "an error path releases the objects and the str storage it owns" {
     // The leak census is the proof: every frame the error left
     // through released what it owned, so a caught error leaves the
     // heap exactly where a returning call would (S4, S34).
-    try agree(
+    try agreeHost(
         \\func gather(path: str) -> i64!:
         \\    let words = new list[str]
         \\    words.append("alpha")
         \\    words.append("beta")
         \\    let held = "prefix-" + path
-        \\    let text = try file_read(path)
+        \\    let text = try files.read(path)
         \\    words.append(held + text)
         \\    return len(words)
         \\
@@ -2124,15 +2162,15 @@ test "text carried across a try keeps the form it was in" {
     // it in a borrowing slot instead marked inline text as *outside*,
     // and the release at the end of the statement freed a pointer into
     // the frame.
-    try agree(
+    try agreeHost(
         \\func main() -> !:
-        \\    try file_write("notes.txt", "hello world")
-        \\    let brief = try file_read("notes.txt")
+        \\    try files.write("notes.txt", "hello world")
+        \\    let brief = try files.read("notes.txt")
         \\    print(brief + "/" + str(len(brief)))
-        \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
-        \\    let lengthy = try file_read("notes.txt")
+        \\    try files.write("notes.txt", "a string well past the inline capacity of a value")
+        \\    let lengthy = try files.read("notes.txt")
         \\    print(lengthy + "/" + str(len(lengthy)))
-        \\    print(str(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(str((try files.kind("notes.txt")) != none) + " " + try files.read("notes.txt"))
         \\
     );
 }
@@ -2143,9 +2181,9 @@ test "a caught error leaves the value it never produced releasable" {
     // that path too.  So the errored edge empties `%out` on the way
     // out, and what the caller carries is the empty str rather than
     // whatever the stack held — which the census then proves.
-    try agree(
+    try agreeHost(
         \\func load(path: str) -> str!:
-        \\    return try file_read(path)
+        \\    return try files.read(path)
         \\
         \\func main():
         \\    var round = 0
@@ -2158,10 +2196,10 @@ test "a caught error leaves the value it never produced releasable" {
 }
 
 test "a fallible call handing back an object gives it up on both paths" {
-    try agree(
+    try agreeHost(
         \\func load(path: str) -> list[str]!:
         \\    let lines = new list[str]
-        \\    lines.append(try file_read(path))
+        \\    lines.append(try files.read(path))
         \\    return lines
         \\
         \\func main():
@@ -2183,19 +2221,19 @@ test "an argument index out of range traps index_bounds on both engines" {
 }
 
 test "a withheld service group fails closed on both engines" {
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main() -> !:
-        \\    print(str(try path_kind("notes.txt")))
+        \\    print(str((try files.kind("notes.txt")) != none))
         \\
     , .{ .files = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print(str(term_rows()))
+        \\    print(str(os.term.rows()))
         \\
     , .{ .terminal = false });
-    try agreeGiven(
+    try agreeHostGiven(
         \\func main():
-        \\    print(key_text())
+        \\    print(os.term.io.text())
         \\
     , .{ .terminal = false });
 }

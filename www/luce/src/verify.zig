@@ -354,7 +354,10 @@ fn execute(
         return combine(gpa, checked);
     }
 
-    const built = try run(self, directory, &.{ compiler, "build", name, "-o", "sample.lc" });
+    // The command-line default is an executable. `loom` loads library
+    // artifacts, so the documentation verifier must ask for that form
+    // explicitly instead of depending on a historical default.
+    const built = try run(self, directory, &.{ compiler, "build", name, "--emit=library", "-o", "sample.lc" });
     defer gpa.free(built.stdout);
     defer gpa.free(built.stderr);
     if (built.status != 0) {

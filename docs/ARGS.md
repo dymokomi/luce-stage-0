@@ -200,24 +200,26 @@ about a slot:
 |---|---|---|
 | **user functions** — plain `f()`, `module.f()`, `Type.f()`, and method `x.f()` | yes | yes |
 | **struct construction** — `Point(x = 1, y = 2)` | required | yes |
-| **free builtins** — `clamp`, `len`, `term_style`, … | yes | yes, where the table declares one |
+| **free builtins** — `clamp`, `len`, `parse_i64`, … | yes | yes, where the table declares one; none do today |
 | **builtin value methods** — `xs.append`, `m.get`, `s.byte_at` | no | no |
 
 A builtin is a declaration the compiler keeps in a table rather than in
 Luce, and that table carries a name for every parameter. So a free
-builtin's arguments may be named, and the two builtins that want a
-default carry one — `term_style(fg, bg = -1, bold = false)` is the
-notable case:
+builtin's arguments may be named. Host APIs are ordinary declarations in
+`std`, so their defaults use the user-function path rather than expanding
+the builtin surface:
 
 ```luce
+import std.os
+
 func fg() -> i64:
     return 3
 
 func main():
     let a = clamp(value = 5, low = 0, high = 10)
     let n = len(value = "abc")
-    term_style(fg())               # bg and bold defaulted
-    term_style(fg(), bold = true)  # bg defaulted
+    os.term.style(fg())               # background and bold defaulted
+    os.term.style(fg(), bold = true)  # background defaulted
     print(str(a + n))
 ```
 

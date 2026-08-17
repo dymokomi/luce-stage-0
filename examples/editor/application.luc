@@ -5,6 +5,7 @@
 # termui owns the application loop, geometry traversal, rendering and shutdown.
 
 import std.strings
+import std.os
 import termui
 import document
 import focus
@@ -145,7 +146,7 @@ class App: termui.Application:
     # --- event handlers ---------------------------------------------
 
     func global_event(event: termui.Event, area: termui.Rect) -> termui.Response:
-        self.model.autosave(clock_ms())
+        self.model.autosave(os.clock_ms())
         match event:
             key(pressed):
                 let intent = keymap.intent_of(pressed)

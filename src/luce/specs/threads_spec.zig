@@ -257,8 +257,10 @@ test "an unwaited task joins at its last release and discards the result" {
     // which is D4's fire-and-forget, and the census is zero because a
     // worker's runtime dies whole.
     try agree.printsGiven(
+        \\import std.files
+        \\
         \\func note() -> i64:
-        \\    file_write("worked.txt", "yes") catch:
+        \\    files.write("worked.txt", "yes") catch:
         \\        return 0
         \\    return 1
         \\
@@ -811,8 +813,10 @@ test "a worker may print, and its line arrives whole" {
 
 test "a worker may reach the file channel" {
     try agree.printsGiven(
+        \\import std.files
+        \\
         \\func save(text: str) -> i64!:
-        \\    try file_write("notes.txt", text)
+        \\    try files.write("notes.txt", text)
         \\    return len(text)
         \\
         \\func main() -> !:

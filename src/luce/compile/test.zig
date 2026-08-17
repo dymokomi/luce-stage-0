@@ -164,14 +164,14 @@ test "semantic diagnostics carry the right code and location" {
 test "a diagnostic about a name points at the name, not at the declaration" {
     // They all pointed at the declaration, because a declaration
     // carried one span and every complaint reused it.  So `func
-    // term_rows():` underlined the `func` as part of a sentence about
-    // the word `term_rows`, and `const print = 3` underlined `= 3`.  The
+    // len():` underlined the `func` as part of a sentence about
+    // the word `len`, and `const print = 3` underlined `= 3`.  The
     // message named one word and the caret covered a phrase, which
     // leaves the reader working out which part is meant.
     //
     // Columns, so this cannot pass by pointing at the right line.
     try expectDiagnostics(
-        \\func term_rows() -> i64:
+        \\func len() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -179,7 +179,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 6 }});
     try expectDiagnostics(
-        \\struct term_style:
+        \\struct print:
         \\    x: i64
         \\
         \\func main():
@@ -195,12 +195,12 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 7 }});
     try expectDiagnostics(
         \\func main():
-        \\    let term_cols = 1
+        \\    let len = 1
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     try expectDiagnostics(
         \\func main():
-        \\    var term_rows: i64
+        \\    var range: i64
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     // The same rule for the duplicates, which read the same spans.
@@ -870,65 +870,80 @@ test "string operations type-check" {
     defer program.deinit();
 }
 
-test "host builtins type-check and stay host-gated" {
+test "the public host surface type-checks and stays host-gated" {
     try expectRejected(
         \\func main():
         \\    print("hello")
         \\
     , "luce.sema.host");
     try expectRejected(
+        \\import std.files
+        \\
         \\func main():
-        \\    let text = file_read("notes.txt")
+        \\    let text = files.read("notes.txt")
         \\
     , "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
+        \\import std.files
+        \\import std.os
+        \\
         \\func main(args: list[str]) -> !:
         \\    print("hello " + args[0])
-        \\    let text = file_read("notes.txt") catch ""
-        \\    try file_write("copy.txt", text)
+        \\    let text = files.read("notes.txt") catch ""
+        \\    try files.write("copy.txt", text)
         \\    print("copied")
-        \\    term_clear()
-        \\    term_move(0, 0)
-        \\    term_style(114, -1, false)
-        \\    term_write((key_read() else "eof") + key_text())
-        \\    term_flush()
+        \\    os.term.clear()
+        \\    os.term.move(0, 0)
+        \\    os.term.style(114, -1, false)
+        \\    os.term.write((os.term.io.read() else "eof") + os.term.io.text())
+        \\    os.term.flush()
         \\
     , .{ .allow_host = true });
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
-    // `key_read` answers `str?`, so a program that treats a key
+    // `os.term.io.read` answers `str?`, so a program that treats a key
     // that never came as a key is refused where it is written rather
     // than looping on it at run time (docs/FAILURE.md).
     try expectRejectedOptions(
+        \\import std.os
+        \\
         \\func main():
-        \\    term_write(key_read())
+        \\    os.term.write(os.term.io.read())
         \\
     , .{ .allow_host = true }, "luce.sema.type");
 
     try expectRejectedOptions(
+        \\import std.files
+        \\
         \\func main() -> !:
-        \\    let bad = try file_read(7)
+        \\    let bad = try files.read(7)
         \\
     , .{ .allow_host = true }, "luce.sema.type");
     // A call that can fail may not be written as if it could not:
     // this is the shape `if files.write_lines(...)` used to have, and
     // it is the whole of why a swallowed failure is now unwritable.
     try expectRejectedOptions(
+        \\import std.files
+        \\
         \\func main():
-        \\    let text = file_read("notes.txt")
+        \\    let text = files.read("notes.txt")
         \\
     , .{ .allow_host = true }, "luce.sema.fallible");
     // And `try` needs a caller that said it can fail.
     try expectRejectedOptions(
+        \\import std.files
+        \\
         \\func main():
-        \\    let text = try file_read("notes.txt")
+        \\    let text = try files.read("notes.txt")
         \\
     , .{ .allow_host = true }, "luce.sema.fallible");
     try expectRejectedOptions(
+        \\import std.os
+        \\
         \\func main():
-        \\    term_style(1, 2, 3)
+        \\    os.term.style(1, 2, 3)
         \\
     , .{ .allow_host = true }, "luce.sema.type");
 }

@@ -11,7 +11,7 @@
 #       world.luc   what a room, a way and a thing are
 #     journal.luc   what a save file is
 #
-# Only this file talks to the world outside: `read_line`, `print`, and
+# Only this file talks to the world outside: `os.read_line`, `print`, and
 # the one `exit` a player asks for by typing quit.  `world` and
 # `command` touch nothing at all, which is why the specification can
 # run the whole game against a scripted keyboard and get the same
@@ -30,6 +30,7 @@ import story
 import command
 import journal
 import std.strings
+import std.os
 
 # Where `save` and `load` with no name of their own go.
 const save_file = "adventure.sav"
@@ -203,7 +204,7 @@ func main(args: list[str]) -> !:
         # input — a pipe that ran dry, or Ctrl-D at a terminal.  There
         # is nobody left to ask what to do, so the game stops without
         # a word about it.
-        let typed = read_line("> ")
+        let typed = os.read_line("> ")
         if typed == none:
             break
         play.act(realm, command.parse(typed)) catch reason:

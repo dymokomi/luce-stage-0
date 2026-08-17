@@ -7,6 +7,41 @@ only to hosted programs; a host-less build cannot call these operations.
 import std.os
 ```
 
+Host implementation names are compiler-private. A program may use names such
+as `clock_ms`, `term_rows`, or `dir_create` for its own declarations; only the
+qualified APIs on this page cross the OS boundary.
+
+## Console, environment, and time
+
+| Signature | Meaning |
+|---|---|
+| `os.read_line(prompt: str) -> str?` | writes the prompt and reads one line without its newline; `none` at end of input |
+| `os.print_error(text: str)` | writes one sanitized line to standard error |
+| `os.env(name: str) -> str?` | one environment variable, or `none` when unset |
+| `os.clock_ms() -> i64` | monotonic milliseconds for measuring elapsed time |
+| `os.epoch_ms() -> i64` | milliseconds since the Unix epoch |
+| `os.sleep_ms(milliseconds: i64)` | waits at least this long; zero and negative durations return immediately |
+
+Use `os.clock_ms` only in differences; its epoch is deliberately unspecified.
+Use `os.epoch_ms` for a timestamp. An absent input line or environment value
+is ordinary absence, while a host without the requested channel traps with
+`host_unavailable`.
+
+```luce run
+import std.os
+
+func main():
+    let started = os.clock_ms()
+    os.sleep_ms(0)
+    print(f"elapsed is nonnegative: {os.clock_ms() >= started}")
+    print(f"missing variable: {os.env("LUCE_NOT_A_REAL_VARIABLE") else "(unset)"}")
+```
+
+```output
+elapsed is nonnegative: true
+missing variable: (unset)
+```
+
 ## Machine facts
 
 | Signature | Meaning |

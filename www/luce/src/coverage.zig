@@ -237,8 +237,9 @@ fn rowNames(names: *Names, table: []const u8, marker: []const u8) !void {
     }
 }
 
-/// Every builtin the analyzer dispatches, from the file-scope table it
-/// reads — the single place a builtin is added.
+/// Every public-prelude builtin the analyzer dispatches, from the
+/// file-scope table it reads. Compiler-only standard intrinsics live in a
+/// different table and are not public documentation vocabulary.
 fn builtins(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
@@ -264,7 +265,7 @@ fn builtins(repository: Repository) !Names {
         const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
         try names.add(rest[0..stop]);
     }
-    if (names.items.items.len < 30) return error.BuiltinTableTooSmall;
+    if (names.items.items.len < 15) return error.BuiltinTableTooSmall;
     return names;
 }
 
@@ -382,7 +383,7 @@ fn reservedNames(repository: Repository) !Names {
         return error.ReservedNamesNotFound;
 
     try quotedWhere(&names, table, isPlainName);
-    if (names.items.items.len < 40) return error.ReservedNamesTooSmall;
+    if (names.items.items.len < 15) return error.ReservedNamesTooSmall;
     return names;
 }
 
@@ -756,7 +757,7 @@ test "the reference names every builtin's parameters" {
 
     const rows = try builtinSignatures(repository);
     defer freeSignatures(gpa, rows);
-    try std.testing.expect(rows.len >= 30);
+    try std.testing.expect(rows.len >= 15);
 
     const page = try repository.read("www/luce/content/guide/reference/builtins.md");
     defer gpa.free(page);

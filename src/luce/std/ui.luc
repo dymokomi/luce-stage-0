@@ -23,9 +23,9 @@ struct Window:
         return Window(handle = handle)
 
     func surface() -> gpu.Surface!:
-        let raw = try ui_window_surface(self.handle)
+        let raw = try Builtin.ui_window_surface(self.handle)
         return gpu.Surface.from_handle(raw)
 
 func open(title: str, width: i64, height: i64) -> Window!:
-    let raw = try ui_window_open(title, width, height)
+    let raw = try Builtin.ui_window_open(title, width, height)
     return Window.from_handle(raw)

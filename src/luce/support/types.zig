@@ -727,8 +727,9 @@ pub const Builtin = enum {
     /// than a fifth container: it takes no type
     /// argument and there is no `new file`, because a handle with no
     /// file behind it is the one thing this type must never hold.
-    /// The raw `file_open(path, mode)` host builtin makes one;
-    /// `std.files` exposes the ordinary open/create/append wrappers.
+    /// The compiler-only `Builtin.file_open(path, mode)` intrinsic makes
+    /// one inside `std.files`; programs use its ordinary
+    /// open/create/append wrappers.
     file,
     /// A running worker (docs/THREADS.md D3).  A resource like `file`
     /// and written with a type argument like `list`: `task[f64]` is

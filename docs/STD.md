@@ -31,7 +31,7 @@ cost of changing the embedded library.
 | `std.lists` | element-type-specialized list algorithms | stable `list.sort_by(func(T, T) -> bool)` routed as a method after import |
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
 | `std.files` | fallible whole-file, directory, and handle APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `file` open/create/append, entries/list |
-| `std.os` | grouped terminal/process services and machine facts | `os.term`, `os.shell.run`, total/available/used memory, CPU count |
+| `std.os` | grouped console/time/environment/terminal/process services and machine facts | line input, standard error, clocks, environment, `os.term`, `os.shell.run`, memory and CPU facts |
 | `std.term` | short terminal compatibility surface | rows/columns, clear/move/style/write/flush |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
@@ -46,7 +46,17 @@ resolution and standard-module embedding as two honest mechanisms.
 
 Most standard code is pure Luce. `math`, `strings`, `lists`, `paths`, `json`,
 and the codec portions of `zip` use language operations only. `files`, `os`,
-`term`, `ui`, `gpu`, and archive path helpers eventually call host builtins.
+`ui`, and `gpu` reach host services through `Builtin.NAME`, a synthetic
+compiler namespace accepted only in embedded standard-library source.
+`std.term` delegates to `std.os`.
+
+`Builtin` is not importable and the spelling has no compiler privilege in
+project or package source; a program may even declare its own type by that
+name. Its rows live in `semantics/builtins.zig` separately from the public
+prelude, so adding a host operation does not reserve, highlight, or document
+its implementation name. Public standard declarations are the only
+supported surface; the raw names are an implementation seam between stage 4
+and MIR.
 
 Importing a hosted module does not grant host access. The semantic host gate
 checks the actual reached operation, and a missing runtime service traps
@@ -104,9 +114,9 @@ A new embedded module costs all of these surfaces:
    boundary.
 
 A public function rename is a language-facing change even though it lives in
-`.luc`. A host builtin or table change additionally pays the runtime/ABI cost
-described in [CODEGEN.md](CODEGEN.md). An internal helper remains `private` and
-does not belong in the public coverage roster.
+`.luc`. A compiler-only `Builtin` row or host-table change additionally pays
+the runtime/ABI cost described in [CODEGEN.md](CODEGEN.md). An internal helper
+remains `private` and does not belong in the public coverage roster.
 
 ## Verification boundary
 

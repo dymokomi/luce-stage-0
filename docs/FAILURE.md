@@ -97,8 +97,10 @@ field, or a parameter, and the value the function answers is an ordinary
 `T`.
 
 ```text
+import std.files
+
 func read(path: str) -> str!:
-    return try file_read(path)
+    return try files.read(path)
 ```
 
 A function marked `-> !` answers nothing but may fail; `-> T!` answers a
@@ -134,8 +136,10 @@ function unwinds with the same error.
 **`catch EXPR`** supplies a fallback value for the whole expression:
 
 ```luce
+import std.files
+
 func read(path: str) -> str!:
-    return try file_read(path)
+    return try files.read(path)
 
 func main() -> !:
     let cfg = read("cfg.txt") catch "default"
@@ -148,16 +152,20 @@ failure. It supplies no value; it is for the case where the response is
 to do something rather than to name a fallback:
 
 ```luce
+import std.files
+
 func main() -> !:
-    file_write("out.txt", "data") catch:
+    files.write("out.txt", "data") catch:
         print("could not write")
 ```
 
 **`catch NAME:`** binds the error's message for the handler:
 
 ```luce
+import std.files
+
 func read(path: str) -> str!:
-    return try file_read(path)
+    return try files.read(path)
 
 func main() -> !:
     read("missing.txt") catch reason:
@@ -176,7 +184,7 @@ failure", which grows the binding form and stays greppable.
 Calling a fallible function and dropping its result is refused
 (`luce.sema.call` / `luce.sema.fallible`). Every fallible call must be
 propagated with `try`, given a fallback with `catch`, or handled by a
-`catch:` block. Ignoring `file_write(...)` does not compile.
+`catch:` block. Ignoring `files.write(...)` does not compile.
 
 ## Traps
 

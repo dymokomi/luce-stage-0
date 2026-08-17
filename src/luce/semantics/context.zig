@@ -197,26 +197,17 @@ pub fn writeMissingFields(
 
 /// Names the language reserves; nothing user-declared may take them.
 ///
-/// **Every free builtin belongs here**, and a test in `builder.zig`
-/// reads that table against this list so the next one added cannot be
-/// left out.  It was left out seven times: the `term_*` services
-/// arrived without their names, so a program could declare
-/// `func term_rows():` over the builtin and get whichever the
-/// resolver reached first.
+/// The names Luce itself owns in bare-call position: `range`, the small
+/// public prelude in `builtins.zig`, and scalar conversion constructors
+/// (added by `isReserved` from the type table).
 ///
-/// **Most method names are deliberately not here** — `sort`, `find`,
-/// `contains`, `clear`, `keys`, `values`, `get`, `build` and the rest
-/// are resolved by receiver type, so a function called `sort` collides
-/// with nothing.  **Seven are here anyway**: `append`, `insert`,
-/// `pop`, `remove`, `has`, `dim` and `byte_at`.  Nothing in the
-/// resolver needs them to be — a method call names its receiver — so
-/// the rule a reader can predict from this list is not the rule the
-/// list states, and the cost is real: `std.files` spells
-/// `append_text` because `append` is here, and `std.json` offers no
-/// `has` beside its `get` for the same reason.  Whether those seven
-/// should stay is a language question and not a resolver one; until it
-/// is answered, this paragraph is the answer to "why can I write
-/// `func sort` and not `func has`".
+/// Host services are deliberately absent.  Embedded standard-library
+/// source reaches them through the compiler-only `Builtin` namespace and
+/// publishes ordinary module declarations; a user may therefore declare a
+/// function called `dir_create`, `clock_ms`, or any other implementation
+/// name.  Receiver method names are absent for the same reason: `xs.append`
+/// cannot collide with a module function called `append` because the
+/// receiver already chooses the namespace.
 pub const reserved_names = [_][]const u8{
     // Scalar conversion constructors are reserved through
     // `types.conversionNamed` in `isReserved`, directly from the one
@@ -233,57 +224,14 @@ pub const reserved_names = [_][]const u8{
     "ceil",
     "trunc",
     "len",
-    "byte_at",
     "assert",
     "trap",
+    "error",
     "parse_i64",
     "parse_f64",
-    "append",
-    "pop",
-    "insert",
-    "remove",
-    "has",
-    "dim",
-    "print",
-    "file_read",
-    "file_write",
-    "path_kind",
-    "key_read",
-    "key_text",
-    "error",
-    "read_line",
-    "print_error",
-    "clock_ms",
-    "sleep_ms",
-    "env",
-    "file_append",
-    "file_delete",
-    "file_rename",
-    "dir_list",
-    "term_rows",
-    "term_cols",
-    "term_clear",
-    "term_move",
-    "term_style",
-    "term_write",
-    "term_flush",
-    "exit",
-    "os_total_memory",
-    "os_available_memory",
-    "os_cpu_count",
-    "file_open",
     "parse_str",
-    "shell_run",
-    "term_event_data",
-    "dir_create",
-    "epoch_ms",
-    "gpu_backend",
-    "ui_window_open",
-    "ui_window_surface",
-    "gpu_surface_size",
-    "gpu_surface_clear",
-    "gpu_surface_fill_rect",
-    "gpu_surface_present",
+    "print",
+    "exit",
 };
 
 pub fn isReserved(name: []const u8) bool {

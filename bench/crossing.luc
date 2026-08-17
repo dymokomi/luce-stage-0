@@ -12,6 +12,8 @@
 #     against one, on disjoint slices.  An honest number, taken on the
 #     same machine in the same run.
 
+import std.os
+
 func sum_of(values: list[i64]) -> i64:
     var total: i64 = 0
     for v in values:
@@ -41,34 +43,34 @@ func main():
         numbers.append(i)
 
     # -- the crossing ---------------------------------------------------
-    let before_cross = clock_ms()
+    let before_cross = os.clock_ms()
     let crossed = spawn sum_of(numbers)
     let answered = crossed.wait()
-    let cross_ms = clock_ms() - before_cross
+    let cross_ms = os.clock_ms() - before_cross
     print("crossing_ms " + str(cross_ms))
     print("crossing_sum " + str(answered))
 
     # -- one worker vs four ---------------------------------------------
     let work: i64 = 200000
     var one_piece = chunk(numbers, 0, work)
-    let before_one = clock_ms()
+    let before_one = os.clock_ms()
     let single = spawn slice_sum(one_piece)
     let one_total = single.wait()
-    let one_ms = clock_ms() - before_one
+    let one_ms = os.clock_ms() - before_one
 
     var pieces = new list[list[i64]]
     let step = work // 4
     for part in range(0, 4):
         pieces.append(chunk(numbers, part * step, (part + 1) * step))
 
-    let before_four = clock_ms()
+    let before_four = os.clock_ms()
     var tasks = new list[task[i64]]
     for piece in pieces:
         tasks.append(spawn slice_sum(piece))
     var four_total: i64 = 0
     for t in tasks:
         four_total = four_total + t.wait()
-    let four_ms = clock_ms() - before_four
+    let four_ms = os.clock_ms() - before_four
 
     print("one_worker_ms " + str(one_ms))
     print("four_workers_ms " + str(four_ms))

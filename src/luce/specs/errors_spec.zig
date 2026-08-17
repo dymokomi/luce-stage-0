@@ -1518,8 +1518,10 @@ test "luce.sema.type: len measures a container, and a resource is not one" {
         "is a resource, not a container, and has no length",
     );
     try expectHostSaying(
+        \\import std.files
+        \\
         \\func main() -> !:
-        \\    let f = try file_open("/tmp/luce-len-of-a-file", 1)
+        \\    let f = try files.create("/tmp/luce-len-of-a-file")
         \\    assert(len(f) == 0)
         \\
     ,
@@ -3023,15 +3025,15 @@ test "luce.sema.host: host builtins are gated off by default" {
     // has no machine to ask about, and asking is refused where it is
     // written rather than where it would run.
     try expectRejected(
-        "func main():\n    print(str(os_total_memory()))\n",
+        "import std.os\n\nfunc main():\n    print(str(os.total_memory()))\n",
         "luce.sema.host",
     );
     try expectRejected(
-        "func main():\n    print(str(os_available_memory()))\n",
+        "import std.os\n\nfunc main():\n    print(str(os.available_memory()))\n",
         "luce.sema.host",
     );
     try expectRejected(
-        "func main():\n    print(str(os_cpu_count()))\n",
+        "import std.os\n\nfunc main():\n    print(str(os.cpu_count()))\n",
         "luce.sema.host",
     );
 }
@@ -3204,7 +3206,7 @@ test "luce.parse.expression: '**' names the std function that does it" {
 test "luce.sema.type: the bit set works on integers, said with the fact that refused it" {
     // docs/BITWISE.md D2: a float has no bits a program may see.
     try expectRejected(
-        "func main():\n    let a = 1.5 & 2.0\n    print_error(str(a))\n",
+        "func main():\n    let a = 1.5 & 2.0\n",
         "luce.sema.type",
     );
     try expectSayingAt(
@@ -3504,33 +3506,17 @@ test "luce.sema.reserved: a function cannot take a conversion's name" {
     try expectRejected("func str():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
-test "luce.sema.reserved: a function cannot take a terminal service's name" {
-    // The seven `term_*` builtins were dispatched and not reserved, so
-    // this program compiled and the declaration stood in front of the
-    // builtin.  One per shape: no arguments, some arguments, and the
-    // one whose name a program is most likely to reach for.
+test "luce.sema.call: a raw standard intrinsic is not a public builtin" {
     try expectRejected(
-        "func term_rows() -> i64:\n    return 1\n\nfunc main():\n    return\n",
-        "luce.sema.reserved",
-    );
-    try expectRejected(
-        "func term_write(text: str):\n    return\n\nfunc main():\n    return\n",
-        "luce.sema.reserved",
-    );
-    try expectRejected(
-        "func term_clear():\n    return\n\nfunc main():\n    return\n",
-        "luce.sema.reserved",
+        "func main():\n    term_rows()\n",
+        "luce.sema.call",
     );
 }
 
-test "luce.sema.reserved: a local cannot take a terminal service's name" {
-    try expectRejected("func main():\n    let term_cols = 1\n", "luce.sema.reserved");
-}
-
-test "luce.sema.reserved: a struct cannot take a terminal service's name" {
+test "luce.sema.name: the compiler Builtin namespace is unavailable to user source" {
     try expectRejected(
-        "struct term_style:\n    x: i64\n\nfunc main():\n    return\n",
-        "luce.sema.reserved",
+        "func main():\n    Builtin.term_rows()\n",
+        "luce.sema.name",
     );
 }
 
@@ -3930,11 +3916,11 @@ test "luce.sema.call: a builtin's argument names come from its table" {
     );
 }
 
-test "luce.sema.call: a wrong builtin parameter name offers the closest slot" {
+test "luce.sema.method: a standard method's wrong parameter name offers the closest slot" {
     try expectHostSaying(
-        "func main():\n    term_style(114, bald = true)\n",
-        "luce.sema.call",
-        "term_style has no parameter bald; did you mean bold?",
+        "import std.os\n\nfunc main():\n    os.term.style(114, bald = true)\n",
+        "luce.sema.method",
+        "style has no parameter bald; did you mean bold?",
     );
 }
 
@@ -5512,24 +5498,28 @@ test "luce.sema.struct: a cycle through a wide graph is still found" {
 // luce.sema.host — each gated builtin
 // ---------------------------------------------------------------------------
 
-test "luce.sema.host: file_read is gated" {
-    try expectRejected("func main():\n    let a = file_read(\"x\")\n", "luce.sema.host");
+test "luce.sema.host: files.read is gated" {
+    try expectSaying(
+        "import std.files\n\nfunc main():\n    let a = files.read(\"x\")\n",
+        "luce.sema.host",
+        "this standard-library operation requires host access",
+    );
 }
 
-test "luce.sema.host: file_open is gated" {
-    try expectRejected("func main():\n    let f = file_open(\"x\", 0)\n", "luce.sema.host");
+test "luce.sema.host: files.open is gated" {
+    try expectRejected("import std.files\n\nfunc main():\n    let f = files.open(\"x\")\n", "luce.sema.host");
 }
 
-test "luce.sema.host: path_kind is gated" {
-    try expectRejected("func main() -> !:\n    let k = try path_kind(\"x\")\n", "luce.sema.host");
+test "luce.sema.host: files.kind is gated" {
+    try expectRejected("import std.files\n\nfunc main() -> !:\n    let k = try files.kind(\"x\")\n", "luce.sema.host");
 }
 
-test "luce.sema.host: key_read is gated" {
-    try expectRejected("func main():\n    let a = key_read()\n", "luce.sema.host");
+test "luce.sema.host: terminal input is gated" {
+    try expectRejected("import std.os\n\nfunc main():\n    let a = os.term.io.read()\n", "luce.sema.host");
 }
 
-test "luce.sema.host: term_write is gated" {
-    try expectRejected("func main():\n    term_write(\"x\")\n", "luce.sema.host");
+test "luce.sema.host: terminal output is gated" {
+    try expectRejected("import std.os\n\nfunc main():\n    os.term.write(\"x\")\n", "luce.sema.host");
 }
 
 // ---------------------------------------------------------------------------
@@ -5585,8 +5575,10 @@ test "luce.sema.fallible: a call that can fail must say try or catch" {
     // `dice.luc` had: a fallible call written as if it could not fail
     // (docs/FAILURE.md).
     try expectHostError(
+        \\import std.files
+        \\
         \\func main():
-        \\    file_write("out.txt", "body")
+        \\    files.write("out.txt", "body")
         \\
     , "luce.sema.fallible");
     try expectHostError(
@@ -5600,8 +5592,10 @@ test "luce.sema.fallible: a call that can fail must say try or catch" {
 
 test "luce.sema.fallible: try needs a caller that said it can fail" {
     try expectHostError(
+        \\import std.files
+        \\
         \\func main():
-        \\    let text = try file_read("notes.txt")
+        \\    let text = try files.read("notes.txt")
         \\
     , "luce.sema.fallible");
 }
@@ -5637,8 +5631,10 @@ test "luce.sema.call: a fallible builtin that answers nothing has nothing to tes
     // What `if files.write_lines(...)` became.  There is no bool left
     // to swallow, so the mistake is unwritable rather than silent.
     try expectHostError(
+        \\import std.files
+        \\
         \\func main() -> !:
-        \\    if try file_write("out.txt", "body"):
+        \\    if try files.write("out.txt", "body"):
         \\        print("wrote")
         \\
     , "luce.sema.call");
@@ -5676,9 +5672,11 @@ test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing 
 
 test "luce.parse.expected: catch guards a plain assignment, not a compound one" {
     try expectHostError(
+        \\import std.files
+        \\
         \\func main():
         \\    var text = ""
-        \\    text += file_read("notes.txt") catch:
+        \\    text += files.read("notes.txt") catch:
         \\        print("no")
         \\
     , "luce.parse.expected");
@@ -7355,8 +7353,10 @@ test "luce.sema.fallible: a fallible function is not a value yet" {
     // type has nowhere to write one — so letting one become a value
     // would drop the obligation in silence.
     try expectHostSaying(
+        \\import std.files
+        \\
         \\func risky(path: str) -> str!:
-        \\    return try file_read(path)
+        \\    return try files.read(path)
         \\
         \\func apply(f: func(str) -> str, x: str) -> str:
         \\    return f(x)

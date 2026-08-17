@@ -23,6 +23,7 @@ const helpers = @import("helpers.zig");
 const nodes = @import("../hir.zig").nodes;
 const builtins_mod = @import("builtins.zig");
 const builtins = builtins_mod.builtins;
+const standard_intrinsics = builtins_mod.standard_intrinsics;
 const context = @import("context.zig");
 const Error = context.Error;
 const Span = source_mod.Span;
@@ -844,6 +845,11 @@ const IntrinsicResult = union(enum) {
     value: Typed,
 };
 
+pub const IntrinsicSurface = enum {
+    prelude,
+    standard,
+};
+
 /// Lower a builtin call; .not_builtin when the callee is no
 /// builtin, .failed after reporting bad arguments.
 pub fn lowerIntrinsic(
@@ -852,12 +858,26 @@ pub fn lowerIntrinsic(
     as_statement: bool,
     fallible_allowed: bool,
     wanted: ?Type,
+    intrinsic_surface: IntrinsicSurface,
 ) Error!IntrinsicResult {
-    const matched = for (builtins) |builtin| {
+    const candidates: []const builtins_mod.Builtin = switch (intrinsic_surface) {
+        .prelude => &builtins,
+        .standard => &standard_intrinsics,
+    };
+    const matched = for (candidates) |builtin| {
         if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
     } else return .not_builtin;
 
     if (matched.host and !self.analyzer.options.allow_host) {
+        if (intrinsic_surface == .standard) {
+            try self.fail(
+                "luce.sema.host",
+                call.span,
+                "this standard-library operation requires host access; this host does not allow console, file, or terminal access here",
+                .{},
+            );
+            return .failed;
+        }
         try self.fail(
             "luce.sema.host",
             call.span,

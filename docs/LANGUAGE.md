@@ -289,12 +289,13 @@ func main(args: list[str]):
 func main(args: list[str]) -> !:
 ```
 
-The command line is the optional `args` parameter. Host services—printing,
-input, clocks, sleep, environment, files, directories, terminal events,
-process execution, UI/GPU operations, and machine facts—are explicit builtins
-or standard modules. A compiler option gates host access; at runtime a missing
-optional service traps `host_unavailable` instead of touching the host through
-another path.
+The command line is the optional `args` parameter. `print` and `exit` are the
+two host-facing prelude operations. Input, clocks, sleep, environment, files,
+directories, terminal events, process execution, UI/GPU operations, and
+machine facts are namespaced standard-library APIs. Their implementation
+services are compiler-private and reserve no program names. A compiler option
+gates host access; at runtime a missing optional service traps
+`host_unavailable` instead of touching the host through another path.
 
 ## Deliberate boundaries
 

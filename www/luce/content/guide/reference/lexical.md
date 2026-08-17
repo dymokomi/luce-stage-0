@@ -108,25 +108,17 @@ declaration using one is `luce.sema.reserved`.
 
 ```
 range
-abs         min          max          clamp               sqrt
-floor       ceil         trunc        len                 byte_at
-assert      trap         parse_i64    parse_f64         append
-pop         insert       remove       has                 dim
-print       file_read    file_write   path_kind            key_read
-key_text    error        read_line    print_error          clock_ms
-sleep_ms    env          file_append file_delete          file_rename
-dir_list    term_rows    term_cols    term_clear           term_move
-term_style  term_write   term_flush   exit                 os_total_memory
-os_available_memory os_cpu_count file_open parse_str shell_run
-term_event_data dir_create
-epoch_ms    gpu_backend  ui_window_open  ui_window_surface
-gpu_surface_size  gpu_surface_clear  gpu_surface_fill_rect  gpu_surface_present
+abs       min       max       clamp      sqrt
+floor     ceil      trunc     len        assert
+trap      error     parse_i64 parse_f64  parse_str
+print     exit
 ```
 
-Most receiver methods are not reserved: a user function may be named
-`sort`, `find`, `contains`, `clear`, `keys`, `values`, `get`, or `build`.
-The historical method names `append`, `insert`, `pop`, `remove`, `has`,
-`dim`, and `byte_at` remain reserved.
+Receiver methods are not reserved. The receiver selects their namespace, so
+a user function may be named `append`, `remove`, `has`, `dim`, `byte_at`, or
+any other method name. Host implementation names are also ordinary program
+identifiers: files, clocks, terminals, and other OS services are reached
+through the standard library instead of global builtins.
 
 ## Number literals
 

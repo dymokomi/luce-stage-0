@@ -57,24 +57,15 @@ pub const type_names = [_][]const u8{
     "bytes", "list", "map", "array", "builder", "file", "task",
 };
 
-/// Everything callable by name on its own: standalone builtins, the
-/// host-gated ones, and `range`.  The compiler's list is the
-/// file-scope `builtins` table in `semantics/builtins.zig`, less
-/// the conversion
+/// Everything callable by name on its own: the small public prelude and
+/// `range`. The compiler's list is the file-scope `builtins` table in
+/// `semantics/builtins.zig`, less the conversion
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
-    "abs",              "min",               "max",                   "clamp",               "sqrt",
-    "floor",            "ceil",              "trunc",                 "len",                 "range",
-    "assert",           "trap",              "error",                 "parse_i64",           "parse_f64",
-    "print",            "print_error",       "read_line",             "env",                 "clock_ms",
-    "sleep_ms",         "file_read",         "file_write",            "file_append",         "path_kind",
-    "file_delete",      "file_rename",       "dir_list",              "term_rows",           "term_cols",
-    "term_clear",       "term_move",         "term_style",            "term_write",          "term_flush",
-    "key_read",         "key_text",          "exit",                  "os_total_memory",     "os_available_memory",
-    "os_cpu_count",     "shell_run",         "file_open",             "term_event_data",     "parse_str",
-    "dir_create",       "epoch_ms",          "gpu_backend",           "ui_window_open",      "ui_window_surface",
-    "gpu_surface_size", "gpu_surface_clear", "gpu_surface_fill_rect", "gpu_surface_present",
+    "abs",   "min",   "max",       "clamp",     "sqrt",      "floor",
+    "ceil",  "trunc", "len",       "range",     "assert",    "trap",
+    "error", "exit",  "parse_i64", "parse_f64", "parse_str", "print",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

@@ -913,7 +913,7 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    try files.append_text("log.txt", "one line\n")
+        \\    try files.append("log.txt", "one line\n")
         \\    try files.append_lines("log.txt", ["two", "three"])
         \\    try files.append_lines("log.txt", new list[str])
         \\    print(try files.read("log.txt"))

@@ -1,20 +1,24 @@
-//! What the language spells for itself — the free builtins, the method
-//! names each receiver kind answers to, and what each one lowers to.
+//! What the language spells for itself — its small public prelude, the
+//! compiler-only services used by embedded `std`, the method names each
+//! receiver kind answers to, and what each one lowers to.
 //!
 //! **Data, and one question asked of it.**  Nothing here checks a call
 //! or emits an instruction; `builder.zig` does both, and reads these
-//! tables to know what it is looking at.  The boundary is honest
-//! because the tables were already published: the compiler is not their
-//! only reader.  `tools/grammar.zig` generates the editor's TextMate
-//! grammar from them rather than from a copy, and `www/luce/src/coverage.zig`
-//! reads the rows *textually* out of this file and holds
-//! `ref/builtins.md` to both the names and the parameter names.  A copy
-//! is exactly how the old grammar came to highlight builtins the
-//! language had deleted (tools/vscode-luce/README.md).
+//! tables to know what it is looking at.  The boundary is honest because
+//! the two surfaces are separate data: `builtins` is the public prelude;
+//! `standard_intrinsics` is reachable only from compiler-owned standard
+//! source through `Builtin.NAME`.  `tools/grammar.zig` generates the
+//! editor's TextMate grammar from the public table rather than from a copy,
+//! and `www/luce/src/coverage.zig` reads those rows *textually* and holds
+//! the public reference to both the names and the parameter names.  The
+//! internal table is intentionally neither highlighted nor documented as
+//! user syntax.
 //!
-//! So a name added to the language reaches the grammar, the reference
-//! page and the checker from one row here, and the two tests at the
-//! bottom hold that row to the reserved-name list it must also be on.
+//! So a public name added to the language reaches the grammar, the
+//! reference page and the checker from one row here.  The tests at the
+//! bottom hold public rows to the reserved-name list and internal rows out
+//! of it: adding a host service must never confiscate an ordinary program
+//! name again.
 
 const std = @import("std");
 const types = @import("../support/types.zig");
@@ -26,7 +30,7 @@ const isReserved = context.isReserved;
 const Type = types.Type;
 
 // ---------------------------------------------------------------------------
-// The free builtins
+// The two free-call surfaces
 // ---------------------------------------------------------------------------
 
 /// One parameter slot of a builtin: its name, and its default where
@@ -38,10 +42,11 @@ pub const Slot = struct {
     default: ?context.TypedConstant = null,
 };
 
-/// One free builtin: what it is called, what it lowers to, the slots
-/// it takes, whether it needs the host gate, whether a call to it can
+/// One compiler-lowered call: what it is called, what it lowers to, the
+/// slots it takes, whether it needs the host gate, whether a call to it can
 /// leave a container different from how it found it, and whether it
-/// answers its operand's own width.
+/// answers its operand's own width.  Which source may spell it is decided
+/// by the table containing the row, never by this shape.
 pub const Builtin = struct {
     name: []const u8,
     kind: mir.Intrinsic,
@@ -74,11 +79,10 @@ pub const Builtin = struct {
 const default_background: context.TypedConstant = .{ .value = .{ .integer = -1 }, .value_type = .i64 };
 const default_not_bold: context.TypedConstant = .{ .value = .{ .boolean = false }, .value_type = .boolean };
 
-/// **The one table.**  `builder.zig`'s `lowerIntrinsic` resolves a call
-/// through it and `isPure` below asks it what a call costs.  Those were
-/// two lists of the same thirty-nine names, 3,375 lines apart in one
-/// file, with nothing checking they agreed — so a builtin added to one
-/// and not the other silently changed the ownership analysis.
+/// The public prelude: the deliberately small set a program may call
+/// without importing a module.  These names are language names and are
+/// therefore reserved.  Host APIs other than the universal `print` door do
+/// not belong here; they live behind ordinary `std` declarations below.
 pub const builtins = [_]Builtin{
     .{ .name = "abs", .kind = .abs, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
     .{ .name = "min", .kind = .min, .parameters = &.{ .{ .name = "a" }, .{ .name = "b" } }, .polymorphic = true },
@@ -96,6 +100,15 @@ pub const builtins = [_]Builtin{
     .{ .name = "parse_f64", .kind = .parse_f64, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "parse_str", .kind = .parse_str, .parameters = &.{.{ .name = "data" }} },
     .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
+    .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
+};
+
+/// The compiler-only bridge used by embedded standard-library source.
+/// A standard module spells one of these as `Builtin.NAME`; ordinary
+/// project and package source cannot reach this table.  The names are not
+/// reserved, highlighted, or part of the language reference.  Their public
+/// contracts are the Luce declarations in `src/luce/std/`.
+pub const standard_intrinsics = [_]Builtin{
     .{ .name = "file_read", .kind = .file_read, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "file_write", .kind = .file_write, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
     .{ .name = "term_rows", .kind = .term_rows, .host = true },
@@ -138,7 +151,6 @@ pub const builtins = [_]Builtin{
     }, .host = true },
     .{ .name = "gpu_surface_present", .kind = .gpu_surface_present, .parameters = &.{.{ .name = "surface" }}, .host = true },
     .{ .name = "file_open", .kind = .file_open, .parameters = &.{ .{ .name = "path" }, .{ .name = "mode" } }, .host = true },
-    .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
     .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
     .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
     .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
@@ -146,10 +158,10 @@ pub const builtins = [_]Builtin{
     .{ .name = "term_event_data", .kind = .term_event_data, .parameters = &.{.{ .name = "field" }}, .host = true },
 };
 
-/// Whether a call to this builtin can leave a container different
-/// from how it found it.  False for anything not named here,
-/// including every user function, which is the conservative answer
-/// `effects.mayMutateContainers` needs.
+/// Whether a bare public-prelude call can leave a container different from
+/// how it found it.  False for anything not named here, including every
+/// user function and every `Builtin` method-shaped call, which is the
+/// conservative answer `effects.mayMutateContainers` needs.
 pub fn isPure(callee: []const u8) bool {
     // `i64(...)` and `f64(...)` are conversions rather than
     // intrinsics, so they are not in the table above; both are pure.
@@ -215,22 +227,42 @@ pub const task_methods = [_][]const u8{"wait"};
 // Tests
 // ---------------------------------------------------------------------------
 
-test "every free builtin's name is reserved" {
-    // Read from the two tables rather than from a copy of either, so
-    // adding a builtin and forgetting to reserve its name fails here
-    // instead of shipping a name a program can quietly take over.
-    //
-    // It shipped that way seven times.  The `term_*` services were
-    // added to `builtins` and not to `reserved_names`, so
-    // `func term_rows():` compiled and stood in front of the builtin
-    // for the rest of the program — a name collision the language
-    // refuses everywhere else, missed because nothing was checking.
+test "every public prelude name is reserved" {
     for (builtins) |builtin| {
         if (!isReserved(builtin.name)) {
             std.debug.print(
                 "builtin '{s}' is dispatched but not in reserved_names\n",
                 .{builtin.name},
             );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "compiler-only standard intrinsics reserve no program names" {
+    for (standard_intrinsics) |intrinsic| {
+        if (isReserved(intrinsic.name)) {
+            std.debug.print(
+                "standard intrinsic '{s}' leaked into reserved_names\n",
+                .{intrinsic.name},
+            );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "receiver methods reserve no program names" {
+    inline for (.{ list_methods, array_methods, map_methods, builder_methods, file_methods, task_methods }) |methods| {
+        for (methods) |name| {
+            if (isReserved(name)) {
+                std.debug.print("receiver method '{s}' leaked into reserved_names\n", .{name});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    for (string_methods) |method| {
+        if (isReserved(method.name)) {
+            std.debug.print("string method '{s}' leaked into reserved_names\n", .{method.name});
             return error.TestUnexpectedResult;
         }
     }

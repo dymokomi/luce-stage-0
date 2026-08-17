@@ -42,6 +42,46 @@ const agree = @import("agree.zig");
 // A named function is a value (S1)
 // ---------------------------------------------------------------------------
 
+test "standard implementation names and receiver method names remain ordinary identifiers" {
+    // Host services are reached through std modules, and a method's receiver
+    // already chooses its namespace. Neither category confiscates a bare
+    // program name.
+    try agree.prints(
+        \\import std.files
+        \\
+        \\func dir_create() -> str:
+        \\    return "directory"
+        \\
+        \\func term_rows() -> str:
+        \\    return "terminal"
+        \\
+        \\func append(left: str, right: str) -> str:
+        \\    return left + right
+        \\
+        \\func main():
+        \\    let clock_ms = "clock"
+        \\    print(append(dir_create(), "/" + term_rows()) + "/" + clock_ms)
+        \\
+    , "directory/terminal/clock\n");
+}
+
+test "Builtin is an ordinary user namespace outside the embedded standard library" {
+    // Source provenance grants the compiler bridge; the letters do not.
+    // A project can therefore own this namespace without gaining or losing
+    // any language power.
+    try agree.prints(
+        \\import std.os
+        \\
+        \\struct Builtin:
+        \\    static func clock_ms() -> i64:
+        \\        return 17
+        \\
+        \\func main():
+        \\    print(str(Builtin.clock_ms()))
+        \\
+    , "17\n");
+}
+
 test "a named function passed to a function-typed parameter is called through" {
     try agree.prints(
         \\func ascending(a: i64, b: i64) -> bool:

@@ -141,8 +141,10 @@ in its own channel, the values in theirs, so `try` composes with no new
 mechanism:
 
 ```luce
+import std.files
+
 func read_pair(path: str) -> (i64, i64)!:
-    let text = try file_read(path)
+    let text = try files.read(path)
     return len(text), 0
 
 func main() -> !:
