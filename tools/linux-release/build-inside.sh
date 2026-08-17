@@ -6,7 +6,11 @@ source_root=${LUCE_RELEASE_SOURCE:-/source}
 output=${LUCE_RELEASE_OUTPUT:-/output}
 architecture=${LUCE_RELEASE_ARCH:?LUCE_RELEASE_ARCH is required}
 source_commit=${LUCE_RELEASE_SOURCE_COMMIT:?LUCE_RELEASE_SOURCE_COMMIT is required}
-source_epoch=$(git -C "${LUCE_RELEASE_SOURCE:-/source}" show -s --format=%ct "$source_commit")
+# Docker bind mounts can be owned by a different numeric user than the
+# container's build user.  The source is read-only and selected by the host
+# wrapper, so explicitly mark this one checkout safe for the provenance read
+# instead of weakening Git's global safety policy.
+source_epoch=$(git -c "safe.directory=$source_root" -C "$source_root" show -s --format=%ct "$source_commit")
 case "$source_epoch" in
     ''|*[!0-9]*)
         echo "linux release: source commit has no numeric timestamp" >&2
