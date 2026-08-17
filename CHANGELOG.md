@@ -6,8 +6,8 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## 0.18 — release candidate
 
-This release is not tagged or published yet. It is the candidate described by
-`VERSION` and the checked installer under
+This is the published release candidate described by `VERSION` and the
+checked installer under
 `www/luce/install/0.18/install.sh`.
 
 - ARC is the one lifetime model for classes, containers, closures, interfaces,
@@ -27,5 +27,7 @@ This release is not tagged or published yet. It is the candidate described by
   Linux 2.28+ ARM64/x86-64. Archives carry source identity, toolchain and
   ABI metadata, licenses, and reproducible tar/gzip metadata.
 
-The complete release gate, clean-room journeys, and deployment proof are still
-required before this candidate becomes a public 0.18 release.
+The complete release gate, clean-room journeys, and deployment proof have
+passed for the published candidate. It remains pre-1.0: the source language,
+module format, host ABI, package manifests, and command-line surface may still
+change between 0.x releases.
