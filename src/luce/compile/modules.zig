@@ -51,10 +51,6 @@ const ModuleTree = semantics.ModuleTree;
 
 pub const Error = error{OutOfMemory};
 
-/// One source file may import at most this many modules transitively;
-/// a backstop against runaway import graphs, not a design limit.
-const max_modules = 64;
-
 /// Load, lex, and parse the root source and everything it imports.
 ///
 /// Every module's text is registered in `diagnostics.sources`, which
@@ -107,11 +103,6 @@ pub fn loadAll(
             try reportIn(diagnostics, wanted.from, "luce.import.self", wanted.import.span, "module {s} imports itself", .{name});
             continue;
         }
-        if (modules.items.len >= max_modules) {
-            try reportIn(diagnostics, wanted.from, "luce.import.limit", wanted.import.span, "too many modules (limit {d})", .{max_modules});
-            break;
-        }
-
         // Resolution answers the id of a module already loaded, so
         // asking again is how a cycle terminates — and how stage 1
         // sees that `import math` and `import std.math` want one name

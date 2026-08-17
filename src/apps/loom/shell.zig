@@ -90,15 +90,12 @@ pub const Shell = struct {
 
     /// One line in.
     fn dispatch(self: *Shell, line: []const u8) !Outcome {
-        var words: [max_words][]const u8 = undefined;
-        const count = split(line, &words);
-        if (count == 0) return .{};
-        if (count == max_words) {
-            try self.err.print("loom: too many arguments\n", .{});
-            return .{ .status = report.exit_trapped };
-        }
-        const command = words[0];
-        const rest = words[1..count];
+        var words: std.ArrayList([]const u8) = .empty;
+        defer words.deinit(self.gpa);
+        try split(self.gpa, line, &words);
+        if (words.items.len == 0) return .{};
+        const command = words.items[0];
+        const rest = words.items[1..];
 
         if (std.mem.eql(u8, command, "exit") or std.mem.eql(u8, command, "quit")) {
             return .{ .keep_going = false };
@@ -193,19 +190,11 @@ pub const Shell = struct {
     }
 };
 
-const max_words = 17;
-
-/// Split on spaces and tabs; returns the word count, capped at the
-/// buffer size (a full buffer signals "too many").
-fn split(line: []const u8, words: *[max_words][]const u8) usize {
-    var count: usize = 0;
+/// Split on spaces and tabs. A command line is bounded by the input reader and
+/// available memory, not by an unrelated fixed argument count.
+fn split(gpa: Allocator, line: []const u8, words: *std.ArrayList([]const u8)) !void {
     var iterator = std.mem.tokenizeAny(u8, line, " \t\r");
-    while (iterator.next()) |word| {
-        if (count == max_words) return count;
-        words[count] = word;
-        count += 1;
-    }
-    return count;
+    while (iterator.next()) |word| try words.append(gpa, word);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +204,12 @@ fn split(line: []const u8, words: *[max_words][]const u8) usize {
 const testing = std.testing;
 
 test "lines split into command words" {
-    var words: [max_words][]const u8 = undefined;
-    try testing.expectEqual(@as(usize, 0), split("   ", &words));
-    try testing.expectEqual(@as(usize, 3), split("run editor.lc notes.txt", &words));
-    try testing.expectEqualStrings("run", words[0]);
-    try testing.expectEqualStrings("notes.txt", words[2]);
+    var words: std.ArrayList([]const u8) = .empty;
+    defer words.deinit(testing.allocator);
+    try split(testing.allocator, "run editor.lc notes.txt", &words);
+    try testing.expectEqual(@as(usize, 3), words.items.len);
+    try testing.expectEqualStrings("run", words.items[0]);
+    try testing.expectEqualStrings("notes.txt", words.items[2]);
 }
 
 /// A shell reading a script, with both channels captured.
@@ -331,20 +321,22 @@ fn expectRejected(line: []const u8, mentioning: []const u8) !void {
     try testing.expectEqualStrings("", ran.out.written());
 }
 
-test "a blank line is not a command, and too many words is not one either" {
+test "a blank line is not a command, and argument count has no fixed ceiling" {
     try expectQuiet("");
     try expectQuiet("   ");
     try expectQuiet("\t \r");
 
-    // The word buffer is a fixed size, and a line that filled it may
-    // have had more words after it — running the part that fits would
-    // be running a different command from the one that was typed.
     const gpa = testing.allocator;
     var crowded: std.ArrayList(u8) = .empty;
     defer crowded.deinit(gpa);
     try crowded.appendSlice(gpa, "run x.lc");
-    for (0..max_words) |index| try crowded.print(gpa, " a{d}", .{index});
-    try expectRejected(crowded.items, "too many arguments");
+    for (0..128) |index| try crowded.print(gpa, " a{d}", .{index});
+
+    var words: std.ArrayList([]const u8) = .empty;
+    defer words.deinit(gpa);
+    try split(gpa, crowded.items, &words);
+    try testing.expectEqual(@as(usize, 130), words.items.len);
+    try testing.expectEqualStrings("a127", words.items[129]);
 }
 
 test "leaving is spelled two ways and both stop the shell without a word" {

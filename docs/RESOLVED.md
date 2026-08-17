@@ -21,3 +21,13 @@ anonymous. Every call now emits and flushes a plain `test` progress line before
 entry, then emits a separate `ok` or `FAIL` verdict. Product tests pin progress,
 program output, and verdict order; redirected and terminal reports use the same
 stable text layout.
+
+## 2026-08-16 — ordinary projects hit small fixed ceilings
+
+The compiler refused an otherwise valid import graph after 64 modules, and
+the `loom` shell refused a program invocation after 16 arguments. Neither
+number followed from the language, artifact format, or host ABI. Import
+loading now grows until its allocator reports exhaustion, with a regression
+that retains 128 imported modules. Shell tokenization grows with the input and
+has a 128-argument regression. Structural recursion and hostile-input limits
+remain where they protect the compiler rather than ration ordinary programs.

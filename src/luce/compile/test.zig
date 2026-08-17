@@ -1084,17 +1084,17 @@ const util_module: TestModule = .{ .name = "util", .source =
     \\
 };
 
-test "luce.import.limit: an import graph past the module ceiling is refused" {
-    // The backstop on a runaway import graph, and the only diagnostic
-    // in the compiler that needs more than a page of source to reach:
-    // sixty-four modules is more than any test writes by hand, so it
-    // is generated here.  Refusing at the ceiling is what keeps a
-    // pathological project from being a compiler that never returns.
+test "an import graph is bounded by available memory, not 64 modules" {
+    // Import loading is a finite breadth-first walk with cycle detection.
+    // Its allocator is the honest resource boundary; an arbitrary project
+    // size ceiling rejects healthy programs and does not make the graph walk
+    // safer. Generate enough siblings to cross the former limit so it cannot
+    // return unnoticed.
     var scratch = std.heap.ArenaAllocator.init(testing.allocator);
     defer scratch.deinit();
     const arena = scratch.allocator();
 
-    const count = 70;
+    const count = 128;
     const modules = try arena.alloc(TestModule, count);
     var root: std.ArrayList(u8) = .empty;
     for (modules, 0..) |*module, index| {
@@ -1115,35 +1115,11 @@ test "luce.import.limit: an import graph past the module ceiling is refused" {
         testing.allocator,
         root.items,
         files.loader(),
-        .{},
+        .{ .prune = false },
     );
     defer result.deinit();
-    try testing.expect(result == .failure);
-
-    var reported = false;
-    for (0..result.failure.count()) |index| {
-        const found = result.failure.at(index).?;
-        if (!std.mem.eql(u8, found.code, "luce.import.limit")) continue;
-        try testing.expect(std.mem.indexOf(u8, found.message, "too many modules") != null);
-        reported = true;
-    }
-    try testing.expect(reported);
-
-    // Well under the ceiling, the same shape compiles: the limit is a
-    // backstop, not a budget any real project can feel.
-    const few = modules[0..8];
-    var small: std.ArrayList(u8) = .empty;
-    for (few, 0..) |_, index| try small.print(arena, "import m{d}\n", .{index});
-    try small.appendSlice(arena, "\nfunc main():\n    return\n");
-    var fewer: TestLoader = .{ .modules = few };
-    var fine = try compile_mod.compileProject(
-        testing.allocator,
-        small.items,
-        fewer.loader(),
-        .{},
-    );
-    defer fine.deinit();
-    try testing.expect(fine == .success);
+    try testing.expect(result == .success);
+    try testing.expectEqual(@as(usize, count + 1), result.success.functions.len);
 }
 
 // ---------------------------------------------------------------------------
