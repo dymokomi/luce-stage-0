@@ -1,0 +1,105 @@
+# std.network against the real host: real sockets, real blocking.
+#
+# The differential specs prove both engines agree over a simulated
+# world; this suite proves the shipped host over the loopback the
+# machine actually has — including the one thing a single-threaded
+# oracle cannot show, a worker blocked in `accept` while its client
+# runs in another runtime.
+
+import std.network
+import std.os
+import std.strings
+
+func test_listen_dial_accept_carry_bytes_both_ways() -> !:
+    let door = try network.listen(0)
+    let port = try door.port()
+    assert(port > 0)
+
+    let client = try network.connect("127.0.0.1", port)
+    let served = try door.accept()
+
+    var word = new array[u8](3)
+    word[0] = 104
+    word[1] = 105
+    word[2] = 33
+    let sent = try client.write(word, 3)
+    assert(sent > 0)
+    try client.flush()
+
+    var heard = new array[u8](3)
+    var got: i64 = 0
+    while got < 3:
+        let landed = try served.read(heard)
+        assert(landed > 0)
+        got += landed
+    assert(heard[0] == 104 and heard[2] == 33)
+
+    var reply = new array[u8](1)
+    reply[0] = 111
+    let answered = try served.write(reply, 1)
+    assert(answered == 1)
+    try served.flush()
+    var back = new array[u8](1)
+    assert(try client.read(back) == 1)
+    assert(back[0] == 111)
+
+func test_a_dropped_peer_reads_as_end_of_stream() -> !:
+    let door = try network.listen(0)
+    let served = try dial_send_and_hang_up(door)
+    var buffer = new array[u8](8)
+    var drained: i64 = 0
+    while true:
+        let landed = try served.read(buffer)
+        if landed == 0:
+            break
+        drained += landed
+    assert(drained == 1)
+
+func dial_send_and_hang_up(door: network.Listener) -> network.Connection!:
+    let client = try network.connect("127.0.0.1", try door.port())
+    let served = try door.accept()
+    var one = new array[u8](1)
+    one[0] = 42
+    assert(try client.write(one, 1) == 1)
+    try client.flush()
+    return served
+
+func test_a_worker_blocks_in_accept_until_a_peer_arrives() -> !:
+    # The worker owns its listener on a fixed port and blocks for a
+    # peer; the client cannot know the door is open except by
+    # knocking, so it retries.  The exchange proves real cross-thread
+    # blocking I/O — the case the oracle's world refuses to simulate.
+    let server = spawn serve_one_byte(18653)
+    var tries = 0
+    while true:
+        let done = knock(18653) catch false
+        if done:
+            break
+        tries += 1
+        assert(tries <= 100)
+        os.sleep_ms(10)
+    try server.wait()
+
+func serve_one_byte(port: i64) -> !:
+    let door = try network.listen(port)
+    let guest = try door.accept()
+    var one = new array[u8](1)
+    one[0] = 7
+    assert(try guest.write(one, 1) == 1)
+    try guest.flush()
+
+func knock(port: i64) -> bool!:
+    let conn = try network.connect("127.0.0.1", port)
+    var one = new array[u8](1)
+    assert(try conn.read(one) == 1)
+    assert(one[0] == 7)
+    return true
+
+func test_a_refused_dial_is_a_catchable_error() -> !:
+    var refused = false
+    dial_nowhere() catch reason:
+        refused = strings.starts_with(reason, "cannot connect to ")
+    assert(refused)
+
+func dial_nowhere() -> !:
+    let held = try network.connect("127.0.0.1", 1)

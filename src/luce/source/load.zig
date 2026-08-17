@@ -200,6 +200,7 @@ const standard_modules = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "gpu", .source = @embedFile("../std/gpu.luc") },
     .{ .name = "ui", .source = @embedFile("../std/ui.luc") },
     .{ .name = "network", .source = @embedFile("../std/network.luc") },
+    .{ .name = "http", .source = @embedFile("../std/http.luc") },
 };
 
 /// The whole library, spelled as it is imported — for the messages

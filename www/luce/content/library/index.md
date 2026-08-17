@@ -35,6 +35,7 @@ fact at their boundary rather than making every application know the OS API.
 | [`std.json`](/library/json/) | parse, inspect, build, and write JSON values |
 | [`std.gpu`](/library/gpu/) | backend-neutral drawing surfaces |
 | [`std.network`](/library/network/) | TCP connections and listeners |
+| [`std.http`](/library/http/) | the HTTP/1.1 client |
 | [`std.ui`](/library/ui/) | windows and their drawing surfaces |
 
 Import only what a module needs. A module's public functions are documented

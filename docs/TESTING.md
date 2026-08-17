@@ -189,6 +189,7 @@ is the one deterministic release gate. It runs these owner lanes:
 | `test-specs` | Every observable language contract, on the interpreter and compiled engine, compared by the differential harness. |
 | `test-apps` | The `luce` and `loom` implementation and their command-line product tests. |
 | `test-packages` | Userland packages through the shipped `luce test` command. |
+| `test-std-userland` | The standard library's own Luce test suites (`tests/std/*_test.luc`) on the real host: real sockets, real blocking accepts, a Luce server answering a Luce client. |
 | `test-editor-product` | The editor model's own Luce tests and the standalone editor build. |
 | `test-example-builds` | Every bundled example compiled through the shipped compiler path. |
 | `test-benchmarks` | Every benchmark compiled, but never timed as part of correctness testing. |

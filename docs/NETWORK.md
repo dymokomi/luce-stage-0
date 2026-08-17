@@ -55,7 +55,7 @@ carrying `cannot connect to HOST`, `cannot listen on :PORT`,
 `cannot accept on :PORT` plus whatever the world said. There are no
 split errno codes — the message is the story. A missing transport
 channel traps `host_unavailable` before touching anything. An HTTP
-status code, when `std.http` arrives, is data, never an error —
+status code, in `std.http` above this module, is data, never an error —
 `os.shell.run`'s "a non-zero exit is data" rule, transferred.
 
 ## Concurrency: the one deliberate exception
@@ -113,4 +113,8 @@ simulated world in `specs/hosts.zig`: the round trip through short
 writes, the peer-close end-of-stream, refused dials and doors, and the
 fail-closed missing channel. The world refuses where reality would
 block — a single-threaded oracle cannot wait for a peer — so blocking
-behavior is proven by the shipped host's product smoke tests instead.
+behavior is proven on the real host by `tests/std/network_test.luc`
+and `tests/std/http_test.luc` (`zig build test-std-userland`): ordinary
+`luce test` suites where a worker blocks in `accept` while its client
+retries the knock, and a Luce HTTP server answers a Luce client over
+the machine's own loopback.

@@ -1,0 +1,121 @@
+# std.http against the real host: a Luce server answering a Luce
+# client over real loopback TCP.
+#
+# The differential specs prove both engines parse and frame alike over
+# a scripted world; this suite proves the whole conversation on the
+# shipped host — the worker blocked in `accept`, the client's retry
+# until the door opens, chunked framing crossing a real socket.
+
+import std.http
+import std.network
+import std.os
+import std.strings
+
+func test_a_luce_server_answers_a_luce_get() -> !:
+    let server = spawn serve(18661, plain_reply())
+    let page = try fetch(18661)
+    try server.wait()
+    assert(page.status == 200)
+    let kind = page.headers.get("content-type") else ""
+    assert(kind == "text/plain")
+    assert(body_text(page) == "from luce")
+
+func test_a_chunked_reply_crosses_a_real_socket() -> !:
+    let server = spawn serve(18662, chunked_reply())
+    let page = try fetch(18662)
+    try server.wait()
+    assert(page.status == 200)
+    assert(body_text(page) == "hello world")
+
+func test_a_404_is_an_answer() -> !:
+    let server = spawn serve(18663, missing_reply())
+    let page = try fetch(18663)
+    try server.wait()
+    assert(page.status == 404)
+    assert(len(page.body) == 0)
+
+func test_refusals_carry_their_reasons():
+    var said = ""
+    fetch_https() catch reason:
+        said = reason
+    assert(strings.starts_with(said, "https is not supported yet"))
+    fetch_elsewhere() catch reason:
+        said = reason
+    assert(said == "not an http url: gopher://old.test/")
+
+func fetch_https() -> !:
+    let held = try http.get("https://example.test/")
+
+func fetch_elsewhere() -> !:
+    let held = try http.get("gopher://old.test/")
+
+# -- the server half, in ordinary Luce --------------------------------
+
+func serve(port: i64, reply: str) -> !:
+    let door = try network.listen(port)
+    let guest = try door.accept()
+    var request = new array[u8](2048)
+    assert(try guest.read(request) > 0)
+    var wire = strings.to_bytes(reply)
+    var buffer = new array[u8](2048)
+    var at: i64 = 0
+    while at < len(wire):
+        buffer[at] = wire[at]
+        at += 1
+    var sent: i64 = 0
+    while sent < len(wire):
+        let landed = try guest.write(buffer, len(wire))
+        assert(landed > 0)
+        sent += landed
+    try guest.flush()
+
+func fetch(port: i64) -> http.Response!:
+    let not_yet = http.Response(
+        status = 0,
+        headers = new map[str, str],
+        body = bytes(new list[u8]),
+    )
+    var tries = 0
+    while true:
+        let page = http.get("http://127.0.0.1:" + str(port) + "/") catch not_yet
+        if page.status != 0:
+            return page
+        tries += 1
+        if tries > 100:
+            error("the server never came up")
+        os.sleep_ms(10)
+
+func body_text(page: http.Response) -> str:
+    var held = new list[u8]
+    for b in page.body:
+        held.append(b)
+    let text = strings.from_bytes(held)
+    if text == none:
+        return ""
+    return text
+
+func line_end() -> str:
+    return str(char(13)) + "\n"
+
+func plain_reply() -> str:
+    let crlf = line_end()
+    var reply = "HTTP/1.1 200 OK" + crlf
+    reply = reply + "Content-Type: text/plain" + crlf
+    reply = reply + "Content-Length: 9" + crlf + crlf
+    reply = reply + "from luce"
+    return reply
+
+func chunked_reply() -> str:
+    let crlf = line_end()
+    var reply = "HTTP/1.1 200 OK" + crlf
+    reply = reply + "Transfer-Encoding: chunked" + crlf + crlf
+    reply = reply + "5" + crlf + "hello" + crlf
+    reply = reply + "6" + crlf + " world" + crlf
+    reply = reply + "0" + crlf + crlf
+    return reply
+
+func missing_reply() -> str:
+    let crlf = line_end()
+    var reply = "HTTP/1.1 404 Not Found" + crlf
+    reply = reply + "Content-Length: 0" + crlf + crlf
+    return reply

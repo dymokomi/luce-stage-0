@@ -170,6 +170,15 @@ pub const World = struct {
     /// A dial the listener has not yet accepted — a backlog one deep,
     /// which is all a single-threaded spec can observe.
     pending_dial: bool = false,
+    /// A scripted reply: when non-empty, a dial to any port succeeds
+    /// without a listener and the world plays the server — it keeps
+    /// the request (inspectable through `toward_served`), answers
+    /// these bytes, and hangs up.  This is what lets a single-threaded
+    /// spec run a whole `http.get` exchange: the client writes, then
+    /// reads a peer that has already spoken and closed.
+    canned_reply: []const u8 = &.{},
+    canned_taken: usize = 0,
+    canned_dialed: bool = false,
     client_handle: ?i64 = null,
     served_handle: ?i64 = null,
     /// The two directions of the connected pair.  Each is a queue the
@@ -594,6 +603,14 @@ pub const World = struct {
     fn dialAt(self: *World, host: []const u8, port: i64, handle: *i64) abi.Answer {
         if (self.refuse_network) return .no;
         if (host.len == 0) return .no;
+        if (self.canned_reply.len > 0) {
+            if (self.client_handle != null) return .no;
+            self.next_handle += 1;
+            self.client_handle = self.next_handle;
+            self.canned_dialed = true;
+            handle.* = self.next_handle;
+            return .yes;
+        }
         if (self.listener_handle == null or port != self.listener_port) return .no;
         if (self.client_handle != null) return .no;
         self.next_handle += 1;
@@ -631,6 +648,16 @@ pub const World = struct {
     }
 
     fn socketReadFrom(self: *World, role: SocketRole, into: []u8, filled: *i64) abi.Answer {
+        // The scripted server has already spoken and hung up: serve
+        // the reply, then the end of the stream.
+        if (role == .client and self.canned_dialed) {
+            const rest = self.canned_reply[self.canned_taken..];
+            const moved = @min(rest.len, into.len);
+            @memcpy(into[0..moved], rest[0..moved]);
+            self.canned_taken += moved;
+            filled.* = @intCast(moved);
+            return .yes;
+        }
         const queue, const length, const taken, const peer_live = switch (role) {
             .client => .{ &self.toward_client, self.toward_client_length, &self.toward_client_taken, self.served_handle != null or self.pending_dial },
             .served => .{ &self.toward_served, self.toward_served_length, &self.toward_served_taken, self.client_handle != null },
@@ -658,7 +685,9 @@ pub const World = struct {
             .listener => return .no,
         };
         const peer_live = switch (role) {
-            .client => self.served_handle != null or self.pending_dial,
+            // The scripted server swallows a request whole-heartedly:
+            // it is closed for reading, not for being written to.
+            .client => self.canned_dialed or self.served_handle != null or self.pending_dial,
             .served => self.client_handle != null,
             .listener => unreachable,
         };

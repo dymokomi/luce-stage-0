@@ -165,6 +165,24 @@ test "an accept with nobody dialing is the world refusing, not a hang" {
     , "cannot accept on :5000\n");
 }
 
+test "a worker inherits the transport channel" {
+    // A worker's runtime is its own; the host's channels are the
+    // run's.  A listener opened inside a spawned function proves the
+    // socket channel crossed with the rest — the regression this
+    // pins was a worker that trapped `host_unavailable` at `listen`
+    // while its parent dialed happily.
+    try hosted.prints(
+        \\func open_door() -> i64!:
+        \\    let door = try network.listen(0)
+        \\    return try door.port()
+        \\
+        \\func main() -> !:
+        \\    let worker = spawn open_door()
+        \\    print(str(try worker.wait()))
+        \\
+    , "49152\n");
+}
+
 test "a host without the transport channel fails closed" {
     // The gate is the reached operation, not the import: a missing
     // channel traps `host_unavailable` before touching anything, on

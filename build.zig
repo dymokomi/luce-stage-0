@@ -1473,6 +1473,31 @@ pub fn build(b: *std.Build) void {
     // The editor carries tests of its pure model and its complete declarative
     // application projection (docs/TESTING.md). Same runner, same shape as a
     // package's, driven from the editor's own project root.
+    // The standard library's userland suites: ordinary `luce test`
+    // files under tests/std, run against the real host.  The
+    // differential specs prove both engines agree over a simulated
+    // world; these prove the shipped host over the loopback the
+    // machine actually has — real blocking accepts, a Luce server
+    // answering a Luce client — which is the half no single-threaded
+    // oracle can show.
+    const test_std_userland = b.addRunArtifact(compiler);
+    test_std_userland.addArg("test");
+    test_std_userland.setCwd(b.path("tests/std"));
+    for ([_][]const u8{ "network", "http" }) |suite| {
+        const file = b.fmt("{s}_test.luc", .{suite});
+        test_std_userland.addArg(file);
+        test_std_userland.addFileInput(b.path(b.fmt("tests/std/{s}", .{file})));
+    }
+    test_std_userland.addFileInput(b.path("src/luce/std/network.luc"));
+    test_std_userland.addFileInput(b.path("src/luce/std/http.luc"));
+    linkAgainstRuntime(test_std_userland, install_runtime, runtime_directory, runtime_archive);
+    const test_std_userland_step = b.step(
+        "test-std-userland",
+        "Run the standard library's Luce test suites on the real host",
+    );
+    test_std_userland_step.dependOn(&test_std_userland.step);
+    test_step.dependOn(test_std_userland_step);
+
     const test_editor = b.addRunArtifact(compiler);
     test_editor.addArg("test");
     test_editor.setCwd(b.path("examples/editor"));

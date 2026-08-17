@@ -63,6 +63,7 @@ pub const definitions = [_]Definition{
             "specs.std_spec.",
             "specs.json_spec.",
             "specs.zip_spec.",
+            "specs.http_spec.",
         },
     },
     .{

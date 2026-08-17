@@ -6,6 +6,14 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `std.http` arrives: the HTTP/1.1 client in pure Luce over the
+  transport. `get` and `post` answer a `Response` whose status is
+  data — a 404 is an answer, not an error — with lowercased headers
+  and a de-chunked body. One request per connection, sent with
+  `Connection: close`; `https` is refused with the reason until TLS
+  lands. Workers now inherit the transport channel, so a spawned
+  function can listen and serve — the Library page runs a whole
+  server-and-client conversation in one program.
 - `std.network` arrives: TCP transport as two library classes,
   `Connection` (read/write/flush — the byte channel files carry) and
   `Listener` (accept/port), with `connect(host, port)` and

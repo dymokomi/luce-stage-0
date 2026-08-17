@@ -1,0 +1,255 @@
+# http — the HTTP/1.1 client (RFC 9110/9112, the client's corner of it).
+#
+# Pure Luce over `std.network`, the way `std.zip` is pure Luce over
+# bytes: the transport moves them, this module says what they mean.
+#
+# **A status code is data, never an error.**  A 404 is the server
+# answering, and the answer comes back in `Response.status` for the
+# program to read — `os.shell.run`'s "a non-zero exit is data" rule,
+# transferred.  The error channel carries what it always carries: the
+# world refusing — an unreachable host, a reset connection, a reply
+# that is not HTTP.
+#
+# Every exchange sends `Connection: close` and reads to the end of the
+# stream.  That is deliberate v1 shape, not an accident: one request,
+# one connection, no keep-alive pool to manage or leak, and the end of
+# the body is the end the transport already knows how to say.  A
+# chunked reply is decoded; a Content-Length reply is taken as sent.
+#
+# `https` is refused with an honest sentence: TLS is a planned
+# addition over platform TLS, and pretending otherwise would be worse
+# than saying so.
+
+import std.network
+import std.strings
+
+# One answer from a server.  `headers` holds each name lowercased with
+# the last value winning — the flat map a program actually asks, not a
+# model of every duplicate-header corner — and `body` is the decoded
+# bytes: what the server meant, after chunking is removed.
+struct Response:
+    status: i64
+    headers: map[str, str]
+    body: bytes
+
+func get(url: str) -> Response!:
+    return try exchange("GET", url, new list[u8], "")
+
+# Send `body` and say what it is.  The content type travels because a
+# POST without one is a question servers answer badly.
+func post(url: str, body: list[u8], content_type: str) -> Response!:
+    return try exchange("POST", url, body, content_type)
+
+# -- the exchange -----------------------------------------------------
+
+# How much one read of the reply asks for.
+private const chunk = 2048
+
+# The protocol's line ending.  The language spells no \r escape —
+# deliberately, its string escapes are the four a program needs — so
+# the carriage return is built from its scalar, once, where the
+# protocol that demands it lives.
+private func line_end() -> str:
+    return str(char(13)) + "\n"
+
+private func exchange(method: str, url: str, body: list[u8], content_type: str) -> Response!:
+    let place = try split_url(url)
+    let conn = try network.connect(place.host, place.port)
+
+    let crlf = line_end()
+    var head = method + " " + place.path + " HTTP/1.1" + crlf
+    head = head + "Host: " + place.host + crlf
+    head = head + "Connection: close" + crlf
+    if len(body) > 0:
+        head = head + "Content-Type: " + content_type + crlf
+        head = head + "Content-Length: " + str(len(body)) + crlf
+    head = head + crlf
+
+    var request = strings.to_bytes(head)
+    for b in body:
+        request.append(b)
+    try send(conn, request)
+
+    let raw = try receive(conn)
+    return try parse_response(raw)
+
+# Where a URL points: the machine, the door, and the path asked for.
+private struct Place:
+    host: str
+    port: i64
+    path: str
+
+# `http://host[:port]/path` and nothing more exotic.  The path keeps
+# whatever query it carries; a missing path is `/`.
+private func split_url(url: str) -> Place!:
+    if strings.starts_with(url, "https://"):
+        error("https is not supported yet: TLS is a planned addition, and pretending would be worse")
+    if not strings.starts_with(url, "http://"):
+        error("not an http url: " + url)
+    let rest = url[7:]
+    if len(rest) == 0:
+        error("no host in " + url)
+    var host_end = len(rest)
+    let cut = strings.find(rest, "/")
+    if cut != none:
+        host_end = cut
+    let authority = rest[0:host_end]
+    var path = "/"
+    if host_end < len(rest):
+        path = rest[host_end:]
+    var host = authority
+    var port: i64 = 80
+    let colon = strings.find(authority, ":")
+    if colon != none:
+        host = authority[0:colon]
+        let spoken = parse_i64(authority[colon + 1:])
+        if spoken == none:
+            error("not a port number in " + url)
+        port = spoken
+    if len(host) == 0:
+        error("no host in " + url)
+    return Place(host = host, port = port, path = path)
+
+# The write loop every byte channel needs: short writes are ordinary,
+# and the next round continues where this one stopped.
+private func send(conn: network.Connection, data: list[u8]) -> !:
+    var buffer = new array[u8](chunk)
+    var at: i64 = 0
+    while at < len(data):
+        var held: i64 = 0
+        while held < chunk and at + held < len(data):
+            buffer[held] = data[at + held]
+            held += 1
+        let sent = try conn.write(buffer, held)
+        if sent <= 0:
+            error("the write made no progress")
+        at += sent
+    try conn.flush()
+
+# The whole reply, to the end of the stream — which `Connection: close`
+# made the end of the response.
+private func receive(conn: network.Connection) -> list[u8]!:
+    var all = new list[u8]
+    var buffer = new array[u8](chunk)
+    var landed = try conn.read(buffer)
+    while landed > 0:
+        var at: i64 = 0
+        while at < landed:
+            all.append(buffer[at])
+            at += 1
+        landed = try conn.read(buffer)
+    return all
+
+# -- reading what came back -------------------------------------------
+
+private func parse_response(raw: list[u8]) -> Response!:
+    let split_at = find_head_end(raw)
+    if split_at == none:
+        error("the reply never finished its headers")
+    var head_bytes = new list[u8]
+    var at: i64 = 0
+    while at < split_at:
+        head_bytes.append(raw[at])
+        at += 1
+    let head = strings.from_bytes(head_bytes)
+    if head == none:
+        error("the reply's headers are not text")
+
+    let lines = strings.split(head, line_end())
+    let status = try read_status(lines[0])
+    var headers = new map[str, str]
+    var row: i64 = 1
+    while row < len(lines):
+        let line = lines[row]
+        let colon = strings.find(line, ":")
+        if colon != none:
+            let name = strings.lower(strings.trim(line[0:colon]))
+            let value = strings.trim(line[colon + 1:])
+            headers[name] = value
+        row += 1
+
+    var body = new list[u8]
+    at = split_at + 4
+    while at < len(raw):
+        body.append(raw[at])
+        at += 1
+
+    let encoding = headers.get("transfer-encoding")
+    if encoding != none and strings.contains(strings.lower(encoding), "chunked"):
+        body = try unchunk(body)
+
+    return Response(status = status, headers = headers, body = bytes(body))
+
+# Where the blank line ends the headers: the position of the first
+# CRLFCRLF, or none when it never came.
+private func find_head_end(raw: list[u8]) -> i64?:
+    var at: i64 = 0
+    while at + 3 < len(raw):
+        if raw[at] == 13 and raw[at + 1] == 10 and raw[at + 2] == 13 and raw[at + 3] == 10:
+            return at
+        at += 1
+    return none
+
+# `HTTP/1.1 200 OK` — the number is the second word, and the words
+# after it are for people.
+private func read_status(line: str) -> i64!:
+    let parts = strings.split(line, " ")
+    if len(parts) < 2 or not strings.starts_with(parts[0], "HTTP/"):
+        error("not an HTTP reply: " + line)
+    let code = parse_i64(parts[1])
+    if code == none:
+        error("not an HTTP status: " + line)
+    if code < 100 or code > 599:
+        error("not an HTTP status: " + line)
+    return code
+
+# Remove chunked framing: `SIZE-in-hex CRLF data CRLF` repeated, a
+# zero-size chunk ending it.  Trailers after the last chunk are
+# ignored — this module reads bodies, and a trailer is a header that
+# arrived too late to matter to one.
+private func unchunk(framed: list[u8]) -> list[u8]!:
+    var out = new list[u8]
+    var at: i64 = 0
+    while true:
+        var size: i64 = 0
+        var digits: i64 = 0
+        while at < len(framed) and framed[at] != 13:
+            let worth = hex_worth(framed[at])
+            if worth == none:
+                # A chunk extension (`;name=value`) ends the digits; skip
+                # to the line's end.
+                if framed[at] == 59:
+                    while at < len(framed) and framed[at] != 13:
+                        at += 1
+                    break
+                error("not a chunk size")
+            size = size * 16 + worth
+            digits += 1
+            at += 1
+        if digits == 0:
+            error("not a chunk size")
+        if at + 1 >= len(framed) or framed[at] != 13 or framed[at + 1] != 10:
+            error("a chunk size line never ended")
+        at += 2
+        if size == 0:
+            return out
+        if at + size > len(framed):
+            error("a chunk ended before its data did")
+        var taken: i64 = 0
+        while taken < size:
+            out.append(framed[at + taken])
+            taken += 1
+        at += size
+        if at + 1 >= len(framed) or framed[at] != 13 or framed[at + 1] != 10:
+            error("a chunk's data never ended")
+        at += 2
+
+# What a hex digit is worth, or none for a byte that is not one.
+private func hex_worth(b: u8) -> i64?:
+    if b >= 48 and b <= 57:
+        return i64(b) - 48
+    if b >= 97 and b <= 102:
+        return i64(b) - 87
+    if b >= 65 and b <= 70:
+        return i64(b) - 55
+    return none

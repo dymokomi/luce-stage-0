@@ -125,6 +125,7 @@ pub const sections = [_]Section{
             .{ .slug = "gpu", .title = "std.gpu", .part = "Standard Library", .blurb = "Backend-neutral surfaces for low-level drawing, with Metal and Vulkan kept behind the host boundary." },
             .{ .slug = "ui", .title = "std.ui", .part = "Standard Library", .blurb = "Windows and their drawing surfaces, before a higher-level UI package exists." },
             .{ .slug = "network", .title = "std.network", .part = "Standard Library", .blurb = "TCP connections and listeners: dial a host, open a door, move bytes." },
+            .{ .slug = "http", .title = "std.http", .part = "Standard Library", .blurb = "The HTTP/1.1 client, in pure Luce: fetch a page, read the answer, and a status code is data." },
             .{ .slug = "termui", .title = "termui", .part = "Maintained Packages", .source = "library/termui.md", .blurb = "Declarative terminal applications built from stacks, panels, rows, events, and one hidden lifecycle." },
         },
     },

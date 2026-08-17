@@ -92,6 +92,7 @@ pub const bytes = @import("specs/bytes_spec.zig");
 /// The host boundary: every effect, offered and withheld.
 pub const host = @import("specs/host_spec.zig");
 pub const network = @import("specs/network_spec.zig");
+pub const http = @import("specs/http_spec.zig");
 
 // The backend's end-to-end proof: source to machine code to a loaded shared
 // library.  It stays beside the backend it proves and is reached only by this
@@ -135,6 +136,7 @@ comptime {
         _ = bytes;
         _ = host;
         _ = network;
+        _ = http;
 
         _ = backend;
 
