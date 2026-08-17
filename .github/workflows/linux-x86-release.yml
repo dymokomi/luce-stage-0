@@ -25,13 +25,12 @@ jobs:
 
       - name: Preserve executable permissions
         run: |
-          tar -czf "$RUNNER_TEMP/luce-linux-x86_64-prefix.tar.gz" \
+          tar -czf "$RUNNER_TEMP/luce-linux-x86_64-prefix-${GITHUB_SHA}.tar.gz" \
             -C "$RUNNER_TEMP/luce-prefix" .
 
       - name: Upload the verified prefix
         uses: actions/upload-artifact@v7
         with:
-          name: luce-linux-x86_64-prefix-${{ github.sha }}
-          path: ${{ runner.temp }}/luce-linux-x86_64-prefix.tar.gz
+          path: ${{ runner.temp }}/luce-linux-x86_64-prefix-${{ github.sha }}.tar.gz
           archive: false
           retention-days: 3
