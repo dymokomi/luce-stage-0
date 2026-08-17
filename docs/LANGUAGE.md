@@ -66,9 +66,11 @@ plain function values are values. A copied value retains any reference fields
 it contains.
 
 A reference shares one ARC object. Classes, `list[T]`, `map[K, V]`,
-`array[T, _, ...]`, `builder`, `file`, and `task[...]` are references.
-Assignment and argument passing retain the same identity. The last strong
-release destroys containers and classes, closes files, and joins unfinished
+`array[T, _, ...]`, `builder`, and `task[...]` are references — as are the
+library's resource classes (`files.File`, `ui.Window`), which privately
+own the std-only `handle` descriptor currency. Assignment and argument
+passing retain the same identity. The last strong
+release destroys containers and classes, closes descriptors, and joins unfinished
 tasks. Closure environments are internal references carried by the ordinary
 function-value representation.
 

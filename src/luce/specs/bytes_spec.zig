@@ -142,6 +142,27 @@ test "a handle opens, reads a count, and its last reference closes it" {
     try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }
 
+test "file and handle are a program's own words, not the language's" {
+    // The raw descriptor currency is the standard library's spelling,
+    // not the language's (docs/BYTES.md R5): outside embedded std
+    // source the words resolve like any other name, so a program may
+    // declare its own `file` struct and `handle` class without
+    // colliding with anything the compiler keeps for itself.
+    try agree.prints(
+        \\struct file:
+        \\    x: i64
+        \\
+        \\class handle:
+        \\    n: i64
+        \\
+        \\func main():
+        \\    let a = file(x = 40)
+        \\    let b = handle(n = 2)
+        \\    print(str(a.x + b.n))
+        \\
+    , "42\n");
+}
+
 test "a handle returns out of the function that opened it" {
     // `return` moves an object, and a handle is an object: the file
     // stays open across the frame that made it and is closed when its
@@ -151,7 +172,7 @@ test "a handle returns out of the function that opened it" {
     var session = try agree.compare(
         \\import std.files
         \\
-        \\func opened() -> file!:
+        \\func opened() -> files.File!:
         \\    return try files.open("notes.txt")
         \\
         \\func main() -> !:
@@ -171,7 +192,7 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\import std.files
         \\
         \\struct Packet:
-        \\    handle: file?
+        \\    handle: files.File?
         \\    callback: (func(i64) -> i64)?
         \\
         \\func scale(value: i64) -> i64:

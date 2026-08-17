@@ -61,7 +61,7 @@ func main():
 `print` and `exit` are the only host-facing prelude functions. Everything
 else supplied by a host is namespaced:
 
-- [`std.files`](/library/files/) for paths, text, bytes, and file handles
+- [`std.files`](/library/files/) for paths, text, bytes, and open files
 - [`std.os`](/library/os/) for input, standard error, clocks, environment,
   terminal access, shell commands, and machine facts
 - [`std.ui`](/library/ui/) and [`std.gpu`](/library/gpu/) for windows and
@@ -131,18 +131,6 @@ func main():
 
 A builder also supports `len(value)`. Use `build()` rather than `str(value)`
 to obtain its text.
-
-## file
-
-| Method | Meaning |
-|---|---|
-| `read(into: array[u8, _]) -> i64!` | fills the buffer and returns the byte count; zero means end of file |
-| `write(from: array[u8, _], count: i64) -> i64!` | writes up to `count` bytes and returns the number written |
-| `flush() -> !` | asks the device to accept everything written so far |
-
-There is no `close`. A `file` is an ARC-managed resource and closes at its
-last strong release. Most programs use the complete conveniences in
-[`std.files`](/library/files/).
 
 ## task
 

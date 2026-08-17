@@ -151,6 +151,9 @@ pub const standard_intrinsics = [_]Builtin{
     }, .host = true },
     .{ .name = "gpu_surface_present", .kind = .gpu_surface_present, .parameters = &.{.{ .name = "surface" }}, .host = true },
     .{ .name = "file_open", .kind = .file_open, .parameters = &.{ .{ .name = "path" }, .{ .name = "mode" } }, .host = true },
+    .{ .name = "handle_read", .kind = .handle_read, .parameters = &.{ .{ .name = "from" }, .{ .name = "into" } }, .host = true },
+    .{ .name = "handle_write", .kind = .handle_write, .parameters = &.{ .{ .name = "to" }, .{ .name = "from" }, .{ .name = "count" } }, .host = true },
+    .{ .name = "handle_flush", .kind = .handle_flush, .parameters = &.{.{ .name = "of" }}, .host = true },
     .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
     .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
     .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
@@ -212,15 +215,15 @@ pub const list_methods = [_][]const u8{
 pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
 pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
 pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
-/// The byte channel's three (docs/BYTES.md R4).  There is no
-/// `close`: aliases share the handle and its last strong release closes it.
-pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
 /// A task's one method (docs/THREADS.md D4).  There is no `cancel`
 /// and no `done`: a worker owns its own runtime and nothing outside
 /// it may reach in, and a question whose answer is stale before it is
 /// read is not a question worth answering.  Its last strong release
-/// joins it, exactly as for `file`.
+/// joins it, exactly as a handle's closes it.  The raw `handle` has
+/// no method table at all — its byte channel is the
+/// `Builtin.handle_*` rows above, called by the standard class that
+/// owns the descriptor.
 pub const task_methods = [_][]const u8{"wait"};
 
 // ---------------------------------------------------------------------------
@@ -252,7 +255,7 @@ test "compiler-only standard intrinsics reserve no program names" {
 }
 
 test "receiver methods reserve no program names" {
-    inline for (.{ list_methods, array_methods, map_methods, builder_methods, file_methods, task_methods }) |methods| {
+    inline for (.{ list_methods, array_methods, map_methods, builder_methods, task_methods }) |methods| {
         for (methods) |name| {
             if (isReserved(name)) {
                 std.debug.print("receiver method '{s}' leaked into reserved_names\n", .{name});

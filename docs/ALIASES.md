@@ -94,10 +94,10 @@ Transparency includes expression sites that name the type:
   constructor;
 - an alias of `list`, `map`, `array`, or `builder` may follow `new`.
 
-The target still decides how values are created. An alias of `file` is opened
-through `std.files`, and an alias of `task[...]` is created by `spawn`;
-neither becomes callable or constructible with `new`. An alias of `bool`, an
-optional, or a function type is a type, not a callable runtime value.
+The target still decides how values are created. An alias of `task[...]` is
+created by `spawn` and never becomes callable or constructible with `new`.
+An alias of `bool`, an optional, or a function type is a type, not a
+callable runtime value.
 
 ## Compiler boundary and evidence
 

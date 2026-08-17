@@ -6,6 +6,7 @@
 //! retain or a missing retain becomes an output or leak disagreement.
 
 const agree = @import("agree.zig");
+const testing = @import("std").testing;
 
 test "a weak local observes one lifetime and never revives on row reuse" {
     try agree.ok(
@@ -178,4 +179,35 @@ test "repeated weak upgrades release every owned snapshot" {
         \\    assert(total == 42000)
         \\
     );
+}
+
+test "a weak files.File observes the descriptor's lifetime without extending it" {
+    // A File is an ordinary class, so weak storage works on it the
+    // way it works on any class — the Swift shape, where a weak
+    // NWConnection is bookkeeping and never keeps a socket open.
+    // The upgrade holds the file alive for the read; releasing the
+    // strong reference closes the descriptor and zeroes the observer.
+    const world: agree.World = .withFile("notes.txt", "abcdef");
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    weak var observed: files.File?
+        \\    if true:
+        \\        var f = try files.open("notes.txt")
+        \\        observed = f
+        \\        let live = observed
+        \\        if live == none:
+        \\            print("dead")
+        \\            return
+        \\        var buffer = new array[u8](6)
+        \\        print(str(try live.read(buffer)))
+        \\    if observed == none:
+        \\        print("closed")
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("6\nclosed\n", session.printed());
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
 }

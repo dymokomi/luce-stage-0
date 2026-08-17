@@ -99,7 +99,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             try verifyType(program, shape.element);
             if (shape.rank < 1 or shape.rank > 4) return error.BadStruct;
         },
-        .builder, .file => {},
+        .builder, .handle => {},
         .task => |work| try verifyType(program, work.result),
     };
     for (program.structs) |layout| {
@@ -249,7 +249,7 @@ fn isWeakTarget(program: *const Program, of: Type) bool {
             false
         else switch (program.heap_types[index]) {
             .class, .list, .map, .array, .builder => true,
-            .file, .task => false,
+            .handle, .task => false,
         },
         else => false,
     };
@@ -444,7 +444,7 @@ fn typeReferenceAt(program: *const Program, node: usize, edge: usize) ?Type {
         },
         .array => |shape| if (edge == 0) shape.element else null,
         .task => |work| if (edge == 0) work.result else null,
-        .builder, .file => null,
+        .builder, .handle => null,
     };
 
     const signature = program.signatures[node - program.heap_types.len];
@@ -757,7 +757,7 @@ fn verifyContainerConstant(
                 try verifyDistinctKeys(allocator, program, entries, pair.key);
             },
         },
-        .builder, .file, .task => return error.BadConstant,
+        .builder, .handle, .task => return error.BadConstant,
     }
 }
 
@@ -1355,7 +1355,7 @@ fn verifyInstruction(
                 // doors.  Treating one as an ordinary heap allocation
                 // leaves the interpreter at `unreachable` and gives
                 // the backend no constructor it can lower.
-                .file, .task => return error.BadIntrinsic,
+                .handle, .task => return error.BadIntrinsic,
             };
             if (new.dims.len != expected_dims) return error.BadStruct;
             for (new.dims) |dimension| {
@@ -1567,7 +1567,7 @@ fn verifyIntrinsic(
                 if (arguments[0] != .heap) return error.BadIntrinsic;
                 switch (try heapShape(program, arguments[0])) {
                     .list, .map, .array, .builder => {},
-                    .class, .file, .task => return error.BadIntrinsic,
+                    .class, .handle, .task => return error.BadIntrinsic,
                 }
             }
             try expectType(result, .i64);
@@ -1688,7 +1688,7 @@ fn verifyIntrinsic(
                     for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .i64);
                     break :blk shape.element;
                 },
-                .class, .builder, .file, .task => return error.BadIntrinsic,
+                .class, .builder, .handle, .task => return error.BadIntrinsic,
             };
             if (reads) {
                 try expectType(result, element);
@@ -1817,7 +1817,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {
                 .list, .map, .builder => {},
-                .class, .array, .file, .task => return error.BadIntrinsic,
+                .class, .array, .handle, .task => return error.BadIntrinsic,
             }
             try expectType(result, .none);
         },
@@ -1896,7 +1896,7 @@ fn verifyIntrinsic(
                 break :accepted switch (shape) {
                     .list => |element| element == .u8,
                     .array => |array| array.rank == 1 and array.element == .u8,
-                    .class, .map, .builder, .file, .task => false,
+                    .class, .map, .builder, .handle, .task => false,
                 };
             } else false;
             if (!accepted) return error.BadIntrinsic;
@@ -1963,34 +1963,34 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .str);
             try expectType(arguments[1], .i64);
             try expectType(arguments[2], .i64);
-            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
         },
         .ui_window_surface => {
             try exactly(arguments, 1);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
-            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
         },
         .gpu_surface_size => {
             try exactly(arguments, 2);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectType(arguments[1], .i64);
             try expectType(result, .i64);
         },
         .gpu_surface_clear => {
             try exactly(arguments, 5);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             for (arguments[1..]) |argument| try expectType(argument, .i64);
             try expectType(result, .none);
         },
         .gpu_surface_fill_rect => {
             try exactly(arguments, 9);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             for (arguments[1..]) |argument| try expectType(argument, .i64);
             try expectType(result, .none);
         },
         .gpu_surface_present => {
             try exactly(arguments, 1);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectType(result, .none);
         },
         .term_rows, .term_cols => {
@@ -2084,17 +2084,17 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             try expectType(arguments[0], .str);
             try expectType(arguments[1], .i64);
-            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
         },
         .handle_read => {
             try exactly(arguments, 2);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectByteBuffer(program, arguments[1]);
             try expectType(result, .i64);
         },
         .handle_write => {
             try exactly(arguments, 3);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectByteBuffer(program, arguments[1]);
             try expectType(arguments[2], .i64);
             try expectType(result, .i64);
@@ -2114,7 +2114,7 @@ fn verifyIntrinsic(
         },
         .handle_flush => {
             try exactly(arguments, 1);
-            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectType(result, .none);
         },
     }
@@ -2278,7 +2278,7 @@ fn typeCarriesWorker(
                 seen_heaps[index] = true;
                 switch (program.heap_types[index]) {
                     .class => if (sought == .class) return true,
-                    .file, .task => if (sought == .resource) return true,
+                    .handle, .task => if (sought == .resource) return true,
                     .list => |element| try pending.append(allocator, element),
                     .map => |pair| {
                         try pending.append(allocator, pair.key);

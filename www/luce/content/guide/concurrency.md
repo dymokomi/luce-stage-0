@@ -64,10 +64,11 @@ arrays, builders, structs, unions, and optionals. It preserves aliases within
 the copied graph and across separate arguments while sharing no identity with
 the caller. The caller can continue using and mutating its original graph.
 
-Resources and callable environments are different. A graph containing a
-`file`, `task`, or function value cannot cross. Open a file in the worker that
-uses it, wait for child tasks in the worker that created them, and name the
-function the worker should run instead of sending a function value.
+Classes and callable environments are different. A graph containing a class —
+including a resource class such as `files.File` — a `task`, or a function
+value cannot cross. Open a file in the worker that uses it, wait for child
+tasks in the worker that created them, and name the function the worker
+should run instead of sending a function value.
 
 ## Return a graph
 
@@ -92,7 +93,7 @@ func main():
 5 100
 ```
 
-A result graph also cannot contain a `file`, `task`, or function value. A task
+A result graph also cannot contain a class, `task`, or function value. A task
 has one runtime on each side of its join; it does not move another live runtime
 through itself.
 
@@ -157,8 +158,8 @@ measure before splitting small calculations.
 - Workers share program code and serialized host services, not Luce objects.
 - Arguments are copied into the worker runtime at `spawn`.
 - Results and recoverable errors are copied back at `wait()`.
-- `file`, `task`, and function values cannot occur anywhere in a crossing
-  graph.
+- Classes (including `files.File`), `task`, and function values cannot occur
+  anywhere in a crossing graph.
 - A worker may spawn another worker; each task is joined exactly once.
 
 For exact task shapes and refusals, see [`task`](/guide/reference/types/#task)

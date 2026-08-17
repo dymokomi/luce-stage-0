@@ -24,8 +24,10 @@ A **reference type** is a shared object. Assigning it or passing it shares the
 *same* object — a mutation through one name is seen through every other. The
 ARC runtime frees it after the last strong reference.
 The reference types implemented today are user-declared `class` types; the
-containers `list[T]`, `map[K, V]`, `array[T, ...]`, and `builder`; and the
-resources `file` and `task[...]`. Capturing closures use an internal ARC
+containers `list[T]`, `map[K, V]`, `array[T, ...]`, and `builder`; the
+resource `task[...]`; and, inside embedded standard source only, the raw
+`handle` descriptor currency the library wraps in ordinary classes
+(`files.File`, `ui.Window`). Capturing closures use an internal ARC
 environment while retaining the ordinary function-value type.
 
 `weak` is non-owning storage for an optional ARC object reference. It is a
@@ -177,7 +179,9 @@ Generation checks prevent a freed object-table row from reviving an old weak
 handle.
 
 Weak storage cannot target a scalar, text value, value struct, interface,
-function, `file`, or `task`, and cannot cross a worker boundary. A value that
+function, raw `handle`, or `task`, and cannot cross a worker boundary. A
+`files.File` is an ordinary class, so weak storage on it works like any
+class. A value that
 contains a weak field has no synthesized equality or collection-search
 semantics. `[weak name]` uses the same runtime representation for a closure
 capture.
@@ -235,8 +239,10 @@ field is present.
 
 The builtin type names are **lowercase**: `bool`; `u8`, `u16`, `u32`,
 `u64`; `i8`, `i16`, `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`,
-`bytes`; the containers `list`, `map`, `array`, `builder`; and the resources
-`file` and `task`.
+`bytes`; the containers `list`, `map`, `array`, `builder`; and the resource
+`task`. (`handle` is the standard library's private descriptor spelling,
+not a program's word: outside embedded std source it resolves like any
+ordinary name.)
 A name you declare — a type alias, struct, class, enum, union, or interface —
 is TitleCase by convention, so the case of a type name says who defined it.
 

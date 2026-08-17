@@ -4175,34 +4175,22 @@ test "luce.sema.construct: a function-namespace struct has no value fields" {
 // luce.sema.new — distinct paths
 // ---------------------------------------------------------------------------
 
-// The two sentences the byte channel adds (docs/BYTES.md R5).  A file
-// is opened, never made — a handle with no file behind it is the one
-// state the type must not hold — and it cannot be copied, because one
-// open file cannot have two owners.  Both are refused by name in stage
-// 4 rather than met as a trap; the runtime and the verifier stand
-// behind them for IR that arrived some other way.
-test "luce.sema.new: a file is opened, not made" {
-    try expectRejected("func main():\n    var f = new file\n", "luce.sema.new");
+// The byte channel wears an ordinary class now (docs/BYTES.md R5):
+// `files.File` owns the host descriptor, and `file` is not a word the
+// language keeps.  What used to be compiler-special diagnostics are
+// the ordinary unknown-type and unknown-method answers, which is the
+// point — the raw currency never enters a program's vocabulary, so
+// there is nothing special left to refuse.
+test "luce.sema.type: file is not a language type; the library owns the descriptor" {
+    try expectRejected("func main():\n    var f = new file\n", "luce.sema.type");
 }
 
-test "luce.sema.method: a file has read, write and flush and nothing else" {
-    try expectRejected(
-        \\import std.files
-        \\
-        \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
-        \\    f.close()
-        \\
-    , "luce.sema.method");
-}
-
-test "luce.sema.method: close is refused by name, with both halves of the answer" {
+test "luce.sema.method: files.File has no close; ARC's last release is the close" {
     // The one name a Python programmer will certainly type
-    // (docs/FILESYSTEM.md D9).  It is refused rather than offered —
-    // a working `close` would be `free` under a second name, and an
-    // idempotent one would need a state a resource must never hold —
-    // so the diagnostic has to teach both the early close and the
-    // automatic one, and say why `with` is missing too.
+    // (docs/FILESYSTEM.md D9).  It is absent rather than special-cased:
+    // a working `close` would be a second lifetime convention beside
+    // ARC, so the class simply does not declare one, and the compiler
+    // answers with the same sentence any class answers.
     try expectHostSaying(
         \\import std.files
         \\
@@ -4210,7 +4198,7 @@ test "luce.sema.method: close is refused by name, with both halves of the answer
         \\    var f = try files.open("notes.txt")
         \\    f.close()
         \\
-    , "luce.sema.method", "file has no method close: free f closes it, and the end of the owning scope closes it anyway");
+    , "luce.sema.method", "files.File has no method close");
 }
 
 test "luce.sema.fallible: an ignored files.exists is refused, not silently dropped" {
@@ -8199,10 +8187,6 @@ test "luce.sema.weak.target: values and resources cannot be weak targets" {
         ,
         \\func main():
         \\    weak var value: (func(i64) -> i64)? = none
-        \\
-        ,
-        \\func main():
-        \\    weak var value: file? = none
         \\
         ,
         \\func main():

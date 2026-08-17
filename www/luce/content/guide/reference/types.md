@@ -13,7 +13,7 @@ i8 i16 i32 i64
 f16 f32 f64
 char str bytes
 list map array builder
-file task
+task
 ```
 
 User declarations add aliases, structs, classes, enums, unions, and
@@ -27,11 +27,17 @@ The kind of a type decides assignment, argument, and return behavior.
 |---|---|---|
 | Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, function values | copy the value; a captured function retains its ARC environment |
 | Reference | classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder` | share one ARC object |
-| Resource reference | `file`, `task[...]` | share one ARC object; close or join at the last release |
+| Resource reference | `task[...]` | share one ARC object; join at the last release |
 
 A value may contain references. Copying the value copies its value fields and
 retains its reference fields. There are no source retain, release, borrow,
 move, clone, or free operations.
+
+An open file is not a language type. `std.files` answers `files.File`, an
+ordinary class that closes its private descriptor at the last strong release.
+The raw descriptor type, `handle`, resolves only inside the embedded standard
+library; a user program cannot name it and may freely declare its own `handle`
+or `file`. See [`std.files`](/library/files/).
 
 ## Type aliases {#type-aliases}
 
@@ -410,13 +416,6 @@ An ARC reference text accumulator. Append text or ASCII bytes and call
 `build() -> str` to finish a value string. Builders are mutable and have no
 type arguments.
 
-## `file` {#file}
-
-An ARC resource opened through `std.files` or the host primitive. Assignment
-and calls share one handle. The final strong release closes it; there is no
-manual `close`. Handle reads and writes use `array[u8, _]` buffers and are
-fallible. A file cannot cross a worker boundary or be weak.
-
 ## `task[...]` {#task}
 
 An ARC resource produced only by `spawn`. The result shape is written in
@@ -474,7 +473,7 @@ and object-table reuse cannot revive it. Separate reads do not persistently
 narrow one another.
 
 Weak targets exclude scalars, text values, value structs, interfaces,
-functions, files, and tasks. Weak fields disable implicit aggregate equality
+functions, and tasks. Weak fields disable implicit aggregate equality
 and collection search, and weak handles cannot cross worker runtimes. A
 closure capture list may use `[weak name]` with the same target rules.
 

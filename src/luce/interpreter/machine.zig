@@ -780,7 +780,7 @@ pub const Machine = struct {
             // The verifier refuses all three from this pool.  Keeping
             // the switch total documents the trust boundary rather
             // than inventing a second recovery for damaged MIR here.
-            .builder, .file, .task => unreachable,
+            .builder, .handle, .task => unreachable,
         }
         return current.*;
     }
@@ -1475,9 +1475,9 @@ pub const Machine = struct {
             .map => return self.runtime.newMap(),
             .builder => return self.runtime.newBuilder(),
             // A file is made by `file_open` and by nothing else, so
-            // there is no `new file` for this to answer; stage 4
-            // refuses one by name and the verifier refuses the IR.
-            .file => unreachable,
+            // there is no `new handle` for this to answer; stage 4
+            // refuses one and the verifier refuses the IR.
+            .handle => unreachable,
             // Nor is there a `new task`: `spawn` is the only door in,
             // for the same reason (docs/THREADS.md D3).
             .task => unreachable,
@@ -1537,7 +1537,7 @@ pub const Machine = struct {
             .list => |element| element,
             // The verifier admits nothing else here: keys and values
             // answer a list and only a list.
-            .class, .map, .array, .builder, .file, .task => unreachable,
+            .class, .map, .array, .builder, .handle, .task => unreachable,
         };
     }
 

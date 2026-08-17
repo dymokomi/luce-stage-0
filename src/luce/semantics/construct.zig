@@ -537,7 +537,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f32 => .f32,
         .f64 => .f64,
         .char => .u32,
-        .boolean, .str, .bytes, .list, .map, .array, .builder, .file, .task => null,
+        .boolean, .str, .bytes, .list, .map, .array, .builder, .handle, .task => null,
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
@@ -600,7 +600,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         const byte_sequence = if (self.analyzer.heapOf(value.value_type)) |descriptor| switch (descriptor) {
             .list => |element| element == .u8,
             .array => |shape| shape.rank == 1 and shape.element == .u8,
-            .class, .map, .builder, .file, .task => false,
+            .class, .map, .builder, .handle, .task => false,
         } else false;
         if (value.value_type != .str and !byte_sequence) {
             return failConvert(self, call, value, produces);
@@ -678,7 +678,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task => unreachable, // answered above
     };
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
@@ -728,7 +728,7 @@ fn lowerEnumToNumber(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task => unreachable, // answered by the caller
     };
     return .{
         // The same node shape as the numeric constructors: one
@@ -973,7 +973,7 @@ pub fn lowerIntrinsic(
                 const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse break :measure false;
                 break :measure switch (descriptor) {
                     .list, .map, .array, .builder => true,
-                    .class, .file, .task => false,
+                    .class, .handle, .task => false,
                 };
             };
             if (!measurable) {
@@ -1120,33 +1120,33 @@ pub fn lowerIntrinsic(
                 !arguments[1].value_type.eql(.i64) or
                 !arguments[2].value_type.eql(.i64))
                 return failIntrinsic(self, call, "ui_window_open takes (title str, width i64, height i64)");
-            result = try resolve.internHeapType(self.analyzer, .file);
+            result = try resolve.internHeapType(self.analyzer, .handle);
         },
         .ui_window_surface => {
-            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            const file_type = try resolve.internHeapType(self.analyzer, .handle);
             if (!arguments[0].value_type.eql(file_type))
                 return failIntrinsic(self, call, "ui_window_surface takes a ui window handle");
             result = file_type;
         },
         .gpu_surface_size => {
-            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            const file_type = try resolve.internHeapType(self.analyzer, .handle);
             if (!arguments[0].value_type.eql(file_type) or
                 !arguments[1].value_type.eql(.i64))
-                return failIntrinsic(self, call, "gpu_surface_size takes (surface file, axis i64)");
+                return failIntrinsic(self, call, "gpu_surface_size takes (surface handle, axis i64)");
             result = .i64;
         },
         .gpu_surface_clear => {
-            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            const file_type = try resolve.internHeapType(self.analyzer, .handle);
             if (!arguments[0].value_type.eql(file_type) or
                 !arguments[1].value_type.eql(.i64) or
                 !arguments[2].value_type.eql(.i64) or
                 !arguments[3].value_type.eql(.i64) or
                 !arguments[4].value_type.eql(.i64))
-                return failIntrinsic(self, call, "gpu_surface_clear takes (surface file, red i64, green i64, blue i64, alpha i64)");
+                return failIntrinsic(self, call, "gpu_surface_clear takes (surface handle, red i64, green i64, blue i64, alpha i64)");
             result = .none;
         },
         .gpu_surface_fill_rect => {
-            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            const file_type = try resolve.internHeapType(self.analyzer, .handle);
             if (!arguments[0].value_type.eql(file_type))
                 return failIntrinsic(self, call, "gpu_surface_fill_rect takes a surface first");
             inline for (1..9) |index| {
@@ -1156,7 +1156,7 @@ pub fn lowerIntrinsic(
             result = .none;
         },
         .gpu_surface_present => {
-            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            const file_type = try resolve.internHeapType(self.analyzer, .handle);
             if (!arguments[0].value_type.eql(file_type))
                 return failIntrinsic(self, call, "gpu_surface_present takes a surface");
             result = .none;
@@ -1277,15 +1277,40 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
             if (!arguments[1].value_type.eql(.i64))
                 return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
-            result = try resolve.internHeapType(self.analyzer, .file);
+            result = try resolve.internHeapType(self.analyzer, .handle);
         },
-        // Reached through `f.read(buffer)` and its two siblings,
-        // which `objectMethod` types against the receiver: a
-        // handle method is not a free builtin and has no row in
-        // the table above.
-        // And `t.wait()`, for the same reason: the result type is
-        // the task's, so only the receiver can say it.
-        .handle_read, .handle_write, .handle_flush, .task_wait => unreachable,
+        // The byte channel itself (docs/BYTES.md R4): a read fills
+        // the caller's rank-1 `array[u8, _]` and answers how many
+        // bytes landed — zero is the end — and a write takes the
+        // buffer and a count and answers how many landed.  Standard
+        // classes (`files.File`) call these on the handle they own;
+        // there is no receiver syntax on the raw currency.
+        .handle_read => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            const buffer_type = try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } });
+            if (!arguments[0].value_type.eql(handle_type) or
+                !arguments[1].value_type.eql(buffer_type))
+                return failIntrinsic(self, call, "handle_read takes (from handle, into array[u8, _])");
+            result = .i64;
+        },
+        .handle_write => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            const buffer_type = try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } });
+            if (!arguments[0].value_type.eql(handle_type) or
+                !arguments[1].value_type.eql(buffer_type) or
+                !arguments[2].value_type.eql(.i64))
+                return failIntrinsic(self, call, "handle_write takes (to handle, from array[u8, _], count i64)");
+            result = .i64;
+        },
+        .handle_flush => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "handle_flush takes a handle");
+            result = .none;
+        },
+        // `t.wait()` stays a receiver method: the result type is the
+        // task's, so only the receiver can say it.
+        .task_wait => unreachable,
     }
     // `error("…")` leaves the function, so it can stand where a
     // value belongs the way `trap("…")` can — but only inside a

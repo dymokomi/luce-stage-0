@@ -334,7 +334,7 @@ test "weak MIR operations are the only door to weak locals and fields" {
     locals.functions[0].locals[0].local_type = .i64;
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
     locals.functions[0].locals[0].local_type = optional_list;
-    locals.heap_types[0] = .file;
+    locals.heap_types[0] = .handle;
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &locals));
 
     var make_fields = [_]Register{0};
@@ -1170,7 +1170,7 @@ test "spawn rejects worker parameters carrying functions, resources, or weak sto
     program.heap_types = try arena.dupe(types.HeapType, &.{
         .{ .task = .{ .result = .none, .fallible = false } },
         .{ .list = .{ .optional = .{ .function = 0 } } },
-        .file,
+        .handle,
     });
 
     // A function value can borrow a receiver, even when it is nested in
@@ -1239,7 +1239,7 @@ test "spawn rejects worker results carrying functions, resources, or weak storag
     program.heap_types = try arena.dupe(types.HeapType, &.{
         .{ .task = .{ .result = .{ .heap = 1 }, .fallible = false } },
         .{ .list = .{ .optional = .{ .function = 0 } } },
-        .file,
+        .handle,
     });
 
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
@@ -1279,7 +1279,7 @@ test "the heap type table is checked before anything indexes it" {
     // Resource rows are made only by file-open and worker-spawn.  A
     // decoded module may name their table rows, but `heap_new` has no
     // valid resource constructor in either engine.
-    heap_types[0] = .file;
+    heap_types[0] = .handle;
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
     heap_types[0] = .{ .task = .{ .result = .i64, .fallible = false } };
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));

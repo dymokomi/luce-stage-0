@@ -5,11 +5,14 @@ follow the deeper references it names.
 
 > **Memory model — read first.** Luce has value types and ARC reference types.
 > Numbers, `bool`, `char`, `str`, `bytes`, structures, enumerations, unions,
-> and value receivers copy. Classes, containers, closure environments, files,
-> and tasks are references. Assignment retains and shares a reference; the
-> last strong release destroys it and closes or joins resources. `weak` breaks
-> cycles without dangling. Workers own separate runtimes and never share
-> object identity. [docs/MEMORY.md](docs/MEMORY.md) is the source of truth.
+> and value receivers copy. Classes, containers, closure environments, and
+> tasks are references. Resources follow the Swift shape: the raw `handle`
+> descriptor is a std-only spelling, and programs hold library classes
+> (`files.File`, `ui.Window`) that privately own it. Assignment retains and
+> shares a reference; the last strong release destroys it and closes or joins
+> resources. `weak` breaks cycles without dangling. Workers own separate
+> runtimes and never share object identity.
+> [docs/MEMORY.md](docs/MEMORY.md) is the source of truth.
 
 ## Guiding principle
 
@@ -83,7 +86,7 @@ There is one shipping engine: LLVM-generated machine code linked with
 used by the specification suite. There is no JIT, bytecode VM, handwritten
 emitter, or runtime fallback.
 
-The serialized MIR module format is **56**. The published host ABI is **24**.
+The serialized MIR module format is **57**. The published host ABI is **24**.
 The declarations in `src/luce/mir/module.zig` and
 `src/luce/codegen/abi.zig` are authoritative; never copy the numbers into a
 new compatibility check.

@@ -116,7 +116,7 @@ retains any reference needed by the caller, then releases locals and
 temporaries abandoned by the return path.
 
 Returning a structure copies its value. Returning a class, list, map, array,
-file, task, or closure gives the caller another strong reference to the same
+task, or closure gives the caller another strong reference to the same
 object or environment. A local reference therefore remains alive when the
 returned value still owns it.
 

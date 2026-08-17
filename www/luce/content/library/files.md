@@ -9,10 +9,10 @@ is fallible: the world may refuse a valid request, so handle it with `try` or
 import std.files
 ```
 
-Programs compiled without host access cannot use this module. A file is a
-shared reference resource, and there is no source `close` call. ARC closes its
-host handle at the last strong release. See [Memory
-Management](/guide/reference/memory/#m7).
+Programs compiled without host access cannot use this module. An open file is
+a `File`, an ordinary class this module declares, and there is no source
+`close` call. ARC closes the descriptor at the last strong release. See
+[Memory Management](/guide/reference/memory/#m7).
 
 ## Text files and directories
 
@@ -76,19 +76,25 @@ Use the byte API when the file is not necessarily UTF-8. It treats a file as
 
 | Signature | Result |
 |---|---|
-| `files.open(path: str) -> file!` | opens from the beginning for reading |
-| `files.create(path: str) -> file!` | opens for writing, creating and truncating |
-| `files.append_to(path: str) -> file!` | opens for writing at the end, creating if needed |
+| `files.open(path: str) -> File!` | opens from the beginning for reading |
+| `files.create(path: str) -> File!` | opens for writing, creating and truncating |
+| `files.append_to(path: str) -> File!` | opens for writing at the end, creating if needed |
 | `files.read_bytes(path: str) -> list[u8]!` | reads the complete file as bytes |
 | `files.write_bytes(path: str, data: list[u8]) -> !` | replaces the file with bytes |
 | `files.append_bytes(path: str, data: list[u8]) -> !` | appends bytes |
 
-An owned `file` has three methods:
+`File` is an ordinary class. Assignment shares one ARC reference, `weak`
+storage works as it does for any class, and the descriptor it wraps is a
+private field no program reaches directly. There is no `close` method —
+`f.close()` is the ordinary class diagnostic `files.File has no method
+close` — because the last strong release already closes the descriptor.
+
+A `File` has three methods:
 
 | Method | Behavior |
 |---|---|
-| `f.read(into: array[u8, _]) -> i64!` | fills a caller-owned buffer and returns the number of bytes read; `0` means end of file |
-| `f.write(from: array[u8, _], count: i64) -> i64!` | writes at most `count` bytes and returns how many were written |
+| `f.read(buffer: array[u8, _]) -> i64!` | fills a caller-owned buffer and returns the number of bytes read; `0` means end of file |
+| `f.write(buffer: array[u8, _], count: i64) -> i64!` | writes at most `count` bytes and returns how many were written |
 | `f.flush() -> !` | asks the host to flush pending writes |
 
 Reads may be short and writes may accept fewer bytes than requested. The

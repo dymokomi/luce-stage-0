@@ -51,7 +51,7 @@ pub fn weakTarget(self: *const Analyzer, of: Type) bool {
     return switch (held) {
         .heap => |index| switch (self.heap_types.items[index]) {
             .class, .list, .map, .array, .builder => true,
-            .file, .task => false,
+            .handle, .task => false,
         },
         else => false,
     };
@@ -163,7 +163,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                     },
                     .array => |shape| try pending.append(self.temporary, shape.element),
                     .builder => {},
-                    .file, .task => {},
+                    .handle, .task => {},
                 }
             },
             .variant => |index| {

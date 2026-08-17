@@ -640,7 +640,7 @@ test "constants: file.read through a parameter traps before changing the world" 
         \\
         \\const BUFFER: array[u8, _] = [u8(0), u8(0), u8(0)]
         \\
-        \\func read(file: file, into: array[u8, _]) -> i64!:
+        \\func read(file: files.File, into: array[u8, _]) -> i64!:
         \\    return try file.read(into)
         \\
         \\func main() -> !:

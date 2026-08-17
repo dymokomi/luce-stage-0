@@ -25,7 +25,7 @@
     "accessors": {
       "patterns": [
         {
-          "match": "(\\.)(append|insert|remove|pop|clear|sort|sort_by|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|read|write|flush|wait|byte_at|find_byte)\\b",
+          "match": "(\\.)(append|insert|remove|pop|clear|sort|sort_by|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|wait|byte_at|find_byte)\\b",
           "captures": {
             "1": { "name": "punctuation.accessor.luce" },
             "2": { "name": "support.function.method.luce" }
@@ -472,7 +472,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|u8|u16|u32|u64|i8|i16|i32|i64|f16|f32|f64|char|str|bytes|list|map|array|builder|file|task)\\b"
+          "match": "\\b(?:bool|u8|u16|u32|u64|i8|i16|i32|i64|f16|f32|f64|char|str|bytes|list|map|array|builder|task)\\b"
         },
         {
           "name": "entity.name.type.luce",

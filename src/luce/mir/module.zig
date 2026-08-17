@@ -216,7 +216,13 @@ pub const magic = "LUCE";
 /// owned payload instead of one bound receiver copy per method. Interface
 /// requirements record mutability/fallibility, witness rows are serialized,
 /// and dedicated make/call instructions replace forged struct fields.
-pub const format_version: u32 = 56;
+///
+/// 57 — the `file` heap shape is renamed `handle`: the raw descriptor
+/// currency behind files.File and the coming std.network, spellable only
+/// in embedded standard source. The byte channel becomes three directly
+/// callable standard intrinsics instead of compiler-routed receiver
+/// methods; no instruction shape changes, but the type vocabulary does.
+pub const format_version: u32 = 57;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -375,7 +381,7 @@ const Writer = struct {
                 try self.valueType(shape.element);
                 try self.int(u8, shape.rank);
             },
-            .builder, .file => {},
+            .builder, .handle => {},
             .task => |work| {
                 try self.valueType(work.result);
                 try self.int(u8, @intFromBool(work.fallible));
@@ -829,7 +835,7 @@ const Reader = struct {
                 .rank = try self.int(u8),
             } },
             .builder => .builder,
-            .file => .file,
+            .handle => .handle,
             .task => .{ .task = .{
                 .result = try self.valueType(),
                 .fallible = (try self.int(u8)) != 0,
@@ -2228,8 +2234,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 55 -> 56: owned interface existentials add three instructions and
     // explicit contract/witness metadata; method count no longer changes a
     // value's physical representation.
-    try testing.expectEqual(@as(u32, 56), format_version);
-    try testing.expectEqual(@as(u64, 6963883506754585830), hasher.final());
+    // 56 -> 57: the `file` heap shape is renamed `handle` (the std-only
+    // descriptor currency behind files.File), changing the wire tag name
+    // the fingerprint hashes without changing any instruction shape.
+    try testing.expectEqual(@as(u32, 57), format_version);
+    try testing.expectEqual(@as(u64, 11240141204635502514), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

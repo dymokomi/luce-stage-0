@@ -55,7 +55,7 @@ The structures are independent values; both `values` fields name one list.
 
 ## References share identity
 
-Lists, maps, arrays, builders, classes, files, and tasks are references.
+Lists, maps, arrays, builders, classes, and tasks are references.
 Assignment, parameters, results, optionals, fields, and container elements all
 retain the same object.
 
@@ -106,8 +106,8 @@ fallthrough releases the locals that path abandons. A temporary releases at
 the end of its statement unless another place retained it.
 
 The final strong release destroys an ordinary object. For resources it also
-performs deterministic cleanup: a `file` closes, and an unfinished `task`
-joins its worker and discards the unobserved answer.
+performs deterministic cleanup: a `files.File` closes its descriptor, and an
+unfinished `task` joins its worker and discards the unobserved answer.
 
 A class can run its own `deinit` body at that point. The body runs once while
 the fields remain alive, then the fields release. See [Classes: Finish work in
@@ -143,7 +143,7 @@ not retain. Reading it once creates an ordinary owned optional snapshot: a
 live target becomes `T?`; a dead target becomes `none`.
 
 Weak targets are classes, lists, maps, arrays, and builders. Values,
-interfaces, function values, files, and tasks are not weak targets. A closure
+interfaces, function values, and tasks are not weak targets. A closure
 capture list uses `[weak name]` for the same rule. Weak storage cannot cross a
 worker boundary.
 
@@ -175,7 +175,7 @@ are rebuilt in the destination runtime. Aliases inside the source graph remain
 aliases inside the independent snapshot, but no object identity is shared
 between caller and worker.
 
-A class, file, task, function value, weak reference, interface value, or graph
+A class, task, function value, weak reference, interface value, or graph
 containing one cannot cross the boundary. A worker may create and use its own
 classes and closures locally. This keeps data races over Luce objects
 unrepresentable without introducing a second ownership model.

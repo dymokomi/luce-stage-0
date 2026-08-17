@@ -1465,7 +1465,7 @@ const Module = struct {
                         });
                     }
                 },
-                .builder, .file, .task => return self.fail(
+                .builder, .handle, .task => return self.fail(
                     "a non-container in the constant-container pool",
                 ),
             }
@@ -1515,7 +1515,7 @@ const Module = struct {
                 .map => |pair| for (constant.payload.map) |_| {
                     count += 1 + @as(usize, @intFromBool(constantOwnsStorage(pair.value)));
                 },
-                .class, .builder, .file, .task => {},
+                .class, .builder, .handle, .task => {},
             }
         }
         return @intCast(count);
@@ -4087,7 +4087,7 @@ const Body = struct {
                 .growable = false,
             },
             .list => |element| .{ .element = element, .rank = 1, .growable = true },
-            .class, .map, .builder, .file, .task => null,
+            .class, .map, .builder, .handle, .task => null,
         };
     }
 
@@ -8592,7 +8592,7 @@ const Body = struct {
         if (of != .heap) return self.fail("keys or values answering no object");
         const element = switch (self.module.program.heap_types[of.heap]) {
             .list => |written| written,
-            .class, .map, .array, .builder, .file, .task => return self.fail(
+            .class, .map, .array, .builder, .handle, .task => return self.fail(
                 "keys or values answering something other than a list",
             ),
         };
@@ -8607,11 +8607,12 @@ const Body = struct {
                 try self.boxed(element, try self.zeroValue(element), "element.zero"),
             }),
             .map => try self.callAnswering(register, .luce_rt_new_map, &.{self.runtime}),
-            // A file is made by `file_open` and by nothing else: `new
-            // file` names no path, and a handle with no file behind it
-            // is the one thing this type must never be able to hold.
-            // Stage 4 refuses it by name; this is the wall behind that.
-            .file => return self.fail("new file"),
+            // A handle is made by a host door (`file_open`) and by
+            // nothing else: `new handle` names no path, and a handle
+            // with nothing behind it is the one thing this type must
+            // never be able to hold.  Stage 4 refuses it; this is the
+            // wall behind that.
+            .handle => return self.fail("new handle"),
             // And a task is made by `spawn` and by nothing else, for
             // the same reason: a task with no worker behind it is the
             // one state this type must never hold (docs/THREADS.md D3).

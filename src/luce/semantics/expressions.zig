@@ -234,15 +234,16 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
             );
             return null;
         }
-        // **A file is opened, never made** (docs/BYTES.md R5).  A
-        // handle with no file behind it is the one thing this type
-        // must never hold, so the only way in is the door that
-        // takes a path.
-        if (self.analyzer.heap_types.items[object_type.heap] == .file) {
+        // **A handle is opened, never made** (docs/BYTES.md R5).  A
+        // handle with nothing behind it is the one thing this type
+        // must never hold, so the only way in is a host door that
+        // takes a path — and only standard source can even write the
+        // name, so this wall faces the library's own mistakes.
+        if (self.analyzer.heap_types.items[object_type.heap] == .handle) {
             try self.fail(
                 "luce.sema.new",
                 new.span,
-                "a file is opened, not made; write files.open(path) [BYTES.md R5]",
+                "a handle is opened, not made; a host door answers one [BYTES.md R5]",
                 .{},
             );
             return null;
@@ -340,7 +341,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
                 wanted_element = shape.element;
                 expected_container = place;
             },
-            .class, .map, .builder, .file, .task => {},
+            .class, .map, .builder, .handle, .task => {},
         }
     }
     if (literal.elements.len == 0 and wanted_element == null) {

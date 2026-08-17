@@ -839,7 +839,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .map => expected,
             .array => |shape| if (shape.rank == 1) expected else null,
-            .class, .builder, .file, .task => null,
+            .class, .builder, .handle, .task => null,
         };
     }
 
@@ -1387,7 +1387,7 @@ pub const FunctionBuilder = struct {
                     .list => |element| element,
                     .array => |shape| shape.element,
                     .map => |pair| pair.value,
-                    .class, .builder, .file, .task => null,
+                    .class, .builder, .handle, .task => null,
                 });
             },
             .subscripts => {
@@ -1436,7 +1436,7 @@ pub const FunctionBuilder = struct {
                         .list => |element| element,
                         .array => |shape| shape.element,
                         .map => |pair| pair.value,
-                        .class, .builder, .file, .task => return null,
+                        .class, .builder, .handle, .task => return null,
                     };
                 },
                 else => return null, // only field and index steps are collected
@@ -1455,7 +1455,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .array => .i64,
             .map => |pair| pair.key,
-            .class, .builder, .file, .task => null,
+            .class, .builder, .handle, .task => null,
         };
     }
 

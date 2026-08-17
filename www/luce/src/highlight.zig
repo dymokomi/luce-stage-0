@@ -52,9 +52,12 @@ pub const verbs = [_][]const u8{ "new", "spawn" };
 /// The compiler's source of truth is `builtin_table` in `support/types.zig`.
 pub const type_names = [_][]const u8{
     // The language's current lowercase scalar and heap vocabulary.
+    // `handle` is absent deliberately: it is the standard library's
+    // private descriptor spelling, and colouring it as language in a
+    // user-facing sample would be a lie about the vocabulary.
     "bool",  "u8",   "u16", "u32",   "u64",     "i8",   "i16",
     "i32",   "i64",  "f16", "f32",   "f64",     "char", "str",
-    "bytes", "list", "map", "array", "builder", "file", "task",
+    "bytes", "list", "map", "array", "builder", "task",
 };
 
 /// Everything callable by name on its own: the small public prelude and
@@ -74,16 +77,18 @@ pub const builtins = [_][]const u8{
 /// are words a program may perfectly well use for its own function,
 /// and colouring one of those as language would be a lie about it.
 ///
-/// The compiler's six lists are `list_methods`, `array_methods`,
-/// `map_methods`, `builder_methods`, `file_methods` and `task_methods`
-/// in `semantics/builtins.zig`, plus the two String primitives beside
-/// them.
+/// The compiler's five lists are `list_methods`, `array_methods`,
+/// `map_methods`, `builder_methods` and `task_methods` in
+/// `semantics/builtins.zig`, plus the two String primitives beside
+/// them.  `read`, `write` and `flush` are gone deliberately: they are
+/// ordinary `files.File` class methods now, and colouring a library
+/// method as language would be a lie about it.
 pub const methods = [_][]const u8{
     "byte_at", "find_byte", "append", "append_ascii", "build",
     "insert",  "remove",    "pop",    "clear",        "sort",
     "sort_by", "reverse",   "find",   "contains",     "dim",
     "fill",    "has",       "get",    "keys",         "values",
-    "read",    "write",     "flush",  "wait",
+    "wait",
 };
 
 pub fn inTable(table: []const []const u8, word: []const u8) bool {

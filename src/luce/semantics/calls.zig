@@ -33,7 +33,6 @@ const list_methods = builtins_mod.list_methods;
 const array_methods = builtins_mod.array_methods;
 const map_methods = builtins_mod.map_methods;
 const builder_methods = builtins_mod.builder_methods;
-const file_methods = builtins_mod.file_methods;
 const task_methods = builtins_mod.task_methods;
 const context = @import("context.zig");
 const Error = context.Error;
@@ -1138,9 +1137,7 @@ fn isStandardIntrinsicCall(self: *FunctionBuilder, method: ast.Method) bool {
         else => return false,
     };
     if (!std.mem.eql(u8, name, "Builtin")) return false;
-    const file = self.analyzer.modules[self.module].file;
-    const source = self.analyzer.diagnostics.sources.at(file) orelse return false;
-    return source.kind == .standard;
+    return naming.isStandardSource(self.analyzer, self.module);
 }
 
 /// Build a nominal value. Classes with `init` route through their hidden
@@ -1230,10 +1227,10 @@ fn lowerAliasCall(
                             .{ declaration.name, try self.analyzer.typeName(target), declaration.name },
                         );
                     },
-                    .file => try self.fail(
+                    .handle => try self.fail(
                         "luce.sema.call",
                         call.span,
-                        "{s} is a type alias for file, not a callable value; open a file through std.files",
+                        "{s} is a type alias for handle, not a callable value; a host door answers one",
                         .{declaration.name},
                     ),
                     .task => try self.fail(
@@ -2195,20 +2192,11 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
                 std.mem.eql(u8, name, "clear")) break :blk &.{};
             break :blk null;
         },
-        .file => blk: {
-            // The buffer is the caller's `array[u8, n]`, and the
-            // count a write takes is a `i64`.  Neither landing
-            // depends on the receiver, so both are written out.
-            if (std.mem.eql(u8, name, "read")) break :blk try typeList(self, &.{
-                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } }),
-            });
-            if (std.mem.eql(u8, name, "write")) break :blk try typeList(self, &.{
-                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } }),
-                .i64,
-            });
-            if (std.mem.eql(u8, name, "flush")) break :blk &.{};
-            break :blk null;
-        },
+        // A raw handle has no method surface at all: the byte channel
+        // is `Builtin.handle_read/write/flush`, called by the standard
+        // class that owns the descriptor (`files.File`), never through
+        // receiver syntax on the currency itself.
+        .handle => null,
         // `wait` takes nothing: what a worker was given, it was
         // given at the `spawn` (docs/THREADS.md D2).
         .task => if (std.mem.eql(u8, name, "wait")) &.{} else null,
@@ -2613,33 +2601,11 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
             }
             try self.fail("luce.sema.method", method.span, "builder has no method {s} (append append_ascii build clear)", .{name});
         },
-        .file => {
-            // The one name a Python programmer will certainly type,
-            // answered in full rather than left to a did-you-mean
-            // (docs/FILESYSTEM.md D9).  It is **refused** and not
-            // merely absent: `free f` already closes it and so does
-            // the end of the owning scope, so a working `close` would
-            // be a second name for one concept.  Both halves of the
-            // answer are here, because a reader who wanted `close`
-            // also wanted `with`.
-            if (std.mem.eql(u8, name, "close")) {
-                try self.fail(
-                    "luce.sema.method",
-                    method.span,
-                    "file has no method close: free f closes it, and the end of the owning scope closes it anyway — which is why there is no 'with' either (docs/FILESYSTEM.md)",
-                    .{},
-                );
-                return;
-            }
-            suggestion.offerAll(&file_methods);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "file has no method {s}; did you mean {s}?", .{ name, closest });
-                return;
-            }
+        .handle => {
             try self.fail(
                 "luce.sema.method",
                 method.span,
-                "file has no method {s} (read write flush; free f closes it, and so does the end of the owning scope)",
+                "handle has no method {s}; the byte channel is Builtin.handle_read/write/flush, called by the class that owns the descriptor",
                 .{name},
             );
         },
@@ -2811,26 +2777,13 @@ fn objectMethod(
             try failNoObjectMethod(self, method, descriptor);
             return null;
         },
-        // The byte channel (docs/BYTES.md R4).  A read fills the
-        // caller's buffer and answers how many bytes landed — zero
-        // is the end of the file — and a write takes a buffer and
-        // a count and answers how many landed.  All three are
-        // fallible: the world decides.  There is no `close`,
-        // because `free f` is one and the end of the owning scope
-        // is the other (MEMORY.md, unchanged).
-        .file => {
-            if (std.mem.eql(u8, name, "read")) {
-                if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .handle_read, .result = .i64 };
-            }
-            if (std.mem.eql(u8, name, "write")) {
-                if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .handle_write, .result = .i64 };
-            }
-            if (std.mem.eql(u8, name, "flush")) {
-                if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .handle_flush, .result = .none };
-            }
+        // The raw descriptor has no receiver surface: the byte
+        // channel (docs/BYTES.md R4) is `Builtin.handle_read`,
+        // `Builtin.handle_write`, and `Builtin.handle_flush`, called
+        // by the standard class that owns the handle.  Deleting the
+        // routing here is the point — one less compiler-owned method
+        // table between a program and the library.
+        .handle => {
             try failNoObjectMethod(self, method, descriptor);
             return null;
         },

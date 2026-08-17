@@ -857,8 +857,8 @@ pub fn checkIndex(
             try self.fail("luce.sema.index", span, "builder has no index; b.build() reads it", .{});
             return null;
         },
-        .file => {
-            try self.fail("luce.sema.index", span, "file has no index; f.read(buffer) reads bytes", .{});
+        .handle => {
+            try self.fail("luce.sema.index", span, "handle has no index; the standard library reads it through the class that owns it", .{});
             return null;
         },
         .task => {

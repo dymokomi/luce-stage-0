@@ -50,7 +50,8 @@ This is an internal boundary operation, not a source-level clone operator.
 
 Three shapes are refused transitively:
 
-- a `file` belongs to the runtime whose host channel opened it;
+- a `handle` (the descriptor inside `files.File` and its kin) belongs to
+  the runtime whose host channel opened it;
 - a `task` owns a worker attached to the runtime that spawned it; and
 - a function value may carry a bound receiver, so its environment is not a
   sendable value.

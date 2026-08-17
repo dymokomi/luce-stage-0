@@ -84,7 +84,7 @@ fn collectEnumName(
         try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
         return;
     }
-    if (types.builtinNamed(declaration.name) != null) {
+    if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
         try self.fail(
             "luce.sema.reserved",
             declaration.name_span,
@@ -201,7 +201,7 @@ fn collectUnionName(
         try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
         return;
     }
-    if (types.builtinNamed(declaration.name) != null) {
+    if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
         try self.fail(
             "luce.sema.reserved",
             declaration.name_span,
@@ -429,7 +429,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             // refused here rather than shadowed silently, because
             // `resolveBase` answers first and the declaration
             // would be a type nothing could ever write down.
-            if (types.builtinNamed(declaration.name) != null) {
+            if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
                 try self.fail(
                     "luce.sema.reserved",
                     declaration.name_span,

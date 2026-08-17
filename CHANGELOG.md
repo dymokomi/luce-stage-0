@@ -4,6 +4,17 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## Unreleased
+
+- The builtin `file` type left the language. `std.files` now declares the
+  ordinary ARC class `File` (with `read`/`write`/`flush` methods), and the
+  raw descriptor currency — renamed `handle` — is spellable only inside
+  embedded standard source, the same gate as `Builtin.NAME`. Programs may
+  declare their own `file` and `handle` types; `weak` storage works on
+  `files.File` as on any class. This is the Swift shape — descriptors live
+  behind library session classes — and the pattern `std.network` will
+  arrive wearing. Serialized module format is 57.
+
 ## 0.18 — release candidate
 
 This is the published release candidate described by `VERSION` and the

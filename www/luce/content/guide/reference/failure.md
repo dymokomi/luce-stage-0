@@ -47,7 +47,8 @@ handler.
 | `class_resurrection` | deinit cannot create a new strong self reference | A class finalizer attempts to make its dying object strongly reachable again. Correct source is rejected at compile time; the runtime code defends damaged MIR. |
 
 `use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
-runtime's broad *object* wording; a handle may also be a `file` or `task`.
+runtime's broad *object* wording; the object may also be an open file
+descriptor or a `task`.
 `not_owned`, `invalid_weak_target`, and
 `class_resurrection` remain defensive runtime vocabulary; correctly compiled
 current source does not produce them.

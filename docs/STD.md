@@ -30,7 +30,7 @@ cost of changing the embedded library.
 | `std.strings` | operations built above core UTF-8 scalar primitives | find/count/prefix/suffix, character classes, trim/case/replace/repeat, split/join, width/take/pad, decimal formatting, byte conversion |
 | `std.lists` | element-type-specialized list algorithms | stable `list.sort_by(func(T, T) -> bool)` routed as a method after import |
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
-| `std.files` | fallible whole-file, directory, and handle APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `file` open/create/append, entries/list |
+| `std.files` | fallible whole-file, directory, and handle APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `File` open/create/append, entries/list |
 | `std.os` | grouped console/time/environment/terminal/process services and machine facts | line input, standard error, clocks, environment, `os.term`, `os.shell.run`, memory and CPU facts |
 | `std.term` | short terminal compatibility surface | rows/columns, clear/move/style/write/flush |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |

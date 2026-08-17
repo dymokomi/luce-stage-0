@@ -464,15 +464,22 @@ pub const HeapType = union(enum) {
     map: struct { key: Type, value: Type },
     array: struct { element: Type, rank: u8 },
     builder,
-    /// An open file (docs/BYTES.md R5).  A heap type and not a scalar
-    /// because a file is a **resource**. References share its handle,
-    /// and the last strong release closes it; a stale handle traps
-    /// rather than becoming undefined access. It carries no element type — a file is not a
-    /// container — so the shape is the whole of it, and
-    /// `std.network`'s sockets are meant to arrive beside it wearing
-    /// the same pattern.
-    file,
-    /// A running worker (docs/THREADS.md D3).  The `file` precedent
+    /// A host descriptor (docs/BYTES.md R5) — an open file today, a
+    /// socket when `std.network` arrives.  A heap type and not a
+    /// scalar because a handle is a **resource**: references share it,
+    /// the last strong release closes it, and a stale handle traps
+    /// rather than becoming undefined access.  It carries no element
+    /// type — a handle is not a container — so the shape is the whole
+    /// of it.
+    ///
+    /// **The spelling is the standard library's, not the program's.**
+    /// User code holds resources through the library's nominal classes
+    /// (`files.File`, `ui.Window`) the way Swift holds a descriptor
+    /// behind `NWConnection` or NIO's `Socket`; only embedded standard
+    /// source may write the type name (`isStandardOnly` below), so the
+    /// raw currency never enters a program's vocabulary.
+    handle,
+    /// A running worker (docs/THREADS.md D3).  The `handle` precedent
     /// exactly: a resource, not a container, whose last-release death
     /// point is a **join**. Structured cleanup follows from the same ARC
     /// rule instead of being a discipline laid on top.
@@ -503,7 +510,7 @@ pub const HeapType = union(enum) {
             .array => |shape| other == .array and
                 shape.element.eql(other.array.element) and shape.rank == other.array.rank,
             .builder => other == .builder,
-            .file => other == .file,
+            .handle => other == .handle,
             .task => |work| other == .task and
                 work.result.eql(other.task.result) and work.fallible == other.task.fallible,
         };
@@ -723,15 +730,16 @@ pub const Builtin = enum {
     map,
     array,
     builder,
-    /// An open file (docs/BYTES.md R5).  A heap-backed resource rather
-    /// than a fifth container: it takes no type
-    /// argument and there is no `new file`, because a handle with no
-    /// file behind it is the one thing this type must never hold.
-    /// The compiler-only `Builtin.file_open(path, mode)` intrinsic makes
-    /// one inside `std.files`; programs use its ordinary
-    /// open/create/append wrappers.
-    file,
-    /// A running worker (docs/THREADS.md D3).  A resource like `file`
+    /// A host descriptor (docs/BYTES.md R5).  A heap-backed resource
+    /// rather than a fifth container: it takes no type argument and
+    /// there is no `new handle`, because a handle with nothing behind
+    /// it is the one thing this type must never hold.  The
+    /// compiler-only `Builtin.file_open(path, mode)` intrinsic makes
+    /// one inside `std.files`, which wraps it in the public `File`
+    /// class; the spelling resolves only in embedded standard source
+    /// (`isStandardOnly`), so a program never names the raw currency.
+    handle,
+    /// A running worker (docs/THREADS.md D3).  A resource like `handle`
     /// and written with a type argument like `list`: `task[f64]` is
     /// what `spawn` answers for a function returning `f64`, `task` alone for a
     /// function that answers nothing, and the `!` inside—`task[T!]`,
@@ -749,6 +757,9 @@ pub const Builtin = enum {
 /// who defined it. There are no TitleCase builtin aliases.
 pub fn builtinNamed(text: []const u8) ?Builtin {
     for (builtin_table) |entry| {
+        if (std.mem.eql(u8, text, entry.name)) return entry.is;
+    }
+    for (standard_only_table) |entry| {
         if (std.mem.eql(u8, text, entry.name)) return entry.is;
     }
     return null;
@@ -774,9 +785,30 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
     .{ .name = "builder", .is = .builder },
-    .{ .name = "file", .is = .file },
     .{ .name = "task", .is = .task },
 };
+
+/// The standard library's private spellings — the type-name half of the
+/// `Builtin.NAME` gate.  A separate table and not a flag, deliberately:
+/// every textual consumer of the public table (the grammar generator,
+/// the site highlighter parity audit, the reference coverage audit)
+/// reads `builtin_table` and therefore never sees these, so a
+/// std-only name cannot leak into highlighting or documentation by
+/// construction.  These resolve only in embedded standard source, are
+/// never reserved or suggested, and a program may freely declare its
+/// own type by any of these names.
+const standard_only_table = [_]struct { name: []const u8, is: Builtin }{
+    .{ .name = "handle", .is = .handle },
+};
+
+/// Whether a builtin spelling belongs to the standard library rather
+/// than the language — membership in `standard_only_table`.
+pub fn isStandardOnly(builtin: Builtin) bool {
+    for (standard_only_table) |entry| {
+        if (entry.is == builtin) return true;
+    }
+    return false;
+}
 
 /// The builtin a **conversion constructor** produces, or null when the
 /// name is not one.  A conversion is named for the type it produces
@@ -787,13 +819,15 @@ pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => builtin,
-        .boolean, .list, .map, .array, .builder, .file, .task => null,
+        .boolean, .list, .map, .array, .builder, .handle, .task => null,
     };
 }
 
 /// The names offered back to a reader who wrote a type name that
-/// spells nothing.  Derived from the one table, so a spelling the
-/// language answers to can never be one it declines to suggest.
+/// spells nothing.  Derived from the public table alone, so a spelling
+/// the language answers to can never be one it declines to suggest —
+/// and a standard-only spelling, which is not part of a program's
+/// vocabulary, can never be suggested into one.
 pub const builtin_names = names: {
     var offered: [builtin_table.len][]const u8 = undefined;
     for (builtin_table, 0..) |entry, index| offered[index] = entry.name;
@@ -872,7 +906,7 @@ fn writeTypeName(
                 try written.appendSlice(allocator, "]");
             },
             .builder => try written.appendSlice(allocator, "builder"),
-            .file => try written.appendSlice(allocator, "file"),
+            .handle => try written.appendSlice(allocator, "handle"),
             .task => |work| {
                 try written.appendSlice(allocator, "task");
                 if (work.result != .none) {

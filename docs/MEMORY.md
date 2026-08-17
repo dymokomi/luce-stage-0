@@ -14,7 +14,7 @@ Every runtime value is either copied as a value or shared as a reference:
 |---|---|---|---|
 | Value | numbers, `bool`, `char`, `str`, `bytes`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
 | Reference | `class`, `list`, `map`, `array`, `builder`, closure environments | retain and share one identity | last strong release destroys the object |
-| Resource reference | `file`, `task`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
+| Resource reference | `task`, and the std-only `handle` inside `files.File`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
 
 There are no source-level retain, release, move, clone, borrow, or free
 operations. The compiler derives every retain and release from the static type
@@ -106,10 +106,12 @@ shared between workers.
 
 ### Resources
 
-`file` and `task` use the same strong count as other references. The last file
-release closes its host handle. The last release of an unfinished task joins
-its worker. `task.wait()` observes the result once; task aliases share that
-one-shot state.
+The raw `handle` (the descriptor behind `files.File`, `ui.Window`, and
+their kin — spellable only in embedded standard source) and `task` use the
+same strong count as other references. The last handle release closes its
+host descriptor. The last release of an unfinished task joins its worker.
+`task.wait()` observes the result once; task aliases share that one-shot
+state.
 
 ### Bound methods, interfaces, and closures
 

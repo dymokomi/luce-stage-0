@@ -15,10 +15,11 @@
 # failure to your caller, or with `catch` to answer it here.  There is
 # no exception, `exists` included — see the note above it.
 #
-# **There is no `close` and no `with`.**  A `file` is a
-# reference-counted resource, closed automatically when the last
-# reference to it goes away, and using one after it is closed traps
-# like any use after free.  Python's `with` is a per-call-site opt-in
+# **There is no `close` and no `with`.**  A `File` is a
+# reference-counted class owning the host's descriptor, closed
+# automatically when the last reference to it goes away, and using one
+# after it is closed traps like any use after free.  Python's `with`
+# is a per-call-site opt-in
 # to a guarantee this language gives unconditionally: a Luce program
 # cannot leak a file by forgetting a keyword, because there is no
 # keyword to forget.
@@ -173,9 +174,10 @@ func make_directory(path: str) -> !:
 #
 # A file is bytes reached through an open handle, and text is a
 # validation the language performs on the bytes.  `open`, `create` and
-# `append_to` answer a `file`: a reference-counted resource, closed
-# when its last reference goes away, and using one after it is closed
-# traps like any use after free, because it is the same mistake.
+# `append_to` answer a `File`: an ordinary class holding the host's
+# descriptor, closed when its last reference goes away, and using one
+# after it is closed traps like any use after free, because it is the
+# same mistake.
 #
 # The primitive is C-shaped on purpose: a read fills a buffer you own
 # and says how many bytes landed — zero means the file is finished —
@@ -183,6 +185,30 @@ func make_directory(path: str) -> !:
 # which may be fewer than you asked for.  Everything below the three
 # doors is a loop over that, the way Go's `os.ReadFile` is a loop over
 # `Read`.
+
+# An open file.  The raw descriptor is private to this file — a
+# program holds a File, never a number — which is the boundary that
+# matters: the host's handle vocabulary stays behind the class that
+# owns it, the way a Swift descriptor stays behind the session object
+# wrapping it.
+class File:
+    private:
+        raw: handle
+
+    # Fill the buffer from where the last read stopped and answer how
+    # many bytes landed.  Zero is the end of the file, not an error.
+    func read(buffer: array[u8, _]) -> i64!:
+        return try Builtin.handle_read(self.raw, buffer)
+
+    # Hand `count` bytes from the front of the buffer to the file and
+    # answer how many landed.  A short write is ordinary — the next
+    # round continues from where this one stopped — which is the whole
+    # reason the count comes back.
+    func write(buffer: array[u8, _], count: i64) -> i64!:
+        return try Builtin.handle_write(self.raw, buffer, count)
+
+    func flush() -> !:
+        try Builtin.handle_flush(self.raw)
 
 # How the three doors number themselves for the host.  Private: a
 # reader writes `files.open(path)`, never a number.
@@ -196,16 +222,16 @@ private const mode_append = 2
 private const chunk = 65536
 
 # Open a file to read from the start.  The file must be there.
-func open(path: str) -> file!:
-    return try Builtin.file_open(path, mode_read)
+func open(path: str) -> File!:
+    return File(raw = try Builtin.file_open(path, mode_read))
 
 # Open a file to write from the start, creating it and emptying it.
-func create(path: str) -> file!:
-    return try Builtin.file_open(path, mode_write)
+func create(path: str) -> File!:
+    return File(raw = try Builtin.file_open(path, mode_write))
 
 # Open a file to write at its end, creating it if it is not there.
-func append_to(path: str) -> file!:
-    return try Builtin.file_open(path, mode_append)
+func append_to(path: str) -> File!:
+    return File(raw = try Builtin.file_open(path, mode_append))
 
 # The whole file, as bytes.  Nothing here asks whether the bytes are
 # text — that is what `strings.from_bytes` is for — so this reads a
@@ -240,7 +266,7 @@ func append_bytes(path: str, data: list[u8]) -> !:
 # than re-sending bytes that already landed.  A host that accepts
 # nothing at all has stopped writing, and says so as an error instead
 # of spinning.
-private func send(f: file, data: list[u8]) -> !:
+private func send(f: File, data: list[u8]) -> !:
     var buffer = new array[u8](chunk)
     var at: i64 = 0
     while at < len(data):

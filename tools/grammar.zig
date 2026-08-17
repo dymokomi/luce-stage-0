@@ -548,7 +548,6 @@ fn methodNames(gpa: Allocator) Allocator.Error!Words {
     try words.addAll(&luce.semantics.array_methods);
     try words.addAll(&luce.semantics.map_methods);
     try words.addAll(&luce.semantics.builder_methods);
-    try words.addAll(&luce.semantics.file_methods);
     try words.addAll(&luce.semantics.task_methods);
     for (luce.semantics.string_methods) |primitive| try words.add(primitive.name);
     return words;

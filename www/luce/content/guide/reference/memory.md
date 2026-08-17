@@ -19,8 +19,8 @@ or captured ARC environment.
 
 ### M2 — reference types share {#m2}
 
-Classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder`, `file`, and
-`task[...]` are reference types. Assignment and ordinary calls retain and
+Classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder`, and `task[...]`
+are reference types. Assignment and ordinary calls retain and
 share one runtime object. Mutation through one reference is visible through
 the others. A `let` prevents rebinding; it does not freeze the object.
 
@@ -47,8 +47,8 @@ after final strong release answers `none`. Reusing an object-table row cannot
 revive the old handle. Weak storage is a place property, not a type, and
 separate reads do not persistently narrow one another.
 
-Weak targets exclude values, value structs, interfaces, function values,
-files, and tasks. A value containing a weak field has no implicit equality or
+Weak targets exclude values, value structs, interfaces, function values, and
+tasks. A value containing a weak field has no implicit equality or
 collection-search semantics. Weak handles cannot cross worker runtimes.
 
 ## ARC operations
@@ -74,8 +74,10 @@ control leaves them through fallthrough, function return, `return`, `break`,
 ### M7 — the last strong release destroys {#m7}
 
 A zero strong count recursively releases contained references and destroys
-the object. A class runs `deinit`; a file closes; an unfinished task joins and
-discards an unobserved result; a closure releases every capture.
+the object. A class runs `deinit`; an unfinished task joins and discards an
+unobserved result; a closure releases every capture. `files.File` closes
+through the same rule: the last release of the class releases the private
+descriptor it owns, and the descriptor closes.
 
 ### M8 — there are no source ownership operations {#m8}
 
@@ -147,8 +149,8 @@ M3a. Releasing the last function value releases the environment.
 
 Each worker has its own runtime. Values copy directly; permitted container
 graphs are rebuilt recursively in the receiving runtime. The source and
-destination share no object identity. A graph carrying a class, `file`,
-`task`, function value, interface, or weak field is refused as an argument or
+destination share no object identity. A graph carrying a class, `task`,
+function value, interface, or weak field is refused as an argument or
 result. A worker may construct and use those values locally.
 
 The copier preserves aliases within one graph and across separate argument

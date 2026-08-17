@@ -401,7 +401,6 @@ fn methods(repository: Repository) !Names {
         "const array_methods = [_][]const u8{",
         "const map_methods = [_][]const u8{",
         "const builder_methods = [_][]const u8{",
-        "const file_methods = [_][]const u8{",
         "const task_methods = [_][]const u8{",
     }) |opening| {
         const table = between(source, opening, "};") orelse return error.MethodTableNotFound;
@@ -1193,9 +1192,9 @@ test "the reference names every conversion constructor" {
         "map",
         "array",
         "builder",
-        // `file` and `task` are resources rather than conversions, and
-        // neither is a function at all: one is opened and the other is
-        // spawned.  `guide/reference/types.md` is where a reader looks for them.
+        // `task` is a resource rather than a conversion, and is not a
+        // function at all: it is spawned.  `guide/reference/types.md`
+        // is where a reader looks for it.
         "task",
     });
 }

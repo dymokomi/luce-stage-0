@@ -19,19 +19,19 @@ enum Backend:
 
 struct Surface:
     private:
-        handle: file
+        raw: handle
 
-    static func from_handle(handle: file) -> Surface:
-        return Surface(handle = handle)
+    static func from_handle(raw: handle) -> Surface:
+        return Surface(raw = raw)
 
     func width() -> i64!:
-        return try Builtin.gpu_surface_size(self.handle, 0)
+        return try Builtin.gpu_surface_size(self.raw, 0)
 
     func height() -> i64!:
-        return try Builtin.gpu_surface_size(self.handle, 1)
+        return try Builtin.gpu_surface_size(self.raw, 1)
 
     func clear(red: i64, green: i64, blue: i64, alpha: i64 = 255) -> !:
-        try Builtin.gpu_surface_clear(self.handle, red, green, blue, alpha)
+        try Builtin.gpu_surface_clear(self.raw, red, green, blue, alpha)
 
     func fill_rect(
         x: i64,
@@ -44,7 +44,7 @@ struct Surface:
         alpha: i64 = 255,
     ) -> !:
         try Builtin.gpu_surface_fill_rect(
-            self.handle,
+            self.raw,
             x,
             y,
             width,
@@ -56,7 +56,7 @@ struct Surface:
         )
 
     func present() -> !:
-        try Builtin.gpu_surface_present(self.handle)
+        try Builtin.gpu_surface_present(self.raw)
 
 func backend() -> Backend:
     let code = Builtin.gpu_backend()

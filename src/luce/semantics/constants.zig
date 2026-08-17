@@ -425,7 +425,7 @@ fn foldSequence(
                 wanted_element = shape.element;
                 expected_container = place;
             },
-            .class, .map, .builder, .file, .task => {},
+            .class, .map, .builder, .handle, .task => {},
         };
     }
     if (literal.elements.len == 0 and wanted_element == null) {
@@ -1106,7 +1106,7 @@ fn foldConvertAs(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task => unreachable, // answered above
     };
     if (operand.value_type == .char) {
         if (target != .u32) {

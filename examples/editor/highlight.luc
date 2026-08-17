@@ -70,7 +70,7 @@ private const type_words = {
     "f16": true, "f32": true, "f64": true,
     "char": true, "str": true, "bytes": true,
     "list": true, "map": true, "array": true,
-    "builder": true, "file": true, "task": true,
+    "builder": true, "task": true,
 }
 
 private const builtin_words = {

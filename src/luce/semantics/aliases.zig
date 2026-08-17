@@ -26,7 +26,7 @@ pub fn collectDeclarations(self: *Analyzer) Error!void {
     for (self.modules, 0..) |module, module_index| {
         self.diagnostics.scope = module.file;
         for (module.tree.aliases) |*declaration| {
-            if (types.builtinNamed(declaration.name) != null) {
+            if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
                 try self.fail(
                     "luce.sema.reserved",
                     declaration.name_span,

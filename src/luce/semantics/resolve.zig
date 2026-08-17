@@ -161,7 +161,11 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     if (written.result != null or std.mem.eql(u8, written.name, "func")) {
         return resolveSignature(self, module, written);
     }
-    if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
+    // A standard-only spelling (`handle`) is the language's inside
+    // embedded standard source and an ordinary name everywhere else —
+    // the type-name half of the `Builtin.NAME` gate.  Falling through
+    // here, rather than failing, is what lets a program own the word.
+    if (naming.visibleBuiltin(self, module, written.name)) |builtin| switch (builtin) {
         .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => {
             if (written.arguments.len != 0 or written.wildcards != 0) {
                 try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
@@ -183,7 +187,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 .char => .char,
                 .str => .str,
                 .bytes => .bytes,
-                .list, .map, .array, .builder, .file, .task => unreachable, // answered by the outer switch
+                .list, .map, .array, .builder, .handle, .task => unreachable, // answered by the outer switch
             };
         },
         .list => {
@@ -273,12 +277,12 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             }
             return try internHeapType(self, .builder);
         },
-        .file => {
+        .handle => {
             if (written.arguments.len != 0 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "file takes no type arguments", .{});
+                try self.fail("luce.sema.type", written.span, "handle takes no type arguments", .{});
                 return null;
             }
-            return try internHeapType(self, .file);
+            return try internHeapType(self, .handle);
         },
         // `task[...]` holds one **return shape**, written as
         // `task[f64]`, `task[f64!]`, `task[!]`, or bare `task` for a worker that answers

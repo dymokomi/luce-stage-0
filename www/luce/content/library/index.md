@@ -25,7 +25,7 @@ fact at their boundary rather than making every application know the OS API.
 |---|---|
 | [`std.math`](/library/math/) | scalar math, array reductions, and a seeded generator |
 | [`std.strings`](/library/strings/) | search, splitting, formatting, characters, and UTF-8 bytes |
-| [`std.files`](/library/files/) | text, bytes, directories, and shared file references |
+| [`std.files`](/library/files/) | text, bytes, directories, and open files |
 | [`std.lists`](/library/lists/) | stable comparator sorting for lists |
 | [`std.paths`](/library/paths/) | joining and inspecting path text without touching the host |
 | [`std.os`](/library/os/) | memory, processor, shell, and terminal services |

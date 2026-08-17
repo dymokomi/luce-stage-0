@@ -17,13 +17,13 @@ import std.gpu
 
 struct Window:
     private:
-        handle: file
+        raw: handle
 
-    static func from_handle(handle: file) -> Window:
-        return Window(handle = handle)
+    static func from_handle(raw: handle) -> Window:
+        return Window(raw = raw)
 
     func surface() -> gpu.Surface!:
-        let raw = try Builtin.ui_window_surface(self.handle)
+        let raw = try Builtin.ui_window_surface(self.raw)
         return gpu.Surface.from_handle(raw)
 
 func open(title: str, width: i64, height: i64) -> Window!:

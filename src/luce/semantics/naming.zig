@@ -149,7 +149,7 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             .map => |pair| privateMentioned(self, pair.key) orelse
                 privateMentioned(self, pair.value),
             .array => |shape| privateMentioned(self, shape.element),
-            .builder, .file => null,
+            .builder, .handle => null,
             .task => |work| privateMentioned(self, work.result),
         },
         // A function type publishes every type in its signature.
@@ -187,6 +187,27 @@ pub fn importsStandardModule(self: *const Analyzer, module: usize, name: []const
         if (imported.origin == .standard and std.mem.eql(u8, imported.name, name)) return true;
     }
     return false;
+}
+
+/// True when `module` is embedded standard-library source — the
+/// visibility gate every compiler-owned spelling shares: `Builtin.NAME`
+/// calls and the standard-only `handle` currency resolve here and
+/// nowhere else, so nothing of the host bridge enters a program's
+/// vocabulary.
+pub fn isStandardSource(self: *const Analyzer, module: usize) bool {
+    const source = self.diagnostics.sources.at(self.modules[module].file) orelse return false;
+    return source.kind == .standard;
+}
+
+/// The builtin a name spells *in this module's vocabulary*: the
+/// public table everywhere, plus the standard-only currency inside
+/// embedded standard source.  Type resolution and the declaration
+/// shadowing checks ask this instead of `types.builtinNamed`, so a
+/// user program may own a spelling the library keeps to itself.
+pub fn visibleBuiltin(self: *const Analyzer, module: usize, name: []const u8) ?types.Builtin {
+    const builtin = types.builtinNamed(name) orelse return null;
+    if (types.isStandardOnly(builtin) and !isStandardSource(self, module)) return null;
+    return builtin;
 }
 
 /// True when `module` is the embedded `std.NAME` itself, rather

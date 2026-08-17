@@ -293,30 +293,31 @@ func main(args: list[str]) -> !:
 ## Opening files
 
 For streaming — reading or writing a file a chunk at a time rather than
-whole — `std.files` opens a `file` handle:
+whole — `std.files` opens a `File`:
 
 | function | shape | opens |
 |---|---|---|
-| `open(path)` | `-> file!` | an existing file, to read from the start |
-| `create(path)` | `-> file!` | a file to write from the start, creating and emptying it |
-| `append_to(path)` | `-> file!` | a file to write at its end, creating it if absent |
+| `open(path)` | `-> File!` | an existing file, to read from the start |
+| `create(path)` | `-> File!` | a file to write from the start, creating and emptying it |
+| `append_to(path)` | `-> File!` | a file to write at its end, creating it if absent |
 
-The `file` these answer is a reference-counted resource with the byte
-methods `read`, `write`, and `flush`; the full reference for the handle,
-its C-shaped read/write primitive, and the whole-file byte conveniences
+`files.File` is an ordinary ARC class with the byte methods `read`,
+`write`, and `flush`; the host descriptor it owns is private to the
+library, so no raw handle ever enters a program. The full reference for
+the C-shaped read/write primitive and the whole-file byte conveniences
 (`files.read_bytes`, `files.write_bytes`, `files.append_bytes`) is
 `docs/BYTES.md`.
 
 ### No `with` or `close`
 
-A `file` is a reference resource (`docs/MEMORY.md`). ARC closes it at its last
-release, without a separate source keyword. There is no `close()` method
-because aliases share one handle and one last-release lifetime:
+A `File` is a reference (`docs/MEMORY.md`). ARC closes the descriptor at
+the File's last release, without a separate source keyword. There is no
+`close()` method because aliases share one object and one last-release
+lifetime:
 
 ```text
 f.close()
-# luce.sema.method: file has no method close: the file closes when its
-#   last reference is released, which is why there is no 'with' either
+# luce.sema.method: files.File has no method close
 ```
 
 ## Where this is not Python
@@ -336,10 +337,10 @@ f.close()
 These convenience shapes can be added without changing the existing
 signatures:
 
-- **Text and byte convenience methods on the `file`** —
+- **Text and byte convenience methods on `files.File`** —
   `read_text`, `read_bytes`, `read_line`, `read_lines`, `write_text`,
   `write_bytes`, `write_lines` — over a read buffer inside `libluce_rt`.
-  Today a `file` answers the C-shaped `read`/`write`/`flush`
+  Today a `File` answers the C-shaped `read`/`write`/`flush`
   (`docs/BYTES.md`), and whole-file text and bytes go through
   `files.read`/`files.write` and `files.read_bytes`/`files.write_bytes`.
 

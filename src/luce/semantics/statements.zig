@@ -1345,8 +1345,8 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
             try self.fail("luce.sema.loop", loop.span, "builder is not iterable", .{});
             return;
         },
-        .file => {
-            try self.fail("luce.sema.loop", loop.span, "file is not iterable; read into a buffer with f.read(buffer)", .{});
+        .handle => {
+            try self.fail("luce.sema.loop", loop.span, "handle is not iterable; read it through the class that owns it", .{});
             return;
         },
         .task => {

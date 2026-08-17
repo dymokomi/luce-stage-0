@@ -30,7 +30,7 @@ pub fn collectDeclarations(self: *Analyzer) Error!void {
                 try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
                 continue;
             }
-            if (types.builtinNamed(declaration.name) != null) {
+            if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
                 try self.fail(
                     "luce.sema.reserved",
                     declaration.name_span,

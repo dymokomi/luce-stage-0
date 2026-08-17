@@ -64,18 +64,21 @@ func main():
 
 ## Files
 
-A `file` is an ARC-managed resource. The handle methods operate on a
-caller-owned `array[u8, _]` and are fallible:
+`files.File` is an ordinary ARC class owning the host's descriptor — the
+raw `handle` currency is spellable only inside embedded standard source,
+so a program holds a `File`, never a number (the Swift shape: a
+descriptor lives behind the session object that owns it). Its methods
+operate on a caller-owned `array[u8, _]` and are fallible:
 
 | Method | Meaning |
 |---|---|
-| `file.read(buffer) -> i64!` | fills up to `len(buffer)` bytes; `0` means end of file |
-| `file.write(buffer, count) -> i64!` | writes up to `count` bytes and reports the actual count |
-| `file.flush() -> !` | asks the host to flush pending writes |
+| `f.read(buffer) -> i64!` | fills up to `len(buffer)` bytes; `0` means end of file |
+| `f.write(buffer, count) -> i64!` | writes up to `count` bytes and reports the actual count |
+| `f.flush() -> !` | asks the host to flush pending writes |
 
-There is no source `close()`. The runtime closes a file when its last strong
-reference is released. Adding a second manual lifetime would make aliases
-unsafe.
+There is no source `close()`. The runtime closes the descriptor when the
+File's last strong reference is released. Adding a second manual lifetime
+would make aliases unsafe.
 
 ```luce
 import std.files

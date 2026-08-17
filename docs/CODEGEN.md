@@ -1267,7 +1267,7 @@ the conventions already there rather than inventing new ones:
 
 There is no list here any more.  Everything a program can say lowers:
 integers, floats, strings, structs, function values, all four container
-kinds, file/task resources and workers, `T?`, `T!`, reference counting, the math
+kinds, handle/task resources and workers, `T?`, `T!`, reference counting, the math
 builtins, and every host service.  The two things that did not — `Bytes`
 and the evaluator ports — were cut rather than grown (docs/ENGINE.md
 steps 1 and 2), because nothing constructed a `Bytes` and nothing

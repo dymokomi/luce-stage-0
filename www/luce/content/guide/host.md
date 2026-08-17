@@ -160,9 +160,10 @@ func main() -> !:
 (not text as a string either)
 ```
 
-`files.open` returns a shared `file` reference. ARC closes its host handle
-after the last strong reference goes away. A file read fills a byte array and
-returns the number of bytes read:
+`files.open` returns a `File`, an ordinary `std.files` class that owns the
+open descriptor. ARC closes the descriptor after the last strong reference
+goes away. A file read fills a byte array and returns the number of bytes
+read:
 
 ```luce run
 import std.files
