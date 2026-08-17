@@ -54,6 +54,10 @@ test ! -e "$smoke_install/stale-from-first-install"
 
 test "$("$smoke_install/bin/luce" --version)" = "luce $release_version"
 test "$("$smoke_install/bin/loom" --version)" = "loom $release_version"
+source_commit=$(awk '$1 == "source" { print $2; exit }' "$smoke_install/share/luce/BUILD-MANIFEST")
+test -n "$source_commit"
+"$smoke_install/bin/luce" --build-info | grep -Fxq "source $source_commit"
+"$smoke_install/bin/loom" --build-info | grep -Fxq "source $source_commit"
 test -x "$smoke_install/bin/editor"
 test -f "$smoke_install/lib/termui-$termui_version/termui.luc"
 test -f "$smoke_extensions/$extension_id-$extension_version/package.json"

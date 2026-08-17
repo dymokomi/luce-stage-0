@@ -216,6 +216,28 @@ if [ "$(tr -d '[:space:]' <"$release/VERSION")" != "$version" ]; then
     echo "luce: release archive has the wrong VERSION" >&2
     exit 1
 fi
+manifest="$release/share/luce/BUILD-MANIFEST"
+if [ ! -f "$manifest" ] ||
+    ! grep -Fxq 'format luce-build-manifest-1' "$manifest" ||
+    ! grep -Fxq "version $version" "$manifest" ||
+    ! grep -Fxq "platform $platform" "$manifest"; then
+    echo "luce: release archive has no matching build manifest" >&2
+    exit 1
+fi
+source_commit=$(awk '$1 == "source" { print $2; exit }' "$manifest")
+if ! printf '%s\n' "$source_commit" | awk \
+    '(length($0) == 40 || length($0) == 64) && $0 !~ /[^0-9a-f]/ { ok = 1 } END { exit ok ? 0 : 1 }'; then
+    echo "luce: release archive has an invalid source identity" >&2
+    exit 1
+fi
+for tool in luce loom; do
+    if ! build_info=$("$release/bin/$tool" --build-info 2>/dev/null) ||
+        ! printf '%s\n' "$build_info" | grep -Fxq "$tool $version" ||
+        ! printf '%s\n' "$build_info" | grep -Fxq "source $source_commit"; then
+        echo "luce: release archive has mismatched $tool build identity" >&2
+        exit 1
+    fi
+done
 for tool in luce loom editor; do
     if [ ! -x "$release/bin/$tool" ]; then
         echo "luce: release archive is missing bin/$tool" >&2
@@ -228,6 +250,21 @@ for library in libluce_rt.a libluce_start.a; do
         exit 1
     fi
 done
+third_party="$release/share/licenses/third-party"
+for notice in THIRD_PARTY_NOTICES.md LLVM-LICENSE.txt ZIG-LICENSE.txt; do
+    if [ ! -s "$third_party/$notice" ]; then
+        echo "luce: release archive is missing third-party notice $notice" >&2
+        exit 1
+    fi
+done
+if [ "$system" = Linux ]; then
+    for notice in GCC-GPL-3.txt GCC-RUNTIME-EXCEPTION.txt; do
+        if [ ! -s "$third_party/$notice" ]; then
+            echo "luce: Linux release is missing third-party notice $notice" >&2
+            exit 1
+        fi
+    done
+fi
 termui_source="$release/lib/termui-$termui_version"
 for package_file in luce.yaml termui.luc model.luc input.luc layout.luc canvas.luc view.luc runtime.luc; do
     if [ ! -f "$termui_source/$package_file" ]; then
@@ -417,4 +454,5 @@ if [ "${LUCE_INSTALL_NO_PATH:-0}" != 1 ]; then
 fi
 
 echo "==> Luce $version installed at $install_root"
+echo "    source $source_commit"
 echo "    luce --version"

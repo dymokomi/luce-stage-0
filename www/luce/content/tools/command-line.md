@@ -48,6 +48,7 @@ not load your interactive shell profile.
 
 ```text
 luce --version
+luce --build-info
 luce build FILE [-o OUT] [--release] [--emit=WHAT]
 luce check FILE
 luce ir FILE [--full]
@@ -57,9 +58,11 @@ luce package version NAME VERSION
 luce package publish NAME
 ```
 
-`--version` prints the tool version and exits. The compiler's command
-words are `build`, `check`, `ir`, `test`, and `package`; the runner's are
-`run` and `luce`.
+`--version` prints the short tool version and exits. `--build-info` adds the
+immutable source revision, target, optimization mode, serialized-module
+format, and host ABI for a precise bug report. The compiler's command words
+are `build`, `check`, `ir`, `test`, and `package`; the runner's are `run` and
+`luce`.
 
 `luce package new` creates a package in a direct source subfolder, writes its
 `luce.yaml`, and adds a `path:` want to the project manifest. `luce package
@@ -103,12 +106,14 @@ the user-facing release number. Current release label: **0.18**.
 
 ```text
 loom --version
+loom --build-info
 loom                        interactive shell
 loom run PROGRAM.lc [ARGS]
 loom luce PROGRAM.luc [ARGS]
 loom PROGRAM.lc [ARGS]      shorthand for run
 ```
 
+`loom --build-info` prints the same release identity fields as the compiler.
 `loom run` loads one `.lc` file and passes the remaining words to
 `main(args)`. `loom luce` asks the `luce` compiler to build a `.luc` file,
 then runs the resulting artifact; it caches that artifact beside the source

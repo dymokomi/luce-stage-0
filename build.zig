@@ -43,6 +43,19 @@ pub fn build(b: *std.Build) void {
     // seam.
     const sysroot = b.option([]const u8, "sysroot", "SDK sysroot for cross-target builds");
     const project_version = readProjectVersion(b);
+    const source_commit = b.option(
+        []const u8,
+        "source-commit",
+        "Immutable source commit embedded in release tools (default: development)",
+    ) orelse "development";
+    if (!validSourceCommit(source_commit)) std.process.fatal(
+        "source-commit must be development or a 40/64-digit lowercase hexadecimal Git object id, got {s}",
+        .{source_commit},
+    );
+
+    const release_identity = b.addOptions();
+    release_identity.addOption([]const u8, "version", project_version);
+    release_identity.addOption([]const u8, "source_commit", source_commit);
 
     const llvm = discoverLlvm(b);
 
@@ -1104,6 +1117,20 @@ pub fn build(b: *std.Build) void {
     });
     test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_report })).step);
 
+    // One rendering of the build identity shared by the two shipped tools.
+    // Version and source revision are build inputs; target, optimization,
+    // module format and host ABI come from the compiled program itself.
+    const app_build_info = b.createModule(.{
+        .root_source_file = b.path("src/apps/build_info.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    app_build_info.addOptions("build_options", release_identity);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_build_info })).step);
+
     // The real host — console, cwd-relative files, arguments, the
     // terminal — as the ABI's C table, which is the one shape a
     // compiled program asks for anything through.  Shared by loom and
@@ -1203,6 +1230,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "build_info", .module = app_build_info },
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
             .{ .name = "package", .module = app_package },
@@ -1224,7 +1252,6 @@ pub fn build(b: *std.Build) void {
     // does — the point of those tests is that the *product* path
     // links, loads and runs, not that a private one does.
     const installed_libraries = b.addOptions();
-    installed_libraries.addOption([]const u8, "version", project_version);
     installed_libraries.addOptionPath("luce_rt_library", runtime_archive);
     installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
     compiler_module.addOptions("build_options", installed_libraries);
@@ -1270,6 +1297,7 @@ pub fn build(b: *std.Build) void {
     });
     const compiler_pieces = b.addOptions();
     compiler_pieces.addOption([]const u8, "version", project_version);
+    compiler_pieces.addOption([]const u8, "source_commit", source_commit);
     compiler_pieces.addOptionPath("luce_binary", compiler.getEmittedBin());
     compiler_pieces.addOptionPath("luce_rt_library", runtime_archive);
     compiler_pieces.addOptionPath("luce_start_library", start_library.getEmittedBin());
@@ -1282,6 +1310,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "build_info", .module = app_build_info },
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
             .{ .name = "host", .module = app_host },
@@ -1292,9 +1321,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "streams", .module = app_streams },
         },
     });
-    const terminal_options = b.addOptions();
-    terminal_options.addOption([]const u8, "version", project_version);
-    terminal_module.addOptions("build_options", terminal_options);
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = terminal_module });
     const install_terminal = b.addInstallArtifact(terminal, .{
         .dest_dir = .{ .override = .prefix },
@@ -1323,6 +1349,7 @@ pub fn build(b: *std.Build) void {
     });
     const binaries = b.addOptions();
     binaries.addOption([]const u8, "version", project_version);
+    binaries.addOption([]const u8, "source_commit", source_commit);
     binaries.addOptionPath("loom_binary", terminal.getEmittedBin());
     binaries.addOptionPath("luce_binary", compiler.getEmittedBin());
     binaries.addOptionPath("luce_rt_library", runtime_archive);
@@ -1632,6 +1659,15 @@ fn validVersionPart(part: []const u8) bool {
     if (part.len == 0 or (part.len > 1 and part[0] == '0')) return false;
     for (part) |character| {
         if (character < '0' or character > '9') return false;
+    }
+    return true;
+}
+
+fn validSourceCommit(commit: []const u8) bool {
+    if (std.mem.eql(u8, commit, "development")) return true;
+    if (commit.len != 40 and commit.len != 64) return false;
+    for (commit) |character| {
+        if (!std.ascii.isDigit(character) and (character < 'a' or character > 'f')) return false;
     }
     return true;
 }

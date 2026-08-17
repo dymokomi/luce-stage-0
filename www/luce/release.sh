@@ -20,8 +20,22 @@ extension_source="$root/tools/vscode-luce"
 extension_version=$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }' "$extension_source/package.json")
 extension_id=luciaos.luce-language
 macos_minimum=15.0
+zig_version=0.16.0
+llvm_version=22.1.8
 linux_aarch64_prefix_override=${LUCE_LINUX_AARCH64_PREFIX:-}
 linux_x86_64_prefix_override=${LUCE_LINUX_X86_64_PREFIX:-}
+
+source_commit=$(git -C "$root" rev-parse --verify HEAD)
+if [ -n "$(git -C "$root" status --porcelain --untracked-files=normal)" ]; then
+    echo "luce release: source tree is not clean" >&2
+    exit 1
+fi
+module_format=$(awk '/pub const format_version: u32 =/ { value = $6; gsub(/;/, "", value); print value; exit }' "$root/src/luce/mir/module.zig")
+host_abi=$(awk '/pub const version: u32 =/ { value = $6; gsub(/;/, "", value); print value; exit }' "$root/src/luce/codegen/abi.zig")
+if [ -z "$module_format" ] || [ -z "$host_abi" ]; then
+    echo "luce release: cannot read the module-format or host-ABI version" >&2
+    exit 1
+fi
 
 if [ "$(uname -s)" != Darwin ]; then
     echo "luce release: the complete matrix must run on macOS so it can build the Apple archive" >&2
@@ -96,8 +110,10 @@ assemble_archive() {
     release_tree="$tree_root/luce-$release_version"
     extension_tree="$release_tree/share/vscode/extensions/$extension_id-$extension_version"
     archive="luce-${release_version}-${platform}.tar.gz"
+    third_party_source="$prefix/share/licenses/third-party"
 
-    mkdir -p "$release_tree/bin" "$release_tree/lib" "$extension_tree/syntaxes" "$release_tree/share/licenses/luce"
+    mkdir -p "$release_tree/bin" "$release_tree/lib" "$extension_tree/syntaxes" \
+        "$release_tree/share/licenses/luce" "$release_tree/share/luce"
     for tool in luce loom editor; do
         if [ ! -x "$prefix/$tool" ]; then
             echo "luce release: $platform prefix is missing $tool" >&2
@@ -121,8 +137,49 @@ assemble_archive() {
     done
 
     printf '%s\n' "$release_version" >"$release_tree/VERSION"
+    case "$platform" in
+        macos-aarch64) platform_floor="macOS $macos_minimum" ;;
+        linux-*) platform_floor='glibc 2.28' ;;
+        *)
+            echo "luce release: no platform floor for $platform" >&2
+            exit 1
+            ;;
+    esac
+    printf '%s\n' \
+        'format luce-build-manifest-1' \
+        "version $release_version" \
+        "source $source_commit" \
+        "platform $platform" \
+        "platform-floor $platform_floor" \
+        "optimize ReleaseSafe" \
+        "zig $zig_version" \
+        "llvm $llvm_version" \
+        "module-format $module_format" \
+        "host-abi $host_abi" \
+        >"$release_tree/share/luce/BUILD-MANIFEST"
     cp "$root/LICENSE-MIT" "$release_tree/share/licenses/luce/LICENSE-MIT"
     cp "$root/LICENSE-APACHE" "$release_tree/share/licenses/luce/LICENSE-APACHE"
+    third_party_release="$release_tree/share/licenses/third-party"
+    mkdir -p "$third_party_release"
+    cp "$root/THIRD_PARTY_NOTICES.md" "$third_party_release/THIRD_PARTY_NOTICES.md"
+    for notice in LLVM-LICENSE.txt ZIG-LICENSE.txt; do
+        if [ ! -s "$third_party_source/$notice" ]; then
+            echo "luce release: $platform prefix is missing $notice" >&2
+            exit 1
+        fi
+        cp "$third_party_source/$notice" "$third_party_release/$notice"
+    done
+    case "$platform" in
+        linux-*)
+            for notice in GCC-GPL-3.txt GCC-RUNTIME-EXCEPTION.txt; do
+                if [ ! -s "$third_party_source/$notice" ]; then
+                    echo "luce release: $platform prefix is missing $notice" >&2
+                    exit 1
+                fi
+                cp "$third_party_source/$notice" "$third_party_release/$notice"
+            done
+            ;;
+    esac
     cp "$extension_source/package.json" "$extension_tree/package.json"
     cp "$extension_source/extension.js" "$extension_tree/extension.js"
     cp "$extension_source/language-configuration.json" "$extension_tree/language-configuration.json"
@@ -159,13 +216,33 @@ verify_macos_minimum() {
 echo "==> macOS arm64 toolchain"
 macos_prefix="$release_work/prefix-macos-aarch64"
 macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
+if [ "$(zig version)" != "$zig_version" ]; then
+    echo "luce release: Zig $zig_version is required" >&2
+    exit 1
+fi
+macos_llvm="$root/.llvm/install/bin/llvm-config"
+if [ ! -x "$macos_llvm" ] || [ "$("$macos_llvm" --version)" != "$llvm_version" ]; then
+    echo "==> pinned LLVM $llvm_version"
+    (cd "$root" && ./vendor-llvm.sh)
+fi
 (cd "$root" && zig build \
     --prefix "$macos_prefix" \
     -Dtarget=aarch64-macos.15.0 \
     -Doptimize=ReleaseSafe \
+    -Dsource-commit="$source_commit" \
+    -Dllvm-config="$macos_llvm" \
     -Dsysroot="$macos_sdk" \
     --global-cache-dir "$zig_global_cache" \
     --summary all)
+macos_third_party="$macos_prefix/share/licenses/third-party"
+mkdir -p "$macos_third_party"
+macos_llvm_license="$("$macos_llvm" --includedir)/llvm/Support/LICENSE.TXT"
+if [ ! -s "$macos_llvm_license" ]; then
+    echo "luce release: pinned LLVM install has no license text" >&2
+    exit 1
+fi
+cp "$macos_llvm_license" "$macos_third_party/LLVM-LICENSE.txt"
+cp "$root/LICENSE-ZIG" "$macos_third_party/ZIG-LICENSE.txt"
 verify_macos_minimum "$macos_prefix"
 assemble_archive macos-aarch64 "$macos_prefix"
 
@@ -179,6 +256,11 @@ for architecture in aarch64 x86_64; do
     else
         linux_prefix="$release_work/prefix-linux-$architecture"
         "$root/tools/linux-release/build.sh" "$architecture" "$linux_prefix"
+    fi
+    if [ ! -f "$linux_prefix/share/luce/SOURCE_COMMIT" ] ||
+        [ "$(tr -d '[:space:]' <"$linux_prefix/share/luce/SOURCE_COMMIT")" != "$source_commit" ]; then
+        echo "luce release: Linux $architecture prefix does not come from $source_commit" >&2
+        exit 1
     fi
     assemble_archive "linux-$architecture" "$linux_prefix"
 done

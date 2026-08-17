@@ -55,6 +55,9 @@ inferred retroactively from current 0.x version numbers.
 The default result of `luce build` is a target-native executable. A `.lc`
 library is also native machine code. Neither is portable across CPU/OS targets,
 and `.lc` records enough identity for `loom` to refuse an incompatible file.
+Treat a `.lc` exactly like an executable: run one only when you trust who built
+it. Its format checks prevent accidental incompatibility; they are not a
+sandbox for hostile machine code.
 
 The compiler’s internal `.lcm` form is verified serialized MIR, used as a seam
 and cache input rather than a distribution format. Its current format version

@@ -105,6 +105,25 @@ test "loom reports the project version without a compiler" {
     try testing.expectEqualStrings("", ran.err);
 }
 
+test "loom reports the immutable build identity without a compiler" {
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, false);
+    defer install.deinit(gpa);
+
+    var ran = try runLoom(gpa, &install, &.{"--build-info"}, null, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(ran.saysOut(expected_version));
+    try testing.expect(ran.saysOut(std.fmt.comptimePrint(
+        "source {s}\n",
+        .{build_options.source_commit},
+    )));
+    for ([_][]const u8{ "target ", "optimize ", "module-format ", "host-abi " }) |field| {
+        try testing.expect(ran.saysOut(field));
+    }
+    try testing.expectEqualStrings("", ran.err);
+}
+
 /// Run the compiler in the tree — for the tests that need a real
 /// artifact before they can break one.
 fn runLuce(gpa: Allocator, install: *const Install, arguments: []const []const u8) !Ran {
@@ -590,6 +609,8 @@ test "every form loom does not have answers with usage, and every usage names th
         try testing.expectEqualStrings("", ran.out);
         try testing.expect(ran.saysErr("usage:"));
         for ([_][]const u8{
+            "loom --version",
+            "loom --build-info",
             "loom run PROGRAM.lc",
             "loom luce PROGRAM.luc",
         }) |form| {

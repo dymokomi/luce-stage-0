@@ -43,7 +43,7 @@
 //! `func test_*()` declarations are what it calls.
 
 const std = @import("std");
-const build_options = @import("build_options");
+const build_info = @import("build_info");
 const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
@@ -77,7 +77,12 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const out = &out_writer.interface;
 
     if (arguments.len == 2 and std.mem.eql(u8, arguments[1], "--version")) {
-        try out.print("luce {s}\n", .{build_options.version});
+        try out.print("luce {s}\n", .{build_info.version});
+        try out.flush();
+        return 0;
+    }
+    if (arguments.len == 2 and std.mem.eql(u8, arguments[1], "--build-info")) {
+        try build_info.write(out, "luce");
         try out.flush();
         return 0;
     }
@@ -260,6 +265,7 @@ fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
             "  luce --version\n" ++
+            "  luce --build-info\n" ++
             "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
             "  luce ir FILE [--full]\n" ++

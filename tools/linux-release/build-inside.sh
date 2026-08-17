@@ -5,6 +5,15 @@ set -eu
 source_root=${LUCE_RELEASE_SOURCE:-/source}
 output=${LUCE_RELEASE_OUTPUT:-/output}
 architecture=${LUCE_RELEASE_ARCH:?LUCE_RELEASE_ARCH is required}
+source_commit=${LUCE_RELEASE_SOURCE_COMMIT:?LUCE_RELEASE_SOURCE_COMMIT is required}
+
+if ! printf '%s\n' "$source_commit" | awk '
+    (length($0) == 40 || length($0) == 64) && $0 !~ /[^0-9a-f]/ { ok = 1 }
+    END { exit ok ? 0 : 1 }
+'; then
+    echo "linux release: source commit is not a lowercase Git object id" >&2
+    exit 1
+fi
 
 case "$(uname -m):$architecture" in
     aarch64:aarch64) target=aarch64-linux-gnu.2.28 ;;
@@ -36,8 +45,28 @@ HOME="$work/home" zig build \
     --global-cache-dir "$work/global-cache" \
     -Dtarget="$target" \
     -Doptimize=ReleaseSafe \
+    -Dsource-commit="$source_commit" \
     -Dllvm-config=/opt/luce-llvm/bin/llvm-config \
     --summary all
+
+mkdir -p "$output/share/luce"
+printf '%s\n' "$source_commit" >"$output/share/luce/SOURCE_COMMIT"
+
+# These exact texts belong to code the self-contained compiler carries. Copy
+# them from the same pinned builder that supplied the linked archives so the
+# notice cannot drift away from the binary.
+third_party="$output/share/licenses/third-party"
+mkdir -p "$third_party"
+cp /opt/luce-llvm/include/llvm/Support/LICENSE.TXT "$third_party/LLVM-LICENSE.txt"
+cp /opt/zig/LICENSE "$third_party/ZIG-LICENSE.txt"
+cp /usr/share/licenses/gcc/COPYING3 "$third_party/GCC-GPL-3.txt"
+cp /usr/share/licenses/gcc/COPYING.RUNTIME "$third_party/GCC-RUNTIME-EXCEPTION.txt"
+for notice in LLVM-LICENSE.txt ZIG-LICENSE.txt GCC-GPL-3.txt GCC-RUNTIME-EXCEPTION.txt; do
+    test -s "$third_party/$notice" || {
+        echo "linux release: required third-party notice is missing: $notice" >&2
+        exit 1
+    }
+done
 
 for tool in luce loom editor; do
     test -x "$output/$tool" || {

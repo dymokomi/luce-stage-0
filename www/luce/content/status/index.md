@@ -49,6 +49,8 @@ useful. The release also contains the terminal editor and a local VS Code or
 Cursor extension. One checked installer publishes that toolchain for macOS 15
 or newer on ARM64 and glibc Linux 2.28+ on ARM64 and x86-64; the compiler
 contains its pinned LLVM and uses the host `cc` only for the final native link.
+`luce --build-info` and `loom --build-info` report the archive's immutable
+source revision, target, optimization mode, module format, and host ABI.
 
 The embedded standard library includes `std.math`, `std.files`,
 `std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,

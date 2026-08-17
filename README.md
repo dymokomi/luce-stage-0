@@ -274,3 +274,6 @@ Luce and loom are distributed under the terms of both the MIT license
 and the Apache License (Version 2.0), at your option.
 
 See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).
+Release archives also carry the exact notices listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for statically linked LLVM,
+Zig runtime, and Linux GCC runtime components.

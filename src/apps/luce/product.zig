@@ -107,6 +107,25 @@ test "luce reports the project version" {
     try testing.expectEqualStrings("", ran.err);
 }
 
+test "luce reports the immutable build identity" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    var ran = try runLuce(gpa, &tree, &.{"--build-info"}, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(ran.saysOut(expected_version));
+    try testing.expect(ran.saysOut(std.fmt.comptimePrint(
+        "source {s}\n",
+        .{build_options.source_commit},
+    )));
+    for ([_][]const u8{ "target ", "optimize ", "module-format ", "host-abi " }) |field| {
+        try testing.expect(ran.saysOut(field));
+    }
+    try testing.expectEqualStrings("", ran.err);
+}
+
 test "a command line with nothing to do prints usage and fails" {
     const gpa = testing.allocator;
     var tree = try installTree(gpa);
@@ -135,6 +154,7 @@ test "a command line with nothing to do prints usage and fails" {
         } else {
             for ([_][]const u8{
                 "luce --version",
+                "luce --build-info",
                 "luce build FILE [-o OUT] [--release] [--emit=WHAT]",
                 "luce check FILE",
                 "luce ir FILE [--full]",

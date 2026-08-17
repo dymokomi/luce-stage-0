@@ -7,6 +7,11 @@ set -eu
 
 here=$(CDPATH= cd "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd "$here/../.." && pwd)
+source_commit=$(git -C "$root" rev-parse --verify HEAD)
+if [ -n "$(git -C "$root" status --porcelain --untracked-files=normal)" ]; then
+    echo "linux release: source tree is not clean" >&2
+    exit 1
+fi
 
 if [ "$#" -ne 2 ]; then
     echo "usage: tools/linux-release/build.sh ARCH ABSOLUTE_OUTPUT" >&2
@@ -74,6 +79,7 @@ docker run --rm \
     "$@" \
     --env HOME=/tmp/luce-release-home \
     --env "LUCE_RELEASE_ARCH=$architecture" \
+    --env "LUCE_RELEASE_SOURCE_COMMIT=$source_commit" \
     --volume "$root:/source:ro" \
     --volume "$output:/output" \
     "$image" \

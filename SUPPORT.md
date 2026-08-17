@@ -9,7 +9,7 @@ editor, extension, and maintained packages as one checked unit.
 For a reproducible compiler, installer, editor, or documentation problem,
 email **dy@dymokomi.com** with the subject `[Luce support]`. Include:
 
-- `luce --version` and the operating system/architecture;
+- the complete output of `luce --build-info` and the operating system version;
 - the smallest `.luc` source that reproduces the behavior;
 - the exact command and complete output; and
 - whether the same behavior occurs after a fresh install.
