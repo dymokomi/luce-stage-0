@@ -52,15 +52,14 @@ target to inflate; the test claim and its layer matter more than the number.
 
 ## What is actually missing
 
-There is one remaining language feature on the path described here:
-
-1. user-defined generics, which make reusable typed algorithms and data
-   structures ordinary Luce source.
-
-Everything else below is optional ergonomics, a library/product layer, a
-platform expansion, or release hardening. Keeping those categories separate
-prevents a desired package registry or native widget set from turning into a
-fictional compiler bug.
+There is no remaining language feature required by the first release. User-
+defined generics remain a post-1.0 proposal: they may make reusable typed
+algorithms and data structures more convenient, but the current classes,
+interfaces, containers, standard library, TermUI, and editor do not require
+them. Everything else below is optional ergonomics, a library/product layer,
+a platform expansion, or release hardening. Keeping those categories
+separate prevents a desired package registry or native widget set from
+turning into a fictional compiler bug.
 
 ## 1. Owned interface existentials — complete
 
@@ -101,7 +100,7 @@ The milestone still excludes interface inheritance, default bodies, associated
 types, compositions, generic bounds, and runtime casts. Those are separate
 features, not prerequisites for a sound existential.
 
-## 2. Add monomorphized generics
+## 2. Post-1.0: add monomorphized generics
 
 Generics build on the owned existentials so interface bounds reuse the final
 conformance representation. The separate
@@ -159,9 +158,10 @@ focus, and rendering.
 That package should reuse the vocabulary TermUI has made familiar—`Panel`,
 `VStack`, `HStack`, `ZStack`, `Label`, and explicit state—without pretending a
 terminal cell and a native control have identical behavior. It should be
-built after owned interfaces and generics so heterogeneous controls, typed
-data, and stateful component contracts exercise the final language rather
-than create framework-only compiler exceptions.
+built after the owned-interface work so heterogeneous controls and stateful
+component contracts exercise the final language rather than create
+framework-only compiler exceptions. Generic data structures can be added
+later when released programs demonstrate that they earn their complexity.
 
 ## 4. Finish the package and platform products
 
@@ -195,8 +195,9 @@ numeric conversion, and ownership annotations remain outside the roadmap.
 ## 6. Lock the 1.0 contract
 
 Luce is deliberately free to break before 1.0. The release lock begins only
-after the two remaining language milestones and their userland proof are
-complete.
+after the current language contract, its userland proof, and the toolchain and
+platform release gates are complete. Post-1.0 generics are not a release
+prerequisite.
 
 The lock requires:
 
@@ -248,9 +249,9 @@ the phase boundary.
   classes, interfaces, weak references, and capturing environments.
 - [x] TermUI hides its application loop and the editor uses its public
   declarative component surface.
-- [ ] A generic library type and bounded generic algorithm work across modules
-  on both engines without a runtime generic representation.
-- [ ] A native UI package uses the final interface and generic surfaces without
+- [post-1.0] A generic library type and bounded generic algorithm work across
+  modules on both engines without a runtime generic representation.
+- [ ] A native UI package uses the final interface surface without
   compiler-known framework syntax.
 
 ## Explicit non-goals

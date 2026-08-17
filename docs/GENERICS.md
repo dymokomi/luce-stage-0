@@ -1,8 +1,10 @@
-# Generics — proposed monomorphized design
+# Generics — post-1.0 monomorphized design
 
-> **Status: proposed, not implemented.** Every syntax example in this document
-> is `text`. The current language has built-in parameterized containers, but
-> users cannot declare a generic function or type.
+> **Status: post-1.0 proposal, not implemented.** Every syntax example in this
+> document is `text`. The current language has built-in parameterized
+> containers, but users cannot declare a generic function or type. User-defined
+> generics are deliberately outside the first release; this document records
+> the design to revisit after real released programs establish the need.
 
 Generics let one declaration state an algorithm or data shape without naming
 every concrete type in advance. They are useful when the relationship between

@@ -296,10 +296,11 @@ another path.
 
 ## Deliberate boundaries
 
-The current language has no tuples, generics, class inheritance, interface
+The current language has no tuples or user-defined generics; generics are a
+post-1.0 design proposal. It also has no class inheritance, interface
 inheritance/default bodies, operator overloading, mutable globals, unsafe
 pointers, unsafe unowned references, tracing garbage collector, reflection,
 macros, exceptions separate from `T!`, or shared mutable state between
 workers. [ROADMAP.md](ROADMAP.md) records the completed ARC, class, closure,
-TermUI, and editor proof; the remaining owned-existential and generics work;
-and the separate native-UI, package, platform, and release tracks.
+TermUI, editor, and owned-existential proofs, plus the separate native-UI,
+package, platform, and release tracks.

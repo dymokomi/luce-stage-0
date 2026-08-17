@@ -115,7 +115,7 @@ Trees, stacks, matrices, and specialized vectors belong in libraries after
 generics rather than in the primitive vocabulary. `map` is the associative
 container; `dict` and `hash` are not aliases.
 
-## Remaining language work
+## Post-1.0 language work
 
 ### Interfaces {#interfaces}
 
@@ -131,9 +131,10 @@ The implementation uses one owned existential payload and a static witness
 identity. It deliberately excludes interface inheritance, default methods,
 associated types, generic bounds, and runtime casts.
 
-### Generics and library data structures
+### User-defined generics and library data structures
 
-Generics remain design work. The intended direction is monomorphized generic
+User-defined generics remain design work and are deliberately outside the
+first release. The intended post-1.0 direction is monomorphized generic
 functions and types with interface bounds. Trees, stacks, matrices, and other
 data structures can then be ordinary library types rather than compiler
 keywords.
