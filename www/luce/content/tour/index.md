@@ -336,10 +336,10 @@ Ada
 
 Each list element keeps its own concrete value and dispatch. Interfaces can
 have several methods, fallible and multi-value results, and may appear in
-maps, arrays, fields, results, and optionals. There are no interface casts,
-inheritance, default methods, or associated types. A writing class witness is
-supported; a writing value-structure witness is the one current dispatch
-limitation.
+maps, arrays, fields, results, and optionals. A `mutating` requirement permits
+a value-structure witness to write back through a mutable local; a class
+witness keeps its shared identity. There are no interface casts, inheritance,
+default methods, or associated types.
 
 ## Let ARC own lifetime
 

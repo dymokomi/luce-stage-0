@@ -20,9 +20,10 @@ source the profile it names), then verify the installation:
 luce --version
 ```
 
-The release ships the `luce` compiler, `loom`, the terminal `editor`, runtime
+The release ships the `luce` compiler, the terminal `editor`, runtime
 libraries, TermUI, and the Luce VS Code extension for local VS Code, VS Code
-Insiders, or Cursor installations.
+Insiders, or Cursor installations. Compile a source file with `luce build
+hello.luc`; it writes a native executable named `hello`.
 If an editor has not been opened yet, it prepares the standard VS Code
 extension shelf so the extension is picked up on first launch. Restart the
 editor (or reload its window) after installation.

@@ -21,8 +21,8 @@ program grows:
 2. **Behavior:** [Control Flow](/guide/control/), [Functions](/guide/functions/),
    and [Closures](/guide/closures/).
 3. **Data modeling:** [Enumerations](/guide/enums/),
-   [Structures](/guide/structures/), [Methods](/guide/methods/),
-   [Classes](/guide/classes/), [Initialization](/guide/initialization/), and
+   [Structures](/guide/structures/), [Classes](/guide/classes/),
+   [Methods](/guide/methods/), [Initialization](/guide/initialization/), and
    [Deinitialization](/guide/deinitialization/).
 4. **Alternative outcomes:** [Optionals](/guide/optionals/),
    [Unions](/guide/unions/), and [Error Handling](/guide/errors/).
