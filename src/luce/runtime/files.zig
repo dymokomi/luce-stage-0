@@ -110,6 +110,12 @@ pub const Channel = struct {
 /// guard.  The guard belongs around the callback alone: allocations,
 /// validation and whole-file loops stay outside it so another worker
 /// can make progress between calls (docs/THREADS.md D9).
+///
+/// **A socket byte-op skips the guard entirely** (`guarded = false`):
+/// a socket read blocks for a peer, and a worker blocked inside the
+/// guard would freeze every other worker's host effects for the
+/// duration.  The socket channel's callbacks are thread-safe by
+/// contract (`sockets.zig`), which is what makes the skip sound.
 fn callOpen(
     runtime: *Runtime,
     service: OpenFn,
@@ -125,30 +131,32 @@ fn callOpen(
 fn callRead(
     runtime: *Runtime,
     service: ReadFn,
+    guarded: bool,
     handle: i64,
     into: []u8,
     filled: *i64,
 ) i32 {
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
+    if (guarded) runtime.enterEffects();
+    defer if (guarded) runtime.leaveEffects();
     return service(runtime.files.context, handle, into.ptr, @intCast(into.len), filled);
 }
 
 fn callWrite(
     runtime: *Runtime,
     service: WriteFn,
+    guarded: bool,
     handle: i64,
     from: []const u8,
     written: *i64,
 ) i32 {
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
+    if (guarded) runtime.enterEffects();
+    defer if (guarded) runtime.leaveEffects();
     return service(runtime.files.context, handle, from.ptr, @intCast(from.len), written);
 }
 
-fn callFlush(runtime: *Runtime, service: FlushFn, handle: i64) i32 {
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
+fn callFlush(runtime: *Runtime, service: FlushFn, guarded: bool, handle: i64) i32 {
+    if (guarded) runtime.enterEffects();
+    defer if (guarded) runtime.leaveEffects();
     return service(runtime.files.context, handle);
 }
 
@@ -207,10 +215,12 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
 }
 
 /// `f.read(into)` — fill an `array[u8, n]` and answer how many bytes
-/// landed.  Zero means the file is finished.
+/// landed.  Zero means the stream is finished.  Serves files and
+/// connected sockets alike: the byte channel is the handle's, and the
+/// resource kind decides only whether the Effects guard is held.
 pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
-    const handle = try handleOf(runtime, held);
+    const resource = try byteResourceOf(runtime, held);
     // Re-resolved after the handle, because both resolves can trap and
     // neither allocates: the pointer stays good across the pair.
     const into_object = try runtime.resolveMutable(buffer);
@@ -223,7 +233,14 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     };
     var filled: i64 = 0;
     const cells = into.cells(u8);
-    if (!try hostAnswer(runtime, callRead(runtime, service, handle, cells, &filled))) return null;
+    if (!try hostAnswer(runtime, callRead(
+        runtime,
+        service,
+        resource.kind == .file,
+        resource.handle,
+        cells,
+        &filled,
+    ))) return null;
     return try hostCount(runtime, filled, cells.len);
 }
 
@@ -231,7 +248,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
 /// `array[u8, n]` and answer how many landed.
 pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i64 {
     const service = runtime.files.write orelse return runtime.fail(.host_unavailable);
-    const handle = try handleOf(runtime, held);
+    const resource = try byteResourceOf(runtime, held);
     const from_object = try runtime.resolve(buffer);
     const from = switch (from_object.data) {
         .array => if (from_object.elements.kind == .u8)
@@ -243,10 +260,14 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
     const cells = from.cells(u8);
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
     var written: i64 = 0;
-    if (!try hostAnswer(
+    if (!try hostAnswer(runtime, callWrite(
         runtime,
-        callWrite(runtime, service, handle, cells[0..@intCast(count)], &written),
-    )) return null;
+        service,
+        resource.kind == .file,
+        resource.handle,
+        cells[0..@intCast(count)],
+        &written,
+    ))) return null;
     return try hostCount(runtime, written, @intCast(count));
 }
 
@@ -266,8 +287,9 @@ fn hostCount(runtime: *Runtime, count: i64, capacity: usize) Error!i64 {
 /// callback is an untrusted enum-shaped integer: only the three published
 /// values are meaningful.  In particular, an arbitrary negative value is a
 /// malformed host, not memory exhaustion, and an arbitrary positive value is
-/// not success.
-fn hostAnswer(runtime: *Runtime, answer: i32) Error!bool {
+/// not success.  Public because `sockets.zig` validates its channel with
+/// the same rule — one definition of what an untrusted answer means.
+pub fn hostAnswer(runtime: *Runtime, answer: i32) Error!bool {
     return switch (answer) {
         yes => true,
         no => false,
@@ -282,23 +304,34 @@ fn hostAnswer(runtime: *Runtime, answer: i32) Error!bool {
 /// `f.flush()` — everything written so far is on the device.
 pub fn flush(runtime: *Runtime, held: Value) Error!bool {
     const service = runtime.files.flush orelse return runtime.fail(.host_unavailable);
-    const handle = try handleOf(runtime, held);
-    return try hostAnswer(runtime, callFlush(runtime, service, handle));
+    const resource = try byteResourceOf(runtime, held);
+    return try hostAnswer(runtime, callFlush(runtime, service, resource.kind == .file, resource.handle));
 }
 
-/// The host handle behind a Luce one, or a trap.  A handle used after
-/// its scope closed it fails here as `use_after_free`, which is what
-/// `resolve` answers for every other object and is the same mistake.
-fn handleOf(runtime: *Runtime, held: Value) Error!i64 {
+/// The resource behind a Luce handle, or a trap.  Files and connected
+/// sockets carry the byte channel; a listener, window, or surface does
+/// not, and answers `not_owned` — asking a door for bytes is a type
+/// error the verifier normally catches, met here again for IR that
+/// arrived some other way.  A handle used after its scope closed it
+/// fails inside `resolve` as `use_after_free`, the same mistake it is
+/// everywhere else.
+fn byteResourceOf(runtime: *Runtime, held: Value) Error!heap.Object.File {
     const object = try runtime.resolve(held);
     return switch (object.data) {
-        .file => |held_file| if (held_file.kind == .file)
-            held_file.handle
-        else
-            runtime.fail(.not_owned),
-        // The verifier admits only a `file` here.
+        .file => |held_file| switch (held_file.kind) {
+            .file, .socket => held_file,
+            .window, .surface, .listener => runtime.fail(.not_owned),
+        },
         .instance, .list, .map, .array, .builder, .task => return runtime.fail(.not_owned),
     };
+}
+
+/// The file-kind handle alone, for the whole-file conveniences that
+/// opened it themselves.
+fn handleOf(runtime: *Runtime, held: Value) Error!i64 {
+    const resource = try byteResourceOf(runtime, held);
+    if (resource.kind != .file) return runtime.fail(.not_owned);
+    return resource.handle;
 }
 
 /// The path a handle was opened at, for the sentence an `io_failed`
@@ -342,7 +375,7 @@ fn readTextLimited(runtime: *Runtime, path: []const u8, limit: usize) Error!?Val
             // one-byte probe distinguishes an exact-limit file from an
             // oversized one without raising the peak allocation.
             var probe: [1]u8 = undefined;
-            const answered = callRead(runtime, service, handle_id, &probe, &filled);
+            const answered = callRead(runtime, service, true, handle_id, &probe, &filled);
             if (!try hostAnswer(runtime, answered)) return null;
             const taken = try hostCount(runtime, filled, probe.len);
             if (taken != 0) return null;
@@ -354,6 +387,7 @@ fn readTextLimited(runtime: *Runtime, path: []const u8, limit: usize) Error!?Val
         const answered = callRead(
             runtime,
             service,
+            true,
             handle_id,
             loaded.items[before..],
             &filled,
@@ -382,6 +416,7 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
         const answered = callWrite(
             runtime,
             service,
+            true,
             try handleOf(runtime, handle),
             text[sent..],
             &written,
@@ -393,7 +428,7 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
         if (moved == 0) return false;
         sent += @intCast(moved);
     }
-    return try hostAnswer(runtime, callFlush(runtime, flusher, try handleOf(runtime, handle)));
+    return try hostAnswer(runtime, callFlush(runtime, flusher, true, try handleOf(runtime, handle)));
 }
 
 test "whole-file reads stay within their content limit" {

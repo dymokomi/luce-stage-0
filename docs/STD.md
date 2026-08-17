@@ -36,6 +36,7 @@ cost of changing the embedded library.
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |
+| `std.network` | TCP transport | `Connection` read/write/flush, `Listener` accept/port, `connect`, `listen` |
 | `std.ui` | low-level native windows | fallible `open` and a window-owned GPU surface |
 
 `termui` is a maintained package, not an embedded `std` module. It appears in
@@ -46,7 +47,7 @@ resolution and standard-module embedding as two honest mechanisms.
 
 Most standard code is pure Luce. `math`, `strings`, `lists`, `paths`, `json`,
 and the codec portions of `zip` use language operations only. `files`, `os`,
-`ui`, and `gpu` reach host services through `Builtin.NAME`, a synthetic
+`ui`, `gpu`, and `network` reach host services through `Builtin.NAME`, a synthetic
 compiler namespace accepted only in embedded standard-library source.
 `std.term` delegates to `std.os`.
 

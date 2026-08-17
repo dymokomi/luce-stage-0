@@ -1279,6 +1279,31 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
             result = try resolve.internHeapType(self.analyzer, .handle);
         },
+        // The transport doors (docs/NETWORK.md).  Like `file_open`,
+        // each answers the raw handle currency; `std.network` is where
+        // the handles get their Connection and Listener classes.
+        .socket_connect => {
+            if (arguments[0].value_type != .str or !arguments[1].value_type.eql(.i64))
+                return failIntrinsic(self, call, "socket_connect takes (host str, port i64)");
+            result = try resolve.internHeapType(self.analyzer, .handle);
+        },
+        .socket_listen => {
+            if (!arguments[0].value_type.eql(.i64))
+                return failIntrinsic(self, call, "socket_listen takes a port i64");
+            result = try resolve.internHeapType(self.analyzer, .handle);
+        },
+        .socket_accept => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "socket_accept takes a listener handle");
+            result = handle_type;
+        },
+        .socket_port => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "socket_port takes a listener handle");
+            result = .i64;
+        },
         // The byte channel itself (docs/BYTES.md R4): a read fills
         // the caller's rank-1 `array[u8, _]` and answers how many
         // bytes landed — zero is the end — and a write takes the

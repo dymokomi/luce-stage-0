@@ -555,6 +555,34 @@ const Module = struct {
                 &.{ .ptr, .i64, .ptr, .i64, .ptr },
                 .normal,
             ),
+            // The transport channel's five (version 25): handed to
+            // `luce_rt_sockets_install` at the start of the run like
+            // the handle five, and called only by `libluce_rt`.
+            .socket_connect => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .i64, .ptr },
+                .normal,
+            ),
+            .socket_listen => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .ptr },
+                .normal,
+            ),
+            .socket_accept => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .ptr },
+                .normal,
+            ),
+            .socket_port => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .ptr },
+                .normal,
+            ),
+            .socket_close => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64 },
+                .normal,
+            ),
             .handle_write => builder.fnType(
                 .i32,
                 &.{ .ptr, .i64, .ptr, .i64, .ptr },
@@ -2581,6 +2609,20 @@ const Module = struct {
             try self.loadHostSlot(&wip, host, .handle_write, "files.write.fn"),
             try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
             try self.loadHostSlot(&wip, host, .handle_close, "files.close.fn"),
+        }, "");
+
+        // The transport channel follows the same lifetime rule — a
+        // socket's close happens in the scope walk — and a different
+        // concurrency rule: its callbacks block for a peer and run
+        // outside the Effects guard (`runtime/sockets.zig`).
+        _ = try self.callService(&wip, .luce_rt_sockets_install, .void, &.{
+            started,
+            context,
+            try self.loadHostSlot(&wip, host, .socket_connect, "sockets.connect.fn"),
+            try self.loadHostSlot(&wip, host, .socket_listen, "sockets.listen.fn"),
+            try self.loadHostSlot(&wip, host, .socket_accept, "sockets.accept.fn"),
+            try self.loadHostSlot(&wip, host, .socket_port, "sockets.port.fn"),
+            try self.loadHostSlot(&wip, host, .socket_close, "sockets.close.fn"),
         }, "");
 
         // The backend-neutral window/GPU channel follows the same lifetime
@@ -8153,6 +8195,59 @@ const Body = struct {
                 self.produced[register].value = try self.unboxed(made, box, "open.value");
                 self.produced[register].box = box;
                 self.produced[register].outcome = opened;
+            },
+            // The transport doors (docs/NETWORK.md), shaped like
+            // `file_open`: a handle resource comes back boxed, and a
+            // world that says no is an `io_failed` the runtime raised.
+            .socket_connect => {
+                const host, const host_length = try self.textParts(of[0], "host");
+                const box = try self.scratch(self.module.value_type, value_alignment, "connect.box");
+                const opened = try self.fileService(.luce_rt_socket_connect, &.{
+                    host,
+                    host_length,
+                    self.produced[of[1]].value,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "connect.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
+            .socket_listen => {
+                const box = try self.scratch(self.module.value_type, value_alignment, "listen.box");
+                const opened = try self.fileService(.luce_rt_socket_listen, &.{
+                    self.produced[of[0]].value,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "listen.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
+            .socket_accept => {
+                const box = try self.scratch(self.module.value_type, value_alignment, "accept.box");
+                const opened = try self.fileService(.luce_rt_socket_accept, &.{
+                    try self.boxedRegister(of[0], "listener"),
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "accept.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
+            .socket_port => {
+                const port = try self.scratch(.i64, value_alignment, "port.answer");
+                self.produced[register].outcome = try self.fileService(.luce_rt_socket_port, &.{
+                    try self.boxedRegister(of[0], "listener"),
+                    port,
+                });
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    port,
+                    value_alignment,
+                    "port.held",
+                );
             },
             .handle_read => {
                 const count = try self.scratch(.i64, value_alignment, "read.count");

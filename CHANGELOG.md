@@ -6,6 +6,16 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `std.network` arrives: TCP transport as two library classes,
+  `Connection` (read/write/flush — the byte channel files carry) and
+  `Listener` (accept/port), with `connect(host, port)` and
+  `listen(port)`; port 0 asks for any free port. No `close()` — ARC's
+  last release closes, and a dropped peer reads as end of stream.
+  Refusals are `io_failed` with the world's reason; a host without the
+  channel traps `host_unavailable`. The socket callbacks run outside
+  the host effect serialization and are thread-safe by contract, so a
+  blocked accept never stalls another worker. Host ABI is 25;
+  serialized module format is 58. TLS is deferred to a later bump.
 - The builtin `file` type left the language. `std.files` now declares the
   ordinary ARC class `File` (with `read`/`write`/`flush` methods), and the
   raw descriptor currency — renamed `handle` — is spellable only inside

@@ -160,6 +160,13 @@ pub const Service = enum {
     luce_rt_file_read_text,
     luce_rt_file_write_text,
 
+    // -- sockets: the transport channel -------------------------------
+    luce_rt_sockets_install,
+    luce_rt_socket_connect,
+    luce_rt_socket_listen,
+    luce_rt_socket_accept,
+    luce_rt_socket_port,
+
     // -- windows and GPU surfaces ------------------------------------
     luce_rt_graphics_install,
     luce_rt_gpu_backend,
@@ -634,6 +641,39 @@ pub fn describe(service: Service) Effect {
                 .plain,
                 .plain,
             },
+            .willreturn = false,
+        },
+        .luce_rt_sockets_install => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown },
+        },
+        .luce_rt_socket_connect => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
+                .bytes_in,
+                .plain,
+                .plain,
+                .value_out,
+                .unknown,
+                .plain,
+                .plain,
+            },
+            .willreturn = false,
+        },
+        .luce_rt_socket_listen => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .value_out, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_socket_accept => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_socket_port => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .unknown, .unknown, .plain, .plain },
             .willreturn = false,
         },
         .luce_rt_file_read => .{
@@ -1129,6 +1169,10 @@ test "exactly callbacks, waits, deep copies, and release-reachable services with
             .luce_rt_file_flush,
             .luce_rt_file_read_text,
             .luce_rt_file_write_text,
+            .luce_rt_socket_connect,
+            .luce_rt_socket_listen,
+            .luce_rt_socket_accept,
+            .luce_rt_socket_port,
             .luce_rt_gpu_backend,
             .luce_rt_ui_window_open,
             .luce_rt_ui_window_surface,

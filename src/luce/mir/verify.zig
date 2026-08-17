@@ -1993,6 +1993,30 @@ fn verifyIntrinsic(
             if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
             try expectType(result, .none);
         },
+        // The transport channel (docs/NETWORK.md): every endpoint is a
+        // handle resource, and the kind discipline — connection versus
+        // listener — is the runtime's, checked at each call.
+        .socket_connect => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .i64);
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
+        },
+        .socket_listen => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .i64);
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
+        },
+        .socket_accept => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
+        },
+        .socket_port => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            try expectType(result, .i64);
+        },
         .term_rows, .term_cols => {
             try exactly(arguments, 0);
             try expectType(result, .i64);

@@ -104,6 +104,20 @@ pub const Host = struct {
     /// makes a stale number land on a row that says "shut" rather than
     /// on whoever moved in.
     open_files: std.ArrayList(OpenFile) = .empty,
+    /// Every socket and listener the transport channel has open
+    /// (docs/NETWORK.md).  A separate registry from `open_files`
+    /// because a socket is a stream, not a positional file, and its
+    /// handles live in a disjoint number range (`socket_handle_base`)
+    /// so one `handle_read` slot can serve both without a collision.
+    open_sockets: std.ArrayList(OpenSocket) = .empty,
+    /// The socket registry's own guard.  The ABI requires the socket
+    /// callbacks to be thread-safe — they run outside the Effects
+    /// serialization because they block for a peer — so every registry
+    /// look-up copies the row out under this short-held lock and the
+    /// blocking system call happens outside it.  Row pointers are never
+    /// held across the lock: an append from another worker may move
+    /// the backing storage.
+    sockets_guard: std.Io.Mutex = .init,
     /// Every worker thread this run started (docs/THREADS.md D8).  A
     /// thread is this table's index plus one, so zero is never a
     /// handle; a joined row is emptied and kept in place, so a stale
@@ -207,6 +221,8 @@ pub const Host = struct {
         self.shell_output.deinit(self.gpa);
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
+        self.closeOpenSockets();
+        self.open_sockets.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -307,6 +323,11 @@ pub const Host = struct {
             .gpu_surface_fill_rect = if (self.graphics_hooks != null) cGpuSurfaceFillRect else null,
             .gpu_surface_present = if (self.graphics_hooks != null) cGpuSurfacePresent else null,
             .gpu_close = if (self.graphics_hooks != null) cGpuClose else null,
+            .socket_connect = cSocketConnect,
+            .socket_listen = cSocketListen,
+            .socket_accept = cSocketAccept,
+            .socket_port = cSocketPort,
+            .socket_close = cSocketClose,
         };
     }
 
@@ -1260,6 +1281,14 @@ pub const Host = struct {
         filled: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
+        // A socket handle travels the same slot a file's does — the
+        // channel is the handle's, and the number range says whose.
+        if (handle >= socket_handle_base) {
+            const landed = self.socketRead(handle, into[0..@intCast(capacity)]) orelse
+                return .no;
+            filled.* = @intCast(landed);
+            return .yes;
+        }
         const row = self.openRow(handle) orelse return .no;
         // `readPositionalAll` fills the buffer or stops at the end of
         // the file and answers how far it got, which is exactly the
@@ -1283,6 +1312,12 @@ pub const Host = struct {
         written: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
+        if (handle >= socket_handle_base) {
+            const landed = self.socketWrite(handle, from[0..@intCast(length)]) orelse
+                return .no;
+            written.* = @intCast(landed);
+            return .yes;
+        }
         const row = self.openRow(handle) orelse return .no;
         const bytes = from[0..@intCast(length)];
         row.file.writePositionalAll(self.io, bytes, row.position) catch return .no;
@@ -1293,6 +1328,14 @@ pub const Host = struct {
 
     fn cHandleFlush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
         const self = of(context);
+        // A socket has no host-side buffer to sync: the write already
+        // handed the bytes to the kernel, so a flush is agreement.
+        if (handle >= socket_handle_base) {
+            return if (self.socketAt(handle)) |row|
+                (if (row == .stream) .yes else .no)
+            else
+                .no;
+        }
         const row = self.openRow(handle) orelse return .no;
         row.file.sync(self.io) catch return .no;
         return .yes;
@@ -1300,6 +1343,7 @@ pub const Host = struct {
 
     fn cHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
         const self = of(context);
+        if (handle >= socket_handle_base) return cSocketClose(context, handle);
         const row = self.openRow(handle) orelse return .no;
         row.file.close(self.io);
         row.shut = true;
@@ -1359,6 +1403,259 @@ pub const Host = struct {
 
     fn pHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
         return @intFromEnum(cHandleClose(context, handle));
+    }
+
+    // -- the transport channel (docs/NETWORK.md) ----------------------
+    //
+    // Thread-safe by ABI contract: these run outside the Effects
+    // serialization because they block for a peer.  The discipline is
+    // uniform — copy the row out under `sockets_guard`, make the
+    // blocking call outside it, register the result back under it —
+    // and it is sound because a socket belongs to one worker, so the
+    // handle a blocked call holds cannot be closed concurrently; the
+    // guard exists for the *registry*, which all workers share.
+
+    /// File a fresh row and answer its handle, or null when the table
+    /// cannot grow.  The caller owns closing `row` on null.
+    fn registerSocket(self: *Host, row: OpenSocket) ?i64 {
+        self.sockets_guard.lockUncancelable(self.io);
+        defer self.sockets_guard.unlock(self.io);
+        for (self.open_sockets.items, 0..) |*held, index| {
+            if (held.* == .shut) {
+                held.* = row;
+                return socket_handle_base + @as(i64, @intCast(index + 1));
+            }
+        }
+        self.open_sockets.append(self.gpa, row) catch return null;
+        return socket_handle_base + @as(i64, @intCast(self.open_sockets.items.len));
+    }
+
+    /// The row a handle names, copied out under the guard — never a
+    /// pointer, which an append from another worker could move.
+    fn socketAt(self: *Host, handle: i64) ?OpenSocket {
+        self.sockets_guard.lockUncancelable(self.io);
+        defer self.sockets_guard.unlock(self.io);
+        const index = handle - socket_handle_base - 1;
+        if (index < 0 or index >= self.open_sockets.items.len) return null;
+        const row = self.open_sockets.items[@intCast(index)];
+        return if (row == .shut) null else row;
+    }
+
+    /// Take a row out of the table, marking it shut in place so a
+    /// stale handle lands on a refusal rather than a successor.
+    fn takeSocket(self: *Host, handle: i64) ?OpenSocket {
+        self.sockets_guard.lockUncancelable(self.io);
+        defer self.sockets_guard.unlock(self.io);
+        const index = handle - socket_handle_base - 1;
+        if (index < 0 or index >= self.open_sockets.items.len) return null;
+        const row = self.open_sockets.items[@intCast(index)];
+        if (row == .shut) return null;
+        self.open_sockets.items[@intCast(index)] = .shut;
+        return row;
+    }
+
+    fn socketConnect(self: *Host, name: []const u8, port: i64) ?i64 {
+        const chosen = portNumber(port) orelse return null;
+        // A literal address dials directly; anything else is a name the
+        // resolver owns — `HostName.connect` looks it up and races the
+        // candidates, which is the policy a program should not have to
+        // carry.
+        const stream = if (std.Io.net.IpAddress.parse(name, chosen)) |address|
+            address.connect(self.io, .{ .mode = .stream }) catch return null
+        else |_| dial: {
+            const host_name = std.Io.net.HostName.init(name) catch return null;
+            break :dial host_name.connect(self.io, chosen, .{ .mode = .stream }) catch return null;
+        };
+        return self.registerSocket(.{ .stream = stream }) orelse {
+            stream.close(self.io);
+            return null;
+        };
+    }
+
+    fn socketListen(self: *Host, port: i64) ?i64 {
+        const chosen = portNumber(port) orelse return null;
+        // Every interface, dual-stack where the machine allows it, and
+        // address reuse on: a server restarted into TIME_WAIT should
+        // bind, which is the same default Go ships.
+        const options: std.Io.net.IpAddress.ListenOptions = .{ .reuse_address = true };
+        const server = open: {
+            if (std.Io.net.IpAddress.parseIp6("::", chosen)) |address| {
+                if (address.listen(self.io, options)) |held| break :open held else |_| {}
+            } else |_| {}
+            const address = std.Io.net.IpAddress.parseIp4("0.0.0.0", chosen) catch return null;
+            break :open address.listen(self.io, options) catch return null;
+        };
+        return self.registerSocket(.{ .server = server }) orelse {
+            var held = server;
+            held.deinit(self.io);
+            return null;
+        };
+    }
+
+    fn socketAccept(self: *Host, listener: i64) ?i64 {
+        const row = self.socketAt(listener) orelse return null;
+        // Accept on a stack copy: the call blocks, and the table row
+        // may move while it does.  `accept` reads the descriptor and
+        // options and mutates nothing, so the copy is the whole state.
+        var server = switch (row) {
+            .server => |held| held,
+            .stream, .shut => return null,
+        };
+        const stream = server.accept(self.io) catch return null;
+        return self.registerSocket(.{ .stream = stream }) orelse {
+            stream.close(self.io);
+            return null;
+        };
+    }
+
+    fn socketPort(self: *Host, listener: i64) ?i64 {
+        const row = self.socketAt(listener) orelse return null;
+        const server = switch (row) {
+            .server => |held| held,
+            .stream, .shut => return null,
+        };
+        var storage: std.c.sockaddr.storage = undefined;
+        var length: std.c.socklen_t = @sizeOf(std.c.sockaddr.storage);
+        const asked = std.c.getsockname(server.socket.handle, @ptrCast(&storage), &length);
+        if (std.posix.errno(asked) != .SUCCESS) return null;
+        const in_network_order = switch (storage.family) {
+            std.c.AF.INET => @as(*align(1) const std.c.sockaddr.in, @ptrCast(&storage)).port,
+            std.c.AF.INET6 => @as(*align(1) const std.c.sockaddr.in6, @ptrCast(&storage)).port,
+            else => return null,
+        };
+        return std.mem.bigToNative(u16, in_network_order);
+    }
+
+    /// A stream read on a connected socket: how many bytes landed,
+    /// zero when the peer finished.  Blocking, outside every lock.
+    fn socketRead(self: *Host, handle: i64, into: []u8) ?usize {
+        const row = self.socketAt(handle) orelse return null;
+        const stream = switch (row) {
+            .stream => |held| held,
+            .server, .shut => return null,
+        };
+        return std.posix.read(stream.socket.handle, into) catch null;
+    }
+
+    fn socketWrite(self: *Host, handle: i64, from: []const u8) ?usize {
+        const row = self.socketAt(handle) orelse return null;
+        const stream = switch (row) {
+            .stream => |held| held,
+            .server, .shut => return null,
+        };
+        // `std.posix` kept `read` and dropped `write`; the raw libc
+        // call with an EINTR retry is the same contract, and a short
+        // write is ordinary — the runtime's caller loops.
+        while (true) {
+            const sent = std.c.write(stream.socket.handle, from.ptr, from.len);
+            if (sent >= 0) return @intCast(sent);
+            if (std.posix.errno(sent) == .INTR) continue;
+            return null;
+        }
+    }
+
+    fn closeSocketRow(self: *Host, row: OpenSocket) void {
+        switch (row) {
+            .stream => |held| held.close(self.io),
+            .server => |held| {
+                var server = held;
+                server.deinit(self.io);
+            },
+            .shut => {},
+        }
+    }
+
+    /// Every socket the run left open, closed with the run — the
+    /// transport's `closeOpenFiles`.  The leak census is what reports
+    /// the program's mistake; the descriptors still go back.
+    pub fn closeOpenSockets(self: *Host) void {
+        self.sockets_guard.lockUncancelable(self.io);
+        defer self.sockets_guard.unlock(self.io);
+        for (self.open_sockets.items) |*row| {
+            const held = row.*;
+            row.* = .shut;
+            self.closeSocketRow(held);
+        }
+        self.open_sockets.clearRetainingCapacity();
+    }
+
+    /// A port a program may say: sixteen bits, with zero meaning "any
+    /// free port".
+    fn portNumber(port: i64) ?u16 {
+        if (port < 0 or port > std.math.maxInt(u16)) return null;
+        return @intCast(port);
+    }
+
+    fn cSocketConnect(
+        context: ?*anyopaque,
+        name: [*]const u8,
+        name_length: i64,
+        port: i64,
+        handle: *i64,
+    ) callconv(.c) abi.Answer {
+        handle.* = of(context).socketConnect(name[0..@intCast(name_length)], port) orelse
+            return .no;
+        return .yes;
+    }
+
+    fn cSocketListen(context: ?*anyopaque, port: i64, handle: *i64) callconv(.c) abi.Answer {
+        handle.* = of(context).socketListen(port) orelse return .no;
+        return .yes;
+    }
+
+    fn cSocketAccept(context: ?*anyopaque, listener: i64, handle: *i64) callconv(.c) abi.Answer {
+        handle.* = of(context).socketAccept(listener) orelse return .no;
+        return .yes;
+    }
+
+    fn cSocketPort(context: ?*anyopaque, listener: i64, port: *i64) callconv(.c) abi.Answer {
+        port.* = of(context).socketPort(listener) orelse return .no;
+        return .yes;
+    }
+
+    fn cSocketClose(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.takeSocket(handle) orelse return .no;
+        self.closeSocketRow(row);
+        return .yes;
+    }
+
+    /// The runtime-library-shaped twins, exactly as `fileChannel`'s.
+    pub fn socketChannel(self: *Host) luce.runtime.sockets.Channel {
+        return .{
+            .context = self,
+            .connect = pSocketConnect,
+            .listen = pSocketListen,
+            .accept = pSocketAccept,
+            .port_of = pSocketPort,
+            .close = pSocketClose,
+        };
+    }
+
+    fn pSocketConnect(
+        context: ?*anyopaque,
+        name: [*]const u8,
+        name_length: i64,
+        port: i64,
+        handle: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cSocketConnect(context, name, name_length, port, handle));
+    }
+
+    fn pSocketListen(context: ?*anyopaque, port: i64, handle: *i64) callconv(.c) i32 {
+        return @intFromEnum(cSocketListen(context, port, handle));
+    }
+
+    fn pSocketAccept(context: ?*anyopaque, listener: i64, handle: *i64) callconv(.c) i32 {
+        return @intFromEnum(cSocketAccept(context, listener, handle));
+    }
+
+    fn pSocketPort(context: ?*anyopaque, listener: i64, port: *i64) callconv(.c) i32 {
+        return @intFromEnum(cSocketPort(context, listener, port));
+    }
+
+    fn pSocketClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        return @intFromEnum(cSocketClose(context, handle));
     }
 
     fn cArgCount(context: ?*anyopaque) callconv(.c) i64 {
@@ -1586,6 +1883,22 @@ const OpenFile = struct {
     /// A closed row keeps its place so a stale handle lands on it and
     /// is refused, instead of naming whoever moved in.
     shut: bool = false,
+};
+
+/// Where socket handles live in the handle number space.  The byte
+/// channel receives one opaque `i64` for files and sockets alike, so
+/// the two registries split the space instead of sharing rows: a file
+/// handle is a small `open_files` index and a socket handle sits above
+/// this base.  The number is a host detail — nothing outside this file
+/// may interpret it.
+const socket_handle_base: i64 = 1 << 32;
+
+/// One row of the transport registry: a connected stream, a listening
+/// server, or the shut sentinel a stale handle lands on.
+const OpenSocket = union(enum) {
+    shut,
+    stream: std.Io.net.Stream,
+    server: std.Io.net.Server,
 };
 
 /// Numeric data belonging to the most recent terminal input event.

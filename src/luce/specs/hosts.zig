@@ -154,6 +154,32 @@ pub const World = struct {
     /// lets a spec see that a close happened.
     open_handle: ?i64 = null,
     next_handle: i64 = 0,
+    // -- the transport (docs/NETWORK.md) -----------------------------
+    //
+    // One listener and one connected pair — the smallest world that
+    // still proves the door opens, the port comes back, a dial reaches
+    // an accept, bytes cross both ways in short pieces, a refusal
+    // refuses, and a close is visible from the other end.  Handles
+    // come from the same `next_handle` counter as files, so a stale
+    // one is told from a live one across the whole world.
+    /// A world that refuses every transport request — the `io_failed`
+    /// side of `connect`, `listen`, and `accept`.
+    refuse_network: bool = false,
+    listener_handle: ?i64 = null,
+    listener_port: i64 = 0,
+    /// A dial the listener has not yet accepted — a backlog one deep,
+    /// which is all a single-threaded spec can observe.
+    pending_dial: bool = false,
+    client_handle: ?i64 = null,
+    served_handle: ?i64 = null,
+    /// The two directions of the connected pair.  Each is a queue the
+    /// peer writes and this end reads.
+    toward_served: [256]u8 = undefined,
+    toward_served_length: usize = 0,
+    toward_served_taken: usize = 0,
+    toward_client: [256]u8 = undefined,
+    toward_client_length: usize = 0,
+    toward_client_taken: usize = 0,
     /// Where the open handle has read to, and whether it was opened
     /// for writing.
     handle_position: usize = 0,
@@ -502,6 +528,7 @@ pub const World = struct {
     }
 
     fn readFrom(self: *World, handle: i64, into: []u8, filled: *i64) abi.Answer {
+        if (self.socketRole(handle)) |role| return self.socketReadFrom(role, into, filled);
         if (self.open_handle != handle) return .no;
         if (self.handle_writes) return .no;
         const rest = self.file_content[self.handle_position..self.file_content_length];
@@ -513,6 +540,7 @@ pub const World = struct {
     }
 
     fn writeTo(self: *World, handle: i64, from: []const u8, written: *i64) abi.Answer {
+        if (self.socketRole(handle)) |role| return self.socketWriteTo(role, from, written);
         if (self.open_handle != handle) return .no;
         if (!self.handle_writes or self.refuse_writes) return .no;
         const wanted = @min(from.len, short_write);
@@ -524,12 +552,145 @@ pub const World = struct {
     }
 
     fn flushAt(self: *World, handle: i64) abi.Answer {
+        if (self.socketRole(handle)) |role| return self.socketFlushAt(role);
         return if (self.open_handle == handle) .yes else .no;
     }
 
     fn closeAt(self: *World, handle: i64) abi.Answer {
+        if (self.socketRole(handle) != null) return self.socketCloseAt(handle);
         if (self.open_handle != handle) return .no;
         self.open_handle = null;
+        return .yes;
+    }
+
+    // -- the transport (docs/NETWORK.md) -----------------------------
+    //
+    // The byte half rides the file channel above — `readFrom`,
+    // `writeTo`, and `flushAt` dispatch here by handle, exactly as the
+    // real host splits its handle space — and this section owns what
+    // is socket-shaped: the doors, the pair, and the close a peer can
+    // see.  **The one honest simulation limit:** a read on an empty
+    // queue with a live peer answers `no` instead of blocking, because
+    // a single-threaded spec that blocked would never finish.  Specs
+    // are written to read only what was already written; blocking
+    // behavior belongs to the real host and its product tests.
+
+    /// Which end of the world's transport a handle names.
+    const SocketRole = enum { listener, client, served };
+
+    fn socketRole(self: *const World, handle: i64) ?SocketRole {
+        if (self.listener_handle == handle) return .listener;
+        if (self.client_handle == handle) return .client;
+        if (self.served_handle == handle) return .served;
+        return null;
+    }
+
+    /// The port `listen(0)` lands on.  A fixed number, because two
+    /// engines cannot agree on a kernel's choice and what is under
+    /// test is that the answer crosses, not which port a kernel had
+    /// free.
+    const ephemeral_port: i64 = 49152;
+
+    fn dialAt(self: *World, host: []const u8, port: i64, handle: *i64) abi.Answer {
+        if (self.refuse_network) return .no;
+        if (host.len == 0) return .no;
+        if (self.listener_handle == null or port != self.listener_port) return .no;
+        if (self.client_handle != null) return .no;
+        self.next_handle += 1;
+        self.client_handle = self.next_handle;
+        self.pending_dial = true;
+        handle.* = self.next_handle;
+        return .yes;
+    }
+
+    fn listenAt(self: *World, port: i64, handle: *i64) abi.Answer {
+        if (self.refuse_network) return .no;
+        if (port < 0 or port > 65535) return .no;
+        if (self.listener_handle != null) return .no;
+        self.next_handle += 1;
+        self.listener_handle = self.next_handle;
+        self.listener_port = if (port == 0) ephemeral_port else port;
+        handle.* = self.next_handle;
+        return .yes;
+    }
+
+    fn acceptAt(self: *World, listener: i64, handle: *i64) abi.Answer {
+        if (self.listener_handle != listener) return .no;
+        if (!self.pending_dial) return .no;
+        self.next_handle += 1;
+        self.served_handle = self.next_handle;
+        self.pending_dial = false;
+        handle.* = self.next_handle;
+        return .yes;
+    }
+
+    fn portAt(self: *World, listener: i64, port: *i64) abi.Answer {
+        if (self.listener_handle != listener) return .no;
+        port.* = self.listener_port;
+        return .yes;
+    }
+
+    fn socketReadFrom(self: *World, role: SocketRole, into: []u8, filled: *i64) abi.Answer {
+        const queue, const length, const taken, const peer_live = switch (role) {
+            .client => .{ &self.toward_client, self.toward_client_length, &self.toward_client_taken, self.served_handle != null or self.pending_dial },
+            .served => .{ &self.toward_served, self.toward_served_length, &self.toward_served_taken, self.client_handle != null },
+            .listener => return .no,
+        };
+        const rest = queue[taken.*..length];
+        if (rest.len == 0) {
+            // Drained: the peer's close is the end of the stream, and
+            // a live peer with nothing written is the refusal above.
+            if (peer_live) return .no;
+            filled.* = 0;
+            return .yes;
+        }
+        const moved = @min(rest.len, into.len);
+        @memcpy(into[0..moved], rest[0..moved]);
+        taken.* += moved;
+        filled.* = @intCast(moved);
+        return .yes;
+    }
+
+    fn socketWriteTo(self: *World, role: SocketRole, from: []const u8, written: *i64) abi.Answer {
+        const queue, const length = switch (role) {
+            .client => .{ &self.toward_served, &self.toward_served_length },
+            .served => .{ &self.toward_client, &self.toward_client_length },
+            .listener => return .no,
+        };
+        const peer_live = switch (role) {
+            .client => self.served_handle != null or self.pending_dial,
+            .served => self.client_handle != null,
+            .listener => unreachable,
+        };
+        if (!peer_live) return .no;
+        // Short like the file channel's writes, and for the same
+        // reason: a transport that never falls short never proves the
+        // caller loops.
+        const wanted = @min(from.len, short_write);
+        if (length.* + wanted > queue.len) return .no;
+        @memcpy(queue[length.*..][0..wanted], from[0..wanted]);
+        length.* += wanted;
+        written.* = @intCast(wanted);
+        return .yes;
+    }
+
+    fn socketFlushAt(_: *World, role: SocketRole) abi.Answer {
+        return switch (role) {
+            .client, .served => .yes,
+            .listener => .no,
+        };
+    }
+
+    fn socketCloseAt(self: *World, handle: i64) abi.Answer {
+        switch (self.socketRole(handle) orelse return .no) {
+            .listener => {
+                self.listener_handle = null;
+                self.listener_port = 0;
+                self.pending_dial = false;
+            },
+            .client => self.client_handle = null,
+            .served => self.served_handle = null,
+        }
         return .yes;
     }
 };
@@ -808,6 +969,82 @@ fn HandleChannel(comptime Owner: type) type {
     };
 }
 
+/// The transport channel's five, over any context that keeps a
+/// `world` — `HandleChannel`'s pattern exactly, one generator so the
+/// two hosts cannot drift.
+fn SocketChannel(comptime Owner: type) type {
+    return struct {
+        fn worldOf(context: ?*anyopaque) *World {
+            const owner: *Owner = @ptrCast(@alignCast(context.?));
+            return &owner.world;
+        }
+
+        fn connect(
+            context: ?*anyopaque,
+            host: [*]const u8,
+            host_length: i64,
+            port_number: i64,
+            handle: *i64,
+        ) callconv(.c) abi.Answer {
+            return worldOf(context).dialAt(host[0..@intCast(host_length)], port_number, handle);
+        }
+
+        fn listen(context: ?*anyopaque, port_number: i64, handle: *i64) callconv(.c) abi.Answer {
+            return worldOf(context).listenAt(port_number, handle);
+        }
+
+        fn accept(context: ?*anyopaque, listener: i64, handle: *i64) callconv(.c) abi.Answer {
+            return worldOf(context).acceptAt(listener, handle);
+        }
+
+        fn port(context: ?*anyopaque, listener: i64, answered: *i64) callconv(.c) abi.Answer {
+            return worldOf(context).portAt(listener, answered);
+        }
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            return worldOf(context).socketCloseAt(handle);
+        }
+
+        fn connectPlain(
+            context: ?*anyopaque,
+            host: [*]const u8,
+            host_length: i64,
+            port_number: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            return @intFromEnum(connect(context, host, host_length, port_number, handle));
+        }
+
+        fn listenPlain(context: ?*anyopaque, port_number: i64, handle: *i64) callconv(.c) i32 {
+            return @intFromEnum(listen(context, port_number, handle));
+        }
+
+        fn acceptPlain(context: ?*anyopaque, listener: i64, handle: *i64) callconv(.c) i32 {
+            return @intFromEnum(accept(context, listener, handle));
+        }
+
+        fn portPlain(context: ?*anyopaque, listener: i64, answered: *i64) callconv(.c) i32 {
+            return @intFromEnum(port(context, listener, answered));
+        }
+
+        fn closePlain(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            return @intFromEnum(close(context, handle));
+        }
+
+        /// The channel the interpreter installs into `libluce_rt`.
+        fn channel(owner: *Owner) runtime.sockets.Channel {
+            return .{
+                .context = owner,
+                .connect = connectPlain,
+                .listen = listenPlain,
+                .accept = acceptPlain,
+                .port_of = portPlain,
+                .close = closePlain,
+            };
+        }
+    };
+}
+
 /// The screen effects, as words: both hosts record the same ones, so a
 /// comparison covers drawing as well as printing.
 fn positionText(buffer: []u8, row: i64, col: i64) []const u8 {
@@ -854,6 +1091,11 @@ pub const Provided = struct {
     /// `host_unavailable` at the keyword, on both engines, having
     /// touched nothing.
     threads: bool = true,
+    /// Whether this host has the transport channel (docs/NETWORK.md).
+    /// A host without one is the fail-closed row for `connect` and
+    /// `listen`: `host_unavailable`, on both engines, having touched
+    /// nothing.
+    network: bool = true,
     /// The depth limit both engines run under.  The ABI's default is
     /// the interpreter's default, so a spec only names this when it
     /// wants a shallower one.
@@ -882,6 +1124,7 @@ pub const Provided = struct {
         .machine = false,
         .shell = false,
         .threads = false,
+        .network = false,
     };
 
     /// A host with a console and nothing else: every other service is
@@ -1074,11 +1317,17 @@ pub const Capture = struct {
             .worker_spawn = if (provided.threads) Threads.spawn else null,
             .worker_join = if (provided.threads) Threads.join else null,
             .path_kind = if (provided.files) pathKind else null,
+            .socket_connect = if (provided.network) Sockets.connect else null,
+            .socket_listen = if (provided.network) Sockets.listen else null,
+            .socket_accept = if (provided.network) Sockets.accept else null,
+            .socket_port = if (provided.network) Sockets.port else null,
+            .socket_close = if (provided.network) Sockets.close else null,
         };
     }
 
     const Handles = HandleChannel(Capture);
     const Threads = ThreadChannel(Capture);
+    const Sockets = SocketChannel(Capture);
 
     fn of(context: ?*anyopaque) *Capture {
         return @ptrCast(@alignCast(context.?));
@@ -1479,11 +1728,13 @@ pub const Reference = struct {
                 .key_read = keyRead,
             } else null,
             .files = if (self.provided.files) Handles.channel(self) else .{},
+            .sockets = if (self.provided.network) Sockets.channel(self) else .{},
             .workers = if (self.provided.threads) Threads.channel(self) else .{},
         };
     }
 
     const Handles = HandleChannel(Reference);
+    const Sockets = SocketChannel(Reference);
     const Threads = ThreadChannel(Reference);
 
     fn take(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {

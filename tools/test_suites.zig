@@ -73,6 +73,7 @@ pub const definitions = [_]Definition{
         .filters = &.{
             "specs.host_spec.",
             "specs.bytes_spec.",
+            "specs.network_spec.",
         },
     },
     .{

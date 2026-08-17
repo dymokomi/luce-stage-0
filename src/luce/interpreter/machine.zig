@@ -27,6 +27,7 @@ const Budget = interpreter.Budget;
 
 const containers = runtime.containers;
 const files = runtime.files;
+const sockets = runtime.sockets;
 const graphics = runtime.graphics;
 const operators = runtime.operators;
 const text = runtime.text;
@@ -59,6 +60,7 @@ pub fn run(
     // compiled path installs the same five pointers through
     // `luce_rt_files_install`, so both engines reach one channel.
     if (host) |given| machine.runtime.files = given.files;
+    if (host) |given| machine.runtime.sockets = given.sockets;
     if (host) |given| machine.runtime.graphics = given.graphics;
     // And the thread channel, plus this engine's own answer to what a
     // worker's runtime is and how one function is run in it
@@ -2356,6 +2358,52 @@ pub const Machine = struct {
                     self.runtime.raiseIo(.open, path, self.placeOf(site));
                     break :blk .none;
                 };
+            },
+            .socket_connect => {
+                const host = registers[arguments[0]].asStr();
+                const opened = try sockets.connect(
+                    &self.runtime,
+                    host,
+                    registers[arguments[1]].asI64(),
+                );
+                return opened orelse blk: {
+                    self.runtime.raiseIo(.connect, host, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .socket_listen => {
+                const port = registers[arguments[0]].asI64();
+                const opened = try sockets.listen(&self.runtime, port);
+                return opened orelse blk: {
+                    var label: [24]u8 = undefined;
+                    const named = std.fmt.bufPrint(&label, ":{d}", .{port}) catch ":?";
+                    self.runtime.raiseIo(.listen, named, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .socket_accept => {
+                const held = registers[arguments[0]];
+                const accepted = try sockets.accept(&self.runtime, held);
+                return accepted orelse blk: {
+                    self.runtime.raiseIo(
+                        .accept,
+                        files.pathOf(&self.runtime, held),
+                        self.placeOf(site),
+                    );
+                    break :blk .none;
+                };
+            },
+            .socket_port => {
+                const held = registers[arguments[0]];
+                const port = try sockets.portOf(&self.runtime, held);
+                return .ofI64(port orelse blk: {
+                    self.runtime.raiseIo(
+                        .ask,
+                        files.pathOf(&self.runtime, held),
+                        self.placeOf(site),
+                    );
+                    break :blk 0;
+                });
             },
             .handle_read => {
                 const held = registers[arguments[0]];

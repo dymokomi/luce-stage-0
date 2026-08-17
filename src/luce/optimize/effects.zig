@@ -309,6 +309,10 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .handle_read,
         .handle_write,
         .handle_flush,
+        .socket_connect,
+        .socket_listen,
+        .socket_accept,
+        .socket_port,
         .exit_program,
         // A wait joins a thread, adopts whatever it left behind, and
         // moves its result into this runtime.
@@ -532,6 +536,10 @@ pub fn viewStable(instruction: Instruction) bool {
             // cannot survive.
             .dir_list,
             .file_open,
+            .socket_connect,
+            .socket_listen,
+            .socket_accept,
+            .socket_port,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,

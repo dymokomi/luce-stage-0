@@ -71,6 +71,7 @@ const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const files = @import("files.zig");
 const graphics = @import("graphics.zig");
+const sockets = @import("sockets.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
 const text = @import("text.zig");
@@ -1023,6 +1024,135 @@ pub export fn luce_rt_file_flush(
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(
         .flush,
+        files.pathOf(runtime, held.*),
+        runtime.frameAt(function, instruction),
+    );
+    return completed(runtime);
+}
+
+// ---------------------------------------------------------------------------
+// Sockets: the transport channel (docs/NETWORK.md)
+// ---------------------------------------------------------------------------
+//
+// Installed like the file channel and different from it in one
+// deliberate way: these callbacks block for a peer, so the runtime
+// calls them without the Effects guard and the host must be
+// thread-safe (`runtime/sockets.zig` owns the contract).  Connected
+// sockets then travel the ordinary `luce_rt_file_read/write/flush`
+// byte channel — the handle is the interface, not the file.
+
+pub export fn luce_rt_sockets_install(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    connect: ?sockets.ConnectFn,
+    listen: ?sockets.ListenFn,
+    accept: ?sockets.AcceptFn,
+    port_of: ?sockets.PortFn,
+    close: ?sockets.CloseFn,
+) callconv(.c) void {
+    runtime.sockets = .{
+        .context = context,
+        .connect = connect,
+        .listen = listen,
+        .accept = accept,
+        .port_of = port_of,
+        .close = close,
+    };
+}
+
+pub export fn luce_rt_socket_connect(
+    runtime: *Runtime,
+    host: [*c]const u8,
+    length: i64,
+    port: i64,
+    out: [*c]Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    const named = checkedBytes(runtime, host, length) catch |mistake|
+        return failed(runtime, mistake);
+    const answer = sockets.connect(runtime, named, port) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        runtime.raiseIo(.connect, named, runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_socket_listen(
+    runtime: *Runtime,
+    port: i64,
+    out: [*c]Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    const answer = sockets.listen(runtime, port) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        var label: [24]u8 = undefined;
+        const named = std.fmt.bufPrint(&label, ":{d}", .{port}) catch ":?";
+        runtime.raiseIo(.listen, named, runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_socket_accept(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, held)) return raised_trap;
+    const answer = sockets.accept(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        runtime.raiseIo(
+            .accept,
+            files.pathOf(runtime, held.*),
+            runtime.frameAt(function, instruction),
+        );
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_socket_port(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    port: [*c]i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, port) or
+        !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, held)) return raised_trap;
+    const answer = sockets.portOf(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    port.* = answer orelse 0;
+    if (answer == null) runtime.raiseIo(
+        .ask,
         files.pathOf(runtime, held.*),
         runtime.frameAt(function, instruction),
     );

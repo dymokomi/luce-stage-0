@@ -60,6 +60,7 @@ selected surface roster is checked during the site build.
 | [BYTES.md](BYTES.md) | Current byte storage and binary file APIs. |
 | [UNION.md](UNION.md) | Tagged unions and payload matching. |
 | [THREADS.md](THREADS.md) | Isolated workers and reference-counted task resources. |
+| [NETWORK.md](NETWORK.md) | The TCP transport: Connection and Listener classes, the unguarded socket channel, and what a server will build on. |
 | [FUNCTIONS.md](FUNCTIONS.md) | Named functions, expression lambdas, ARC closures, captures, storage, and calls. |
 | [PACKAGES.md](PACKAGES.md) | The package consumer and manifest surface that exists today. |
 | [TESTING.md](TESTING.md) | Luce tests, engineering lanes, progress output, and the release gate. |

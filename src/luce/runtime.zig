@@ -67,6 +67,7 @@ pub const maxElements = @import("runtime/heap.zig").maxElements;
 /// (docs/BYTES.md).  The oracle reaches these directly; a compiled
 /// artifact reaches the same bodies through `exports.zig`.
 pub const files = @import("runtime/files.zig");
+pub const sockets = @import("runtime/sockets.zig");
 
 /// Window and GPU handles: the backend-neutral host channel behind
 /// `std.ui` and `std.gpu`.

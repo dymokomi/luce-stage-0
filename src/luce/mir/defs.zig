@@ -407,6 +407,18 @@ pub const Intrinsic = enum {
     /// text, `list[u8]`, or a rank-one `array[u8, _]`.  Appended so
     /// every earlier intrinsic keeps its wire number.
     bytes_value,
+    /// The transport channel (`std.network`, docs/NETWORK.md).
+    /// `socket_connect(host, port)` and `socket_listen(port)` answer
+    /// fresh handle resources; `socket_accept(listener)` answers the
+    /// connection a peer made; `socket_port(listener)` answers which
+    /// port `listen(0)` landed on.  Connected sockets then travel the
+    /// ordinary `handle_read`/`handle_write`/`handle_flush` byte
+    /// channel — the handle is the interface.  Appended so every
+    /// earlier intrinsic keeps its wire number.
+    socket_connect,
+    socket_listen,
+    socket_accept,
+    socket_port,
 
     // -- per-intrinsic facts, classified once ---------------------------
     //
@@ -475,6 +487,15 @@ pub const Intrinsic = enum {
             .handle_read,
             .handle_write,
             .handle_flush,
+            // The socket channel holds **no** lock at all: its
+            // callbacks block for a peer and are thread-safe by
+            // contract (`runtime/sockets.zig`).  Saying `true` here
+            // would put a blocked `accept` inside the Effects guard
+            // and freeze every other worker's host effects.
+            .socket_connect,
+            .socket_listen,
+            .socket_accept,
+            .socket_port,
             // The graphics callbacks are reached through the runtime
             // channel, which takes its own effect lock around each host
             // operation just like files.
@@ -575,6 +596,10 @@ pub const Intrinsic = enum {
             .path_kind,
             // The byte channel, on the same grounds.
             .file_open,
+            .socket_connect,
+            .socket_listen,
+            .socket_accept,
+            .socket_port,
             .handle_read,
             .handle_write,
             .handle_flush,
@@ -789,6 +814,10 @@ pub const Intrinsic = enum {
             .os_total_memory,
             .os_available_memory,
             .file_open,
+            .socket_connect,
+            .socket_listen,
+            .socket_accept,
+            .socket_port,
             .handle_read,
             .handle_write,
             .handle_flush,
@@ -899,6 +928,10 @@ pub const Intrinsic = enum {
             .os_total_memory,
             .os_available_memory,
             .file_open,
+            .socket_connect,
+            .socket_listen,
+            .socket_accept,
+            .socket_port,
             .handle_read,
             .handle_write,
             .handle_flush,

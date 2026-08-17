@@ -122,6 +122,15 @@ pub const FileAct = enum(i32) {
     /// is the parent nobody may search, the device that failed.
     /// Appended, so nothing renumbers.
     inspect,
+    /// The transport verbs (`std.network`, docs/NETWORK.md).  All the
+    /// world's decisions — refused, reset, unresolvable, port taken —
+    /// travel as these four sentences; there are no split errno codes,
+    /// only the message.  Appended, so nothing renumbers.
+    connect,
+    listen,
+    accept,
+    /// A listener would not say which port it holds.
+    ask,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -138,6 +147,10 @@ pub const FileAct = enum(i32) {
             .run => "cannot run ",
             .make => "cannot make directory ",
             .inspect => "cannot inspect ",
+            .connect => "cannot connect to ",
+            .listen => "cannot listen on ",
+            .accept => "cannot accept on ",
+            .ask => "cannot ask ",
         };
     }
 };

@@ -102,7 +102,10 @@ therefore unrepresentable.
 
 Host effects are process services rather than Luce objects. The runtime
 serializes them, so a host callback never has to be entered concurrently and a
-printed line is atomic with respect to other workers. Worker publication and
+printed line is atomic with respect to other workers. The transport channel
+(docs/NETWORK.md) is the one deliberate exception: its callbacks block for a
+peer, run outside this serialization, and are required to be thread-safe, so
+a worker blocked in `accept` never stalls another worker's printing. Worker publication and
 joining use a separate registry lock because they are lifecycle operations,
 not language-visible shared state.
 

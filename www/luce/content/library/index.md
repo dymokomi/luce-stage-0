@@ -11,8 +11,8 @@ Each module follows the same language rules as application code. Containers
 are shared ARC references, arithmetic is checked, and a host-facing module is
 available only when the program has a host. `std.paths`, `std.math`,
 `std.strings`, `std.lists`, `std.json`, and the byte-only parts of `std.zip`
-are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`, and the
-file doors in `std.zip` use host services.
+are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`,
+`std.network`, and the file doors in `std.zip` use host services.
 
 The low-level `std.ui` and `std.gpu` modules are host boundaries. On macOS an
 installed runner may provide a Metal-backed implementation; a host without a
@@ -34,6 +34,7 @@ fact at their boundary rather than making every application know the OS API.
 | [`std.zip`](/library/zip/) | ZIP/DEFLATE over byte lists, plus explicit file helpers |
 | [`std.json`](/library/json/) | parse, inspect, build, and write JSON values |
 | [`std.gpu`](/library/gpu/) | backend-neutral drawing surfaces |
+| [`std.network`](/library/network/) | TCP connections and listeners |
 | [`std.ui`](/library/ui/) | windows and their drawing surfaces |
 
 Import only what a module needs. A module's public functions are documented

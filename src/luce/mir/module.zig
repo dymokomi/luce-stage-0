@@ -222,7 +222,17 @@ pub const magic = "LUCE";
 /// in embedded standard source. The byte channel becomes three directly
 /// callable standard intrinsics instead of compiler-routed receiver
 /// methods; no instruction shape changes, but the type vocabulary does.
-pub const format_version: u32 = 57;
+///
+/// 58 — the transport intrinsics arrive (docs/NETWORK.md):
+/// `socket_connect`, `socket_listen`, `socket_accept`, `socket_port`,
+/// appended after `bytes_value`. Connected sockets travel the existing
+/// handle byte channel, so no other instruction changes.
+///
+/// When this number moves, move the sentence below with it — the two
+/// must change together so concurrent format changes meet as a merge
+/// conflict here instead of silently sharing one version number.
+/// This comment last moved for format 58.
+pub const format_version: u32 = 58;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2237,8 +2247,9 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 56 -> 57: the `file` heap shape is renamed `handle` (the std-only
     // descriptor currency behind files.File), changing the wire tag name
     // the fingerprint hashes without changing any instruction shape.
-    try testing.expectEqual(@as(u32, 57), format_version);
-    try testing.expectEqual(@as(u64, 11240141204635502514), hasher.final());
+    // 57 -> 58: four transport intrinsics append after `bytes_value`.
+    try testing.expectEqual(@as(u32, 58), format_version);
+    try testing.expectEqual(@as(u64, 2762504765576837242), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

@@ -40,6 +40,7 @@ pub const living = [_][]const u8{
     "docs/BYTES.md",
     "docs/UNION.md",
     "docs/THREADS.md",
+    "docs/NETWORK.md",
     "docs/FUNCTIONS.md",
     "docs/PACKAGES.md",
     "docs/TESTING.md",

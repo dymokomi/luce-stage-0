@@ -252,7 +252,20 @@ const trace = @import("../runtime/trace.zig");
 /// 24 — the pre-1.0 table is compacted. Four services already replaced by
 /// the byte-handle channel (`file_read`, `file_write`, `file_append`, and
 /// `file_exists`) leave the layout instead of surviving as null tombstones.
-pub const version: u32 = 24;
+///
+/// 25 — the transport channel arrives (docs/NETWORK.md): `socket_connect`,
+/// `socket_listen`, `socket_accept`, `socket_port`, and `socket_close`,
+/// appended together in one bump.  Connected sockets travel the existing
+/// `handle_read`/`handle_write`/`handle_flush` slots unchanged.  The five
+/// new callbacks block for a peer, run outside the Effects guard, and are
+/// therefore required to be thread-safe — the one place the table's
+/// concurrency contract is stronger than "never entered concurrently".
+///
+/// When this number moves, move the sentence below with it — the two
+/// must change together so concurrent ABI changes meet as a merge
+/// conflict here instead of silently sharing one version number.
+/// This comment last moved for version 25.
+pub const version: u32 = 25;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -821,6 +834,60 @@ pub const HandlePlainFn = *const fn (
     handle: i64,
 ) callconv(.c) Answer;
 
+// ---------------------------------------------------------------------------
+// The transport channel (version 25, docs/NETWORK.md)
+// ---------------------------------------------------------------------------
+//
+// Installed into the runtime once like the handle five, and unlike
+// every other slot in this table these MAY BE ENTERED CONCURRENTLY
+// and MAY BLOCK: an `accept` waits for a peer, and holding the
+// process-wide Effects guard across that wait would freeze every
+// other worker's host effects.  The host keeps its handle registry
+// behind its own short-held mutex and performs the blocking system
+// call outside every lock.  A socket the runtime accepts or connects
+// is addressed by the same opaque `i64` a file handle is, and its
+// bytes travel `handle_read`/`handle_write`/`handle_flush` unchanged.
+
+/// Resolve `host` and open a TCP connection to it on `port`.  Name
+/// resolution is the host's: no address vocabulary crosses here.
+pub const SocketConnectFn = *const fn (
+    context: ?*anyopaque,
+    host: [*]const u8,
+    host_length: i64,
+    port: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+/// Open a listener on `port`, on every interface.  Port 0 asks for an
+/// ephemeral port; `socket_port` answers which one landed.
+pub const SocketListenFn = *const fn (
+    context: ?*anyopaque,
+    port: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+/// Wait for one connection on a listener.  Callable concurrently on
+/// one listener from several workers — the pre-fork accept shape.
+pub const SocketAcceptFn = *const fn (
+    context: ?*anyopaque,
+    listener: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+/// The port a listener actually holds.
+pub const SocketPortFn = *const fn (
+    context: ?*anyopaque,
+    listener: i64,
+    port: *i64,
+) callconv(.c) Answer;
+
+/// Close a socket or listener.  Called from the ownership walk, which
+/// has nobody to report to; the answer is read by nothing.
+pub const SocketCloseFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+) callconv(.c) Answer;
+
 /// The service table handed to `luce_main`.
 ///
 /// The struct is `extern` so its layout is the C layout the generated
@@ -944,6 +1011,19 @@ pub const Host = extern struct {
     gpu_surface_fill_rect: ?GpuSurfaceFillRectFn = null,
     gpu_surface_present: ?GpuSurfacePresentFn = null,
     gpu_close: ?GpuCloseFn = null,
+    /// Version 25: the transport channel (docs/NETWORK.md).  Installed
+    /// into the runtime like the handle five, and different from every
+    /// slot above in one deliberate way: **these callbacks block for a
+    /// peer, run outside the Effects guard, and must be thread-safe** —
+    /// the host keeps its registry behind its own short-held mutex and
+    /// performs the blocking system call outside every lock.  Connected
+    /// sockets then travel `handle_read`/`handle_write`/`handle_flush`
+    /// unchanged, which is what those slots' names always promised.
+    socket_connect: ?SocketConnectFn = null,
+    socket_listen: ?SocketListenFn = null,
+    socket_accept: ?SocketAcceptFn = null,
+    socket_port: ?SocketPortFn = null,
+    socket_close: ?SocketCloseFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -998,6 +1078,11 @@ pub const Slot = enum(u32) {
     gpu_surface_fill_rect = 45,
     gpu_surface_present = 46,
     gpu_close = 47,
+    socket_connect = 48,
+    socket_listen = 49,
+    socket_accept = 50,
+    socket_port = 51,
+    socket_close = 52,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

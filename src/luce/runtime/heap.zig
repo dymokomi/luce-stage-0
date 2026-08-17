@@ -17,6 +17,7 @@ const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const files = @import("files.zig");
 const graphics = @import("graphics.zig");
+const sockets = @import("sockets.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
 const workers = @import("workers.zig");
@@ -283,6 +284,14 @@ pub const Object = struct {
             file = 0,
             window = 1,
             surface = 2,
+            /// A connected TCP endpoint (`sockets.zig`).  Carries the
+            /// same byte channel a file does — `files.read/write/flush`
+            /// serve it — but without the Effects guard, because a
+            /// socket read blocks for a peer.
+            socket = 3,
+            /// A listening door.  Not a byte stream: it answers
+            /// `accept` and `port`, and the byte channel refuses it.
+            listener = 4,
         };
 
         handle: i64,
@@ -1092,6 +1101,13 @@ pub const Runtime = struct {
     /// effect.
     files: files.Channel = .{},
 
+    /// The host's socket channel, installed once at the start of a run
+    /// (`runtime/sockets.zig`).  Held for the reason `files` is — a
+    /// socket's close happens inside `freeObject` — and different from
+    /// it in one deliberate way: its callbacks run without the Effects
+    /// guard and must be thread-safe, because they block for a peer.
+    sockets: sockets.Channel = .{},
+
     /// The window/GPU channel, installed once at the start of a run.  Native
     /// handles live in the same object table as files so scope teardown,
     /// `give`, `copy` refusal, and stale-handle checks remain one mechanism.
@@ -1633,9 +1649,14 @@ pub const Runtime = struct {
     /// host that cannot close has already lost the file.
     fn closeFile(self: *Runtime, resource: Object.File) void {
         if (resource.handle == no_file) return;
-        if (resource.kind != .file) {
-            graphics.close(self, resource);
-            return;
+        switch (resource.kind) {
+            .window, .surface => return graphics.close(self, resource),
+            // A socket close takes no Effects guard, deliberately: the
+            // channel is thread-safe by contract (`sockets.zig`), and a
+            // close must never queue behind another worker's blocked
+            // read.
+            .socket, .listener => return sockets.close(self, resource),
+            .file => {},
         }
         const service = self.files.close orelse return;
         // A close is a host call like any other, and this is the one

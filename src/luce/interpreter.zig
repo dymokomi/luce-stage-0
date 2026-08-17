@@ -264,6 +264,12 @@ pub const Host = struct {
     /// moving UTF-8 validation into the runtime was for.
     files: runtime.files.Channel = .{},
 
+    /// The transport channel behind `std.network` (docs/NETWORK.md).
+    /// C-shaped for the reason `files` is, with one contract of its
+    /// own: its callbacks block for a peer, run outside the Effects
+    /// serialization, and must therefore be thread-safe.
+    sockets: runtime.sockets.Channel = .{},
+
     /// The backend-neutral window/GPU channel behind `std.ui` and
     /// `std.gpu`.  Like files, it is C-shaped and installed into the
     /// shared runtime so resource close happens after the owning scope
