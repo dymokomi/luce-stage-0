@@ -103,6 +103,8 @@ expect_failure relative-prefix 'LUCE_INSTALL_DIR must be an absolute path' "$ful
     TEST_SYSTEM=Linux TEST_MACHINE=x86_64 LUCE_INSTALL_DIR=relative
 expect_failure system-prefix 'refusing unsafe install directory: /var/lib/luce' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=x86_64 LUCE_INSTALL_DIR=/var/lib/luce
+expect_failure shell-sensitive-prefix 'contains shell-sensitive characters' "$full_bin" \
+    TEST_SYSTEM=Linux TEST_MACHINE=x86_64 'LUCE_INSTALL_DIR=/tmp/$(touch /tmp/luce-installer-contract-owned)'
 
 # A checksum only authenticates the archive bytes. Exercise the extraction
 # boundary with a complete (but deliberately malicious) fixture so a future

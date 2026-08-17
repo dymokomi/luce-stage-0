@@ -48,6 +48,7 @@ pub const living = [_][]const u8{
     "docs/TERMUI.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
+    "docs/RELEASE_SECURITY.md",
     "docs/README.md",
     "README.md",
     "CLAUDE.md",

@@ -68,6 +68,7 @@ selected surface roster is checked during the site build.
 | [TERMUI.md](TERMUI.md) | The current declarative terminal application package. |
 | [SELF.md](SELF.md) | Implied receivers, static members, and value-writer calls. |
 | [CONSTANTS.md](CONSTANTS.md) | File-scope constants and immutable program-root containers. |
+| [RELEASE_SECURITY.md](RELEASE_SECURITY.md) | Current release provenance, installer boundary, and trust model. |
 
 ## Plans
 

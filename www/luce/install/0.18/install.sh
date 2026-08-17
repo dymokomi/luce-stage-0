@@ -56,6 +56,25 @@ for tool in awk cp curl date dirname grep mkdir mktemp mv rm tar tr uname; do
     fi
 done
 
+# These values are written into shell and fish startup files.  Keep ordinary
+# spaces and Unicode paths useful, but reject control characters and shell
+# syntax rather than turning an environment override into code executed on a
+# later `source`.
+reject_profile_path() {
+    label=$1
+    value=$2
+    cleaned=$(printf '%s' "$value" | tr -d '\001-\037\177')
+    if [ "$cleaned" != "$value" ] || ! awk 'BEGIN {
+        value = ARGV[1]
+        forbidden = "`$\\\"();&|<>[]{}"
+        for (i = 1; i <= length(forbidden); i++)
+            if (index(value, substr(forbidden, i, 1)) != 0) exit 1
+    }' "$value"; then
+        echo "luce: $label contains shell-sensitive characters" >&2
+        exit 1
+    fi
+}
+
 if [ "$system" = Darwin ]; then
     if ! command -v sw_vers >/dev/null 2>&1; then
         echo "luce: cannot determine the macOS version (sw_vers is missing)" >&2
@@ -167,13 +186,22 @@ if [ -n "$profile_override" ]; then
     esac
 fi
 
+reject_profile_path LUCE_INSTALL_DIR "$install_root"
+if [ -n "$editor_extensions_dir" ]; then
+    reject_profile_path LUCE_INSTALL_EDITOR_EXTENSIONS_DIR "$editor_extensions_dir"
+fi
+if [ -n "$profile_override" ]; then
+    reject_profile_path LUCE_INSTALL_PROFILE "$profile_override"
+fi
+
 parent=$(dirname "$install_root")
 mkdir -p "$parent"
 tmp=$(mktemp -d "$parent/.luce-install.XXXXXX")
-backup="$parent/.luce-old.$$"
+backup_dir=$(mktemp -d "$parent/.luce-old.XXXXXX")
+backup="$backup_dir/current"
 
 cleanup() {
-    rm -rf "$tmp" "$backup"
+    rm -rf "$tmp" "$backup_dir"
 }
 trap cleanup 0 HUP INT TERM
 
@@ -339,7 +367,7 @@ if ! mv "$release" "$install_root"; then
     echo "luce: could not replace $install_root" >&2
     exit 1
 fi
-rm -rf "$backup"
+rm -rf "$backup_dir"
 extension_source="$install_root/share/vscode/extensions/$extension_id-$extension_version"
 
 install_editor_extension() {

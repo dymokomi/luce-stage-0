@@ -23,5 +23,13 @@ other native programs. Run them only when you trust their source or publisher.
 Serialized `.lcm` modules are untrusted compiler input and must be rejected
 cleanly when malformed; they are not a sandbox.
 
+The release archive and checksum are served by the same HTTPS endpoint. The
+checksum detects transfer or publication corruption, but it is not a detached
+signature: a compromised release host could replace both files. The current
+provenance and installer checks are recorded in
+[docs/RELEASE_SECURITY.md](docs/RELEASE_SECURITY.md); a future signing-key and
+rotation policy is required before treating a mirror as independently
+trusted.
+
 The release supports macOS 15 or newer on Apple Silicon and glibc Linux 2.28+
 on ARM64 and x86-64. Other platforms do not receive security support yet.
