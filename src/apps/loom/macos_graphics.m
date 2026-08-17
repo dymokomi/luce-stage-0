@@ -43,6 +43,11 @@ typedef struct {
     CALayer *layer;
     int64_t width;
     int64_t height;
+    /* A Surface keeps the window's native layer usable after the Luce
+     * Window value has gone out of scope.  The host therefore keeps the
+     * window object alive until the last derived surface releases it. */
+    size_t surface_refs;
+    int close_requested;
     int alive;
 } LuceWindow;
 
@@ -69,6 +74,7 @@ typedef struct {
 
 static void luce_release_window(LuceWindow *slot) {
     if (!slot->alive) return;
+    if (slot->surface_refs != 0) return;
     [slot->window orderOut:nil];
     [slot->window close];
     [slot->window release];
@@ -90,6 +96,16 @@ static LuceWindow *luce_window(LuceGraphics *graphics, int64_t handle) {
     return slot->alive ? slot : NULL;
 }
 
+static void luce_request_window_close(LuceWindow *slot) {
+    if (!slot->alive) return;
+    if (!slot->close_requested) {
+        slot->close_requested = 1;
+        [slot->window orderOut:nil];
+        [slot->window close];
+    }
+    luce_release_window(slot);
+}
+
 static LuceSurface *luce_surface(LuceGraphics *graphics, int64_t handle) {
     if (handle <= 0 || handle > luce_max_surfaces) return NULL;
     LuceSurface *slot = &graphics->surfaces[handle - 1];
@@ -108,6 +124,16 @@ static int64_t luce_next_surface(LuceGraphics *graphics) {
         if (!graphics->surfaces[index].alive) return index + 1;
     }
     return 0;
+}
+
+static void luce_surface_released(LuceGraphics *graphics, LuceSurface *surface) {
+    const int64_t window_handle = surface->window;
+    luce_release_surface(surface);
+    LuceWindow *window = luce_window(graphics, window_handle);
+    if (window != NULL && window->surface_refs != 0) {
+        window->surface_refs -= 1;
+        luce_release_window(window);
+    }
 }
 
 static id<MTLRenderPipelineState> luce_make_pipeline(id<MTLDevice> device) {
@@ -165,7 +191,11 @@ void luce_macos_graphics_destroy(void *opaque) {
     if (opaque == NULL) return;
     @autoreleasepool {
         LuceGraphics *graphics = opaque;
-        for (int index = 0; index < luce_max_surfaces; index++) luce_release_surface(&graphics->surfaces[index]);
+        for (int index = 0; index < luce_max_surfaces; index++) {
+            if (graphics->surfaces[index].alive) {
+                luce_surface_released(graphics, &graphics->surfaces[index]);
+            }
+        }
         for (int index = 0; index < luce_max_windows; index++) luce_release_window(&graphics->windows[index]);
         [graphics->pipeline release];
         [graphics->queue release];
@@ -283,6 +313,7 @@ int luce_macos_graphics_window_surface(void *opaque, int64_t window, int64_t *su
         slot->clear[1] = 0.0;
         slot->clear[2] = 0.0;
         slot->clear[3] = 1.0;
+        window_slot->surface_refs += 1;
         *surface = number;
         return luce_yes;
     }
@@ -446,18 +477,16 @@ int luce_macos_graphics_close(void *opaque, int64_t handle, int64_t kind) {
         if (kind == luce_surface_kind) {
             LuceSurface *surface = luce_surface(graphics, handle);
             if (surface == NULL) return luce_no;
-            luce_release_surface(surface);
+            luce_surface_released(graphics, surface);
             return luce_yes;
         }
         if (kind == luce_window_kind) {
             LuceWindow *window = luce_window(graphics, handle);
             if (window == NULL) return luce_no;
-            for (int index = 0; index < luce_max_surfaces; index++) {
-                if (graphics->surfaces[index].alive && graphics->surfaces[index].window == handle) {
-                    luce_release_surface(&graphics->surfaces[index]);
-                }
-            }
-            luce_release_window(window);
+            /* Closing a Window value requests that the native window
+             * disappear, but derived Surface values retain the host-side
+             * object until their own ARC releases. */
+            luce_request_window_close(window);
             return luce_yes;
         }
         return luce_no;

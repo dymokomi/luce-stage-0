@@ -4,7 +4,9 @@
 # the language API independent of Metal, Vulkan, and any window-system
 # handle; the host supplies those through the runtime graphics channel.
 # Resource lifetime is ordinary Luce ARC: aliases retain the same surface, and
-# the native resource closes when its last strong reference disappears.
+# the native resource closes when its last strong reference disappears. A
+# Surface also keeps the host-side state needed by its originating window alive
+# until that Surface is released.
 #
 # The macOS host shipped with `loom` uses Metal when it is available and a
 # CPU-backed window when it is not. Other hosts may leave this channel absent;

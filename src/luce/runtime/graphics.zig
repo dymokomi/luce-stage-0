@@ -335,7 +335,7 @@ test "backend values are a closed, explicit wire vocabulary" {
     try std.testing.expectEqual(@as(i64, 2), @intFromEnum(Backend.headless));
 }
 
-test "a headless channel owns a window and surface through the runtime" {
+test "a surface keeps its native resource after the window wrapper is released" {
     const Host = struct {
         closes: usize = 0,
         last_kind: i64 = -1,
@@ -439,11 +439,18 @@ test "a headless channel owns a window and surface through the runtime" {
     try std.testing.expect(try clear(&runtime, surface_value, 1, 2, 3, 4));
     try std.testing.expect(try fillRect(&runtime, surface_value, 0, 0, 10, 20, 1, 2, 3, 4));
     try std.testing.expect(try present(&runtime, surface_value));
-    runtime.freeValue(surface_value);
     runtime.freeValue(window);
+    // Window and Surface are independent ARC resources.  Dropping the
+    // wrapper that requested the surface must not invalidate a surface that
+    // escaped its scope; the native adapter keeps the parent state until the
+    // final derived surface releases it.
+    try std.testing.expectEqual(@as(usize, 1), host.closes);
+    try std.testing.expectEqual(@as(i64, @intFromEnum(heap.Object.File.Kind.window)), host.last_kind);
+    try std.testing.expectEqual(@as(i64, 320), (try size(&runtime, surface_value, 0)).?);
+    runtime.freeValue(surface_value);
     try std.testing.expect(host.cleared);
     try std.testing.expect(host.filled);
     try std.testing.expect(host.presented);
     try std.testing.expectEqual(@as(usize, 2), host.closes);
-    try std.testing.expectEqual(@as(i64, @intFromEnum(heap.Object.File.Kind.window)), host.last_kind);
+    try std.testing.expectEqual(@as(i64, @intFromEnum(heap.Object.File.Kind.surface)), host.last_kind);
 }

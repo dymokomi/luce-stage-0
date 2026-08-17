@@ -40,8 +40,9 @@ no manual `close` operation.
 window.surface() -> gpu.Surface!
 ```
 
-Each successful call creates a surface associated with the window. Keep the
-window alive while using that surface. Drawing is explicit:
+Each successful call creates a surface associated with the window. The surface
+retains the host-side drawing state, so it remains valid if the `Window` value
+is returned from or released before the surface. Drawing is explicit:
 
 ```text
 import std.ui

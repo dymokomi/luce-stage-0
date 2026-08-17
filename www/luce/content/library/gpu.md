@@ -49,8 +49,8 @@ let surface = try window.surface()
 
 `Surface` is a value wrapper around an ARC resource reference. Copying the
 wrapper shares the native surface and keeps it alive. Releasing its last
-strong reference closes the native resource. Keep the originating window
-alive for at least as long as every surface obtained from it.
+strong reference closes the native resource; the surface also keeps the
+host-side state needed by its originating window alive until then.
 
 ## Surface size
 
