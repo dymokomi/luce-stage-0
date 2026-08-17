@@ -588,6 +588,17 @@ pub const StructField = struct {
     field_type: Type,
 };
 
+/// One callable requirement of an interface.  Requirements are metadata,
+/// not fields in the existential value: every interface value has the same
+/// two-slot representation (witness identity, owned payload), while this
+/// table describes how calls through that value are checked and dispatched.
+pub const InterfaceMethod = struct {
+    name: []const u8, // arena-owned by the program
+    signature: u32,
+    mutating: bool = false,
+    fallible: bool = false,
+};
+
 /// One member of a union, as the program carries it: the name an arm
 /// and `str(u)` answer, and the payload fields in declaration order
 /// (docs/UNION.md D1).  A bare member has no fields; the fields reuse
@@ -642,9 +653,12 @@ pub const VariantType = struct {
 pub const StructLayout = struct {
     name: []const u8, // arena-owned by the program
     fields: []StructField,
-    /// Compiler-generated interface layouts are the one place a bare
-    /// function field is valid. Source structs keep the ordinary rule that
-    /// function fields must be optional.
+    /// Method contracts for an interface layout, empty for every source
+    /// struct and class.  Keeping these separate from `fields` prevents a
+    /// generic field instruction from forging or exposing an existential's
+    /// private witness/payload representation.
+    interface_methods: []InterfaceMethod = &.{},
+    /// Compiler-generated nominal layout for an interface existential.
     interface: bool = false,
     /// ARC storage synthesized for a closure environment or a captured
     /// mutable cell. These layouts are never source-addressable, and may
@@ -659,6 +673,13 @@ pub const StructLayout = struct {
     /// every field is still alive. Null for value structs and classes that
     /// declare no `deinit:` hook.
     deinitializer: ?u32 = null,
+
+    /// The runtime `Value` span of this nominal value.  A source struct has
+    /// one slot per field.  An interface has one witness slot and exactly one
+    /// owned payload slot, independent of its method count.
+    pub fn runLength(self: StructLayout) usize {
+        return if (self.interface) 2 else self.fields.len;
+    }
 
     pub fn findField(self: StructLayout, name: []const u8) ?u32 {
         for (self.fields, 0..) |field, index| {

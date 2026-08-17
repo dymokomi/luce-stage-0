@@ -36,6 +36,8 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
 
     const reachable = try arena.alloc(bool, count);
     @memset(reachable, false);
+    const witness_reachable = try arena.alloc(bool, program.interface_witnesses.len);
+    @memset(witness_reachable, false);
     var pending: std.ArrayList(u32) = .empty;
     reachable[program.entry_function] = true;
     try pending.append(arena, program.entry_function);
@@ -49,6 +51,17 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     }
     while (pending.pop()) |index| {
         for (program.functions[index].instructions) |*instruction| {
+            if (instruction.* == .interface_make) {
+                const witness_index = instruction.interface_make.witness;
+                if (!witness_reachable[witness_index]) {
+                    witness_reachable[witness_index] = true;
+                    for (program.interface_witnesses[witness_index].methods) |called| {
+                        if (reachable[called]) continue;
+                        reachable[called] = true;
+                        try pending.append(arena, called);
+                    }
+                }
+            }
             const called = (functionSlot(instruction) orelse continue).*;
             if (reachable[called]) continue;
             reachable[called] = true;
@@ -63,14 +76,23 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         slot.* = kept;
         kept += 1;
     }
-    if (kept == count) return;
+    var kept_witnesses: u32 = 0;
+    const witness_renumbered = try arena.alloc(u32, program.interface_witnesses.len);
+    for (witness_reachable, witness_renumbered) |live, *slot| {
+        if (!live) continue;
+        slot.* = kept_witnesses;
+        kept_witnesses += 1;
+    }
 
-    const functions = try arena.alloc(Function, kept);
+    const functions = if (kept == count) program.functions else try arena.alloc(Function, kept);
     for (reachable, 0..) |live, index| {
         if (!live) continue;
         const function = program.functions[index];
         for (function.instructions) |*instruction| {
             if (functionSlot(instruction)) |slot| slot.* = renumbered[slot.*];
+            if (instruction.* == .interface_make) {
+                instruction.interface_make.witness = witness_renumbered[instruction.interface_make.witness];
+            }
         }
         functions[renumbered[index]] = function;
     }
@@ -79,6 +101,17 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     for (program.structs) |*layout| {
         if (layout.deinitializer) |function| layout.deinitializer = renumbered[function];
     }
+
+    const witnesses = if (kept_witnesses == program.interface_witnesses.len)
+        program.interface_witnesses
+    else
+        try arena.alloc(defs.InterfaceWitness, kept_witnesses);
+    for (program.interface_witnesses, witness_reachable, 0..) |witness, live, index| {
+        if (!live) continue;
+        for (witness.methods) |*method| method.* = renumbered[method.*];
+        witnesses[witness_renumbered[index]] = witness;
+    }
+    program.interface_witnesses = witnesses;
 }
 
 /// The function index an instruction names, or null — **the one place
@@ -113,6 +146,7 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         .binary,
         .unary,
         .convert,
+        .interface_make,
         .struct_make,
         .struct_get,
         .struct_set,
@@ -122,6 +156,8 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         .variant_tag,
         .variant_field,
         .call_indirect,
+        .interface_call,
+        .interface_call_inout,
         .intrinsic,
         .heap_new,
         .jump,
@@ -156,6 +192,7 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .binary,
         .unary,
         .convert,
+        .interface_make,
         .struct_make,
         .struct_get,
         .struct_set,
@@ -166,6 +203,8 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .variant_field,
         .call,
         .call_inout,
+        .interface_call,
+        .interface_call_inout,
         .spawn,
         .call_indirect,
         .intrinsic,

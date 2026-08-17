@@ -118,9 +118,9 @@ The concrete type is chosen at the call and checked for explicit `Named`
 conformance. The generic body is checked against `Named`, and each specialized
 call uses the concrete witness table selected by existing conformance rules.
 
-Owned interface existentials land first. That prevents generic bounds from
-depending on the current per-method bound-receiver representation and gives
-writing value witnesses one final meaning before generics reuse them.
+Owned interface existentials are already in place. Generic bounds can reuse
+that final payload-and-witness representation, including writing value
+witnesses behind `mutating` requirements.
 
 The first version has one bound per parameter. Multiple bounds, protocol
 composition, associated types, and generic interfaces are deferred until a

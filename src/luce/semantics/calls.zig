@@ -1589,9 +1589,9 @@ pub fn declaredName(self: *const FunctionBuilder, of: Type) ?[]const u8 {
     };
 }
 
-/// `element.method(args)` where `element` is an interface value.  The
-/// receiver is already bound in the function slot stored by `interface_make`;
-/// the call therefore passes only the explicit arguments to `call_indirect`.
+/// `element.method(args)` where `element` is an interface value. The value
+/// carries one witness identity and one payload; the call names the contract
+/// slot and dispatches without materializing a bound function.
 fn lowerInterfaceCall(
     self: *FunctionBuilder,
     method: ast.Method,
@@ -1637,7 +1637,12 @@ fn lowerInterfaceCall(
         return null;
     if (!(try checkRequiredSlots(self, method.name, "luce.sema.method", surface, seen, method.span))) return null;
 
-    const entries = try self.arena().alloc(RecordedOperand, run.values.len - 1);
+    const entries = try self.arena().alloc(RecordedOperand, run.values.len);
+    entries[0] = .{
+        .node = run.values[0].node,
+        .slot = 0,
+        .copied = run.copied[0],
+    };
     for (method.arguments, slots, 0..) |argument, slot, index| {
         const value = run.values[index + 1];
         const fitted = (try self.fit(value, info.parameter_types[slot])) orelse {
@@ -1650,9 +1655,12 @@ fn lowerInterfaceCall(
             });
             return null;
         };
-        entries[index] = .{
+        if (info.mutating and shapes.ownsStorage(self.analyzer, info.parameter_types[slot])) {
+            _ = try ledger.parkDerivedTemp(self, info.parameter_types[slot], method.span);
+        }
+        entries[index + 1] = .{
             .node = fitted.node,
-            .slot = slot,
+            .slot = slot + 1,
             .copied = run.copied[index + 1],
         };
     }
@@ -1669,24 +1677,20 @@ fn lowerInterfaceCall(
         );
         return null;
     }
-    const receiver = run.values[0];
-    const callee = try self.arena().create(nodes.Expression);
-    callee.* = .{ .field_get = .{
-        .target = receiver.node,
-        .layout = receiver.value_type.strukt,
-        .field = info.field,
-        .result = .{ .function = info.signature },
-        .span = method.span,
-    } };
+    if (info.mutating) {
+        _ = (try receiverPlace(self, method, .{ .strukt = contract.layout })) orelse return null;
+    }
     const node = try recorder.recordCallNode(
         self,
-        .{ .indirect = .{
-            .callee = callee,
+        .{ .interface = .{
+            .layout = contract.layout,
+            .method = info.slot,
             .signature = info.signature,
+            .writing = info.mutating,
             .fallible = info.fallible,
         } },
         entries,
-        entries.len,
+        run.values.len,
         info.fallible,
         info.return_type,
         method.span,

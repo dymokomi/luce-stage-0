@@ -104,6 +104,15 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     };
     for (program.structs) |layout| {
         if (layout.interface and layout.reference) return error.BadStruct;
+        if (layout.interface) {
+            if (layout.fields.len != 0 or layout.interface_methods.len == 0)
+                return error.BadStruct;
+            for (layout.interface_methods) |method| {
+                if (method.signature >= program.signatures.len) return error.BadFunction;
+            }
+        } else if (layout.interface_methods.len != 0) {
+            return error.BadStruct;
+        }
         if (layout.closure_storage and (!layout.reference or layout.interface))
             return error.BadStruct;
         if (layout.deinitializer) |function| {
@@ -114,7 +123,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             try verifyFieldType(
                 program,
                 field.field_type,
-                layout.reference or layout.interface or layout.closure_storage,
+                layout.reference or layout.closure_storage,
             );
             if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
                 return error.BadStruct;
@@ -164,6 +173,9 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
         }
     }
+    for (program.interface_witnesses) |witness| {
+        try verifyInterfaceWitness(program, witness);
+    }
     // A deinitializer is one ordinary body behind a non-callable layout
     // edge: exactly one borrowed class receiver, no result, no failure
     // channel. Check the edge and also refuse any instruction that tries to
@@ -192,6 +204,11 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
                 if (named) |target| {
                     if (target == finalizer) return error.BadFunction;
                 }
+            }
+        }
+        for (program.interface_witnesses) |witness| {
+            for (witness.methods) |target| {
+                if (target == finalizer) return error.BadFunction;
             }
         }
     }
@@ -294,6 +311,44 @@ fn nominalType(program: *const Program, layout: u32) VerifyError!Type {
             return .{ .heap = @intCast(index) };
     }
     return error.BadStruct;
+}
+
+fn verifyInterfaceWitness(
+    program: *const Program,
+    witness: defs.InterfaceWitness,
+) VerifyError!void {
+    if (witness.interface >= program.structs.len) return error.BadStruct;
+    const layout = program.structs[witness.interface];
+    if (!layout.interface or witness.methods.len != layout.interface_methods.len)
+        return error.BadStruct;
+    try verifyType(program, witness.receiver);
+    const concrete_layout: u32 = switch (witness.receiver) {
+        .strukt => |index| index,
+        .heap => |index| switch (program.heap_types[index]) {
+            .class => |class| class,
+            else => return error.BadStruct,
+        },
+        else => return error.BadStruct,
+    };
+    if (program.structs[concrete_layout].interface) return error.BadStruct;
+
+    for (witness.methods, layout.interface_methods) |function_index, requirement| {
+        if (function_index >= program.functions.len) return error.BadFunction;
+        const function = program.functions[function_index];
+        const signature = program.signatures[requirement.signature];
+        if (function.parameter_count != signature.parameters.len + 1 or
+            function.locals.len < function.parameter_count or
+            !function.locals[0].local_type.eql(witness.receiver) or
+            !function.return_type.eql(signature.result) or
+            (function.fallible and !requirement.fallible) or
+            (function.locals[0].inout and !requirement.mutating))
+        {
+            return error.BadFunction;
+        }
+        for (signature.parameters, function.locals[1..function.parameter_count]) |parameter, local| {
+            try expectType(local.local_type, parameter.value_type);
+        }
+    }
 }
 
 /// Value structs and union members cannot declare bare function fields: they
@@ -793,6 +848,7 @@ fn verifyConstantValue(
             if (expected != .strukt or held.layout != expected.strukt) return error.BadConstant;
             if (held.layout >= program.structs.len) return error.BadConstant;
             const layout = program.structs[held.layout];
+            if (layout.interface) return error.BadConstant;
             if (held.fields.len != layout.fields.len) return error.BadConstant;
             for (held.fields, layout.fields) |field, declared| {
                 if (declared.weak and field != .absent) return error.BadConstant;
@@ -856,6 +912,34 @@ fn expectSignature(
 
 fn expectType(actual: Type, expected: Type) VerifyError!void {
     if (!actual.eql(expected)) return error.TypeMismatch;
+}
+
+fn interfaceRequirement(
+    program: *const Program,
+    layout_index: u32,
+    method_index: u32,
+) VerifyError!types.InterfaceMethod {
+    if (layout_index >= program.structs.len) return error.BadStruct;
+    const layout = program.structs[layout_index];
+    if (!layout.interface or method_index >= layout.interface_methods.len)
+        return error.BadStruct;
+    return layout.interface_methods[method_index];
+}
+
+fn verifyInterfaceArguments(
+    program: *const Program,
+    function: *const Function,
+    defined: *const std.AutoHashMapUnmanaged(Register, void),
+    requirement: types.InterfaceMethod,
+    arguments: []const Register,
+    result: Type,
+) VerifyError!void {
+    const signature = program.signatures[requirement.signature];
+    if (arguments.len != signature.parameters.len) return error.BadFunction;
+    for (arguments, signature.parameters) |argument, parameter| {
+        try expectType(try operandType(function, defined, argument), parameter.value_type);
+    }
+    try expectType(result, signature.result);
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,9 +1122,22 @@ fn verifyInstruction(
             if (!from.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
             if (operand != .enumeration and from.eql(result)) return error.TypeMismatch;
         },
+        .interface_make => |make| {
+            if (make.layout >= program.structs.len or
+                !program.structs[make.layout].interface or
+                make.witness >= program.interface_witnesses.len)
+            {
+                return error.BadStruct;
+            }
+            const witness = program.interface_witnesses[make.witness];
+            if (witness.interface != make.layout) return error.BadStruct;
+            try expectType(try operandType(function, defined, make.receiver), witness.receiver);
+            try expectType(result, .{ .strukt = make.layout });
+        },
         .struct_make => |make| {
             if (make.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[make.layout];
+            if (layout.interface) return error.BadStruct;
             if (make.fields.len != layout.fields.len) return error.BadStruct;
             for (make.fields, layout.fields) |field_register, field| {
                 const value = try operandType(function, defined, field_register);
@@ -1051,6 +1148,7 @@ fn verifyInstruction(
         .struct_get => |get| {
             if (get.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[get.layout];
+            if (layout.interface) return error.BadStruct;
             if (get.field >= layout.fields.len) return error.BadStruct;
             if (layout.fields[get.field].weak) return error.BadStruct;
             const target = try operandType(function, defined, get.target);
@@ -1060,6 +1158,7 @@ fn verifyInstruction(
         .struct_set => |set| {
             if (set.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[set.layout];
+            if (layout.interface) return error.BadStruct;
             if (set.field >= layout.fields.len) return error.BadStruct;
             if (layout.fields[set.field].weak) return error.BadStruct;
             const target = try operandType(function, defined, set.target);
@@ -1071,6 +1170,7 @@ fn verifyInstruction(
         .weak_struct_get => |get| {
             if (get.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[get.layout];
+            if (layout.interface) return error.BadStruct;
             if (get.field >= layout.fields.len or !layout.fields[get.field].weak)
                 return error.BadStruct;
             const target = try operandType(function, defined, get.target);
@@ -1080,6 +1180,7 @@ fn verifyInstruction(
         .weak_struct_set => |set| {
             if (set.layout >= program.structs.len) return error.BadStruct;
             const layout = program.structs[set.layout];
+            if (layout.interface) return error.BadStruct;
             if (set.field >= layout.fields.len or !layout.fields[set.field].weak)
                 return error.BadStruct;
             const target = try operandType(function, defined, set.target);
@@ -1149,6 +1250,38 @@ fn verifyInstruction(
                 try expectType(value, callee.locals[index].local_type);
             }
             if (!result.eql(callee.return_type)) return error.TypeMismatch;
+        },
+        .interface_call => |call| {
+            const requirement = try interfaceRequirement(program, call.layout, call.method);
+            if (requirement.mutating or requirement.fallible != call.fallible)
+                return error.BadFunction;
+            try expectType(
+                try operandType(function, defined, call.receiver),
+                .{ .strukt = call.layout },
+            );
+            try verifyInterfaceArguments(
+                program,
+                function,
+                defined,
+                requirement,
+                call.arguments,
+                result,
+            );
+        },
+        .interface_call_inout => |call| {
+            const requirement = try interfaceRequirement(program, call.layout, call.method);
+            if (!requirement.mutating or requirement.fallible != call.fallible)
+                return error.BadFunction;
+            if (call.receiver >= function.locals.len) return error.BadLocal;
+            try expectType(function.locals[call.receiver].local_type, .{ .strukt = call.layout });
+            try verifyInterfaceArguments(
+                program,
+                function,
+                defined,
+                requirement,
+                call.arguments,
+                result,
+            );
         },
         // A spawn is a call whose arguments cross a runtime boundary
         // (docs/THREADS.md D2), so it is checked as a call plus the two
@@ -1275,6 +1408,8 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
             program.functions[call.function].fallible,
         .call_inout => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
+        .interface_call => |call| call.fallible,
+        .interface_call_inout => |call| call.fallible,
         .call_indirect => |call| call.fallible,
         .intrinsic => |intrinsic| switch (intrinsic.kind) {
             // The one intrinsic whose fallibility is not a fact about

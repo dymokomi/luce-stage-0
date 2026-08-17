@@ -54,6 +54,7 @@ pub const Origin = @import("mir/defs.zig").Origin;
 pub const ConstantValue = @import("mir/defs.zig").ConstantValue;
 pub const ContainerConstant = @import("mir/defs.zig").ContainerConstant;
 pub const Function = @import("mir/defs.zig").Function;
+pub const InterfaceWitness = @import("mir/defs.zig").InterfaceWitness;
 pub const Program = @import("mir/defs.zig").Program;
 pub const strip = @import("mir/defs.zig").strip;
 pub const boxTag = @import("mir/defs.zig").boxTag;
@@ -61,6 +62,9 @@ pub const mapKeyStorage = @import("mir/defs.zig").mapKeyStorage;
 pub const function_run_length = @import("mir/defs.zig").function_run_length;
 pub const function_run_named = @import("mir/defs.zig").function_run_named;
 pub const function_run_receiver = @import("mir/defs.zig").function_run_receiver;
+pub const interface_run_length = @import("mir/defs.zig").interface_run_length;
+pub const interface_run_witness = @import("mir/defs.zig").interface_run_witness;
+pub const interface_run_payload = @import("mir/defs.zig").interface_run_payload;
 
 /// Building the MIR: the emitter stage 4 records on, and the pass that
 /// closes what it recorded into a `Program`.

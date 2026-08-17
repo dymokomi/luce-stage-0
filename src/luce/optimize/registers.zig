@@ -54,6 +54,7 @@ pub fn mapOperands(
         },
         .unary => |*unary| unary.operand = map[unary.operand],
         .convert => |*operand| operand.* = map[operand.*],
+        .interface_make => |*make| make.receiver = map[make.receiver],
         .struct_make => |*make| make.fields = try mapSlice(arena, make.fields, map),
         .struct_get => |*get| get.target = map[get.target],
         .struct_set => |*set| {
@@ -70,6 +71,11 @@ pub fn mapOperands(
         .variant_field => |*get| get.target = map[get.target],
         .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_inout => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
+        .interface_call => |*call| {
+            call.receiver = map[call.receiver];
+            call.arguments = try mapSlice(arena, call.arguments, map);
+        },
+        .interface_call_inout => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_indirect => |*call| {
             call.callee = map[call.callee];
             call.arguments = try mapSlice(arena, call.arguments, map);
@@ -118,6 +124,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         },
         .unary => |unary| used[unary.operand] = true,
         .convert => |operand| used[operand] = true,
+        .interface_make => |make| used[make.receiver] = true,
         .struct_make => |make| for (make.fields) |field| {
             used[field] = true;
         },
@@ -144,6 +151,13 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             used[argument] = true;
         },
         .call_inout => |call| for (call.arguments) |argument| {
+            used[argument] = true;
+        },
+        .interface_call => |call| {
+            used[call.receiver] = true;
+            for (call.arguments) |argument| used[argument] = true;
+        },
+        .interface_call_inout => |call| for (call.arguments) |argument| {
             used[argument] = true;
         },
         .intrinsic => |call| for (call.arguments) |argument| {
@@ -177,6 +191,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .local_set => |set| .{ .write = set.local },
         .weak_local_set => |set| .{ .write = set.local },
         .call_inout => |call| .{ .read_write = call.receiver },
+        .interface_call_inout => |call| .{ .read_write = call.receiver },
         // Everything else works in registers.  Listed rather than
         // defaulted, as `markOperands` lists its own: an instruction
         // added later that names a local would otherwise answer "no
@@ -190,6 +205,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .binary,
         .unary,
         .convert,
+        .interface_make,
         .struct_make,
         .struct_get,
         .struct_set,
@@ -199,6 +215,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .variant_tag,
         .variant_field,
         .call,
+        .interface_call,
         .spawn,
         .call_indirect,
         .intrinsic,

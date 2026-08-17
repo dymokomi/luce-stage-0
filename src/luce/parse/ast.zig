@@ -514,6 +514,7 @@ pub const InterfaceMethod = struct {
     name_span: Span,
     parameters: []Parameter,
     returns: []TypeName,
+    mutating: bool = false,
     fallible: bool = false,
     span: Span,
 };

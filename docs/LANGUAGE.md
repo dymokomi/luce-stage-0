@@ -206,16 +206,18 @@ complete contract.
 ### Interfaces
 
 An `interface` is a nominal list of method signatures. A struct or class opts
-in explicitly and must satisfy every slot, including parameter names/types,
-results, receiver effect, and directional fallibility. A non-fallible witness
-may satisfy a fallible requirement; the reverse is refused.
+in explicitly and must satisfy every slot, including parameter count/order and
+types, results, receiver effect, and directional fallibility. Requirement
+parameter names are call labels; witness parameter names are local details. A
+non-fallible witness may satisfy a fallible requirement; the reverse is
+refused.
 
 Interface values support multiple methods, multi-value answers, returns,
-optionals, fields, and heterogeneous lists/maps/arrays. A class witness may
-mutate its shared identity. A writing value-struct witness is currently
-refused because the hidden bound-witness representation owns a snapshot rather
-than one mutable existential box. [INTERFACES.md](INTERFACES.md) states the
-current boundary and planned representation change.
+optionals, fields, closure captures, and heterogeneous lists/maps/arrays. A
+class witness may mutate its shared identity. A `mutating` requirement permits
+a writing value-struct witness; the call must use a mutable bare local so the
+updated payload can be written back. [INTERFACES.md](INTERFACES.md) states the
+complete boundary and deliberate non-goals.
 
 ## Control flow
 

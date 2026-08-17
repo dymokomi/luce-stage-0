@@ -476,3 +476,198 @@ test "replacing heterogeneous class witnesses releases the old receiver first" {
         \\
     , "first:1\nclosed first\nsecond:42\nleaving\nclosed second\n");
 }
+
+test "a mutating interface requirement preserves one value payload across methods" {
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64)
+        \\    func value() -> i64
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self.current = self.current + amount
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\func main():
+        \\    var counter: Counter = Number(current = 1)
+        \\    counter.add(1)
+        \\    counter.add(40)
+        \\    print(str(counter.value()))
+        \\
+    , "42\n");
+}
+
+test "a mutating multi-value requirement uses the ordinary return shape" {
+    try agree.prints(
+        \\interface Cursor:
+        \\    mutating func advance(amount: i64) -> (i64, i64)
+        \\    func position() -> i64
+        \\
+        \\struct Index: Cursor:
+        \\    value: i64
+        \\    func advance(amount: i64) -> (i64, i64):
+        \\        let before = self.value
+        \\        self.value = self.value + amount
+        \\        return before, self.value
+        \\    func position() -> i64:
+        \\        return self.value
+        \\
+        \\func main():
+        \\    var cursor: Cursor = Index(value = 40)
+        \\    let before, after = cursor.advance(2)
+        \\    print(str(before) + ":" + str(after) + ":" + str(cursor.position()))
+        \\
+    , "40:42:42\n");
+}
+
+test "a non-fallible mutating witness satisfies a fallible requirement" {
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64) -> i64!
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64) -> i64:
+        \\        self.current = self.current + amount
+        \\        return self.current
+        \\
+        \\func main() -> !:
+        \\    var counter: Counter = Number(current = 40)
+        \\    print(str(try counter.add(2)))
+        \\
+    , "42\n");
+}
+
+test "a non-mutating witness can satisfy a mutating requirement" {
+    try agree.prints(
+        \\interface Reset:
+        \\    mutating func reset()
+        \\
+        \\struct Noop: Reset:
+        \\    marker: i64
+        \\    func reset():
+        \\        return
+        \\
+        \\func main():
+        \\    var resetter: Reset = Noop(marker = 7)
+        \\    resetter.reset()
+        \\    print("ok")
+        \\
+    , "ok\n");
+}
+
+test "copied class existentials retain shared identity" {
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64)
+        \\    func value() -> i64
+        \\
+        \\class Shared: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self.current = self.current + amount
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\func main():
+        \\    var first: Counter = Shared(current = 1)
+        \\    var second = first
+        \\    first.add(41)
+        \\    print(str(second.value()))
+        \\
+    , "42\n");
+}
+
+test "a closure can retain and mutate an interface existential" {
+    const source =
+        \\interface Counter:
+        \\    mutating func add(amount: i64)
+        \\    func value() -> i64
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self.current = self.current + amount
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\func make() -> func() -> i64:
+        \\    var counter: Counter = Number(current = 0)
+        \\    return func():
+        \\        counter.add(1)
+        \\        return counter.value()
+        \\
+        \\func main():
+        \\    let next = make()
+        \\    print(str(next()))
+        \\    print(str(next()))
+        \\
+    ;
+    try agree.prints(source, "1\n2\n");
+}
+
+test "copied struct existentials mutate independently" {
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64)
+        \\    func value() -> i64
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self.current = self.current + amount
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\func main():
+        \\    var first: Counter = Number(current = 1)
+        \\    var second = first
+        \\    first.add(41)
+        \\    second.add(1)
+        \\    print(str(first.value()) + ":" + str(second.value()))
+        \\
+    , "42:2\n");
+}
+
+test "heterogeneous collections can round-trip mutating interface values" {
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64)
+        \\    func value() -> i64
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self.current = self.current + amount
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\struct Offset: Counter:
+        \\    current: i64
+        \\    func add(amount: i64):
+        \\        self = Offset(current = self.current + amount + 1)
+        \\    func value() -> i64:
+        \\        return self.current
+        \\
+        \\func main():
+        \\    var items = new list[Counter]
+        \\    items.append(Number(current = 1))
+        \\    items.append(Offset(current = 39))
+        \\    var first = items[0]
+        \\    var second = items[1]
+        \\    first.add(1)
+        \\    second.add(1)
+        \\    items[0] = first
+        \\    items[1] = second
+        \\    var table = new map[str, Counter]
+        \\    table["first"] = items[0]
+        \\    table["second"] = items[1]
+        \\    let fallback: Counter = Number(current = 0)
+        \\    let from_first = table.get("first") else fallback
+        \\    let from_second = table.get("second") else fallback
+        \\    print(str(from_first.value()) + ":" + str(from_second.value()))
+        \\
+    , "2:41\n");
+}

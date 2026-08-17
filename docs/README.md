@@ -44,7 +44,7 @@ selected surface roster is checked during the site build.
 | [PIPELINE.md](PIPELINE.md) | The compiler stages and their current completion state. |
 | [CODING_GUIDE.md](CODING_GUIDE.md) | The repository's authoritative Zig style and testing rules. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | Deep modules, information hiding, naming, and complexity control. |
-| [INTERFACES.md](INTERFACES.md) | Current nominal interfaces, struct/class conformance, heterogeneous storage, and the value-mutation boundary. |
+| [INTERFACES.md](INTERFACES.md) | Current nominal interfaces, struct/class conformance, owned existential storage, mutation, and deliberate non-goals. |
 | [CLASSES.md](CLASSES.md) | Final ARC classes, identity, mutation, weak edges, interfaces, and deterministic `deinit`. |
 | [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | Operational product and interface-design guidance. |
 | [RETURNS.md](RETURNS.md) | Multiple returns without tuple values. |
@@ -74,7 +74,7 @@ selected surface roster is checked during the site build.
 | File | What it decides |
 |---|---|
 | [V2.md](V2.md) | The language-first product north star, current userland proof, and intentionally deferred systems work. |
-| [ROADMAP.md](ROADMAP.md) | The dated state-of-language audit and ordered path through owned existentials, generics, native UI, platform work, and the 1.0 lock. |
+| [ROADMAP.md](ROADMAP.md) | The dated state-of-language audit and ordered path through generics, native UI, platform work, and the 1.0 lock. |
 | [GENERICS.md](GENERICS.md) | The proposed monomorphized generics design, its real library customers, diagnostics, limits, and acceptance matrix. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
 

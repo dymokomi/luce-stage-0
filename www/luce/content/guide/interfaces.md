@@ -90,14 +90,39 @@ conforms to `Drawable`.
 ## Let the compiler check the contract
 
 Every declared method is required. The implementation must match its name,
-parameter names, order, types, result count, and result types. The receiver is
-implied by the method declaration. Interface requirements cannot declare
-default arguments; callers only know the contract, so every argument in that
-contract must be supplied.
+parameter count and order, types, result count, and result types. The receiver
+is implied by the method declaration. Parameter names in the interface are the
+labels callers use; witness parameter names are local implementation details.
+Interface requirements cannot declare default arguments; callers only know the
+contract, so every argument in that contract must be supplied.
 
-A class witness may mutate its shared object. A writing value-struct method
-cannot currently be a witness, because interface dispatch does not expose
-mutable value storage.
+Put `mutating` on a requirement when a value-struct witness may write `self`:
+
+```text
+interface Counter:
+    mutating func add(amount: i64)
+    func value() -> i64
+
+struct Number: Counter:
+    current: i64
+
+    func add(amount: i64):
+        self.current += amount
+
+    func value() -> i64:
+        return self.current
+```
+
+Concrete methods do not write `mutating`; the compiler infers receiver writes
+from the body. A non-writing witness may satisfy a `mutating` requirement, but
+a writing witness cannot satisfy a non-mutating requirement. Class witnesses
+may mutate shared class identity regardless of the value-place rule.
+
+A mutating call on a value interface needs a mutable bare local. A `let`
+binding, call result, field projection, or collection element is not writable;
+bind it to `var` first. Copies of a struct interface have independent payloads,
+while class interfaces retain the same identity. A captured mutable interface
+writes its updated value back through the closure cell.
 
 Failure effects are directional. A non-fallible implementation may satisfy
 a fallible requirement, so a caller may still write `try`. A fallible
@@ -117,7 +142,8 @@ value reaches a caller:
 | a method is `static` | an interface method needs an instance receiver |
 | a parameter or result differs | the caller and witness would disagree about the call shape |
 | a fallible witness satisfies a non-fallible requirement | the caller has no error path |
-| a value-struct witness writes `self` | the current representation owns a snapshot, not a writable value place |
+| a writing witness satisfies a non-mutating requirement | the contract does not permit receiver write-back |
+| a mutating call uses `let`, a temporary, a projection, or an element | there is no mutable value place to receive the updated interface |
 
 Extra concrete methods are fine because they do not change any required slot.
 
@@ -236,23 +262,21 @@ func main():
 
 ## Values remain alive
 
-Converting a struct to an interface value captures a copy of the concrete
-receiver. Converting a class retains its shared identity. In both cases the
-interface owns everything its dispatch can reach, even after the original
+Converting a struct to an interface value copies its concrete value into one
+owned payload. Converting a class retains its shared identity. In both cases
+the interface owns everything its payload can reach, even after the original
 binding leaves scope. A class mutation through the interface remains visible
-through every alias of that class.
+through every alias of that class; copied struct interfaces remain independent.
 
-The current representation stores one bound dispatch value per required
-method. It is correct but intentionally not the final representation. The
-[status page](/status/#interfaces) describes the planned move to one owned
-payload and a witness table. Mutable class dispatch is already supported; a
-future owned value payload is what enables writing struct witnesses.
+The payload is paired with a static witness identity. The number of required
+methods does not copy the receiver repeatedly, and each interface value in a
+heterogeneous collection carries the witness for its own concrete type. This
+is an implementation detail that explains the lifetime and collection rules;
+it does not add casts, reflection, or interface inheritance.
 
-That representation detail matters for performance planning and the one
-unsupported mutating case, but not for ordinary lifetime safety. Copying an
-interface value retains everything its methods may reach; dropping the last
-copy releases it. An interface may therefore safely leave the scope where its
-concrete value was created.
+Copying an interface value retains everything its payload may reach; dropping
+the last copy releases it. An interface may therefore safely leave the scope
+where its concrete value was created.
 
 The [memory guide](/guide/memory/) explains the lifetime rule. The [interface
 reference](/guide/reference/types/#interface) gives the exact matching,

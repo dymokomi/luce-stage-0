@@ -361,6 +361,13 @@ const Module = struct {
     /// (docs/BINDING.md D12).  So every entry takes a receiver, and the
     /// adapter for a plain function ignores it.
     entries: []?Builder.Function.Index = &.{},
+    witness_tables: ?WitnessTables = null,
+
+    const WitnessTables = struct {
+        layouts: Builder.Variable.Index,
+        offsets: Builder.Variable.Index,
+        methods: Builder.Variable.Index,
+    };
 
     fn deinit(self: *Module) void {
         self.gpa.free(self.spawned);
@@ -873,20 +880,25 @@ const Module = struct {
         const layout = self.program.structs[which];
         var fields: std.ArrayList(Builder.Constant) = .empty;
         defer fields.deinit(self.gpa);
-        for (layout.fields) |field| {
-            // The analyzer rejects struct cycles, so this bottoms out.
-            try fields.append(self.gpa, if (field.weak)
-                try self.constantBox(
-                    .weak,
-                    0,
-                    try self.builder.intConst(.i64, runtime.null_index),
-                    0,
-                )
-            else
-                try self.zeroField(field.field_type));
+        if (layout.interface) {
+            try fields.append(self.gpa, try self.zeroField(.i64));
+            try fields.append(self.gpa, try self.zeroField(.none));
+        } else {
+            for (layout.fields) |field| {
+                // The analyzer rejects struct cycles, so this bottoms out.
+                try fields.append(self.gpa, if (field.weak)
+                    try self.constantBox(
+                        .weak,
+                        0,
+                        try self.builder.intConst(.i64, runtime.null_index),
+                        0,
+                    )
+                else
+                    try self.zeroField(field.field_type));
+            }
         }
 
-        const run_type = try self.builder.arrayType(layout.fields.len, self.value_type);
+        const run_type = try self.builder.arrayType(layout.runLength(), self.value_type);
         const initializer = try self.builder.arrayConst(run_type, fields.items);
         const name = try self.builder.strtabStringFmt("luce.zero.{s}", .{layout.name});
         const variable = try self.builder.addVariable(name, run_type, .default);
@@ -1016,7 +1028,7 @@ const Module = struct {
             .function => .{ .function, try self.builder.intConst(.i64, 0) },
         };
         const length: u64 = switch (of) {
-            .strukt => |nested| self.program.structs[nested].fields.len,
+            .strukt => |nested| self.program.structs[nested].runLength(),
             .variant => |nested| self.program.variants[nested].runLength(),
             .function => mir.function_run_length,
             else => 0,
@@ -1615,7 +1627,9 @@ const Module = struct {
         return found.toOwnedSlice(self.gpa);
     }
 
-    /// One adapter per function some `const_function` makes a value of.
+    /// One adapter per function named by a function value or interface
+    /// witness. Interface targets are bound to the existential payload but
+    /// do not allocate a bound-function value at runtime.
     ///
     /// A program that makes no function value emits none of this, the
     /// way a program that never spawns emits no worker entry.
@@ -1623,6 +1637,13 @@ const Module = struct {
         self.entries = try self.gpa.alloc(?Builder.Function.Index, self.program.functions.len);
         @memset(self.entries, null);
         var any = false;
+        for (self.program.interface_witnesses) |witness| {
+            for (witness.methods) |function| {
+                if (self.entries[function] != null) continue;
+                self.entries[function] = try self.lowerValueEntry(function, true);
+                any = true;
+            }
+        }
         for (self.program.functions) |function| {
             for (function.instructions) |instruction| {
                 const named = switch (instruction) {
@@ -1630,7 +1651,10 @@ const Module = struct {
                     else => continue,
                 };
                 if (self.entries[named.function] != null) continue;
-                self.entries[named.function] = try self.lowerValueEntry(named);
+                self.entries[named.function] = try self.lowerValueEntry(
+                    named.function,
+                    named.receiver != null,
+                );
                 any = true;
             }
         }
@@ -1651,10 +1675,11 @@ const Module = struct {
     /// the call site does not have to (docs/BINDING.md D12).
     fn lowerValueEntry(
         self: *Module,
-        named: mir.Instruction.BoundFunction,
+        function_index: u32,
+        is_bound: bool,
     ) Error!Builder.Function.Index {
-        const function = &self.program.functions[named.function];
-        const bound: u32 = if (named.receiver == null) 0 else 1;
+        const function = &self.program.functions[function_index];
+        const bound: u32 = if (is_bound) 1 else 0;
 
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
@@ -1667,7 +1692,7 @@ const Module = struct {
 
         const declared = try self.builder.addFunction(
             signature_type,
-            try self.builder.strtabStringFmt("luce.bound.{d}", .{named.function}),
+            try self.builder.strtabStringFmt("luce.bound.{d}", .{function_index}),
             .default,
         );
         declared.setLinkage(.internal, self.builder);
@@ -1684,7 +1709,7 @@ const Module = struct {
             .module = self,
             .wip = &wip,
             .function = function,
-            .index = named.function,
+            .index = function_index,
             .host = wip.arg(0),
             .runtime = wip.arg(1),
             .depth = wip.arg(2),
@@ -1696,11 +1721,14 @@ const Module = struct {
         defer passed.deinit(self.gpa);
         try passed.appendSlice(self.gpa, &.{ wip.arg(0), wip.arg(1), wip.arg(2) });
         if (bound == 1) {
-            try passed.append(self.gpa, try arm.unboxed(
-                function.locals[0].local_type,
-                wip.arg(3),
-                "bound.self",
-            ));
+            try passed.append(self.gpa, if (function.locals[0].inout)
+                wip.arg(3)
+            else
+                try arm.unboxed(
+                    function.locals[0].local_type,
+                    wip.arg(3),
+                    "bound.self",
+                ));
         }
         // The written parameters stand after the receiver slot, whether
         // this adapter uses that slot or not.
@@ -1711,7 +1739,7 @@ const Module = struct {
             try passed.append(self.gpa, wip.arg(@intCast(4 + function.parameter_count - bound)));
         }
 
-        const target = self.functions[named.function];
+        const target = self.functions[function_index];
         _ = try wip.ret(try wip.call(
             .normal,
             Builder.CallConv.default,
@@ -2159,6 +2187,75 @@ const Module = struct {
         variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
         self.function_table = variable;
         return variable;
+    }
+
+    /// Static interface witness metadata in three compact parallel tables.
+    /// A runtime value keeps only the one-based row index. The descriptor
+    /// validates its nominal interface and points into the flattened method
+    /// function-index table.
+    fn interfaceWitnessTables(self: *Module) Error!WitnessTables {
+        if (self.witness_tables) |built| return built;
+        var layouts: std.ArrayList(Builder.Constant) = .empty;
+        defer layouts.deinit(self.gpa);
+        var offsets: std.ArrayList(Builder.Constant) = .empty;
+        defer offsets.deinit(self.gpa);
+        var methods: std.ArrayList(Builder.Constant) = .empty;
+        defer methods.deinit(self.gpa);
+
+        for (self.program.interface_witnesses) |witness| {
+            try layouts.append(self.gpa, try self.builder.intConst(.i32, witness.interface));
+            try offsets.append(self.gpa, try self.builder.intConst(.i32, methods.items.len));
+            for (witness.methods) |function| {
+                try methods.append(self.gpa, try self.builder.intConst(.i32, function));
+            }
+        }
+
+        const layout_type = try self.builder.arrayType(layouts.items.len, .i32);
+        const layout_rows = try self.builder.addVariable(
+            try self.builder.strtabString("luce.interface_witness_layouts"),
+            layout_type,
+            .default,
+        );
+        try layout_rows.setInitializer(
+            try self.builder.arrayConst(layout_type, layouts.items),
+            self.builder,
+        );
+        layout_rows.setMutability(.constant, self.builder);
+        layout_rows.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+
+        const offset_type = try self.builder.arrayType(offsets.items.len, .i32);
+        const offset_rows = try self.builder.addVariable(
+            try self.builder.strtabString("luce.interface_witness_offsets"),
+            offset_type,
+            .default,
+        );
+        try offset_rows.setInitializer(
+            try self.builder.arrayConst(offset_type, offsets.items),
+            self.builder,
+        );
+        offset_rows.setMutability(.constant, self.builder);
+        offset_rows.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+
+        const method_type = try self.builder.arrayType(methods.items.len, .i32);
+        const method_rows = try self.builder.addVariable(
+            try self.builder.strtabString("luce.interface_witness_methods"),
+            method_type,
+            .default,
+        );
+        try method_rows.setInitializer(
+            try self.builder.arrayConst(method_type, methods.items),
+            self.builder,
+        );
+        method_rows.setMutability(.constant, self.builder);
+        method_rows.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+
+        const built: WitnessTables = .{
+            .layouts = layout_rows,
+            .offsets = offset_rows,
+            .methods = method_rows,
+        };
+        self.witness_tables = built;
+        return built;
     }
 
     /// The program's function *names*, one `{ptr, i64}` per function in
@@ -3120,6 +3217,7 @@ const Body = struct {
                 .binary,
                 .unary,
                 .convert,
+                .interface_make,
                 .struct_make,
                 .struct_get,
                 .struct_set,
@@ -3130,6 +3228,8 @@ const Body = struct {
                 .variant_field,
                 .call,
                 .call_inout,
+                .interface_call,
+                .interface_call_inout,
                 .intrinsic,
                 .heap_new,
                 => return self.fail("a block without a terminator"),
@@ -3572,7 +3672,7 @@ const Body = struct {
             => try builder.intValue(.i64, 0),
             .strukt => |layout| try builder.intValue(
                 .i64,
-                self.module.program.structs[layout].fields.len,
+                self.module.program.structs[layout].runLength(),
             ),
             // A union's run length is a fact about the type, exactly
             // as a struct's is: every run of union `U` spans
@@ -5668,6 +5768,7 @@ const Body = struct {
             .binary => |operation| try self.emitBinary(register, operation),
             .unary => |operation| try self.emitUnary(register, operation),
             .convert => |operand| try self.emitConvert(register, operand),
+            .interface_make => |make| try self.emitInterfaceMake(register, make),
             .struct_make => |make| try self.emitStructMake(register, make.layout, make.fields),
             .struct_get => |get| {
                 const layout = self.module.program.structs[get.layout];
@@ -5790,6 +5891,26 @@ const Body = struct {
             },
             .call => |called| try self.emitCall(register, called),
             .call_inout => |called| try self.emitInoutCall(register, called),
+            .interface_call => |called| try self.emitInterfaceCall(
+                register,
+                called.layout,
+                called.method,
+                called.arguments,
+                called.fallible,
+                self.produced[called.receiver].value,
+            ),
+            .interface_call_inout => |called| try self.emitInterfaceCall(
+                register,
+                called.layout,
+                called.method,
+                called.arguments,
+                called.fallible,
+                try self.unboxed(
+                    .{ .strukt = called.layout },
+                    self.local_slots[called.receiver],
+                    "interface.inout",
+                ),
+            ),
             .spawn => |called| try self.emitSpawn(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
             .heap_new => |new| try self.emitHeapNew(register, new),
@@ -6860,6 +6981,225 @@ const Body = struct {
             return self.inout;
         }
         return self.local_slots[local];
+    }
+
+    fn emitInterfaceMake(
+        self: *Body,
+        register: mir.Register,
+        made: mir.Instruction.InterfaceMake,
+    ) Error!void {
+        const run = try self.scratchRun(
+            self.module.value_type,
+            mir.interface_run_length,
+            value_alignment,
+            "interface",
+        );
+        try self.boxAt(
+            run,
+            mir.interface_run_witness,
+            .i64,
+            try self.module.builder.intValue(.i64, made.witness + 1),
+        );
+        try self.storedAt(run, mir.interface_run_payload, made.receiver);
+        try self.callAnswering(register, .luce_rt_struct_make, &.{
+            self.runtime,
+            run,
+            try self.module.builder.intValue(.i64, mir.interface_run_length),
+        });
+    }
+
+    /// Dispatch one interface contract slot. The runtime value owns only its
+    /// payload; the one-based witness identity selects a verified static row,
+    /// and the ordinary function-value adapter table performs the concrete
+    /// receiver unboxing (or forwards the payload cell for an inout witness).
+    fn emitInterfaceCall(
+        self: *Body,
+        register: mir.Register,
+        layout: u32,
+        method: u32,
+        explicit_arguments: []const mir.Register,
+        fallible: bool,
+        run: Builder.Value,
+    ) Error!void {
+        const builder = self.module.builder;
+        const gpa = self.module.gpa;
+        const requirement = self.module.program.structs[layout].interface_methods[method];
+        const signature = self.module.program.signatures[requirement.signature];
+        const result = self.function.result_types[register];
+
+        try self.check(
+            try self.wip.icmp(
+                .eq,
+                try self.wip.cast(.ptrtoint, run, .i64, "interface.word"),
+                try builder.intValue(.i64, 0),
+                "no.interface",
+            ),
+            .null_object,
+        );
+        const witness_slot = try self.wip.gep(
+            .inbounds,
+            self.module.value_type,
+            run,
+            &.{try builder.intValue(.i64, mir.interface_run_witness)},
+            "witness.slot",
+        );
+        const one_based = try self.unboxed(.i64, witness_slot, "witness");
+        try self.check(
+            try self.wip.icmp(
+                .ult,
+                one_based,
+                try builder.intValue(.i64, 1),
+                "no.witness",
+            ),
+            .null_object,
+        );
+        try self.check(
+            try self.wip.icmp(
+                .ugt,
+                one_based,
+                try builder.intValue(.i64, self.module.program.interface_witnesses.len),
+                "bad.witness",
+            ),
+            .null_object,
+        );
+        const witness_index = try self.wip.bin(
+            .sub,
+            one_based,
+            try builder.intValue(.i64, 1),
+            "witness.index",
+        );
+        const tables = try self.module.interfaceWitnessTables();
+        const layout_slot = try self.wip.gep(
+            .inbounds,
+            .i32,
+            tables.layouts.toValue(builder),
+            &.{witness_index},
+            "witness.layout.slot",
+        );
+        const witnessed_layout = try self.wip.load(
+            .normal,
+            .i32,
+            layout_slot,
+            .fromByteUnits(4),
+            "witness.layout",
+        );
+        try self.check(
+            try self.wip.icmp(
+                .ne,
+                witnessed_layout,
+                try builder.intValue(.i32, layout),
+                "wrong.interface",
+            ),
+            .null_object,
+        );
+        const offset_slot = try self.wip.gep(
+            .inbounds,
+            .i32,
+            tables.offsets.toValue(builder),
+            &.{witness_index},
+            "witness.offset.slot",
+        );
+        const offset = try self.wip.load(
+            .normal,
+            .i32,
+            offset_slot,
+            .fromByteUnits(4),
+            "witness.offset",
+        );
+        const method_index = try self.wip.bin(
+            .add,
+            offset,
+            try builder.intValue(.i32, method),
+            "witness.method.index",
+        );
+        const method_slot = try self.wip.gep(
+            .inbounds,
+            .i32,
+            tables.methods.toValue(builder),
+            &.{try self.wip.cast(.zext, method_index, .i64, "witness.method.at")},
+            "witness.method.slot",
+        );
+        const named = try self.wip.load(
+            .normal,
+            .i32,
+            method_slot,
+            .fromByteUnits(4),
+            "witness.method",
+        );
+        const function_table = try self.module.functionTable();
+        const target_slot = try self.wip.gep(
+            .inbounds,
+            .ptr,
+            function_table.toValue(builder),
+            &.{try self.wip.cast(.zext, named, .i64, "witness.target.at")},
+            "witness.target.slot",
+        );
+        const target = try self.wip.load(
+            .normal,
+            .ptr,
+            target_slot,
+            .fromByteUnits(8),
+            "witness.target",
+        );
+
+        const callee_depth = try self.calleeDepth();
+        try self.check(
+            try self.wip.icmp(
+                .slt,
+                callee_depth,
+                try builder.intValue(.i64, 1),
+                "too.deep",
+            ),
+            .call_depth_exceeded,
+        );
+        const payload_slot = try self.wip.gep(
+            .inbounds,
+            self.module.value_type,
+            run,
+            &.{try builder.intValue(.i64, mir.interface_run_payload)},
+            "interface.payload",
+        );
+        var arguments: std.ArrayList(Builder.Value) = .empty;
+        defer arguments.deinit(gpa);
+        try arguments.appendSlice(gpa, &.{ self.host, self.runtime, callee_depth, payload_slot });
+        for (explicit_arguments) |argument| {
+            try arguments.append(gpa, self.produced[argument].value);
+        }
+        var result_slot: Builder.Value = .none;
+        if (result != .none) {
+            result_slot = try self.scratch(
+                try self.module.valueType(result),
+                Module.valueAlignment(result),
+                "interface.result",
+            );
+            try arguments.append(gpa, result_slot);
+        }
+
+        const outcome = try self.wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            try self.module.indirectSignature(signature),
+            target,
+            arguments.items,
+            "interface.outcome",
+        );
+        if (fallible) self.produced[register].outcome = outcome;
+        try self.propagate(try self.wip.icmp(
+            .ne,
+            outcome,
+            try builder.intValue(.i32, outcome_ok),
+            "interface.trapped",
+        ));
+        if (result != .none) {
+            self.produced[register].value = try self.wip.load(
+                .normal,
+                try self.module.valueType(result),
+                result_slot,
+                Module.valueAlignment(result),
+                "interface.value",
+            );
+        }
     }
 
     /// A call **through a function value** (docs/FUNCTIONS.md D2).

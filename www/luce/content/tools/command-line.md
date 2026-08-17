@@ -97,7 +97,7 @@ Artifacts record the target machine, host ABI, program hash, and code
 generator. A loader refuses an artifact made for a different machine or
 incompatible ABI instead of running it with the wrong assumptions.
 
-The current `.lcm` format is **55** (`format_version = 55`) and the
+The current `.lcm` format is **56** (`format_version = 56`) and the
 published host ABI is **24** (`abi.version = 24`).
 They describe compatibility of intermediate modules and host services, not
 the user-facing release number. Current release label: **0.18**.

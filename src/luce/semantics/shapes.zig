@@ -75,7 +75,10 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
         // function follows the carrying path; an unbound receiver is `none`
         // and retain/release are no-ops.
         .function => true,
-        .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
+        .strukt => |layout_index| if (self.structs.items[layout_index].interface)
+            true
+        else
+            self.struct_shapes.items[layout_index].carries,
         // The OR over the members' fields (docs/UNION.md D9): the
         // predicate is static and type-level, so `Json` carries
         // objects unconditionally and `Json.number` pays the verb
@@ -142,6 +145,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
             .strukt => |layout| {
                 if (seen_structs[layout]) continue;
                 seen_structs[layout] = true;
+                if (self.structs.items[layout].interface and sought == .function) return true;
                 for (self.structs.items[layout].fields) |field| {
                     if (field.weak and sought == .weak) return true;
                     try pending.append(self.temporary, field.field_type);
@@ -204,6 +208,9 @@ pub const Incomparable = struct {
         /// of one method with different receivers would compare equal
         /// (docs/BINDING.md D6).
         function,
+        /// An existential's concrete type and payload are deliberately
+        /// erased, so field-by-field value equality has no stable meaning.
+        interface,
         /// `match` is the only door into a union (docs/UNION.md D16):
         /// an inactive payload slot holds a different shape on each
         /// side, so a run-for-run comparison is not even well formed.
@@ -268,6 +275,9 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
             .strukt => |layout| {
                 if (seen_structs[layout]) continue;
                 seen_structs[layout] = true;
+                if (self.structs.items[layout].interface) {
+                    return .{ .reason = .interface, .part = current };
+                }
                 for (self.structs.items[layout].fields) |field| {
                     if (field.weak) return .{ .reason = .weak, .part = field.field_type };
                     try pending.append(self.temporary, field.field_type);
@@ -350,7 +360,10 @@ pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
 /// and 1.6 s to check.
 pub fn valueCount(self: *const Analyzer, of: Type) u32 {
     return switch (of) {
-        .strukt => |layout_index| self.struct_shapes.items[layout_index].values,
+        .strukt => |layout_index| if (self.structs.items[layout_index].interface)
+            1
+        else
+            self.struct_shapes.items[layout_index].values,
         .variant => |index| self.variant_shapes.items[index].values,
         else => 1,
     };

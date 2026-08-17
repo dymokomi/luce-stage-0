@@ -83,7 +83,7 @@ There is one shipping engine: LLVM-generated machine code linked with
 used by the specification suite. There is no JIT, bytecode VM, handwritten
 emitter, or runtime fallback.
 
-The serialized MIR module format is **55**. The published host ABI is **24**.
+The serialized MIR module format is **56**. The published host ABI is **24**.
 The declarations in `src/luce/mir/module.zig` and
 `src/luce/codegen/abi.zig` are authoritative; never copy the numbers into a
 new compatibility check.
@@ -182,9 +182,11 @@ facts that architecture work must preserve:
   class inheritance.
 - Interfaces are nominal and support multiple methods, multi-value results,
   directional fallibility, class and struct conformers, optionals, returns,
-  and heterogeneous collections. The current hidden bound-witness layout
-  permits mutable class dispatch but refuses a writing value-struct witness;
-  the owned existential replacement remains planned.
+  closure captures, and heterogeneous collections. One owned existential
+  payload plus a static witness identity supports mutable class dispatch and
+  writing value-struct witnesses behind `mutating` requirements. Inheritance,
+  default methods, associated types, generic bounds, and runtime casts remain
+  deliberately out of scope.
 - `(x) -> expression` is capture-free. `func(x):` is a block closure with an
   ARC environment. Immutable values snapshot, references capture strongly by
   default, mutable locals share one cell, `[weak name]` is zeroing and

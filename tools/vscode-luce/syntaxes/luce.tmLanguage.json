@@ -196,7 +196,7 @@
         },
         {
           "name": "storage.modifier.luce",
-          "match": "\\b(?:static|weak|public|private)\\b"
+          "match": "\\b(?:static|mutating|weak|public|private)\\b"
         },
         {
           "name": "keyword.control.import.luce",

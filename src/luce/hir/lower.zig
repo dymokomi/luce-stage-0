@@ -249,6 +249,7 @@ const Replay = struct {
             .strukt => |layout| {
                 if (seen_structs[layout]) return false;
                 seen_structs[layout] = true;
+                if (self.code.structs[layout].interface) return true;
                 for (self.code.structs[layout].fields) |field| {
                     if (carriesObjectsIn(self, field.field_type, seen_structs, seen_variants)) return true;
                 }
@@ -657,26 +658,15 @@ const Replay = struct {
             .struct_make => |built| try self.replayStructMake(built),
             .interface_make => |built| interface: {
                 const receiver = try self.replayValue(built.receiver);
-                const fields = try self.arena().alloc(Register, built.methods.len);
-                for (built.methods, fields) |method, *field| {
-                    // Each witness owns an independent value copy of the
-                    // receiver.  Treat the replayed receiver as a view for
-                    // every slot: copy its private storage, retain its
-                    // carried references, and leave the original temporary
-                    // to its own park.
-                    const held = try self.ownedForStore(
-                        receiver,
-                        built.receiver.result(),
-                        .view,
-                    );
-                    field.* = try self.code.emit(.{ .const_function = .{
-                        .function = method.function,
-                        .receiver = held.register,
-                    } }, .{ .function = method.signature });
-                }
-                break :interface try self.code.emit(.{ .struct_make = .{
+                const held = try self.ownedForStore(
+                    receiver,
+                    built.receiver.result(),
+                    .view,
+                );
+                break :interface try self.code.emit(.{ .interface_make = .{
                     .layout = built.layout,
-                    .fields = fields,
+                    .witness = built.witness,
+                    .receiver = held.register,
                 } }, built.result);
             },
             .variant_make => |built| try self.replayVariantMake(built),
@@ -1097,11 +1087,65 @@ const Replay = struct {
         switch (called.callee) {
             .function => |index| return self.replayDirectCall(called, index),
             .indirect => |through| return self.replayIndirectCall(called, through),
+            .interface => |through| return self.replayInterfaceCall(called, through),
             .intrinsic => |kind| return self.replayIntrinsicCall(called, kind),
             .conversion => |produced| return self.replayConversion(called, produced),
             .enum_name => |index| return self.replayEnumText(called, index),
             .variant_name => |index| return self.replayVariantText(called, index),
         }
+    }
+
+    fn replayInterfaceCall(
+        self: *Replay,
+        called: nodes.Expression.Call,
+        through: nodes.ResolvedCallee.Interface,
+    ) Error!Register {
+        const signature = self.deps.signatures[through.signature];
+        const batch = called.operands;
+        const entries = try self.replayWrittenOperands(batch);
+        defer self.scratch().free(entries);
+
+        for (entries[0..batch.written], batch.slots[0..batch.written], 0..) |*entry, slot, position| {
+            try self.applyWrappers(entry);
+            if (through.writing and position != 0) {
+                const parameter = signature.parameters[slot - 1].value_type;
+                if (self.ownsStorage(parameter)) {
+                    entry.register = try self.code.ownStorage(entry.register);
+                    try self.parkDerivedStorage(entry.register, parameter);
+                }
+            }
+        }
+
+        const registers = try self.arena().alloc(Register, signature.parameters.len + 1);
+        for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
+        const arguments = try self.arena().alloc(Register, signature.parameters.len);
+        @memcpy(arguments, registers[1..]);
+        const writing = if (through.writing)
+            try self.prepareWritingReceiver(
+                batch.operands[0],
+                entries[0].register,
+                entries[0].provenance,
+            )
+        else
+            WritingReceiver{ .local = 0 };
+        const call = if (through.writing)
+            try self.code.emit(.{ .interface_call_inout = .{
+                .receiver = writing.local,
+                .layout = through.layout,
+                .method = through.method,
+                .arguments = arguments,
+                .fallible = through.fallible,
+            } }, signature.result)
+        else
+            try self.code.emit(.{ .interface_call = .{
+                .receiver = registers[0],
+                .layout = through.layout,
+                .method = through.method,
+                .arguments = arguments,
+                .fallible = through.fallible,
+            } }, signature.result);
+        if (through.writing) try self.finishWritingReceiver(writing);
+        return self.finishFallible(call, called, .fresh);
     }
 
     fn replayDirectCall(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
@@ -1131,14 +1175,19 @@ const Replay = struct {
         if (writing) {
             // The receiver travels as a place; the argument run is one
             // shorter, and the place is the receiver operand's local.
-            const receiver_local = receiverLocalOf(batch.operands[0]);
+            const receiver = try self.prepareWritingReceiver(
+                batch.operands[0],
+                entries[0].register,
+                entries[0].provenance,
+            );
             const explicit = try self.arena().alloc(Register, registers.len - 1);
             @memcpy(explicit, registers[1..]);
             const call = try self.code.emit(.{ .call_inout = .{
                 .function = index,
-                .receiver = receiver_local,
+                .receiver = receiver.local,
                 .arguments = explicit,
             } }, info.return_type);
+            try self.finishWritingReceiver(receiver);
             return self.finishFallible(call, called, .fresh);
         }
         const call = try self.code.emit(
@@ -1148,12 +1197,89 @@ const Replay = struct {
         return self.finishFallible(call, called, .fresh);
     }
 
-    /// The mutable local a writing method's receiver operand names.
-    fn receiverLocalOf(node: nodes.NodeRef) LocalId {
+    const WritingReceiver = struct {
+        local: LocalId,
+        writeback: ?Writeback = null,
+    };
+
+    const Writeback = struct {
+        target: nodes.NodeRef,
+        layout: u32,
+        field: u32,
+    };
+
+    /// A writing call normally aliases a local slot directly. A mutable
+    /// local captured by a block closure is represented in HIR as a read of
+    /// the hidden capture-cell field, however. Materialize that field into
+    /// one owned temporary so the existing MIR inout instruction can still
+    /// express the call, then copy the changed existential back to the cell.
+    /// The temporary is tracked like every other statement storage and is
+    /// released on both the success and failure paths.
+    fn prepareWritingReceiver(
+        self: *Replay,
+        node: nodes.NodeRef,
+        register: Register,
+        provenance: nodes.Provenance,
+    ) Error!WritingReceiver {
         return switch (node.*) {
-            .local_get => |read| read.local,
-            else => unreachable, // a writing receiver is a bare var binding
+            .local_get => |read| .{ .local = read.local },
+            .field_get => |field| receiver: {
+                const receiver_type = node.result();
+                const stored = try self.ownedForStore(register, receiver_type, provenance);
+                const local = try self.makeSpillSlot(receiver_type);
+                // The temporary owns the interface run until the writeback
+                // consumes it.  Claiming storage here is what makes its MIR
+                // slot a boxed `Value` rather than a bare struct pointer;
+                // `interface_call_inout` must pass the payload cell to the
+                // witness adapter, not reinterpret that pointer as a box.
+                self.code.claimStorage(local, true);
+                try self.code.store(local, stored.register);
+                try self.temps.append(self.scratch(), .{
+                    .local = local,
+                    .register = stored.register,
+                    .storage = true,
+                    .objects = try self.carriesObjects(receiver_type),
+                });
+                break :receiver .{
+                    .local = local,
+                    .writeback = .{
+                        .target = field.target,
+                        .layout = field.layout,
+                        .field = field.field,
+                    },
+                };
+            },
+            else => unreachable, // semantics admits only a bare writable name
         };
+    }
+
+    /// Store a captured writer's updated value back into its hidden class
+    /// cell. This is deliberately emitted immediately after the call, before
+    /// fallible control-flow branches, so a witness that mutates and then
+    /// reports an error has the same inout semantics as a direct local call.
+    fn finishWritingReceiver(self: *Replay, receiver: WritingReceiver) Error!void {
+        const writeback = receiver.writeback orelse return;
+        const base = try self.replayValue(writeback.target);
+        const value = try self.code.load(receiver.local);
+        const receiver_type = self.code.localType(receiver.local);
+        const stored = try self.ownedForStore(value, receiver_type, .view);
+        const layout = self.code.structs[writeback.layout];
+        std.debug.assert(layout.reference);
+        const field = layout.fields[writeback.field];
+        _ = try self.code.emit(
+            if (field.weak) .{ .weak_struct_set = .{
+                .target = base,
+                .layout = writeback.layout,
+                .field = writeback.field,
+                .value = stored.register,
+            } } else .{ .struct_set = .{
+                .target = base,
+                .layout = writeback.layout,
+                .field = writeback.field,
+                .value = stored.register,
+            } },
+            .none,
+        );
     }
 
     fn replayIndirectCall(

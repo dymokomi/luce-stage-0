@@ -1,156 +1,133 @@
 # Interfaces
 
-This is the current interface contract. Classes and value structures both
-conform today. A later owned-existential representation remains separate work
-in [ROADMAP.md](ROADMAP.md).
-
-An interface is a nominal set of method requirements. A struct or class opts in by
-listing the interface and must implement the complete contract. A matching
-type that does not list the interface does not conform.
+An interface is a nominal set of instance-method requirements. A struct or
+class opts in explicitly with `: Interface`; a type that merely happens to
+have the same methods does not conform. The compiler checks every requirement
+before it permits the value to enter an interface-typed place.
 
 ```luce
-interface UIElement:
+interface Drawable:
     func render(value: i64) -> i64
     func label() -> str
 
-struct Button: UIElement:
-    text: str
+struct Button: Drawable:
+    caption: str
+    offset: i64
 
     func render(value: i64) -> i64:
-        return value + 1
+        return value + self.offset
 
     func label() -> str:
-        return self.text
+        return self.caption
 
-func describe(item: UIElement) -> str:
-    return item.label() + ":" + str(item.render(41))
-
-func main():
-    print(describe(Button(text = "ok")))
+func describe(item: Drawable) -> str:
+    return item.label() + ":" + str(item.render(40))
 ```
 
-The conversion from `Button` to `UIElement` happens when the concrete value
-lands in an interface-typed place. There is no cast syntax, structural
-conformance, or runtime “does this type conform?” query.
+There is no cast syntax, structural conformance, runtime conformance query,
+interface field, or interface constructor. Conversion is implicit when a
+conforming value is assigned, passed, returned, or stored where the interface
+type is required.
 
 ## Contract matching
 
-For each required method, the witness must agree on:
+For every requirement, the witness must have the same method name, instance
+receiver, parameter count and order, parameter types, result count and result
+types. The requirement's parameter names are the labels callers use; witness
+parameter names are not part of the function type. Default arguments are not
+allowed in an interface declaration.
 
-- the method name and instance status;
-- the number, order, names, and types of explicit parameters;
-- the number and types of returned values; and
-- the failure direction.
+Failure is directional: a non-fallible witness may satisfy a fallible
+requirement, but a fallible witness cannot satisfy a non-fallible requirement.
+A static method cannot witness an instance requirement. Extra concrete methods
+are fine and remain hidden through the interface.
 
-A concrete type may define additional methods. A static function cannot
-satisfy an instance requirement. Interface requirements do not declare
-default arguments.
-
-Failure matching is directional. A non-fallible witness may satisfy a
-fallible requirement because a caller may safely write `try` around a call
-that never raises. A fallible witness cannot satisfy a non-fallible
-requirement.
-
-Multiple methods occupy distinct dispatch slots. Multi-value answers use the
-ordinary return-shape rules and must be received by a destructuring `let`,
-`var`, or assignment:
-
-```luce
-interface Measured:
-    func span(value: i64) -> (i64, i64)
-
-struct Range: Measured:
-    width: i64
-
-    func span(value: i64) -> (i64, i64):
-        return value, value + self.width
-
-func total(item: Measured) -> i64:
-    let low, high = item.span(10)
-    return low + high
-
-func main():
-    print(str(total(Range(width = 7))))
-```
+An incomplete conformance is rejected at its declaration. The diagnostic also
+covers duplicate requirements, duplicate conformance entries, wrong method
+shapes, and static witnesses.
 
 ## Receiver mutation
 
-A writing value-struct method cannot satisfy an interface requirement today.
-The compiler infers whether a method writes `self`; conformance rejects a
-value writer with `luce.sema.interface` because the current bound witness owns
-a snapshot rather than an inout path back to the source value.
-
-A class witness may write `self` now. Its bound receiver retains the shared
-class identity, so dispatch mutates the same object every class alias sees.
-The roadmap's owned existential is still required before a value existential
-can mutate its own boxed copy cleanly.
-
-Mutation of a reference passed as an ordinary parameter is different. A
-read-only struct witness may still mutate a `list`, `map`, or other reference
-object that it receives or reaches through a field; that does not write the
-struct receiver itself.
-
-## Storage and heterogeneous collections
-
-Interface values may be local variables, return values, optional values,
-struct fields, and elements of lists, maps, and arrays. A struct witness owns
-its copied receiver and retains the references that receiver carries. A class
-witness retains its receiver identity. Either form may outlive the concrete
-binding that formed it.
+Put `mutating` on an interface requirement when callers may need to change a
+value-struct receiver:
 
 ```luce
-interface Named:
-    func name() -> str
+interface Counter:
+    mutating func add(amount: i64)
+    func value() -> i64
 
-struct First: Named:
-    marker: i64
+struct Number: Counter:
+    current: i64
 
-    func name() -> str:
-        return "first"
+    func add(amount: i64):
+        self.current += amount
 
-struct Second: Named:
-    marker: i64
-
-    func name() -> str:
-        return "second"
-
-func main():
-    var values = new list[Named]
-    values.append(First(marker = 1))
-    values.append(Second(marker = 2))
-    print(values[0].name())
-    print(values[1].name())
+    func value() -> i64:
+        return self.current
 ```
 
-The same collection may therefore contain different concrete structs and
-classes. A concrete type may list more than one interface, and each conversion selects the
-contract requested by the destination type.
+Concrete methods never write `mutating`; the compiler infers receiver writes
+from the body. A writing witness must satisfy a `mutating` requirement. A
+non-writing witness may satisfy one as well, because it does not need the
+write-back path. A writing witness cannot satisfy a non-mutating requirement.
 
-## Runtime shape today
+A mutating call on a value existential needs a mutable bare local, just like a
+direct writing method call. A `let` binding, call result, field projection, or
+collection element is not a writable place; bind it to `var` first. Struct
+existentials copy independently, so copying one mutable interface value does
+not connect their value payloads. Class existentials retain one shared class
+identity, so class mutation remains visible through every alias. A captured
+mutable interface uses its closure cell and writes the updated existential back
+to that cell.
 
-The current implementation lowers an interface to a hidden value layout of
-bound function values, one per method. Each bound value owns a concrete struct
-receiver snapshot or retains a concrete class identity. Copying and destroying
-the interface therefore preserve the receiver graph correctly.
+## Multiple methods and multiple results
 
-This representation scales receiver storage with method count and cannot give
-a mutable value payload its own stable box. It is explicitly scheduled for
-replacement, not documented as the final ABI.
+Each requirement has its own witness slot, in declaration order. A method may
+return several values using the ordinary Luce result-shape rules:
 
-## Deliberately absent today
+```luce
+interface Bounds:
+    func limits(value: i64) -> (i64, i64)!
 
-- interface fields and property requirements;
-- default method bodies;
-- interface inheritance or composition syntax;
-- associated types;
-- runtime casting;
-- generic constraints.
+struct Window: Bounds:
+    width: i64
+
+    func limits(value: i64) -> (i64, i64):
+        return value, value + self.width
+
+func total(item: Bounds) -> i64!:
+    let low, high = try item.limits(10)
+    return low + high
+```
+
+Multi-value calls must be destructured; they are not a scalar argument or
+printable value. `try` follows the same rule as an ordinary fallible function.
+
+## Storage and collections
+
+An interface value is one owned existential payload plus a static witness
+identity. The payload is a copied value-struct receiver or a retained class
+object. Copying and releasing an interface therefore follow the receiver's
+ordinary value/reference rules; the number of interface methods does not copy
+the receiver once per method.
+
+Interface values may be locals, parameters, results, optionals, struct fields,
+and elements of lists, maps, and arrays. Each element carries its own witness,
+so one collection can hold different conforming structs and classes. A type
+may conform to multiple independent interfaces; choosing one destination
+chooses that contract's witness.
+
+## Deliberate non-goals
+
+The current language does not provide interface inheritance or composition,
+default method bodies, associated types, generic interface bounds, properties
+or fields as requirements, or runtime casts/downcasts. These are separate
+design work and are not implied by the current dispatch representation.
 
 The executable positive specification is
 [`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig).
-Class conformance and mutable class dispatch are exercised in
-[`src/luce/specs/classes_spec.zig`](../src/luce/specs/classes_spec.zig).
-Conformance and call-site refusals live in
-[`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig). Any new
-observable interface rule belongs in those differential specifications before
-it is described here.
+Conformance and call-site refusals are in
+[`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig); MIR
+serialization and verifier checks are in
+[`src/luce/mir/module.zig`](../src/luce/mir/module.zig) and
+[`src/luce/mir/verify.zig`](../src/luce/mir/verify.zig).

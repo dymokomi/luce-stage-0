@@ -7732,6 +7732,116 @@ test "luce.sema.interface: a writing method cannot satisfy a read-only interface
     , "luce.sema.interface", "writes self");
 }
 
+test "luce.sema.interface: a mutating value witness needs a mutable bare local" {
+    try expectHostSaying(
+        \\interface Counter:
+        \\    mutating func bump()
+        \\
+        \\struct Box: Counter:
+        \\    value: i64
+        \\    func bump():
+        \\        self.value += 1
+        \\
+        \\func main():
+        \\    let item: Counter = Box(value = 0)
+        \\    item.bump()
+        \\
+    , "luce.sema.let", "item is let-bound; bump writes its implicit self — use var");
+
+    try expectHostSaying(
+        \\interface Counter:
+        \\    mutating func bump()
+        \\
+        \\struct Box: Counter:
+        \\    value: i64
+        \\    func bump():
+        \\        self.value += 1
+        \\
+        \\func use(item: Counter):
+        \\    item.bump()
+        \\
+        \\func main():
+        \\    var item: Counter = Box(value = 0)
+        \\    use(item)
+        \\
+    , "luce.sema.let", "item is let-bound; bump writes its implicit self — use var");
+}
+
+test "luce.sema.interface: a mutating value witness cannot use a temporary or projection" {
+    try expectHostSaying(
+        \\interface Counter:
+        \\    mutating func bump()
+        \\
+        \\struct Box: Counter:
+        \\    value: i64
+        \\    func bump():
+        \\        self.value += 1
+        \\
+        \\func make() -> Counter:
+        \\    return Box(value = 0)
+        \\
+        \\func main():
+        \\    make().bump()
+        \\
+    , "luce.sema.self", "bump writes its implicit self, so its receiver must be a var binding — not a call result or temporary");
+
+    for ([_][]const u8{
+        "holder.item.bump()",
+        "items[0].bump()",
+    }) |call| {
+        const source = try std.fmt.allocPrint(std.testing.allocator,
+            \\interface Counter:
+            \\    mutating func bump()
+            \\
+            \\struct Box: Counter:
+            \\    value: i64
+            \\    func bump():
+            \\        self.value += 1
+            \\
+            \\struct Holder:
+            \\    item: Counter
+            \\
+            \\func main():
+            \\    var holder = Holder(item = Box(value = 0))
+            \\    var items = new list[Counter]
+            \\    items.append(Box(value = 0))
+            \\    {s}
+            \\
+        , .{call});
+        defer std.testing.allocator.free(source);
+        try expectHostSaying(source, "luce.sema.self", "bump writes its implicit self, so its receiver must be a var binding");
+    }
+}
+
+test "luce.parse.mutating: the marker belongs only on interface requirements" {
+    try expectHostSaying(
+        \\mutating func top_level():
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.mutating", "mutating belongs on an interface requirement");
+    try expectHostSaying(
+        \\struct Box:
+        \\    value: i64
+        \\    mutating func bump():
+        \\        self.value += 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.mutating", "mutating belongs on an interface requirement");
+    try expectHostSaying(
+        \\interface Counter:
+        \\    mutating mutating func bump()
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.mutating", "write 'mutating' once");
+}
+
 test "luce.sema.interface: a conformance list names interfaces only" {
     try expectHostSaying(
         \\struct Box: i64:
@@ -7845,6 +7955,58 @@ test "luce.sema.interface: a non-conforming struct cannot be passed as the contr
         \\    print(str(draw(button)))
         \\
     , "luce.sema.type", "argument 1 of draw is Renderable, got Button");
+}
+
+test "luce.sema.interface: every required method must be implemented" {
+    try expectHostSaying(
+        \\interface Drawable:
+        \\    func render(value: i64) -> i64
+        \\    func label() -> str
+        \\
+        \\struct Button: Drawable:
+        \\    marker: i64
+        \\    func render(value: i64) -> i64:
+        \\        return value
+        \\
+        \\func main():
+        \\    let button = Button(marker = 0)
+        \\    _ = button
+        \\
+    , "luce.sema.interface", "struct Button does not implement Drawable.label");
+}
+
+test "luce.sema.interface: witness parameters must match the contract" {
+    try expectHostSaying(
+        \\interface Reader:
+        \\    func read(value: i64) -> i64
+        \\
+        \\struct Buffer: Reader:
+        \\    marker: i64
+        \\    func read(value: str) -> i64:
+        \\        return self.marker
+        \\
+        \\func main():
+        \\    let buffer = Buffer(marker = 1)
+        \\    _ = buffer
+        \\
+    , "luce.sema.interface", "Buffer.read does not match interface method Reader.read");
+}
+
+test "luce.sema.interface: a non-mutating requirement rejects a writing witness" {
+    try expectHostSaying(
+        \\interface Counter:
+        \\    func bump()
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func bump():
+        \\        self.current += 1
+        \\
+        \\func main():
+        \\    let number = Number(current = 0)
+        \\    _ = number
+        \\
+    , "luce.sema.interface", "writes self, but interface method Counter.bump is not mutating");
 }
 
 test "luce.parse.interface: an interface must have at least one method" {

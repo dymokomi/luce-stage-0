@@ -600,6 +600,12 @@ pub fn failIncomparable(
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );
         },
+        .interface => try self.fail(
+            "luce.sema.interface",
+            span,
+            "{s} erases the concrete payload behind an interface, so {s} has no field-by-field value meaning; compare an explicit stable property instead",
+            .{ try self.analyzer.typeName(compared), operator },
+        ),
         .weak => try self.fail(
             "luce.sema.weak.access",
             span,
@@ -674,6 +680,12 @@ pub fn failUnsearchable(
                 .{ method_name, element_name, part_name },
             );
         },
+        .interface => try self.fail(
+            "luce.sema.method",
+            span,
+            "{s} compares elements with ==, but {s} contains an interface value whose concrete payload is erased; search an explicit stable key instead",
+            .{ method_name, element_name },
+        ),
         .weak => try self.fail(
             "luce.sema.weak.access",
             span,

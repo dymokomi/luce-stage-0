@@ -853,6 +853,9 @@ pub const Lowered = struct {
     /// One row per distinct function type the program writes
     /// (docs/FUNCTIONS.md S2).
     signatures: []types.Signature = &.{},
+    /// Static interface conformances. Runtime values carry a one-based row
+    /// index and one payload; method functions stay here in program metadata.
+    interface_witnesses: []defs.InterfaceWitness = &.{},
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
     /// Constant containers in declaration order.  Unlike strings,
@@ -903,6 +906,7 @@ pub fn build(
     program.enums = lowered.enums;
     program.variants = lowered.variants;
     program.signatures = lowered.signatures;
+    program.interface_witnesses = lowered.interface_witnesses;
     program.functions = functions;
     program.constants = lowered.constants;
     const container_constants = try arena.alloc(defs.ContainerConstant, lowered.container_constants.len);

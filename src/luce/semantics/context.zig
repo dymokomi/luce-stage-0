@@ -515,8 +515,9 @@ pub const InterfaceMethodInfo = struct {
     parameter_types: []Type,
     results: []Type,
     return_type: Type,
+    mutating: bool,
     fallible: bool,
-    field: u32,
+    slot: u32,
     signature: u32,
 };
 
@@ -536,6 +537,8 @@ pub const InterfaceDeclInfo = struct {
 pub const InterfaceConformance = struct {
     interface: u32,
     strukt: u32,
+    receiver: Type,
+    witness: u32,
     methods: []u32,
 };
 

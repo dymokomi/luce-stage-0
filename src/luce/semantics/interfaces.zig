@@ -3,7 +3,7 @@
 //! Interfaces are nominal.  A struct opts in with `: Interface`, and this
 //! pass checks the complete method table before any conversion can be made.
 //! The runtime representation is deliberately not here: a conversion is
-//! lowered later as a small struct run of existing bound function values.
+//! lowered later as one witness identity beside one owned concrete payload.
 
 const std = @import("std");
 const source_mod = @import("../source.zig");
@@ -71,9 +71,9 @@ pub fn collectDeclarations(self: *Analyzer) Error!void {
     self.diagnostics.scope = source_mod.root_file;
 }
 
-/// Resolve every method signature and fill the hidden dispatch fields in the
-/// interface layout.  The fields are never exposed to source; they are only
-/// the existing runtime shape used by `struct_get` and `call_indirect`.
+/// Resolve every method signature and fill the contract table in the
+/// interface layout. Requirements are metadata rather than hidden fields:
+/// the existential itself stays two slots regardless of method count.
 pub fn settleDeclarations(self: *Analyzer) Error!void {
     for (self.interface_decls.items, 0..) |*info, interface_index| {
         self.diagnostics.scope = self.modules[info.module].file;
@@ -84,8 +84,8 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
         }
         var methods: std.ArrayList(context.InterfaceMethodInfo) = .empty;
         defer methods.deinit(self.arena);
-        var fields: std.ArrayList(types.StructField) = .empty;
-        defer fields.deinit(self.arena);
+        var contracts: std.ArrayList(types.InterfaceMethod) = .empty;
+        defer contracts.deinit(self.arena);
         for (declaration.methods) |*method| {
             var duplicate = false;
             for (methods.items) |existing| {
@@ -134,23 +134,26 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
                 .parameters = try signature_parameters.toOwnedSlice(self.arena),
                 .result = return_type,
             })).function;
-            const field: u32 = @intCast(fields.items.len);
-            try fields.append(self.arena, .{
+            const slot: u32 = @intCast(contracts.items.len);
+            try contracts.append(self.arena, .{
                 .name = try self.arena.dupe(u8, method.name),
-                .field_type = .{ .function = signature },
+                .signature = signature,
+                .mutating = method.mutating,
+                .fallible = method.fallible,
             });
             try methods.append(self.arena, .{
                 .declaration = method,
                 .parameter_types = try parameter_types.toOwnedSlice(self.arena),
                 .results = try results.toOwnedSlice(self.arena),
                 .return_type = return_type,
+                .mutating = method.mutating,
                 .fallible = method.fallible,
-                .field = field,
+                .slot = slot,
                 .signature = signature,
             });
         }
         info.methods = try methods.toOwnedSlice(self.arena);
-        self.structs.items[info.layout].fields = try fields.toOwnedSlice(self.arena);
+        self.structs.items[info.layout].interface_methods = try contracts.toOwnedSlice(self.arena);
         _ = interface_index;
     }
     self.diagnostics.scope = source_mod.root_file;
@@ -177,7 +180,7 @@ pub fn synthesizeShapes(self: *Analyzer) Error!void {
                 .parameters = try interfaceSignatureParameters(self, method),
                 .result = return_type,
             })).function;
-            self.structs.items[info.layout].fields[method.field].field_type = .{ .function = method.signature };
+            self.structs.items[info.layout].interface_methods[method.slot].signature = method.signature;
         }
     }
     self.diagnostics.scope = source_mod.root_file;
@@ -256,12 +259,12 @@ pub fn settleConformances(self: *Analyzer) Error!void {
                         valid = false;
                         continue;
                     }
-                    if (implementation.receiver == .writes) {
+                    if (implementation.receiver == .writes and !method.mutating) {
                         try self.fail(
                             "luce.sema.interface",
                             method.declaration.name_span,
-                            "{s}.{s} writes self; interface methods are read-only so a value can be dispatched safely",
-                            .{ declaration.name, method.declaration.name },
+                            "{s}.{s} writes self, but interface method {s}.{s} is not mutating",
+                            .{ declaration.name, method.declaration.name, contract.declaration.name, method.declaration.name },
                         );
                         valid = false;
                         continue;
@@ -300,9 +303,12 @@ pub fn settleConformances(self: *Analyzer) Error!void {
                     try implementations.append(self.arena, function);
                 }
                 if (!valid or implementations.items.len != contract.methods.len) continue;
+                const witness: u32 = @intCast(self.conformances.items.len);
                 try self.conformances.append(self.temporary, .{
                     .interface = interface_index,
                     .strukt = strukt,
+                    .receiver = self.functions.items[implementations.items[0]].parameter_types[0],
+                    .witness = witness,
                     .methods = try implementations.toOwnedSlice(self.arena),
                 });
             }

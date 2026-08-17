@@ -229,11 +229,11 @@ An interface requirement is an instance method declaration without a body. A
 conforming type lists the interface and supplies a compatible method. Names,
 explicit parameters, results, and failure direction are checked.
 
-A class writer can satisfy an interface today because it mutates shared class
-identity. A writing structure method cannot yet be a witness: the current
-interface value owns receiver snapshots rather than one mutable boxed value.
-[Interfaces](/guide/interfaces/) explains that boundary without changing
-ordinary structure method behavior.
+A class writer can satisfy an interface because it mutates shared class
+identity. A writing structure method can satisfy a `mutating` requirement; the
+call must use a mutable bare local so the updated interface payload can be
+written back. [Interfaces](/guide/interfaces/) explains that boundary without
+changing ordinary structure method behavior.
 
 The exact receiver and writer rules are in [Statements and Declarations:
 Methods](/guide/reference/statements/#methods). Continue with

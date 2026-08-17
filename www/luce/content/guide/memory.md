@@ -160,11 +160,13 @@ and Closures](/guide/closures/#snapshot-captures) gives a complete example.
 
 ## Interfaces preserve their concrete value
 
-An interface value owns the dispatch state for its concrete receiver. A
-structure conformance owns a receiver snapshot; a class conformance retains
-the class identity. A class method called through an interface may mutate that
-shared object. A writing value-structure witness is currently refused because
-the present interface representation does not expose a mutable value payload.
+An interface value owns one payload and a static witness identity for its
+concrete receiver. A structure conformance owns a copied value; a class
+conformance retains the class identity. A class method called through an
+interface may mutate that shared object. A value-structure witness may write
+through an interface only when the requirement is marked `mutating`, and the
+call has a mutable bare local as its receiver. `let` bindings, temporaries,
+field projections, and collection elements are not writable value places.
 
 ## Workers remain isolated
 

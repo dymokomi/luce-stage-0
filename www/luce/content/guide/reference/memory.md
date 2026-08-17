@@ -117,15 +117,16 @@ program cannot mutate it directly or through hidden provenance.
 
 ### M12 — interface dispatch owns its receiver {#m12}
 
-The current interface layout stores one bound function per required method. A
-structure conformer is copied into each bound receiver and its reference
-fields are retained. A class conformer retains the shared class identity, so a
-mutable class witness changes the same object every alias observes.
+An interface value stores one owned payload and a static witness identity. A
+structure conformer is copied into that payload and its reference fields are
+retained. A class conformer retains the shared class identity, so a mutable
+class witness changes the same object every alias observes. A `mutating`
+requirement permits a writing value-struct witness; the call must name a
+mutable bare local so the updated payload can be written back.
 
 A stored or returned interface may outlive the concrete binding that formed
-it. The planned one-payload existential replaces repeated receiver state with
-one owned payload, metadata, and witness table; it does not change this
-lifetime rule.
+it. Copying the interface retains the payload's reachable objects, and the
+last copy releases them.
 
 ### M13 — bound methods and closures own their environments {#m13}
 

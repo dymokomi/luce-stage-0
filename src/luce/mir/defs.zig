@@ -83,6 +83,13 @@ pub const function_run_length: usize = 2;
 pub const function_run_named: usize = 0;
 pub const function_run_receiver: usize = 1;
 
+/// An interface existential's field run. Slot zero is a one-based index
+/// into `Program.interface_witnesses` (zero is the uninitialized sentinel);
+/// slot one is the sole owned concrete payload.
+pub const interface_run_length: usize = 2;
+pub const interface_run_witness: usize = 0;
+pub const interface_run_payload: usize = 1;
+
 pub const BlockId = u32;
 pub const LocalId = u32;
 
@@ -970,6 +977,9 @@ pub const Instruction = union(enum) {
     /// instruction set got smaller rather than larger (docs/TYPES.md
     /// §3).
     convert: Register,
+    /// Erase one concrete nominal value behind an interface witness.  The
+    /// payload is stored exactly once, regardless of the contract's size.
+    interface_make: InterfaceMake,
     struct_make: struct { layout: u32, fields: []Register },
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
@@ -995,6 +1005,11 @@ pub const Instruction = union(enum) {
     /// zero is marked `inout` and aliases this local on both the normal
     /// and errored edges.
     call_inout: InoutCall,
+    /// Dispatch through an interface value. The read form accepts any value;
+    /// the inout form names the mutable local whose existential payload may
+    /// be replaced by a `mutating` requirement.
+    interface_call: InterfaceCall,
+    interface_call_inout: InterfaceInoutCall,
     /// `spawn f(args)` — hand `f` and its arguments to a worker with a
     /// runtime of its own, and answer the `task` that owns it
     /// (docs/THREADS.md D2, D3).  The same shape as `call` because it
@@ -1048,6 +1063,21 @@ pub const Instruction = union(enum) {
     };
     pub const Call = struct { function: u32, arguments: []Register };
     pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
+    pub const InterfaceMake = struct { layout: u32, witness: u32, receiver: Register };
+    pub const InterfaceCall = struct {
+        receiver: Register,
+        layout: u32,
+        method: u32,
+        arguments: []Register,
+        fallible: bool = false,
+    };
+    pub const InterfaceInoutCall = struct {
+        receiver: LocalId,
+        layout: u32,
+        method: u32,
+        arguments: []Register,
+        fallible: bool = false,
+    };
     pub const IndirectCall = struct {
         callee: Register,
         signature: u32,
@@ -1066,6 +1096,15 @@ pub const Instruction = union(enum) {
             else => false,
         };
     }
+};
+
+/// One statically verified conformance descriptor.  A runtime existential
+/// stores only this row's one-based index and one owned payload. Method
+/// indexes are in the interface declaration's order.
+pub const InterfaceWitness = struct {
+    interface: u32,
+    receiver: Type,
+    methods: []u32,
 };
 
 pub const Local = struct {
@@ -1190,6 +1229,7 @@ pub const Program = struct {
     /// `luce ir`; never on the execution path, where a function value is
     /// the `i32` it is stored as.
     signatures: []types.Signature = &.{},
+    interface_witnesses: []InterfaceWitness = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
     /// Constant-container declarations after reachability pruning.

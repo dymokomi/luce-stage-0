@@ -183,16 +183,15 @@ signatures, construction, and import diagnostics in detail.
 A structure can opt into one or more interfaces by listing them after its
 name. The compiler checks that every required method is present with compatible
 parameters, results, and fallibility. Landing the structure in an
-interface-typed place owns a receiver snapshot and retains reference fields in
-that snapshot.
+interface-typed place copies it into one owned payload and records the static
+witness for its concrete type.
 
-Read-only structure witnesses work in locals, returns, fields, optionals, and
-heterogeneous containers. A writing structure method is not yet an interface
-witness because the current interface representation does not provide one
-mutable boxed payload. Ordinary writing structure methods are fully supported.
+Mark an interface requirement `mutating` when its value-struct witness may
+write `self`. A mutating call needs a mutable bare local; `let` bindings,
+temporaries, field projections, and collection elements cannot receive the
+updated value. Ordinary writing structure methods remain fully supported.
 
-See [Interfaces](/guide/interfaces/) for conformance and dispatch, and
-[Status](/status/#interfaces) for the planned owned-existential improvement.
+See [Interfaces](/guide/interfaces/) for conformance, mutation, and dispatch.
 
 ## Choosing another type
 

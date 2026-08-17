@@ -773,32 +773,17 @@ pub const FunctionBuilder = struct {
         if (value.value_type.eql(expected)) return value;
         // A concrete struct or class may be passed to a nominal interface only
         // after it explicitly promised that interface.  The conversion
-        // records one bound method per contract slot; lower reuses the
-        // ordinary function-value ABI for those slots.
+        // records one static witness identity and lower stores the concrete
+        // payload exactly once.
         if (expected == .strukt) {
             if (self.analyzer.interfaceForLayout(expected.strukt)) |interface_index| {
                 const concrete_layout = self.analyzer.nominalLayout(value.value_type) orelse return null;
                 if (self.analyzer.conformance(concrete_layout, interface_index)) |conformance| {
-                    const contract = self.analyzer.interface_decls.items[interface_index];
-                    const methods = try self.arena().alloc(nodes.Expression.InterfaceMethod, contract.methods.len);
-                    for (conformance.methods, contract.methods, methods) |function, method, *slot| {
-                        slot.* = .{
-                            .function = function,
-                            .signature = method.signature,
-                            // The interface call carries the contract's
-                            // failure obligation; the witness entry carries
-                            // the concrete target's actual effect.  A
-                            // non-fallible implementation may satisfy a
-                            // fallible requirement, just as Swift's
-                            // throwing protocol witness rules do.
-                            .fallible = self.analyzer.functions.items[function].fallible,
-                        };
-                    }
                     const converted = Typed{
                         .node = try recorder.recordNode(self, .{ .interface_make = .{
                             .layout = expected.strukt,
+                            .witness = conformance.witness,
                             .receiver = value.node,
-                            .methods = methods,
                             .result = expected,
                             .span = value.node.span(),
                         } }),

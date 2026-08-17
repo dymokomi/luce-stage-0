@@ -425,8 +425,12 @@ pub const Frame = struct {
 
 const Register = mir.Register;
 
-const Inout = struct {
-    slot: usize,
+const Inout = union(enum) {
+    /// A slot in the reallocating frame-storage vector. Keep it as an index.
+    frame: usize,
+    /// A payload cell in an owned interface run. Runtime run allocations are
+    /// stable for their lifetime, so this pointer survives deeper calls.
+    external: *RuntimeValue,
 };
 
 // ---------------------------------------------------------------------------
@@ -641,7 +645,10 @@ pub const Machine = struct {
 
     fn localSlot(self: *Machine, frame: *const Frame, local: mir.LocalId) *RuntimeValue {
         if (local == 0) {
-            if (frame.inout) |inout| return &self.frame_storage.items[inout.slot];
+            if (frame.inout) |inout| return switch (inout) {
+                .frame => |slot| &self.frame_storage.items[slot],
+                .external => |slot| slot,
+            };
         }
         return &self.frame_storage.items[frame.slots_at + frame.register_count + local];
     }
@@ -650,9 +657,7 @@ pub const Machine = struct {
         if (receiver == 0) {
             if (frame.inout) |inout| return inout;
         }
-        return .{
-            .slot = frame.slots_at + frame.register_count + receiver,
-        };
+        return .{ .frame = frame.slots_at + frame.register_count + receiver };
     }
 
     /// The same, for every frame a trap left standing.
@@ -1102,6 +1107,17 @@ pub const Machine = struct {
                             mir.boxTag(function.result_types[item]).?,
                         ) catch |mistake| return self.caught(mistake);
                     },
+                    .interface_make => |make| {
+                        self.field_scratch.clearRetainingCapacity();
+                        try self.field_scratch.ensureTotalCapacity(
+                            self.arena,
+                            mir.interface_run_length,
+                        );
+                        self.field_scratch.appendAssumeCapacity(.ofI64(make.witness + 1));
+                        self.field_scratch.appendAssumeCapacity(registers[make.receiver]);
+                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                            return self.caught(mistake);
+                    },
                     .struct_make => |make| {
                         const layout = self.program.structs[make.layout];
                         self.field_scratch.clearRetainingCapacity();
@@ -1228,6 +1244,62 @@ pub const Machine = struct {
                         const inout = inoutFrom(frame, called.receiver);
                         if (try self.pushFrame(
                             called.function,
+                            self.argument_scratch.items,
+                            item,
+                            inout,
+                        )) |failed| return failed;
+                        continue :dispatch;
+                    },
+                    .interface_call => |called| {
+                        const erased = self.interfaceValue(registers[called.receiver], called.layout) orelse
+                            return self.trap(.null_object);
+                        const target_index = erased.witness.methods[called.method];
+                        const target = &self.program.functions[target_index];
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(
+                            self.arena,
+                            called.arguments.len + 1,
+                        );
+                        const inout: ?Inout = if (target.locals[0].inout)
+                            .{ .external = erased.payload }
+                        else blk: {
+                            self.argument_scratch.appendAssumeCapacity(erased.payload.*);
+                            break :blk null;
+                        };
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        if (try self.pushFrame(
+                            target_index,
+                            self.argument_scratch.items,
+                            item,
+                            inout,
+                        )) |failed| return failed;
+                        continue :dispatch;
+                    },
+                    .interface_call_inout => |called| {
+                        const erased = self.interfaceValue(
+                            self.localSlot(frame, called.receiver).*,
+                            called.layout,
+                        ) orelse return self.trap(.null_object);
+                        const target_index = erased.witness.methods[called.method];
+                        const target = &self.program.functions[target_index];
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(
+                            self.arena,
+                            called.arguments.len + 1,
+                        );
+                        const inout: ?Inout = if (target.locals[0].inout)
+                            .{ .external = erased.payload }
+                        else blk: {
+                            self.argument_scratch.appendAssumeCapacity(erased.payload.*);
+                            break :blk null;
+                        };
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        if (try self.pushFrame(
+                            target_index,
                             self.argument_scratch.items,
                             item,
                             inout,
@@ -1493,6 +1565,33 @@ pub const Machine = struct {
         };
     }
 
+    const InterfaceValue = struct {
+        witness: *const mir.InterfaceWitness,
+        payload: *RuntimeValue,
+    };
+
+    /// Resolve the private two-slot existential run. Zero/uninitialized and
+    /// malformed values all take the ordinary null-object trap at the call.
+    fn interfaceValue(
+        self: *Machine,
+        held: RuntimeValue,
+        layout: u32,
+    ) ?InterfaceValue {
+        if (held.tag != .strukt) return null;
+        const slots = held.asStruct();
+        if (slots.len != mir.interface_run_length) return null;
+        if (slots[mir.interface_run_witness].tag != .i64) return null;
+        const one_based = slots[mir.interface_run_witness].asI64();
+        if (one_based <= 0 or one_based > self.program.interface_witnesses.len)
+            return null;
+        const witness = &self.program.interface_witnesses[@intCast(one_based - 1)];
+        if (witness.interface != layout) return null;
+        return .{
+            .witness = witness,
+            .payload = &slots[mir.interface_run_payload],
+        };
+    }
+
     /// The zero value a fresh local or array element carries, per type.
     pub fn zeroValue(self: *Machine, written: types.Type) error{OutOfMemory}!RuntimeValue {
         // An enum-typed slot starts at the enum's **first declared
@@ -1558,12 +1657,17 @@ pub const Machine = struct {
                 }
                 if (self.struct_zeros[layout_index]) |zero| break :blk zero;
                 const layout = self.program.structs[layout_index];
-                const fields = try self.arena.alloc(RuntimeValue, layout.fields.len);
-                for (layout.fields, fields) |field, *slot| {
-                    slot.* = if (field.weak)
-                        .ofWeak(.none)
-                    else
-                        try self.zeroValue(field.field_type);
+                const fields = try self.arena.alloc(RuntimeValue, layout.runLength());
+                if (layout.interface) {
+                    fields[mir.interface_run_witness] = .ofI64(0);
+                    fields[mir.interface_run_payload] = .none;
+                } else {
+                    for (layout.fields, fields) |field, *slot| {
+                        slot.* = if (field.weak)
+                            .ofWeak(.none)
+                        else
+                            try self.zeroValue(field.field_type);
+                    }
                 }
                 const zero: RuntimeValue = .ofStruct(fields);
                 self.struct_zeros[layout_index] = zero;

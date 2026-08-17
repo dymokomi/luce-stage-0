@@ -17,7 +17,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 
     for (program.structs) |layout| {
         try appendPrint(&text, allocator, "{s} {s}:\n", .{
-            if (layout.reference) "class" else "struct",
+            if (layout.interface) "interface" else if (layout.reference) "class" else "struct",
             layout.name,
         });
         for (layout.fields) |field| {
@@ -27,6 +27,16 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
                 if (field.weak) "weak " else "",
                 field.name,
                 field_type_name,
+            });
+        }
+        for (layout.interface_methods) |method| {
+            const signature_name = try typeName(allocator, program, .{ .function = method.signature });
+            defer allocator.free(signature_name);
+            try appendPrint(&text, allocator, "    {s}{s}: {s}{s}\n", .{
+                if (method.mutating) "mutating " else "",
+                method.name,
+                signature_name,
+                if (method.fallible) " !" else "",
             });
         }
     }
@@ -233,6 +243,12 @@ fn printInstruction(
         },
         .unary => |unary| try appendPrint(text, allocator, "{s} r{d}", .{ @tagName(unary.op), unary.operand }),
         .convert => |operand| try appendPrint(text, allocator, "convert r{d}", .{operand}),
+        .interface_make => |make| try appendPrint(
+            text,
+            allocator,
+            "interface_make {s}, witness#{d}, r{d}",
+            .{ program.structs[make.layout].name, make.witness, make.receiver },
+        ),
         .struct_make => |make| {
             try appendPrint(text, allocator, "struct_make {s}", .{program.structs[make.layout].name});
             for (make.fields) |field| try appendPrint(text, allocator, ", r{d}", .{field});
@@ -281,6 +297,22 @@ fn printInstruction(
             try appendPrint(text, allocator, "call_inout {s}, &%{d}", .{
                 program.functions[call.function].name,
                 call.receiver,
+            });
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
+        .interface_call => |call| {
+            try appendPrint(text, allocator, "interface_call r{d}, {s}.{s}", .{
+                call.receiver,
+                program.structs[call.layout].name,
+                program.structs[call.layout].interface_methods[call.method].name,
+            });
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
+        .interface_call_inout => |call| {
+            try appendPrint(text, allocator, "interface_call_inout &%{d}, {s}.{s}", .{
+                call.receiver,
+                program.structs[call.layout].name,
+                program.structs[call.layout].interface_methods[call.method].name,
             });
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },

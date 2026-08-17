@@ -575,6 +575,15 @@ pub const Parser = struct {
                         self.recover();
                     }
                 },
+                .keyword_mutating => {
+                    try self.report(
+                        "luce.parse.mutating",
+                        self.peek().span,
+                        "mutating belongs on an interface requirement; concrete methods infer receiver mutation from their body",
+                        .{},
+                    );
+                    self.recover();
+                },
                 .keyword_func => {
                     if (try self.funcDecl()) |declaration| {
                         try functions.append(self.arena, declaration);
@@ -782,6 +791,15 @@ pub const Parser = struct {
                 } else {
                     self.recover();
                 }
+            },
+            .keyword_mutating => {
+                try self.report(
+                    "luce.parse.mutating",
+                    self.peek().span,
+                    "mutating belongs on an interface requirement; concrete methods infer receiver mutation from their body",
+                    .{},
+                );
+                self.recover();
             },
             else => {
                 try self.report(
@@ -1276,11 +1294,22 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
+            const mutating = self.accept(.keyword_mutating) != null;
+            if (mutating and self.peekKind() == .keyword_mutating) {
+                try self.report(
+                    "luce.parse.mutating",
+                    self.peek().span,
+                    "write 'mutating' once before the interface requirement",
+                    .{},
+                );
+                self.recover();
+                continue;
+            }
             if (self.peekKind() != .keyword_func) {
                 try self.report(
                     "luce.parse.interface",
                     self.peek().span,
-                    "an interface contains method signatures: write 'func name(...) -> type'",
+                    "an interface contains method signatures: write 'func name(...) -> type' or 'mutating func name(...) -> type'",
                     .{},
                 );
                 self.recover();
@@ -1391,6 +1420,7 @@ pub const Parser = struct {
                 .name_span = method_name.span,
                 .parameters = try parameters.toOwnedSlice(self.arena),
                 .returns = try returns.toOwnedSlice(self.arena),
+                .mutating = mutating,
                 .fallible = fallible,
                 .span = .{ .start = method_start.span.start, .end = method_end },
             });
@@ -1416,6 +1446,17 @@ pub const Parser = struct {
         visibility: ast.Visibility,
     ) Error!void {
         const weak_marker = self.accept(.keyword_weak);
+        if (self.peekKind() == .keyword_mutating) {
+            const marker = self.advance();
+            try self.report(
+                "luce.parse.mutating",
+                marker.span,
+                "mutating belongs on an interface requirement; concrete methods infer receiver mutation from their body",
+                .{},
+            );
+            self.recover();
+            return;
+        }
         if (weak_marker != null and
             (self.peekKind() == .keyword_func or
                 self.peekKind() == .keyword_static or
@@ -3283,6 +3324,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_init => "the keyword 'init'",
         .keyword_deinit => "the keyword 'deinit'",
         .keyword_interface => "the keyword 'interface'",
+        .keyword_mutating => "the keyword 'mutating'",
         .keyword_alias => "the keyword 'alias'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_union => "the keyword 'union'",

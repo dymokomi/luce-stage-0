@@ -211,7 +211,12 @@ pub const magic = "LUCE";
 /// 55 — dead `chr_code` and `ord_text` intrinsics leave the wire set; their
 /// work is performed by checked scalar conversions. The unused
 /// `ownership_cycle` trap from the manual-ownership design leaves as well.
-pub const format_version: u32 = 55;
+///
+/// 56 — interface existentials store one static witness identity and one
+/// owned payload instead of one bound receiver copy per method. Interface
+/// requirements record mutability/fallibility, witness rows are serialized,
+/// and dedicated make/call instructions replace forged struct fields.
+pub const format_version: u32 = 56;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -258,6 +263,13 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
             try writer.int(u8, @intFromBool(field.weak));
             try writer.valueType(field.field_type);
         }
+        try writer.int(u32, @intCast(layout.interface_methods.len));
+        for (layout.interface_methods) |method| {
+            try writer.blob(method.name);
+            try writer.int(u32, method.signature);
+            try writer.int(u8, @intFromBool(method.mutating));
+            try writer.int(u8, @intFromBool(method.fallible));
+        }
     }
 
     try writer.int(u32, @intCast(program.heap_types.len));
@@ -296,6 +308,14 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
             try writer.valueType(parameter.value_type);
         }
         try writer.valueType(signature.result);
+    }
+
+    try writer.int(u32, @intCast(program.interface_witnesses.len));
+    for (program.interface_witnesses) |witness| {
+        try writer.int(u32, witness.interface);
+        try writer.valueType(witness.receiver);
+        try writer.int(u32, @intCast(witness.methods.len));
+        for (witness.methods) |method| try writer.int(u32, method);
     }
 
     try writer.int(u32, @intCast(program.functions.len));
@@ -476,6 +496,11 @@ const Writer = struct {
                 try self.int(u32, unary.operand);
             },
             .convert => |operand| try self.int(u32, operand),
+            .interface_make => |make| {
+                try self.int(u32, make.layout);
+                try self.int(u32, make.witness);
+                try self.int(u32, make.receiver);
+            },
             .struct_make => |make| {
                 try self.int(u32, make.layout);
                 try self.registers(make.fields);
@@ -522,6 +547,20 @@ const Writer = struct {
                 try self.int(u32, call.function);
                 try self.int(u32, call.receiver);
                 try self.registers(call.arguments);
+            },
+            .interface_call => |call| {
+                try self.int(u32, call.receiver);
+                try self.int(u32, call.layout);
+                try self.int(u32, call.method);
+                try self.registers(call.arguments);
+                try self.int(u8, @intFromBool(call.fallible));
+            },
+            .interface_call_inout => |call| {
+                try self.int(u32, call.receiver);
+                try self.int(u32, call.layout);
+                try self.int(u32, call.method);
+                try self.registers(call.arguments);
+                try self.int(u8, @intFromBool(call.fallible));
             },
             .call_indirect => |call| {
                 try self.int(u32, call.callee);
@@ -600,6 +639,15 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
             field.field_type = try reader.valueType();
         }
         layout.fields = fields;
+        const method_count = try reader.count();
+        const methods = try arena.alloc(types.InterfaceMethod, method_count);
+        for (methods) |*method| {
+            method.name = try arena.dupe(u8, try reader.blob());
+            method.signature = try reader.int(u32);
+            method.mutating = (try reader.int(u8)) != 0;
+            method.fallible = (try reader.int(u8)) != 0;
+        }
+        layout.interface_methods = methods;
     }
     program.structs = structs;
 
@@ -656,6 +704,18 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         signature.result = try reader.valueType();
     }
     program.signatures = signatures;
+
+    const witness_count = try reader.count();
+    const witnesses = try arena.alloc(mir.InterfaceWitness, witness_count);
+    for (witnesses) |*witness| {
+        witness.interface = try reader.int(u32);
+        witness.receiver = try reader.valueType();
+        const method_count = try reader.count();
+        const methods = try arena.alloc(u32, method_count);
+        for (methods) |*method| method.* = try reader.int(u32);
+        witness.methods = methods;
+    }
+    program.interface_witnesses = witnesses;
 
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
@@ -924,6 +984,11 @@ const Reader = struct {
                 .operand = try self.int(u32),
             } },
             .convert => .{ .convert = try self.int(u32) },
+            .interface_make => .{ .interface_make = .{
+                .layout = try self.int(u32),
+                .witness = try self.int(u32),
+                .receiver = try self.int(u32),
+            } },
             .struct_make => .{ .struct_make = .{
                 .layout = try self.int(u32),
                 .fields = try self.registers(arena),
@@ -972,6 +1037,20 @@ const Reader = struct {
                 .function = try self.int(u32),
                 .receiver = try self.int(u32),
                 .arguments = try self.registers(arena),
+            } },
+            .interface_call => .{ .interface_call = .{
+                .receiver = try self.int(u32),
+                .layout = try self.int(u32),
+                .method = try self.int(u32),
+                .arguments = try self.registers(arena),
+                .fallible = (try self.int(u8)) != 0,
+            } },
+            .interface_call_inout => .{ .interface_call_inout = .{
+                .receiver = try self.int(u32),
+                .layout = try self.int(u32),
+                .method = try self.int(u32),
+                .arguments = try self.registers(arena),
+                .fallible = (try self.int(u8)) != 0,
             } },
             .spawn => .{ .spawn = .{
                 .function = try self.int(u32),
@@ -2146,8 +2225,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // text-boundary trap names use the public `str` vocabulary.
     // 54 -> 55: the dead `chr_code` and `ord_text` intrinsics and the
     // retired manual-ownership `ownership_cycle` trap are removed.
-    try testing.expectEqual(@as(u32, 55), format_version);
-    try testing.expectEqual(@as(u64, 8342519655480777746), hasher.final());
+    // 55 -> 56: owned interface existentials add three instructions and
+    // explicit contract/witness metadata; method count no longer changes a
+    // value's physical representation.
+    try testing.expectEqual(@as(u32, 56), format_version);
+    try testing.expectEqual(@as(u64, 6963883506754585830), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
@@ -2290,28 +2372,20 @@ fn expectReversedInterfaceWitness(program: *const mir.Program) !void {
         }
     } else return error.TestUnexpectedResult;
     const layout = program.structs[layout_index];
-    try testing.expectEqual(@as(usize, 2), layout.fields.len);
-    try testing.expectEqualStrings("left", layout.fields[0].name);
-    try testing.expectEqualStrings("right", layout.fields[1].name);
+    try testing.expectEqual(@as(usize, 0), layout.fields.len);
+    try testing.expectEqual(@as(usize, 2), layout.interface_methods.len);
+    try testing.expectEqualStrings("left", layout.interface_methods[0].name);
+    try testing.expectEqualStrings("right", layout.interface_methods[1].name);
 
     var saw_value = false;
     for (program.functions) |function| {
         for (function.instructions) |instruction| {
-            if (instruction != .struct_make or instruction.struct_make.layout != layout_index) continue;
-            const fields = instruction.struct_make.fields;
-            try testing.expectEqual(@as(usize, 2), fields.len);
-            const left = switch (function.instructions[fields[0]]) {
-                .const_function => |bound| bound,
-                else => return error.TestUnexpectedResult,
-            };
-            const right = switch (function.instructions[fields[1]]) {
-                .const_function => |bound| bound,
-                else => return error.TestUnexpectedResult,
-            };
-            try testing.expect(left.receiver != null);
-            try testing.expect(right.receiver != null);
-            try testing.expectEqualStrings("Reversed.left", program.functions[left.function].name);
-            try testing.expectEqualStrings("Reversed.right", program.functions[right.function].name);
+            if (instruction != .interface_make or instruction.interface_make.layout != layout_index) continue;
+            const witness = program.interface_witnesses[instruction.interface_make.witness];
+            try testing.expectEqual(layout_index, witness.interface);
+            try testing.expectEqual(@as(usize, 2), witness.methods.len);
+            try testing.expectEqualStrings("Reversed.left", program.functions[witness.methods[0]].name);
+            try testing.expectEqualStrings("Reversed.right", program.functions[witness.methods[1]].name);
             saw_value = true;
         }
     }

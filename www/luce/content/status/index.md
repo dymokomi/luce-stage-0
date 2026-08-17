@@ -22,7 +22,8 @@ from work that is still design. The [Tour](/tour/), [Guide](/guide/), and
   support explicit snapshot and zeroing weak captures.
 - Nominal interfaces with multiple methods, multi-value answers, directional
   failure matching, heterogeneous collections, and mutable class dispatch.
-  A writing value-structure method is not yet an interface witness.
+  `mutating` requirements also support writing value-structure witnesses when
+  the call has a mutable bare local receiver.
 - Lists, maps, fixed-shape arrays, builders, optionals, recoverable errors,
   multiple returns, constants, modules, access control, packages, and tests.
 - ARC across reference objects, resources, class instances, bound methods,
@@ -59,7 +60,7 @@ declarative terminal applications from panels, stacks, labels, rows, styles,
 events, and one library-owned application loop. The shipped editor uses that
 public surface.
 
-The current serialized-module format is 55 and the host ABI is 24. Loaders
+The current serialized-module format is 56 and the host ABI is 24. Loaders
 refuse incompatible artifacts rather than guessing.
 
 ## The memory model
@@ -76,9 +77,10 @@ The language is organized around one sentence:
 | Reference | classes, lists, maps, arrays, builders, closure environments | retain and share one identity |
 | Resource reference | files, tasks, windows, GPU surfaces | retain and share; clean up at zero |
 
-An interface currently owns bound dispatch state: a structure conformance
-owns a receiver snapshot and a class conformance retains shared identity.
-[Memory and ARC](/guide/memory/) teaches the model; [Memory
+An interface owns one concrete payload and a static witness identity: a
+structure conformance copies its value and a class conformance retains shared
+identity. A `mutating` value call writes the updated payload back to a mutable
+bare local. [Memory and ARC](/guide/memory/) teaches the model; [Memory
 Management](/guide/reference/memory/) states its exact rules.
 
 ## Explicit type names
@@ -117,17 +119,17 @@ container; `dict` and `hash` are not aliases.
 
 ### Interfaces {#interfaces}
 
-The present representation stores one owned bound dispatch value per required
-method. It is safe and complete for current read-only structure witnesses and
-mutable class witnesses, but it repeats receiver state.
+The first interface design is complete. A conformance is nominal and explicit;
+all required instance methods, parameter and result shapes, and fallibility
+direction are checked before conversion. `mutating` requirements permit
+writing value-structure witnesses, while non-mutating calls cannot write a
+value receiver. Multiple methods, multiple results, class identity, copied
+struct payloads, closure captures, and heterogeneous list/map/array elements
+are covered by the executable specifications.
 
-The next representation step is one owned existential payload, concrete type
-metadata, and a static witness table. A structure payload will be boxed as a
-value; a class payload will retain its object. This enables writing structure
-witnesses without changing interface syntax or function types.
-
-The first existential model still excludes interface inheritance, default
-methods, associated types, and runtime casts.
+The implementation uses one owned existential payload and a static witness
+identity. It deliberately excludes interface inheritance, default methods,
+associated types, generic bounds, and runtime casts.
 
 ### Generics and library data structures
 

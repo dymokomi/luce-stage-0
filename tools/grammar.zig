@@ -160,6 +160,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_public,
         .keyword_private,
         .keyword_static,
+        // `mutating` qualifies an interface requirement; concrete methods
+        // infer receiver writes from their bodies.
+        .keyword_mutating,
         // `weak` qualifies a storage place: it neither declares a binding
         // by itself nor changes the value's type.
         .keyword_weak,

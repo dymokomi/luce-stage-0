@@ -251,8 +251,10 @@ func main():
 ```
 
 Heterogeneous containers can hold different class and structure conformers.
-The current representation’s one missing case concerns writing value-structure
-witnesses; mutable class dispatch is complete.
+Class interface values retain shared identity, so a class witness can mutate
+the same object observed through other aliases. Value-struct witnesses that
+write `self` require a `mutating` interface requirement and a mutable bare
+local at the call site.
 
 ## Lifetime and deinitialization
 

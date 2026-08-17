@@ -342,10 +342,23 @@ pub const Analyzer = struct {
 
         const entry_index = self.entry_function orelse return null;
 
+        const interface_witnesses = try self.arena.alloc(
+            mir.InterfaceWitness,
+            self.conformances.items.len,
+        );
+        for (self.conformances.items, interface_witnesses) |implementation, *witness| {
+            witness.* = .{
+                .interface = self.interface_decls.items[implementation.interface].layout,
+                .receiver = implementation.receiver,
+                .methods = implementation.methods,
+            };
+        }
+
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
             .signatures = try self.signatures.toOwnedSlice(self.arena),
+            .interface_witnesses = interface_witnesses,
             .enums = try self.enums.toOwnedSlice(self.arena),
             .variants = try self.variants.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),

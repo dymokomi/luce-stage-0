@@ -213,19 +213,21 @@ size:41
 ```
 
 Conformance is explicit, not structural. Method names, instance status,
-parameter names/order/types, and result arity/types must match. A non-fallible
-witness may satisfy a fallible requirement; the reverse is invalid. Static
-functions, incomplete conformers, and duplicate witnesses are rejected. A
-class witness may mutate the shared class object; a writing value-struct
-witness is currently rejected.
+parameter count/order/types, and result arity/types must match. Requirement
+parameter names are call labels; witness parameter names are not part of the
+function type. A non-fallible witness may satisfy a fallible requirement; the
+reverse is invalid. Static functions, incomplete conformers, and duplicate
+witnesses are rejected. A `mutating` requirement permits a writing
+value-struct witness; a writing witness is rejected when the requirement is
+not `mutating`. Class witnesses may mutate shared class identity.
 
 Interface values work as locals, parameters, results, optionals, fields, and
-heterogeneous list/map/array elements. Current dispatch stores one owned bound
-function per requirement: a struct receiver is a snapshot and a class
-receiver retains identity. [Status](/status/#interfaces) records the planned
-one-payload existential representation. There are no default methods,
-interface inheritance, associated types, runtime casts, or generic
-constraints.
+heterogeneous list/map/array elements. Dispatch stores one owned payload plus
+a static witness identity: a struct receiver is copied and a class receiver
+retains identity. A mutating value call requires a mutable bare local; a `let`,
+temporary, projection, or collection element cannot receive write-back. There
+are no default methods, interface inheritance, associated types, runtime
+casts, or generic constraints.
 
 ## Structs
 

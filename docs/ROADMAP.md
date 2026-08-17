@@ -28,13 +28,13 @@ or another language.
 | Area | State | What is true now | Honest boundary |
 |---|---|---|---|
 | Compiler pipeline | Complete | UTF-8 source passes through lexer, parser, semantic analysis, typed HIR, mechanical lowering, verified MIR, optimization, and LLVM code generation. | The interpreter is a test oracle, not a shipping fallback. |
-| Artifacts and ABI | Complete | `.lc` is native machine code; `.lcm` is a verified internal seam. The module format is 55 and the host ABI is 24. | Artifacts are target- and ABI-specific and are deliberately refused when stale. |
+| Artifacts and ABI | Complete | `.lc` is native machine code; `.lcm` is a verified internal seam. The module format is 56 and the host ABI is 24. | Artifacts are target- and ABI-specific and are deliberately refused when stale. |
 | Scalar types | Complete | `bool`; eight fixed-width integers; `f16`, `f32`, `f64`; `char`, `str`, and `bytes`; contextual literals; checked integer arithmetic; explicit conversions. | No platform-sized integers, implicit numeric promotion, `f8`, or alternate spellings. |
 | Declared value types | Complete | Structures, enumerations, and tagged unions copy by value and may contain retained references. | No tuples, nested type declarations, computed properties, extensions, or user-defined subscripts. |
 | Reference types | Complete | Lists, maps, arrays, builders, final classes, files, tasks, windows, surfaces, and closure environments use ARC. | No inheritance, unsafe pointers, manual retain/release, or tracing collector. |
 | Classes | Complete | Shared identity, mutation through stable `let`, `is`, memberwise or one custom `init`, definite initialization, weak fields, interfaces, and one deterministic `deinit`. | No overloads, initializer delegation, subclassing, `override`, or `super`. |
 | Functions and closures | Complete | Named/default arguments, multiple returns, function values, expression lambdas, block closures, strong/weak/snapshot captures, shared mutable cells, and bound methods. | Function values have no equality and cannot cross workers. |
-| Interfaces | Complete inside the current boundary | Explicit struct/class conformance, multiple methods, multi-value and fallible requirements, returns, optionals, and heterogeneous lists/maps/arrays. Class witnesses may mutate shared identity. | A writing value-structure method cannot witness an interface until interface storage becomes one owned existential payload. |
+| Interfaces | Complete inside the current boundary | Explicit struct/class conformance, multiple methods, multi-value and fallible requirements, directional effects, returns, optionals, closure captures, and heterogeneous lists/maps/arrays. Class witnesses share identity; `mutating` requirements support writing value-structure witnesses. | No inheritance, default methods, associated types, generic bounds, or runtime casts. |
 | Memory management | Complete for the current type system | Retain/release covers locals, temporaries, aggregates, errors, traps, loops, closures, interfaces, resources, and workers. Zeroing weak storage breaks supported cycles. | Strong cycles still require an intentional weak back-edge; ARC is not cycle collection. |
 | Concurrency | Complete inside the isolated-worker model | `spawn` and `wait` copy permitted graphs between independent runtimes while preserving aliases inside each snapshot. | No shared heap, locks, atomics, async functions, cancellation, or worker identity. |
 | Modules and packages | Consumer and local-authoring path complete | Rootless siblings, governed projects, import graphs bounded by available memory rather than a fixed module count, exact package versions, path overrides, stores, shelves, `package new`, and `package version` work. | There is no registry, fetch/update client, lockfile solver, signing, or upload path. `package publish` refuses honestly. |
@@ -52,11 +52,9 @@ target to inflate; the test claim and its layer matter more than the number.
 
 ## What is actually missing
 
-There are two remaining language features on the path described here:
+There is one remaining language feature on the path described here:
 
-1. owned interface existentials, which finish the one known semantic limit of
-   current interfaces; and
-2. user-defined generics, which make reusable typed algorithms and data
+1. user-defined generics, which make reusable typed algorithms and data
    structures ordinary Luce source.
 
 Everything else below is optional ergonomics, a library/product layer, a
@@ -64,18 +62,10 @@ platform expansion, or release hardening. Keeping those categories separate
 prevents a desired package registry or native widget set from turning into a
 fictional compiler bug.
 
-## 1. Replace bound interface storage with owned existentials
+## 1. Owned interface existentials — complete
 
-This is the next language change. Interface syntax and nominal conformance
-already work; the representation is the unfinished part.
-
-Today an interface value stores one bound function value for every required
-method. Each bound slot owns a copy of the structure receiver or retains the
-same class receiver. That layout is memory-safe and supports heterogeneous
-collections, but receiver storage grows with the number of methods and a
-writing structure witness has no single mutable payload to update.
-
-The replacement is one existential value:
+The interface representation milestone is complete. Interface syntax and
+nominal conformance are unchanged; the runtime now stores one existential value:
 
 ```text
 { owned payload, concrete metadata, static witness table }
@@ -92,7 +82,8 @@ The replacement is one existential value:
 - Copies, optionals, fields, returns, errors, containers, closures, and weak
   storage use the same ARC operations as every other reference-bearing value.
 
-Acceptance requires all current interface behavior to remain green plus:
+The acceptance matrix is now executable and green on the compiled engine and
+differential oracle:
 
 - a multi-method interface whose value witness mutates state through several
   calls;
@@ -106,14 +97,14 @@ Acceptance requires all current interface behavior to remain green plus:
   parameter-incompatible, result-incompatible, and fallibility-incompatible
   witnesses.
 
-This milestone still excludes interface inheritance, default bodies,
-associated types, compositions, and runtime casts. Those are separate
+The milestone still excludes interface inheritance, default bodies, associated
+types, compositions, generic bounds, and runtime casts. Those are separate
 features, not prerequisites for a sound existential.
 
 ## 2. Add monomorphized generics
 
-Generics follow owned existentials so interface bounds reuse the final
-conformance representation rather than a temporary one. The separate
+Generics build on the owned existentials so interface bounds reuse the final
+conformance representation. The separate
 [GENERICS.md](GENERICS.md) proposal owns the design and acceptance matrix.
 
 The first useful surface is intentionally narrow:
@@ -249,9 +240,8 @@ the phase boundary.
 - [x] Returned closures retain and mutate captured state; weak captures break
   stored callback cycles.
 - [x] Heterogeneous interfaces dispatch multiple and multi-value methods for
-  read-only value witnesses and mutable class witnesses.
-- [ ] Heterogeneous interfaces dispatch writing value witnesses through one
-  owned existential payload.
+  value witnesses and mutable class witnesses through one owned existential
+  payload.
 - [x] Every numeric width, conversion, overflow, shift, Unicode scalar, and
   byte/text boundary has executable proof.
 - [x] Workers copy nested graphs without sharing identity and reject resources,

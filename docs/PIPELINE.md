@@ -119,10 +119,11 @@ instructions, ownership claims, worker boundaries, and control flow before
 either execution path receives a program.
 
 `mir/module.zig` encodes the verified front-end handoff. The current
-`format_version` is **55**. The format includes explicit-width types, weak
+`format_version` is **56**. The format includes explicit-width types, weak
 storage, class reference layouts and deinitializers, closure-only layouts, and
-boxed non-owning closure bridges. It is a cache seam, not a stable distribution
-format: incompatible modules recompile from source.
+boxed non-owning closure bridges, and owned interface witness layouts. It is a
+cache seam, not a stable distribution format: incompatible modules recompile
+from source.
 
 A change to an instruction, intrinsic, type tag, trap/error code, encoded
 layout/local field, or another wire meaning bumps the format and updates the

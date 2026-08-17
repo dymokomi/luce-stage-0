@@ -43,6 +43,9 @@ pub const Kind = enum {
     /// `interface Name:` — a named set of method contracts that a
     /// struct may explicitly implement.
     keyword_interface,
+    /// `mutating func` on an interface requirement says that dispatch may
+    /// replace a value receiver. Concrete methods keep body-based inference.
+    keyword_mutating,
     /// `alias Name = Type` — a transparent, compile-time-only second
     /// spelling for an existing type.
     keyword_alias,
@@ -209,6 +212,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "deinit", .kind = .keyword_deinit },
     .{ .word = "init", .kind = .keyword_init },
     .{ .word = "interface", .kind = .keyword_interface },
+    .{ .word = "mutating", .kind = .keyword_mutating },
     .{ .word = "alias", .kind = .keyword_alias },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "union", .kind = .keyword_union },

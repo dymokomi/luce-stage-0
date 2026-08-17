@@ -289,6 +289,7 @@ fn collect(
                 .local_set => |set| assigned[set.local] = true,
                 .weak_local_set => |set| assigned[set.local] = true,
                 .call_inout => |call| assigned[call.receiver] = true,
+                .interface_call_inout => |call| assigned[call.receiver] = true,
                 .intrinsic => |call| {
                     switch (call.kind) {
                         .index_get, .index_set, .len, .dim_size => {},
@@ -320,6 +321,7 @@ fn collect(
                 .binary,
                 .unary,
                 .convert,
+                .interface_make,
                 .struct_make,
                 .struct_get,
                 .struct_set,
@@ -329,6 +331,7 @@ fn collect(
                 .variant_tag,
                 .variant_field,
                 .call,
+                .interface_call,
                 .spawn,
                 .call_indirect,
                 .heap_new,

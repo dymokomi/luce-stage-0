@@ -287,8 +287,8 @@ pub const Expression = union(enum) {
     /// arguments do), defaults appended after the written operands in
     /// the order they materialize.
     struct_make: StructMake,
-    /// A compiler-generated interface value: one bound function value per
-    /// contract method, all targeting the same concrete receiver.
+    /// A compiler-generated interface value: one static witness identity
+    /// beside one owned concrete receiver payload.
     interface_make: InterfaceMake,
     /// A union member built whole (docs/UNION.md D8).
     variant_make: VariantMake,
@@ -592,19 +592,10 @@ pub const Expression = union(enum) {
         park: ?Park = null,
     };
 
-    pub const InterfaceMethod = struct {
-        function: u32,
-        signature: u32,
-        /// Internal interface dispatch may point at a fallible method;
-        /// ordinary function values keep this false because their type
-        /// intentionally carries no failure obligation.
-        fallible: bool = false,
-    };
-
     pub const InterfaceMake = struct {
         layout: u32,
+        witness: u32,
         receiver: NodeRef,
-        methods: []const InterfaceMethod,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -738,6 +729,10 @@ pub const ResolvedCallee = union(enum) {
     /// the expression that answers the value, and the interned
     /// signature the call was checked against.
     indirect: Indirect,
+    /// A call through an interface witness. The receiver remains an operand
+    /// in the call batch so evaluation order, spill handling, and writing
+    /// receiver place checks follow the same path as declared methods.
+    interface: Interface,
     /// A builtin that lowers to one MIR intrinsic — the resolved name
     /// of the operation, shared with stage 6 so it cannot drift.
     /// `str(f)` records here as `function_name` rather than as a
@@ -783,6 +778,14 @@ pub const ResolvedCallee = union(enum) {
         /// residual hazard).  True means the copy is emitted, and the
         /// park that rides it stands on the callee's own node.
         borrow_copy: bool = false,
+    };
+
+    pub const Interface = struct {
+        layout: u32,
+        method: u32,
+        signature: u32,
+        writing: bool = false,
+        fallible: bool = false,
     };
 };
 
@@ -1167,7 +1170,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         .call => |payload| switch (payload.callee) {
             // A function's result is the caller's (S16): fresh storage
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
-            .function, .indirect => .fresh,
+            .function, .indirect, .interface => .fresh,
             .intrinsic => |kind| ofIntrinsic(kind),
             // `str(x)` allocates its text; the numeric conversions
             // answer scalars.
@@ -1240,7 +1243,7 @@ pub fn freshObject(expression: *const Expression) bool {
         .function_value, .lambda_ref, .bound_method => true,
         .slice, .spawn => true,
         .call => |payload| switch (payload.callee) {
-            .function, .indirect => true,
+            .function, .indirect, .interface => true,
             .intrinsic => |kind| freshObjectIntrinsic(kind),
             .conversion, .enum_name, .variant_name => false,
         },
@@ -1367,7 +1370,7 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
         // The callee expression is lowered in this frame beside the
         // arguments, so a branch inside it is this call's own.
         .indirect => |through| splitsBlocks(through.callee, declared),
-        .function, .intrinsic, .conversion => false,
+        .function, .interface, .intrinsic, .conversion => false,
     };
 }
 

@@ -70,10 +70,11 @@ diagnoses the direct case where a class stores a closure that strongly
 captures the same `self`; indirect application cycles remain the program's
 responsibility.
 
-The current interface representation is a hidden set of bound witnesses. It
-owns struct receiver snapshots and retains class identities safely. A class
-witness may mutate its shared object; a writing value-struct witness remains
-refused until interfaces use one owned payload and a witness table.
+An interface value is one owned payload paired with a static witness identity.
+A struct conformance copies its value into that payload; a class conformance
+retains the shared identity. A class witness may mutate its shared object. A
+value-struct witness may write through an interface when the requirement is
+`mutating` and the call has a mutable bare local receiver.
 
 ## ARC behavior
 
@@ -115,8 +116,8 @@ one-shot state.
 A bound method copies a value receiver and retains reference fields in that
 copy. A class bound method retains and shares its receiver identity. The
 function value can therefore be returned or stored independently of the
-original binding. A current interface value stores one bound witness per
-method; a struct witness owns its receiver snapshot, while a class witness
+original binding. An interface value stores one owned payload and static
+witness identity; a struct witness owns its copied value, while a class witness
 retains the shared object.
 
 Capturing closure environments are ARC objects. Immutable value captures are
