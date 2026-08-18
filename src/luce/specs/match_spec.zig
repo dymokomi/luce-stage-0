@@ -206,6 +206,33 @@ test "a folded constant is a literal the compiler can read" {
     );
 }
 
+test "constants stand as patterns: exact, listed, and as range endpoints" {
+    try agree.ok(
+        \\const zero: char = '0'
+        \\const nine: char = '9'
+        \\const comma: char = ','
+        \\const colon: char = ':'
+        \\
+        \\func kind(c: char) -> str:
+        \\    match c:
+        \\        zero..nine:
+        \\            return "digit"
+        \\        comma, colon:
+        \\            return "separator"
+        \\        else:
+        \\            return "other"
+        \\
+        \\func main():
+        \\    assert(kind('0') == "digit")
+        \\    assert(kind('5') == "digit")
+        \\    assert(kind('9') == "digit")
+        \\    assert(kind(',') == "separator")
+        \\    assert(kind(':') == "separator")
+        \\    assert(kind('x') == "other")
+        \\
+    );
+}
+
 test "the scrutinee is read once, before any arm runs" {
     try agree.ok(
         \\func counted(log: list[i64], value: i64) -> i64:

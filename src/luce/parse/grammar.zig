@@ -2967,6 +2967,13 @@ pub const Parser = struct {
             .keyword_false,
             .minus,
             => return self.valueMatchArm(),
+            // `zero..nine:` and `comma, colon:` — a name followed by a
+            // range or a comma can only be a value arm, because a
+            // member arm is one bare name.  A lone `limit:` stays a
+            // member arm here; stage 4 reads it as a constant when the
+            // scrutinee is a value.
+            .identifier => if (self.peekAhead(1) == .dot_dot or self.peekAhead(1) == .comma)
+                return self.valueMatchArm(),
             else => {},
         }
         // `case stored:` — Python's second keyword, carrying nothing

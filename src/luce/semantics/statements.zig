@@ -403,7 +403,7 @@ fn lowerValueMatch(
     // Exact literals already claimed, for the dead-arm diagnosis.
     // Integers, chars, and bools compare as numbers; a str compares
     // as its interned constant-pool slot.
-    var seen_numbers: std.ArrayList(i64) = .empty;
+    var seen_numbers: std.ArrayList(i128) = .empty;
     defer seen_numbers.deinit(self.temporary());
     var seen_texts: std.ArrayList(u32) = .empty;
     defer seen_texts.deinit(self.temporary());
@@ -414,18 +414,30 @@ fn lowerValueMatch(
     );
     for (matched.arms, recorded_patterns) |arm, *slot| {
         slot.* = &.{};
-        if (arm.values.len == 0) {
-            try self.fail(
-                "luce.sema.match",
-                arm.name_span,
-                "a match over {s} takes literal arms, and '{s}' is a name; write the values themselves",
-                .{ type_name, arm.name },
-            );
-            usable = false;
-            continue;
+        // `limit:` — a bare name parses as a member arm, and over a
+        // value it is read as a constant pattern: a folded constant
+        // is a literal the compiler can read, and anything else is
+        // refused by the same sentences a written pattern earns.
+        var name_patterns: [1]ast.ValuePattern = undefined;
+        var values = arm.values;
+        if (values.len == 0) {
+            if (arm.bindings.len != 0) {
+                try self.fail(
+                    "luce.sema.match",
+                    arm.span,
+                    "a value arm binds nothing: a literal has no fields",
+                    .{},
+                );
+                usable = false;
+                continue;
+            }
+            const reference = try self.arena().create(ast.Expression);
+            reference.* = .{ .name = .{ .text = arm.name, .span = arm.name_span } };
+            name_patterns[0] = .{ .low = reference, .high = null, .span = arm.name_span };
+            values = name_patterns[0..1];
         }
-        const patterns = try self.arena().alloc(nodes.Statement.Match.Pattern, arm.values.len);
-        for (arm.values, patterns) |pattern, *recorded| {
+        const patterns = try self.arena().alloc(nodes.Statement.Match.Pattern, values.len);
+        for (values, patterns) |pattern, *recorded| {
             recorded.* = .{ .low = scrutinee.node, .high = null };
             const low = (try lowerPatternLiteral(self, pattern.low, value_type)) orelse {
                 usable = false;
@@ -448,8 +460,8 @@ fn lowerValueMatch(
                     continue;
                 };
                 recorded.high = high.node;
-                const bottom = recorder.constantI64(self, low.node) orelse unreachable;
-                const top = recorder.constantI64(self, high.node) orelse unreachable;
+                const bottom = patternConstant(self, low.node) orelse unreachable;
+                const top = patternConstant(self, high.node) orelse unreachable;
                 if (bottom > top) {
                     try self.fail(
                         "luce.sema.match",
@@ -492,8 +504,8 @@ fn lowerValueMatch(
                     claimed.* = true;
                 },
                 else => {
-                    const number = recorder.constantI64(self, low.node) orelse unreachable;
-                    if (std.mem.indexOfScalar(i64, seen_numbers.items, number) != null) {
+                    const number = patternConstant(self, low.node) orelse unreachable;
+                    if (std.mem.indexOfScalar(i128, seen_numbers.items, number) != null) {
                         try self.fail(
                             "luce.sema.match",
                             pattern.span,
@@ -583,6 +595,22 @@ fn lowerValueMatch(
     } });
 }
 
+/// The integer constant behind a recorded pattern, carried wide: a
+/// u64 literal's top half does not fit i64, and a pattern only needs
+/// the value for ordering and duplicate checks, both of which i128
+/// answers for every width.
+fn patternConstant(self: *const FunctionBuilder, node: nodes.NodeRef) ?i128 {
+    return switch (node.*) {
+        .const_integer => |literal| literal.value,
+        .constant_ref => |use| blk: {
+            const info = self.analyzer.constant_infos.items[use.constant];
+            break :blk if (info.value == .integer) info.value.integer else null;
+        },
+        .convert => |conversion| patternConstant(self, conversion.operand),
+        else => null,
+    };
+}
+
 /// One pattern literal, landed on the scrutinee's type.  The parser
 /// let any expression through so this refusal can say what it found:
 /// the pattern must be a literal the compiler can read — a folded
@@ -610,7 +638,7 @@ fn lowerPatternLiteral(
     const folded = switch (wanted) {
         .str => lowered.node.* == .const_str,
         .boolean => lowered.node.* == .const_boolean,
-        else => recorder.constantI64(self, lowered.node) != null,
+        else => patternConstant(self, lowered.node) != null,
     };
     if (!folded) {
         try self.fail(

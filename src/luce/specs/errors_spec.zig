@@ -6642,17 +6642,20 @@ test "luce.sema.match: an else that can never run is refused, like every dead ar
     );
 }
 
-test "luce.sema.match: a value match takes literal arms, not names" {
+test "luce.sema.match: a name arm must fold, so a local is refused" {
     try expectSaying(
         \\func main():
+        \\    let ceiling = 9
         \\    let n = 3
         \\    match n:
-        \\        one:
+        \\        ceiling:
+        \\            return
+        \\        else:
         \\            return
         \\
     ,
         "luce.sema.match",
-        "a match over i64 takes literal arms, and 'one' is a name",
+        "computed at run time",
     );
 }
 
@@ -6778,6 +6781,24 @@ test "luce.sema.match: the same literal twice is a dead arm" {
     ,
         "luce.sema.match",
         "this value already has an arm in this match",
+    );
+}
+
+test "luce.sema.match: a value arm binds nothing" {
+    try expectSaying(
+        \\const limit = 9
+        \\
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        limit(held):
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "a value arm binds nothing",
     );
 }
 

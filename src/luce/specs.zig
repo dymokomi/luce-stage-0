@@ -116,6 +116,7 @@ comptime {
         _ = text_types;
         _ = enums;
         _ = unions;
+        _ = match;
         _ = errors;
         _ = functions;
         _ = closures;
