@@ -10,13 +10,14 @@
 import std.term
 
 alias Key = term.Key
+alias KeyPress = term.KeyPress
 alias Pointer = term.Pointer
 alias Mouse = term.Mouse
 
 union Event:
     closed
     resize
-    key(pressed: Key)
+    key(press: KeyPress)
     text(typed: str)
     mouse(pointer: Mouse)
 
@@ -35,8 +36,8 @@ class Stream:
         match read:
             resize:
                 return Event.resize
-            key(pressed):
-                return Event.key(pressed = pressed)
+            key(press):
+                return Event.key(press = press)
             text(typed):
                 return Event.text(typed = typed)
             mouse(pointer):

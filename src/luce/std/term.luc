@@ -92,6 +92,16 @@ enum Key:
     ctrl_y
     ctrl_z
 
+# One pressed key with the modifiers held down with it.  A ctrl+letter
+# is not spelled here — the terminal sends it as its own byte and it
+# stays the distinct `Key.ctrl_a`..`ctrl_z` it always was; `control`
+# marks ctrl held with a named key (ctrl+left, ctrl+home).
+struct KeyPress:
+    key: Key = Key.unknown
+    shift: bool = false
+    alt: bool = false
+    control: bool = false
+
 # What a mouse did.
 enum Pointer:
     press
@@ -125,7 +135,7 @@ struct Mouse:
 # the terminal moved.
 union Event:
     resize
-    key(pressed: Key)
+    key(press: KeyPress)
     text(typed: str)
     mouse(pointer: Mouse)
 
@@ -156,7 +166,14 @@ func read() -> Event?:
                     modifiers = Builtin.term_event_data(3),
                     wheel = Builtin.term_event_data(4),
                 ))
-            return Event.key(pressed = key_of(name))
+            # A key's modifiers ride the same slot a mouse report uses.
+            let modifiers = Builtin.term_event_data(3)
+            return Event.key(press = KeyPress(
+                key = key_of(name),
+                shift = (modifiers & 1) != 0,
+                alt = (modifiers & 2) != 0,
+                control = (modifiers & 4) != 0,
+            ))
 
 private func pointer_of(name: str) -> Pointer?:
     match name:

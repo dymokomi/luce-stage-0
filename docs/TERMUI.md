@@ -52,11 +52,11 @@ class Counter: termui.View:
 
     func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
         match event:
-            key(pressed):
-                if pressed == termui.Key.enter:
+            key(press):
+                if press.key == termui.Key.enter:
                     self.count += 1
                     return termui.Response.handled
-                if pressed == termui.Key.ctrl_q:
+                if press.key == termui.Key.ctrl_q:
                     return termui.Response.quit
             else:
                 return termui.Response.ignored
@@ -288,7 +288,9 @@ display order; `ZStack` visits the visually topmost child first. Keyboard and
 text events continue until a focused child accepts them. Resize and closed
 input remain lifecycle events owned by `start`.
 
-The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. `Key`,
+The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. A
+`key` carries a `KeyPress` — the key plus `shift`/`alt`/`control`
+booleans for what was held with it. `Key`, `KeyPress`,
 `Pointer`, and `Mouse` are `std.term`'s own types, re-exported as aliases,
 so termui events and plain terminal events carry the same values; termui
 adds only `closed`, which `term.read()` spells as absence. A `Mouse`

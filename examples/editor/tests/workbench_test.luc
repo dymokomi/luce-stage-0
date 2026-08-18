@@ -2,7 +2,7 @@
 
 import std.strings
 import termui
-from termui import Rect, Event, Cursor, Key, Mouse, Pointer, Response, snapshot
+from termui import Rect, Event, Cursor, Key, KeyPress, Mouse, Pointer, Response, snapshot
 from termui.layout import VStack, HStack
 from termui.constraints import Fixed, Grow
 from document import Document
@@ -80,7 +80,7 @@ func test_global_commands_and_search_are_reflected_in_the_frame():
     let shared = model_of()
     let bench, pane, files = built(shared)
     assert(bench.dispatch(
-        Event.key(pressed = Key.ctrl_f),
+        Event.key(press = KeyPress(key = Key.ctrl_f)),
         Rect(rows = 12, columns = 60),
     ) == Response.handled)
     assert(shared.focus == Focus.search)

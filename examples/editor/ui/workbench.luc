@@ -85,8 +85,8 @@ class Workbench: View:
         self.attach()
         self.model.autosave(os.clock_ms())
         match event:
-            key(pressed):
-                let intent = intent_of(pressed)
+            key(press):
+                let intent = intent_of(press)
                 if is_global(intent):
                     self.model.key(intent, "", max(area.rows - 1, 0))
                     if self.model.quit:

@@ -795,8 +795,8 @@ test "terminal builtins drive the host screen and key queue" {
         \\        print("?")
         \\    else:
         \\        match quit:
-        \\            key(pressed):
-        \\                assert(pressed == term.Key.ctrl_q)
+        \\            key(press):
+        \\                assert(press.key == term.Key.ctrl_q)
         \\                print("ctrl_q")
         \\            else:
         \\                print("?")
@@ -813,6 +813,47 @@ test "terminal builtins drive the host screen and key queue" {
         "[flush]\n" ++
         "ctrl_q\n" ++
         "24x80\n", session.printed());
+}
+
+test "a key's modifiers cross the boundary as the KeyPress they were" {
+    // Shift is bit 1, alt bit 2, ctrl bit 4 — the same slot a mouse
+    // report uses.  A bare key answers all-false, and each bit lands
+    // in its own named field of the KeyPress value.
+    const keys = [_]agree.World.Key{
+        .{ .name = "left" },
+        .{ .name = "left", .modifiers = 1 },
+        .{ .name = "right", .modifiers = 2 },
+        .{ .name = "home", .modifiers = 5 },
+    };
+    var session = try hosted.compare(
+        \\func describe(event: term.Event?) -> str:
+        \\    if event == none:
+        \\        return "none"
+        \\    match event:
+        \\        key(press):
+        \\            var held = ""
+        \\            if press.shift:
+        \\                held = held + "s"
+        \\            if press.alt:
+        \\                held = held + "a"
+        \\            if press.control:
+        \\                held = held + "c"
+        \\            if held == "":
+        \\                held = "-"
+        \\            return held
+        \\        else:
+        \\            return "other"
+        \\
+        \\func main():
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read()))
+        \\
+    , .{ .world = .{ .keys = &keys } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("-\ns\na\nsc\n", session.printed());
 }
 
 test "term_style's defaults fill from the table, on both engines" {

@@ -17,8 +17,8 @@ class Ticker: termui.View:
 
     func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
         match event:
-            key(pressed):
-                if pressed == termui.Key.enter:
+            key(press):
+                if press.key == termui.Key.enter:
                     self.value += 1
                     return termui.Response.handled
             else:
@@ -37,7 +37,7 @@ func test_a_retained_layout_updates_in_place():
     assert(first.line(2) == "count 41  ")
     let response = termui.route(
         stack,
-        termui.Event.key(pressed = termui.Key.enter),
+        termui.Event.key(press = termui.KeyPress(key = termui.Key.enter)),
         termui.Rect(rows = 3, columns = 10),
     )
     assert(response == termui.Response.handled)

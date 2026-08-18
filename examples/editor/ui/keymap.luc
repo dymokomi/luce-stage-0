@@ -6,7 +6,7 @@
 # The host's key names never reach the editor — termui answers a `Key`, and
 # the table below is the whole translation.
 
-from termui import Key
+from termui import Key, KeyPress
 from model import Intent
 
 const INTENTS = {
@@ -37,8 +37,8 @@ const INTENTS = {
 # How far a movement intent scrolls a list: one row, or a page of eight.
 # A key that moves nothing is not in the table, read as zero.
 # What a key means.  A key the editor does not bind is `ignored`.
-func intent_of(pressed: Key) -> Intent:
-    let found = INTENTS.get(pressed)
+func intent_of(press: KeyPress) -> Intent:
+    let found = INTENTS.get(press.key)
     if found == none:
         return Intent.ignored
     return found

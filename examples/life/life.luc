@@ -93,8 +93,8 @@ func main():
         else:
             var steps = 1
             match event:
-                key(pressed):
-                    if pressed == term.Key.ctrl_q:
+                key(press):
+                    if press.key == term.Key.ctrl_q:
                         steps = 0
                         running = false
                 text(typed):

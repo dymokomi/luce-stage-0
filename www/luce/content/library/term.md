@@ -63,15 +63,21 @@ returns; a held event never changes under a later read.
 
 | Case | Payload |
 |---|---|
-| `key(pressed: term.Key)` | one named key |
+| `key(press: term.KeyPress)` | one named key with its held modifiers |
 | `text(typed: str)` | printable text |
 | `mouse(pointer: term.Mouse)` | one mouse action |
 | `resize` | the terminal changed size; ask `rows()`/`cols()` again |
 
-`Key` names `enter`, `tab`, `backspace`, `delete`, the arrows `up`, `down`,
-`left`, `right`, `home`, `end`, `page_up`, `page_down`, `escape`, and
-`ctrl_a` through `ctrl_z`. A key the terminal decoded but this vocabulary
-does not know arrives as `Key.unknown` rather than being dropped.
+`KeyPress` pairs the key with what was held with it: `key: term.Key`
+plus `shift`, `alt`, and `control` booleans. `Key` names `enter`, `tab`,
+`backspace`, `delete`, the arrows `up`, `down`, `left`, `right`, `home`,
+`end`, `page_up`, `page_down`, `escape`, and `ctrl_a` through `ctrl_z`.
+A key the terminal decoded but this vocabulary does not know arrives as
+`Key.unknown` rather than being dropped. A ctrl+letter stays its
+distinct `ctrl_a`..`ctrl_z` member — the terminal sends it as its own
+byte — while `control` marks ctrl held with a named key, `ctrl+left`.
+A paste arrives as one `text` event (bracketed paste), so pasting is
+one edit rather than a replay of keystrokes.
 
 `Mouse` is a value describing one action:
 

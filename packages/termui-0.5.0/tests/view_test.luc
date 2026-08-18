@@ -46,7 +46,7 @@ func test_route_screens_lifecycle_events_before_any_dispatch():
     assert(view.route(tally, input.Event.closed, area) == model.Response.ignored)
     assert(view.route(tally, input.Event.resize, area) == model.Response.ignored)
     assert(tally.seen == 0)
-    assert(view.route(tally, input.Event.key(pressed = input.Key.enter), area) == model.Response.handled)
+    assert(view.route(tally, input.Event.key(press = input.KeyPress(key = input.Key.enter)), area) == model.Response.handled)
     assert(tally.seen == 1)
 
 func test_route_contains_pointer_events_to_the_child_rectangle():

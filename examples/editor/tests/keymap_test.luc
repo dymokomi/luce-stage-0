@@ -2,18 +2,18 @@
 
 from ui.keymap import intent_of
 from model import Intent, steps_of
-from termui import Key
+from termui import Key, KeyPress
 
 func test_bound_keys_map_to_their_intent():
-    assert(intent_of(Key.left) == Intent.move_left)
-    assert(intent_of(Key.ctrl_s) == Intent.save)
-    assert(intent_of(Key.ctrl_f) == Intent.find)
-    assert(intent_of(Key.ctrl_z) == Intent.undo)
-    assert(intent_of(Key.ctrl_y) == Intent.redo)
+    assert(intent_of(KeyPress(key = Key.left)) == Intent.move_left)
+    assert(intent_of(KeyPress(key = Key.ctrl_s)) == Intent.save)
+    assert(intent_of(KeyPress(key = Key.ctrl_f)) == Intent.find)
+    assert(intent_of(KeyPress(key = Key.ctrl_z)) == Intent.undo)
+    assert(intent_of(KeyPress(key = Key.ctrl_y)) == Intent.redo)
 
 func test_an_unbound_key_is_ignored():
-    assert(intent_of(Key.ctrl_a) == Intent.ignored)
-    assert(intent_of(Key.unknown) == Intent.ignored)
+    assert(intent_of(KeyPress(key = Key.ctrl_a)) == Intent.ignored)
+    assert(intent_of(KeyPress(key = Key.unknown)) == Intent.ignored)
 
 func test_steps_scroll_a_list_and_are_zero_otherwise():
     assert(steps_of(Intent.move_up) == -1)

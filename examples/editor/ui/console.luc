@@ -42,10 +42,10 @@ class Console: View:
 
     func output_event(event: Event, area: Rect) -> Response:
         match event:
-            key(pressed):
+            key(press):
                 if self.model.focus != Focus.output:
                     return Response.ignored
-                let intent = intent_of(pressed)
+                let intent = intent_of(press)
                 if intent == Intent.ignored:
                     return Response.ignored
                 self.model.key(intent, "", area.rows)

@@ -10,6 +10,8 @@ func test_the_vocabulary_is_the_terminals_own():
     assert(pressed == term.Key.ctrl_s)
     let kind: term.Pointer = input.Pointer.wheel
     assert(kind == term.Pointer.wheel)
+    let held: term.KeyPress = input.KeyPress(key = input.Key.left, shift = true)
+    assert(held.key == term.Key.left and held.shift and not held.control)
 
 func test_an_event_owns_the_mouse_snapshot_it_carries():
     let mouse = input.Mouse(kind = input.Pointer.press, row = 7, column = 2, modifiers = 5)

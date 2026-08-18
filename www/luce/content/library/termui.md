@@ -45,11 +45,11 @@ class Counter: termui.View:
 
     func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
         match event:
-            key(pressed):
-                if pressed == termui.Key.enter:
+            key(press):
+                if press.key == termui.Key.enter:
                     self.count += 1
                     return termui.Response.handled
-                if pressed == termui.Key.ctrl_q:
+                if press.key == termui.Key.ctrl_q:
                     return termui.Response.quit
             else:
                 return termui.Response.ignored
@@ -286,12 +286,12 @@ child accepts them.
 ```text
 closed
 resize
-key(pressed: Key)
+key(press: KeyPress)
 text(typed: str)
 mouse(pointer: Mouse)
 ```
 
-`Key`, `Pointer`, and `Mouse` are [`std.term`](/library/term/)'s own types,
+`Key`, `KeyPress`, `Pointer`, and `Mouse` are [`std.term`](/library/term/)'s own types,
 re-exported as aliases, so termui events and plain terminal events carry the
 same values; termui adds only `closed`, which `term.read()` spells as
 absence. `Mouse` carries `kind`, `row`, `column`, `button`, `modifiers`, and

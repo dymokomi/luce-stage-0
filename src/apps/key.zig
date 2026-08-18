@@ -19,6 +19,11 @@ pub const Key = union(enum) {
     escape,
     control: u8,
     mouse: Mouse,
+    /// Bracketed paste delimiters (`CSI 200~` / `CSI 201~`).  The host
+    /// accumulates everything between them into one text event, so a
+    /// paste is one edit rather than a keystroke replay.
+    paste_begin,
+    paste_end,
     none,
 };
 
@@ -46,6 +51,11 @@ pub const MouseKind = enum {
 pub const Decoded = struct {
     key: Key,
     used: usize,
+    /// Modifier bits held with the key: shift=1, alt=2, ctrl=4 — the
+    /// same encoding mouse reports already carry.  A ctrl+letter is
+    /// not spelled here: the terminal sends it as a distinct C0 byte
+    /// and it stays the distinct `control` key it always was.
+    modifiers: i64 = 0,
 };
 
 /// Decode one key from raw bytes.  Text borrows from `bytes`.
@@ -86,31 +96,70 @@ fn utf8Size(first: u8) ?usize {
 
 fn decodeEscape(bytes: []const u8) Decoded {
     if (bytes.len < 2) return .{ .key = .escape, .used = 1 };
-    if (bytes[1] != '[' and bytes[1] != 'O') return .{ .key = .escape, .used = 1 };
+    if (bytes[1] != '[' and bytes[1] != 'O') {
+        // Alt sends the key it modifies behind an ESC prefix.  The
+        // word-motion pair every terminal agrees on is `ESC b`/`ESC f`
+        // (macOS Option-arrow), which *means* alt+left/alt+right; an
+        // alt-modified erase arrives as `ESC BS`.  Anything else after
+        // a bare ESC stays the escape key it always was.
+        const follow: Decoded = switch (bytes[1]) {
+            'b' => .{ .key = .left, .used = 2, .modifiers = 2 },
+            'f' => .{ .key = .right, .used = 2, .modifiers = 2 },
+            0x7f, 0x08 => .{ .key = .backspace, .used = 2, .modifiers = 2 },
+            else => .{ .key = .escape, .used = 1 },
+        };
+        return follow;
+    }
     if (bytes.len < 3) return .{ .key = .none, .used = 0 };
+    if (bytes[2] == '<') return decodeMouse(bytes);
 
-    switch (bytes[2]) {
-        '<' => return decodeMouse(bytes),
-        'A' => return .{ .key = .up, .used = 3 },
-        'B' => return .{ .key = .down, .used = 3 },
-        'C' => return .{ .key = .right, .used = 3 },
-        'D' => return .{ .key = .left, .used = 3 },
-        'H' => return .{ .key = .home, .used = 3 },
-        'F' => return .{ .key = .end, .used = 3 },
-        '1', '3', '4', '5', '6', '7', '8' => {
-            if (bytes.len < 4) return .{ .key = .none, .used = 0 };
-            if (bytes[3] != '~') return .{ .key = .none, .used = 3 };
-            const key: Key = switch (bytes[2]) {
-                '1', '7' => .home,
-                '4', '8' => .end,
-                '3' => .delete,
-                '5' => .page_up,
-                '6' => .page_down,
+    // The general CSI key shape: an optional number, an optional
+    // `;modifier`, and a final byte — `CSI A` and `CSI 1;2A` are one
+    // grammar, not two.  The modifier parameter is one more than its
+    // bits (xterm), so `;2` is shift and `;5` is ctrl.
+    var at: usize = 2;
+    var first: i64 = 0;
+    var has_first = false;
+    while (at < bytes.len and bytes[at] >= '0' and bytes[at] <= '9') : (at += 1) {
+        if (first > 1000) return .{ .key = .none, .used = at };
+        first = first * 10 + (bytes[at] - '0');
+        has_first = true;
+    }
+    var modifiers: i64 = 0;
+    if (at < bytes.len and bytes[at] == ';') {
+        at += 1;
+        var parameter: i64 = 0;
+        while (at < bytes.len and bytes[at] >= '0' and bytes[at] <= '9') : (at += 1) {
+            if (parameter > 1000) return .{ .key = .none, .used = at };
+            parameter = parameter * 10 + (bytes[at] - '0');
+        }
+        if (parameter > 0) modifiers = parameter - 1;
+    }
+    if (at >= bytes.len) return .{ .key = .none, .used = 0 };
+    const final = bytes[at];
+    const used = at + 1;
+
+    switch (final) {
+        'A' => return .{ .key = .up, .used = used, .modifiers = modifiers },
+        'B' => return .{ .key = .down, .used = used, .modifiers = modifiers },
+        'C' => return .{ .key = .right, .used = used, .modifiers = modifiers },
+        'D' => return .{ .key = .left, .used = used, .modifiers = modifiers },
+        'H' => return .{ .key = .home, .used = used, .modifiers = modifiers },
+        'F' => return .{ .key = .end, .used = used, .modifiers = modifiers },
+        '~' => {
+            const key: Key = switch (first) {
+                1, 7 => .home,
+                4, 8 => .end,
+                3 => .delete,
+                5 => .page_up,
+                6 => .page_down,
+                200 => .paste_begin,
+                201 => .paste_end,
                 else => .none,
             };
-            return .{ .key = key, .used = 4 };
+            return .{ .key = key, .used = used, .modifiers = modifiers };
         },
-        else => return .{ .key = .none, .used = 3 },
+        else => return .{ .key = .none, .used = used },
     }
 }
 
@@ -199,6 +248,55 @@ test "keys and printable UTF-8 decode from raw bytes" {
     try std.testing.expectEqual(Key.up, decode("\x1b[A").key);
     try std.testing.expectEqual(Key.delete, decode("\x1b[3~").key);
     try std.testing.expectEqual(@as(usize, 0), decode(&.{0xce}).used);
+}
+
+test "modified CSI sequences carry their modifier bits" {
+    // Shift, alt, and ctrl arrive as the xterm `;parameter` — one more
+    // than the bits — on the same finals the bare keys use.
+    const shifted = decode("\x1b[1;2D");
+    try std.testing.expectEqual(Key.left, shifted.key);
+    try std.testing.expectEqual(@as(i64, 1), shifted.modifiers);
+    try std.testing.expectEqual(@as(usize, 6), shifted.used);
+
+    const worded = decode("\x1b[1;5C");
+    try std.testing.expectEqual(Key.right, worded.key);
+    try std.testing.expectEqual(@as(i64, 4), worded.modifiers);
+
+    const both = decode("\x1b[1;6H");
+    try std.testing.expectEqual(Key.home, both.key);
+    try std.testing.expectEqual(@as(i64, 5), both.modifiers);
+
+    const paged = decode("\x1b[5;2~");
+    try std.testing.expectEqual(Key.page_up, paged.key);
+    try std.testing.expectEqual(@as(i64, 1), paged.modifiers);
+
+    // A bare key still carries no modifiers, and an incomplete
+    // modified sequence waits for the rest.
+    try std.testing.expectEqual(@as(i64, 0), decode("\x1b[D").modifiers);
+    try std.testing.expectEqual(@as(usize, 0), decode("\x1b[1;2").used);
+}
+
+test "alt's ESC-prefixed word and erase keys decode as modified keys" {
+    const back = decode("\x1bb");
+    try std.testing.expectEqual(Key.left, back.key);
+    try std.testing.expectEqual(@as(i64, 2), back.modifiers);
+
+    const forward = decode("\x1bf");
+    try std.testing.expectEqual(Key.right, forward.key);
+    try std.testing.expectEqual(@as(i64, 2), forward.modifiers);
+
+    const erase = decode("\x1b\x7f");
+    try std.testing.expectEqual(Key.backspace, erase.key);
+    try std.testing.expectEqual(@as(i64, 2), erase.modifiers);
+
+    // Anything else behind a bare ESC is still the escape key.
+    try std.testing.expectEqual(Key.escape, decode("\x1bq").key);
+}
+
+test "bracketed paste delimiters decode as markers" {
+    try std.testing.expectEqual(Key.paste_begin, decode("\x1b[200~").key);
+    try std.testing.expectEqual(Key.paste_end, decode("\x1b[201~").key);
+    try std.testing.expectEqual(@as(usize, 6), decode("\x1b[200~").used);
 }
 
 test "SGR mouse reports decode into zero-based events" {

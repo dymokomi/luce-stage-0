@@ -35,6 +35,7 @@ alias Response = model.Response
 alias Edges = model.Edges
 
 alias Key = input.Key
+alias KeyPress = input.KeyPress
 alias Pointer = input.Pointer
 alias Mouse = input.Mouse
 alias Event = input.Event

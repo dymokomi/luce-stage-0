@@ -215,6 +215,7 @@ pub const Host = struct {
         self.threads.deinit(self.gpa);
         self.restoreScreen();
         self.screen.buffer.deinit(self.gpa);
+        self.screen.paste.deinit(self.gpa);
         self.read_line_buffer.deinit(self.gpa);
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
@@ -468,7 +469,7 @@ pub const Host = struct {
     pub fn restoreScreen(self: *Host) void {
         if (!self.screen.active) return;
         self.screen.active = false;
-        self.out.writeAll("\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1002l\x1b[?1049l") catch {};
+        self.out.writeAll("\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1049l") catch {};
         self.out.flush() catch {};
         std.posix.tcsetattr(self.screen.handle, .FLUSH, self.screen.saved) catch {};
     }
@@ -868,7 +869,7 @@ pub const Host = struct {
         // tracking gives clicks and drags without flooding an editor with
         // every pointer movement, while the host still decodes motion reports
         // from terminals that send them.
-        self.out.writeAll("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[0m\x1b[2J\x1b[H") catch {};
+        self.out.writeAll("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[0m\x1b[2J\x1b[H") catch {};
         self.out.flush() catch {};
     }
 
@@ -953,14 +954,52 @@ pub const Host = struct {
                 self.screen.pending_len -= self.screen.pending_used;
                 self.screen.pending_used = 0;
             }
-            const decoded = key_mod.decode(self.screen.pending[0..self.screen.pending_len]);
-            if (decoded.used != 0) {
-                self.screen.pending_used = decoded.used;
-                if (keyView(&self.screen.control_name, decoded.key)) |view| {
-                    self.screen.event = view.event;
-                    return view;
+            // A paste in flight owns the bytes: raw text is copied
+            // verbatim (line endings normalized), and the only escape
+            // sequence that means anything inside one is its own end
+            // marker.  Everything arrives as ONE text event.
+            if (self.screen.pasting and self.screen.pending_len != 0) {
+                if (self.screen.pending[0] != 0x1b) {
+                    var at: usize = 0;
+                    while (at < self.screen.pending_len and self.screen.pending[at] != 0x1b) : (at += 1) {
+                        const byte = self.screen.pending[at];
+                        if (self.screen.paste_carriage and byte == '\n') {
+                            self.screen.paste_carriage = false;
+                            continue;
+                        }
+                        self.screen.paste_carriage = byte == '\r';
+                        try self.screen.paste.append(self.gpa, if (byte == '\r') '\n' else byte);
+                    }
+                    self.screen.pending_used = at;
+                    continue;
                 }
-                continue;
+                const decoded = key_mod.decode(self.screen.pending[0..self.screen.pending_len]);
+                if (decoded.used != 0) {
+                    self.screen.pending_used = decoded.used;
+                    if (decoded.key == .paste_end) {
+                        self.screen.pasting = false;
+                        sanitizeUtf8(&self.screen.paste);
+                        self.screen.event = .{};
+                        return .{ .name = "text", .text = self.screen.paste.items };
+                    }
+                    continue;
+                }
+            } else if (self.screen.pending_len != 0) {
+                const decoded = key_mod.decode(self.screen.pending[0..self.screen.pending_len]);
+                if (decoded.used != 0) {
+                    self.screen.pending_used = decoded.used;
+                    if (decoded.key == .paste_begin) {
+                        self.screen.pasting = true;
+                        self.screen.paste_carriage = false;
+                        self.screen.paste.clearRetainingCapacity();
+                        continue;
+                    }
+                    if (keyView(&self.screen.control_name, decoded.key, decoded.modifiers)) |view| {
+                        self.screen.event = view.event;
+                        return view;
+                    }
+                    continue;
+                }
             }
             // A full buffer that decodes to nothing is not going to
             // decode to anything with one more byte in it: drop it
@@ -1028,6 +1067,14 @@ pub const Host = struct {
         /// Where a control key's name ("ctrl_s") is written, so naming
         /// one costs no allocation.
         control_name: [6]u8 = undefined,
+        /// A bracketed paste being accumulated: everything between the
+        /// `200~`/`201~` markers becomes ONE text event, so a paste is
+        /// one edit and one undo step rather than a keystroke replay.
+        paste: std.ArrayList(u8) = .empty,
+        pasting: bool = false,
+        /// Whether the last pasted byte was a carriage return, so a
+        /// CRLF split across two reads still becomes one newline.
+        paste_carriage: bool = false,
         /// Numeric data belonging to the most recently returned terminal
         /// event.  `term_event_data` reads this after `key_read`; the host
         /// owns it and every field is reset when input ends or the window
@@ -1935,28 +1982,32 @@ const KeyView = struct {
 
 /// map a decoded key to its stable Luce-visible event, or null for
 /// bytes that decode to nothing a program should see.  A control key's
-/// name is written into `control_name`, which the caller owns.
-fn keyView(control_name: *[6]u8, decoded: key_mod.Key) ?KeyView {
+/// name is written into `control_name`, which the caller owns.  A
+/// named key carries its modifier bits in the event's `modifiers`
+/// slot — the same slot a mouse report uses.
+fn keyView(control_name: *[6]u8, decoded: key_mod.Key, modifiers: i64) ?KeyView {
+    const held: EventData = .{ .modifiers = modifiers };
     return switch (decoded) {
         .text => |text| .{ .name = "text", .text = text },
-        .enter => .{ .name = "enter" },
-        .tab => .{ .name = "tab" },
-        .backspace => .{ .name = "backspace" },
-        .delete => .{ .name = "delete" },
-        .up => .{ .name = "up" },
-        .down => .{ .name = "down" },
-        .left => .{ .name = "left" },
-        .right => .{ .name = "right" },
-        .home => .{ .name = "home" },
-        .end => .{ .name = "end" },
-        .page_up => .{ .name = "page_up" },
-        .page_down => .{ .name = "page_down" },
-        .escape => .{ .name = "escape" },
+        .enter => .{ .name = "enter", .event = held },
+        .tab => .{ .name = "tab", .event = held },
+        .backspace => .{ .name = "backspace", .event = held },
+        .delete => .{ .name = "delete", .event = held },
+        .up => .{ .name = "up", .event = held },
+        .down => .{ .name = "down", .event = held },
+        .left => .{ .name = "left", .event = held },
+        .right => .{ .name = "right", .event = held },
+        .home => .{ .name = "home", .event = held },
+        .end => .{ .name = "end", .event = held },
+        .page_up => .{ .name = "page_up", .event = held },
+        .page_down => .{ .name = "page_down", .event = held },
+        .escape => .{ .name = "escape", .event = held },
         .control => |letter| blk: {
             @memcpy(control_name[0..5], "ctrl_");
             control_name[5] = letter;
-            break :blk .{ .name = control_name };
+            break :blk .{ .name = control_name, .event = held };
         },
+        .paste_begin, .paste_end => null,
         .mouse => |mouse| .{
             .name = switch (mouse.kind) {
                 .press => "mouse_press",
@@ -1975,6 +2026,31 @@ fn keyView(control_name: *[6]u8, decoded: key_mod.Key) ?KeyView {
         },
         .none => null,
     };
+}
+
+/// Remove invalid UTF-8 in place, keeping every valid sequence.  A
+/// paste is arbitrary clipboard bytes; the language's `str` is valid
+/// UTF-8, so what cannot be text does not become text.
+fn sanitizeUtf8(buffer: *std.ArrayList(u8)) void {
+    if (std.unicode.utf8ValidateSlice(buffer.items)) return;
+    var kept: usize = 0;
+    var at: usize = 0;
+    while (at < buffer.items.len) {
+        const size = std.unicode.utf8ByteSequenceLength(buffer.items[at]) catch {
+            at += 1;
+            continue;
+        };
+        if (at + size > buffer.items.len) break;
+        const sequence = buffer.items[at .. at + size];
+        if (!std.unicode.utf8ValidateSlice(sequence)) {
+            at += 1;
+            continue;
+        }
+        std.mem.copyForwards(u8, buffer.items[kept .. kept + size], sequence);
+        kept += size;
+        at += size;
+    }
+    buffer.shrinkRetainingCapacity(kept);
 }
 
 /// Append one SGR run: reset, then bold and 256-color foreground and
@@ -2555,12 +2631,18 @@ test "a message too long for the fixed report buffer is cut on a codepoint" {
 
 test "decoded keys map to stable event names" {
     var control_name: [6]u8 = undefined;
-    const text = keyView(&control_name, .{ .text = "λ" }).?;
+    const text = keyView(&control_name, .{ .text = "λ" }, 0).?;
     try testing.expectEqualStrings("text", text.name);
     try testing.expectEqualStrings("λ", text.text);
-    const save = keyView(&control_name, .{ .control = 's' }).?;
+    const save = keyView(&control_name, .{ .control = 's' }, 0).?;
     try testing.expectEqualStrings("ctrl_s", save.name);
-    try testing.expectEqual(@as(?KeyView, null), keyView(&control_name, .none));
+    try testing.expectEqual(@as(?KeyView, null), keyView(&control_name, .none, 0));
+    // A modified key carries its bits in the event's modifiers slot,
+    // and the paste delimiters never become events themselves.
+    const shifted = keyView(&control_name, .left, 1).?;
+    try testing.expectEqualStrings("left", shifted.name);
+    try testing.expectEqual(@as(i64, 1), shifted.event.modifiers);
+    try testing.expectEqual(@as(?KeyView, null), keyView(&control_name, .paste_begin, 0));
 }
 
 test "the C table offers every service, over the same implementation" {
