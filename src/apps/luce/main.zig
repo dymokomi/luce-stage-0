@@ -179,6 +179,17 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             .driver = environment.get("LUCE_CC"),
         });
     }
+    if (std.mem.eql(u8, command, "query")) {
+        // `luce query diagnostics FILE` — the machine half of `check`:
+        // one JSON array on standard output, `[]` for a clean compile.
+        // FILE may be `-`, which is how a tool asks about an unsaved
+        // buffer it pipes in.
+        if (arguments.len != 4 or !std.mem.eql(u8, arguments[2], "diagnostics"))
+            return refuse(err, "query takes: luce query diagnostics FILE", .{});
+        return front.queryDiagnostics(gpa, io, out, err, arguments[3], .{
+            .library_path = library_path,
+        });
+    }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return refuse(err, "check takes one file and no options", .{});
         var program = switch (try front.compilePath(gpa, io, err, path, .{
@@ -268,6 +279,7 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce --build-info\n" ++
             "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
+            "  luce query diagnostics FILE\n" ++
             "  luce ir FILE [--full]\n" ++
             "  luce test [PATH ...]\n" ++
             "  luce package new NAME [VERSION]\n" ++

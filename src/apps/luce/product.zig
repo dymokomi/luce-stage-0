@@ -411,6 +411,54 @@ test "check compiles, reports, and writes nothing" {
     try testing.expect(missing.saysErr(absent));
 }
 
+test "query diagnostics answers JSON: positions for a broken file, [] for a clean one" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+    try tree.write("sums.luc", greeting);
+    try tree.write("broken.luc",
+        \\func main():
+        \\    let count: i64 = "seven"
+        \\    print(str(count))
+        \\
+    );
+
+    const program = try tree.at(gpa, "sums.luc");
+    defer gpa.free(program);
+    var clean = try runLuce(gpa, &tree, &.{ "query", "diagnostics", program }, null);
+    defer clean.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), clean.status);
+    try testing.expectEqualStrings("[]\n", clean.out);
+
+    // A broken compile is still a successful *query*: the array is the
+    // answer, machine-readable, on standard output alone.
+    const broken = try tree.at(gpa, "broken.luc");
+    defer gpa.free(broken);
+    var full = try runLuce(gpa, &tree, &.{ "query", "diagnostics", broken }, null);
+    defer full.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), full.status);
+    try testing.expectEqualStrings("", full.err);
+    try testing.expect(full.saysOut("\"code\":\"luce.sema.type\""));
+    try testing.expect(full.saysOut("\"line\":2"));
+    try testing.expect(full.saysOut("\"column\":5"));
+    try testing.expect(full.saysOut("\"end_column\":"));
+
+    // The buffer a tool has not saved yet travels as `-`.
+    var piped = try runLuce(gpa, &tree, &.{ "query", "diagnostics", "-" }, "func main():\n    print(missing)\n");
+    defer piped.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), piped.status);
+    try testing.expect(piped.saysOut("\"code\":\"luce.sema.name\""));
+    try testing.expect(piped.saysOut("\"path\":\"<stdin>\""));
+
+    // A file the query cannot read is the query's own failure.
+    const absent = try tree.at(gpa, "nowhere.luc");
+    defer gpa.free(absent);
+    var missing = try runLuce(gpa, &tree, &.{ "query", "diagnostics", absent }, null);
+    defer missing.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), missing.status);
+    try testing.expect(missing.saysErr("no such file"));
+}
+
 test "ir prints the program, and --full keeps what the entry never reaches" {
     // Pruning is what makes an unused std import cost nothing to ship,
     // so `luce ir` shows the program as it will be compiled.  `--full`

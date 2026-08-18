@@ -58,6 +58,94 @@ pub fn compilePath(
     options: Options,
 ) !Outcome {
     if (std.mem.endsWith(u8, path, luce.mir.module.extension)) return decodePath(gpa, io, err, path);
+    var result = switch (try compileSource(gpa, io, err, path, options)) {
+        .unreadable => return .{ .refused = .{} },
+        .result => |compiled| compiled,
+    };
+    switch (result) {
+        .success => |program| return .{ .program = program },
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(gpa);
+            defer gpa.free(rendered);
+            try err.print("luce: compile failed\n{s}", .{rendered});
+            const from_import = namedAnImport(diagnostics);
+            result.deinit();
+            return .{ .refused = .{ .import_failed = from_import } };
+        },
+    }
+}
+
+/// The diagnostics of one compile, as one JSON array on `out` — the
+/// machine half of `luce check`, and the door the language server
+/// asks through.  The array is the whole answer: a clean compile is
+/// `[]`, and each entry carries the stable code, the message, and
+/// 1-based start and end positions.  An unreadable file is a failure
+/// of the *query* — reported to `err`, nonzero — because "no such
+/// file" is not a fact about the program's source.
+pub fn queryDiagnostics(
+    gpa: Allocator,
+    io: std.Io,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    path: []const u8,
+    options: Options,
+) !u8 {
+    if (std.mem.endsWith(u8, path, luce.mir.module.extension)) {
+        try err.writeAll("luce: query wants source, not a compiled module\n");
+        return 1;
+    }
+    var result = switch (try compileSource(gpa, io, err, path, options)) {
+        .unreadable => return 1,
+        .result => |compiled| compiled,
+    };
+    defer result.deinit();
+    var stream: std.json.Stringify = .{ .writer = out };
+    try stream.beginArray();
+    if (result == .failure) {
+        const diagnostics = &result.failure;
+        for (0..diagnostics.count()) |index| {
+            const place = diagnostics.resolve(index).?;
+            try stream.beginObject();
+            try stream.objectField("code");
+            try stream.write(place.code);
+            try stream.objectField("severity");
+            try stream.write("error");
+            try stream.objectField("message");
+            try stream.write(place.message);
+            try stream.objectField("path");
+            try stream.write(place.path);
+            try stream.objectField("line");
+            try stream.write(place.line);
+            try stream.objectField("column");
+            try stream.write(place.column);
+            try stream.objectField("end_line");
+            try stream.write(place.end_line);
+            try stream.objectField("end_column");
+            try stream.write(place.end_column);
+            try stream.endObject();
+        }
+    }
+    try stream.endArray();
+    try out.writeAll("\n");
+    try out.flush();
+    return 0;
+}
+
+/// What loading and compiling came to, before any caller's policy:
+/// the result with its diagnostics still alive, or a file that could
+/// not be read at all (already explained on `err`).
+const Front = union(enum) {
+    result: luce.compile.CompileResult,
+    unreadable,
+};
+
+fn compileSource(
+    gpa: Allocator,
+    io: std.Io,
+    err: *std.Io.Writer,
+    path: []const u8,
+    options: Options,
+) !Front {
 
     // The root file goes through the same door as every import, so a
     // directory, a permission, or an oversized file reads the same
@@ -67,22 +155,22 @@ pub fn compilePath(
         .text => |text| text.bytes,
         .missing => {
             try err.print("luce: cannot read {s}: no such file\n", .{path});
-            return .{ .refused = .{} };
+            return .unreadable;
         },
         .unreadable => |why| {
             try err.print("luce: cannot read {s}: {s}\n", .{ path, why });
-            return .{ .refused = .{} };
+            return .unreadable;
         },
         // The root is one path the user typed; no host answers it in
         // two places and no store machinery refuses it.  The arms
         // exist because the seam carries them.
         .ambiguous => {
             try err.print("luce: cannot read {s}: it answered in more than one place\n", .{path});
-            return .{ .refused = .{} };
+            return .unreadable;
         },
         .refused => |refusal| {
             try err.print("luce: cannot read {s}: {s}\n", .{ path, refusal.message });
-            return .{ .refused = .{} };
+            return .unreadable;
         },
     };
     defer gpa.free(source);
@@ -98,7 +186,7 @@ pub fn compilePath(
         .governed => |project| project,
         .refused => |why| {
             try err.print("luce: {s}\n", .{why});
-            return .{ .refused = .{} };
+            return .unreadable;
         },
     };
     const source_root: []const u8 = if (governed) |project| project.root else "";
@@ -120,24 +208,13 @@ pub fn compilePath(
         .gpa = gpa,
     };
     defer loader.deinit();
-    var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
+    return .{ .result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
         .allow_host = true,
         .source_name = files.displayName(path),
         .source_root = source_root,
         .prune = options.prune,
         .entry = options.entry,
-    });
-    switch (result) {
-        .success => |program| return .{ .program = program },
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa);
-            defer gpa.free(rendered);
-            try err.print("luce: compile failed\n{s}", .{rendered});
-            const from_import = namedAnImport(diagnostics);
-            result.deinit();
-            return .{ .refused = .{ .import_failed = from_import } };
-        },
-    }
+    }) };
 }
 
 /// Whether anything in this failure is about reaching another module.

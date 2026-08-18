@@ -51,6 +51,7 @@ luce --version
 luce --build-info
 luce build FILE [-o OUT] [--release] [--emit=WHAT]
 luce check FILE
+luce query diagnostics FILE
 luce ir FILE [--full]
 luce test [PATH ...]
 luce package NAME() [VERSION]
@@ -61,8 +62,17 @@ luce package publish NAME
 `--version` prints the short tool version and exits. `--build-info` adds the
 immutable source revision, target, optimization mode, serialized-module
 format, and host ABI for a precise bug report. The compiler's command words
-are `build`, `check`, `ir`, `test`, and `package`; the runner's are `run` and
-`luce`.
+are `build`, `check`, `query`, `ir`, `test`, and `package`; the runner's are
+`run` and `luce`.
+
+`luce query diagnostics FILE` is the machine half of `check`: one JSON
+array on standard output — `[]` for a clean compile, otherwise one
+object per diagnostic with the stable `code`, the `message`, the
+`path`, and 1-based `line`/`column`/`end_line`/`end_column`. FILE may
+be `-` to read the source from standard input, which is how an editor
+asks about a buffer it has not saved. A broken compile is still a
+successful query (exit 0, the array is the answer); only a file the
+query cannot read fails it.
 
 `luce package new` creates a package in a direct source subfolder, writes its
 `luce.yaml`, and adds a `path:` want to the project manifest. `luce package
