@@ -55,15 +55,55 @@ Imports are case-sensitive. The file name, import spelling, and filesystem
 entry must agree exactly even on a host whose filesystem would otherwise
 ignore case.
 
-Import only the module, then keep its qualification at the use site. The
-prefix tells a reader where a declaration came from and lets two modules use
-the same declaration name without flattening them into one scope.
+Import the module and keep its qualification when the origin matters at the
+use site — the prefix tells a reader where a declaration came from, and it
+lets two modules use the same name without flattening them into one scope.
 
 Modules may import one another. Each file is loaded once, and the complete
 graph is compiled into one artifact, so mutually recursive functions across
 files are valid. A module cannot import itself. Conditional imports, wildcard
 imports, executable import bodies, and source-level re-export declarations
 are not part of Luce.
+
+## Import members directly
+
+When the qualification is noise rather than information — a program that
+writes one module's types in every signature — name the members themselves.
+`from name import a, b` binds the named public declarations bare, so the
+file writes `Point`, not `geometry.Point`:
+
+```luce module file=geometry.luc
+struct Point:
+    x: f64
+    y: f64
+
+func distance(a: Point, b: Point) -> f64:
+    let dx = a.x - b.x
+    let dy = a.y - b.y
+    return sqrt(dx * dx + dy * dy)
+```
+
+```luce run
+from geometry import Point, distance as span
+
+func main():
+    let a = Point(x = 0.0, y = 0.0)
+    let b = Point(x = 3.0, y = 4.0)
+    print(str(span(a, b)))
+```
+
+```output
+5
+```
+
+Any public file-scope declaration can be named: a function, struct, class,
+interface, enum, union, constant, or type alias. `as` renames one member,
+which is also the escape hatch when a member's name is already taken. The
+member import binds only its members — the module namespace stays unbound,
+so `geometry.Point` needs a plain `import geometry`, and the two forms may
+coexist in one file. Every member is checked where the import is written:
+an unknown or `private` member is refused on that line, and a member
+binding that collides with any other name in the file is a duplicate.
 
 ## The standard library
 

@@ -1330,12 +1330,20 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     // owns copied static/member declarations; rewriting the namespace here
     // keeps one authoritative function/member table.
     const namespace_written = joined[0 .. joined.len - method.name.len - 1];
-    const alias_key: ?[]const u8 = if (count == 1)
+    var alias_key: ?[]const u8 = if (count == 1)
         try naming.qualify(self.analyzer, self.prefix, namespace_written)
     else if (naming.importsModule(self.analyzer, self.module, head))
         try self.importedName(namespace_written)
     else
         null;
+    // A member-imported alias answers as a namespace under its bare
+    // binding: `from geo import Ops` makes `Ops.helper(...)` the
+    // qualified alias lookup.
+    if (count == 1 and alias_key != null and !self.analyzer.alias_names.contains(alias_key.?)) {
+        if (try naming.memberKey(self.analyzer, self.module, head)) |member_alias| {
+            alias_key = member_alias;
+        }
+    }
     if (alias_key) |key| {
         if (self.analyzer.alias_names.get(key)) |alias_index| {
             const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, method.span)) orelse
@@ -1376,6 +1384,25 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
         }
         try refusals.failUnknownFunction(self, joined, method.span);
         return .reported;
+    }
+    // `Point.origin(...)` where Point arrived through a member
+    // import: the member's key replaces the head, and the rest of
+    // the written chain follows it unchanged.
+    if (try naming.memberKey(self.analyzer, self.module, head)) |head_key| {
+        if (self.analyzer.struct_names.contains(head_key) or
+            self.analyzer.interface_names.contains(head_key) or
+            self.analyzer.enum_names.contains(head_key) or
+            self.analyzer.variant_names.contains(head_key))
+        {
+            const full = try std.fmt.allocPrint(self.arena(), "{s}{s}", .{ head_key, joined[head.len..] });
+            if (isNamespaceDeclaration(self, full)) {
+                return .{ .resolved = full };
+            }
+            try refusals.failUnknownFunction(self, joined, method.span);
+            return .reported;
+        }
+        // A member bound to a constant is a value with methods.
+        if (self.analyzer.constant_names.contains(head_key)) return .value;
     }
     if (naming.importsModule(self.analyzer, self.module, head)) {
         const key = try self.importedName(joined);

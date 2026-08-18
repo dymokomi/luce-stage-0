@@ -42,6 +42,118 @@ const geo: agree.File = .{ .name = "geo", .source =
     \\
 };
 
+const member_kit: agree.File = .{ .name = "shapes", .source =
+    \\struct Point:
+    \\    x: i64
+    \\    y: i64
+    \\
+    \\class Widget:
+    \\    width: i64
+    \\
+    \\enum Color:
+    \\    red
+    \\    green
+    \\
+    \\union Figure:
+    \\    circle(radius: i64)
+    \\    dot
+    \\
+    \\const origin = 7
+    \\
+    \\func span(p: Point) -> i64:
+    \\    return p.x + p.y
+    \\
+    \\alias Spot = Point
+    \\
+    \\interface Sized:
+    \\    func size() -> i64
+    \\
+};
+
+test "a member import binds every declaration kind bare" {
+    var program = try agree.project(
+        \\from shapes import Point, Widget, Color, Figure, origin, span, Spot
+        \\
+        \\func main():
+        \\    let p = Point(x = 2, y = 3)
+        \\    let s: Spot = Point(x = 1, y = 1)
+        \\    let w = new Widget(width = 4)
+        \\    let c = Color.red
+        \\    let figure = Figure.dot
+        \\    var total = span(p) + origin + w.width + s.x
+        \\    if c == Color.red:
+        \\        total += 1
+        \\    match figure:
+        \\        dot:
+        \\            total += 1
+        \\        else:
+        \\            total += 0
+        \\    assert(total == 19)
+        \\
+    , &.{member_kit});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "a member import renames with as and coexists with the whole import" {
+    var program = try agree.project(
+        \\import shapes
+        \\from shapes import Point as Dot, span as measure
+        \\
+        \\func main():
+        \\    let bare = Dot(x = 4, y = 5)
+        \\    let qualified = shapes.Point(x = 1, y = 1)
+        \\    assert(measure(bare) == 9)
+        \\    assert(shapes.span(qualified) == 2)
+        \\    let same: shapes.Point = bare
+        \\    assert(same.y == 5)
+        \\
+    , &.{member_kit});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "an interface arrives through a member import with bare conformance" {
+    var program = try agree.project(
+        \\from shapes import Sized
+        \\
+        \\struct Tile: Sized:
+        \\    edge: i64
+        \\
+        \\    func size() -> i64:
+        \\        return self.edge * self.edge
+        \\
+        \\func total(items: list[Sized]) -> i64:
+        \\    var sum = 0
+        \\    for item in items:
+        \\        sum += item.size()
+        \\    return sum
+        \\
+        \\func main():
+        \\    var items: list[Sized] = []
+        \\    items.append(Tile(edge = 2))
+        \\    items.append(Tile(edge = 3))
+        \\    assert(total(items) == 13)
+        \\
+    , &.{member_kit});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "a member import folds an imported constant at file scope" {
+    var program = try agree.project(
+        \\from shapes import origin
+        \\
+        \\const doubled = origin * 2
+        \\
+        \\func main():
+        \\    assert(doubled == 14)
+        \\
+    , &.{member_kit});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
 test "a file is a module: imports, qualified names, and shared types run" {
     var program = try agree.project(
         \\import geo

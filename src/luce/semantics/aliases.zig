@@ -49,6 +49,9 @@ pub fn collectDeclarations(self: *Analyzer) Error!void {
 
             var import_precedes = false;
             for (module.tree.imports) |imported| {
+                // A member import's module binding is unbound; its
+                // member bindings have their own collision gate.
+                if (imported.members.len != 0) continue;
                 if (!std.mem.eql(u8, imported.binding, declaration.name)) continue;
                 if (imported.span.start < declaration.name_span.start) {
                     import_precedes = true;

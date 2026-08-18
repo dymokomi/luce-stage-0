@@ -634,6 +634,16 @@ pub const FuncDecl = struct {
     }
 };
 
+/// One member of a selective import: `from geo import Point` binds
+/// `Point`, and `from geo import Point as Spot` binds `Spot`.  `name`
+/// is the declaration's name in its module; `binding` is what this
+/// file calls it — the same text unless `as` renames it.
+pub const ImportMember = struct {
+    name: []const u8,
+    binding: []const u8,
+    span: Span,
+};
+
 /// An import, in either namespace: `import geo` binds the sibling
 /// file geo.luc, `import std.math` binds the standard library's math,
 /// and `import geo.shapes` binds geo/shapes.luc under the project
@@ -641,10 +651,16 @@ pub const FuncDecl = struct {
 /// `import`, without the std head — "geo", "geo.shapes", "math" —
 /// and `binding` is the namespace call sites use: the last segment,
 /// or the alias when the import says `as`.
+///
+/// `from geo import Point, length` records the same module with
+/// `members` filled.  A member import binds only its members: the
+/// module namespace stays unbound, so `binding` is the default last
+/// segment and stage 4 refuses to answer to it.
 pub const Import = struct {
     name: []const u8,
     binding: []const u8,
     origin: source_mod.Origin,
+    members: []ImportMember = &.{},
     span: Span,
 };
 

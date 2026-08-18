@@ -566,6 +566,12 @@ pub const FunctionBuilder = struct {
             if (naming.importsModule(self.analyzer, self.module, head)) {
                 return try self.importedName(written);
             }
+            // `Point.origin` where Point arrived through a member
+            // import: the member's key replaces the head, and the
+            // rest of the written chain follows unchanged.
+            if (try naming.memberKey(self.analyzer, self.module, head)) |key| {
+                return try std.fmt.allocPrint(self.arena(), "{s}{s}", .{ key, written[dot..] });
+            }
             // A call the reader never wrote cannot be fixed where it
             // points.  `f"{x:.2f}"` lowers to `strings.format_float`,
             // so the generic message would name a namespace that
@@ -600,7 +606,12 @@ pub const FunctionBuilder = struct {
             }
             return null;
         }
-        return try naming.qualify(self.analyzer, self.prefix, written);
+        const local = try naming.qualify(self.analyzer, self.prefix, written);
+        if (naming.declares(self.analyzer, local)) return local;
+        // A member import binds the bare name; the import line
+        // already settled reachability and collisions.
+        if (try naming.memberKey(self.analyzer, self.module, written)) |key| return key;
+        return local;
     }
 
     /// The declared key of a cross-module reference written in this
@@ -1756,6 +1767,13 @@ pub const FunctionBuilder = struct {
                     const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);
                     if (self.analyzer.constant_names.get(qualified)) |constant| {
                         return expressions.emitConstant(self, constant, name.span);
+                    }
+                    // Or a member import's binding: `from geo import
+                    // origin` reads the imported constant bare.
+                    if (try naming.memberKey(self.analyzer, self.module, name.text)) |key| {
+                        if (self.analyzer.constant_names.get(key)) |constant| {
+                            return expressions.emitConstant(self, constant, name.span);
+                        }
                     }
                     // Or a function, where a function is what the place
                     // wants (docs/FUNCTIONS.md S1).  A local wins, and

@@ -391,6 +391,17 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     if (self.struct_names.get(local)) |index| return try nominalType(self, index);
     if (self.enum_names.get(local)) |index| return self.enumType(index);
     if (self.variant_names.get(local)) |index| return .{ .variant = index };
+    // A member import binds the bare name: after `from geo import
+    // Point`, this is the qualified lookup with the member's own key.
+    // Reachability was settled where the import was written, so no
+    // per-use privacy check repeats here.
+    if (try naming.memberKey(self, module, written.name)) |key| {
+        if (self.alias_names.get(key)) |index| return resolveAlias(self, module, index, written.span);
+        if (self.interface_names.get(key)) |interface_index| return .{ .strukt = self.interface_decls.items[interface_index].layout };
+        if (self.struct_names.get(key)) |index| return try nominalType(self, index);
+        if (self.enum_names.get(key)) |index| return self.enumType(index);
+        if (self.variant_names.get(key)) |index| return .{ .variant = index };
+    }
     try failUnknownType(self, module, written);
     return null;
 }

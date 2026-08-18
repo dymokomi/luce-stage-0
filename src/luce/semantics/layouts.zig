@@ -395,6 +395,11 @@ pub fn collectStructs(self: *Analyzer) Error!void {
     for (self.modules, 0..) |module, module_index| {
         self.diagnostics.scope = module.file;
         for (module.tree.imports) |imported| {
+            // A member import binds its members, not the module
+            // namespace, so its module binding is no word this file
+            // uses; the members have their own gate in
+            // `naming.validateMemberImports`.
+            if (imported.members.len != 0) continue;
             if (isReserved(imported.binding) or std.mem.eql(u8, imported.binding, "evaluate")) {
                 try self.fail("luce.sema.reserved", imported.span, "{s} is a reserved name", .{imported.binding});
             }

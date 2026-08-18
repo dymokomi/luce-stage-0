@@ -635,6 +635,13 @@ pub const Parser = struct {
                     // Luce spelling beats listing the four keywords.
                     if (self.peekKind() == .identifier) {
                         const word = self.text(self.peek());
+                        // `from geo import Point` — the member import.
+                        // Contextual, like `as`: no other file-scope
+                        // line opens with a bare identifier.
+                        if (std.mem.eql(u8, word, "from")) {
+                            try self.fromImportDecl(&imports);
+                            continue;
+                        }
                         if (miscasedKeyword(word)) |keyword| {
                             try self.report(
                                 "luce.parse.top",
@@ -813,29 +820,24 @@ pub const Parser = struct {
         }
     }
 
-    /// import name — the sibling module `name.luc`; import std.name —
-    /// the standard library's; import a.b — the file b.luc in folder
-    /// a under the project root (docs/PACKAGES.md D2, resolved by the
-    /// host).  `std` is the one namespace the grammar knows, and
-    /// *what* it contains is stage 1's to say.  An optional trailing
-    /// `as name` picks the binding; `as` is read contextually — after
-    /// the module path only an alias can follow, so the word stays an
-    /// ordinary identifier everywhere else.
-    fn importDecl(self: *Parser, imports: *std.ArrayList(ast.Import)) Error!void {
-        const start = self.advance(); // import
-        const head = (try self.expect(.identifier, "a module name after import")) orelse {
-            self.recover();
-            return;
-        };
+    const ImportPath = struct {
+        name: []const u8,
+        last: Token,
+        origin: source_mod.Origin,
+    };
+
+    /// The module path both import forms share: a sibling name,
+    /// `std.name`, or a dotted project path (docs/PACKAGES.md D2,
+    /// resolved by the host).  `std` is the one namespace the grammar
+    /// knows, and *what* it contains is stage 1's to say.
+    fn importPath(self: *Parser, after: []const u8) Error!?ImportPath {
+        const head = (try self.expect(.identifier, after)) orelse return null;
         var name = self.text(head);
         var last = head;
         var origin: source_mod.Origin = .sibling;
         if (std.mem.eql(u8, name, source_mod.standard_namespace) and self.peekKind() == .dot) {
             _ = self.advance(); // dot
-            last = (try self.expect(.identifier, "a standard module name after std.")) orelse {
-                self.recover();
-                return;
-            };
+            last = (try self.expect(.identifier, "a standard module name after std.")) orelse return null;
             name = self.text(last);
             origin = .standard;
             // import std.a.b — the namespace is one level deep.
@@ -846,19 +848,33 @@ pub const Parser = struct {
                     "'import {s}.{s}' names one standard module: there are no deeper paths",
                     .{ source_mod.standard_namespace, name },
                 );
-                self.recover();
-                return;
+                return null;
             }
         } else while (self.peekKind() == .dot) {
             // import a.b maps dots to folders under the project root;
             // the path is rebuilt because a dot may carry spaces.
             _ = self.advance(); // dot
-            last = (try self.expect(.identifier, "a module name after the dot")) orelse {
-                self.recover();
-                return;
-            };
+            last = (try self.expect(.identifier, "a module name after the dot")) orelse return null;
             name = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ name, self.text(last) });
         }
+        return .{ .name = name, .last = last, .origin = origin };
+    }
+
+    /// import name — the sibling module `name.luc`; import std.name —
+    /// the standard library's; import a.b — the file b.luc in folder
+    /// a under the project root.  An optional trailing `as name` picks
+    /// the binding; `as` is read contextually — after the module path
+    /// only an alias can follow, so the word stays an ordinary
+    /// identifier everywhere else.
+    fn importDecl(self: *Parser, imports: *std.ArrayList(ast.Import)) Error!void {
+        const start = self.advance(); // import
+        const path = (try self.importPath("a module name after import")) orelse {
+            self.recover();
+            return;
+        };
+        const name = path.name;
+        const last = path.last;
+        const origin = path.origin;
         var bound = self.text(last);
         var end = last.span.end;
         if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "as")) {
@@ -891,6 +907,77 @@ pub const Parser = struct {
             .name = name,
             .binding = bound,
             .origin = origin,
+            .span = .{ .start = start.span.start, .end = end },
+        });
+    }
+
+    /// from geo import Point, length as len — a member import.  The
+    /// module loads exactly as `import geo` loads it, but what this
+    /// file gains is the named members, bound bare; the module
+    /// namespace itself stays unbound.  `from` is contextual the way
+    /// `as` is: a file-scope line opening with a bare identifier is
+    /// never anything else, so the word costs no keyword.
+    fn fromImportDecl(self: *Parser, imports: *std.ArrayList(ast.Import)) Error!void {
+        const start = self.advance(); // from
+        const path = (try self.importPath("a module name after from")) orelse {
+            self.recover();
+            return;
+        };
+        if (self.peekKind() != .keyword_import) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "'from {s}' names members: write 'from {s} import Name'",
+                .{ path.name, path.name },
+            );
+            self.recover();
+            return;
+        }
+        _ = self.advance(); // import
+        var members: std.ArrayList(ast.ImportMember) = .empty;
+        defer members.deinit(self.arena);
+        var end = path.last.span.end;
+        while (true) {
+            if (self.peekKind() == .star) {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "there is no wildcard import: name each member, or write 'import {s}'",
+                    .{path.name},
+                );
+                self.recover();
+                return;
+            }
+            const member = (try self.expect(.identifier, "a member name after import")) orelse {
+                self.recover();
+                return;
+            };
+            try self.refuseWildcardName(member);
+            var bound = self.text(member);
+            end = member.span.end;
+            if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "as")) {
+                _ = self.advance(); // as
+                const alias = (try self.expect(.identifier, "a binding name after as")) orelse {
+                    self.recover();
+                    return;
+                };
+                try self.refuseWildcardName(alias);
+                bound = self.text(alias);
+                end = alias.span.end;
+            }
+            try members.append(self.arena, .{
+                .name = self.text(member),
+                .binding = bound,
+                .span = .{ .start = member.span.start, .end = end },
+            });
+            if (self.accept(.comma) == null) break;
+        }
+        try self.endOfStatement("end of line after the import");
+        try imports.append(self.arena, .{
+            .name = path.name,
+            .binding = self.text(path.last),
+            .origin = path.origin,
+            .members = try members.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = end },
         });
     }
@@ -3291,7 +3378,6 @@ fn foreignWord(word: []const u8) ?[]const u8 {
         .{ .word = "function", .advice = "functions are declared with 'func'" },
         .{ .word = "type", .advice = "type aliases are declared with 'alias': write 'alias Name = Type'" },
         .{ .word = "final", .advice = "file-scope constants are declared with 'const'" },
-        .{ .word = "from", .advice = import_advice },
         .{ .word = "include", .advice = import_advice },
         .{ .word = "require", .advice = import_advice },
         .{ .word = "use", .advice = import_advice },

@@ -716,6 +716,14 @@ pub fn fold(
             if (analyzer.constant_names.get(qualified)) |index| {
                 return evaluate(analyzer, index);
             }
+            // `from geo import origin` folds the imported constant
+            // under its bare binding; the import line already settled
+            // reachability.
+            if (try naming.memberKey(analyzer, module, name.text)) |key| {
+                if (analyzer.constant_names.get(key)) |index| {
+                    return evaluate(analyzer, index);
+                }
+            }
             return constantError(analyzer, name.span, "unknown name {s} in a constant (constants may use literals and other constants)", .{name.text});
         },
         .field => |field| {
@@ -882,6 +890,38 @@ pub fn fold(
                     },
                 );
             }
+            // `from geo import Point` folds a construction under its
+            // bare binding; the import line already settled
+            // reachability.
+            if (try naming.memberKey(analyzer, module, call.callee)) |key| {
+                if (analyzer.struct_names.get(key)) |layout_index| {
+                    return foldConstruct(analyzer, module, call.arguments, call.span, layout_index);
+                }
+                if (analyzer.alias_names.get(key)) |alias_index| {
+                    const target = (try resolve.resolveAlias(analyzer, module, alias_index, call.span)) orelse
+                        return null;
+                    if (target == .strukt) return foldConstruct(analyzer, module, call.arguments, call.span, target.strukt);
+                    return constantError(
+                        analyzer,
+                        call.span,
+                        "{s} is a type alias for {s}, not a constant constructor",
+                        .{ call.callee, try analyzer.typeName(target) },
+                    );
+                }
+                if (analyzer.enum_names.get(key)) |enum_index| {
+                    return constantError(
+                        analyzer,
+                        call.span,
+                        "{s}(…) is a runtime lookup that answers {s}?; name the constant member: {s}.{s}",
+                        .{
+                            call.callee,
+                            analyzer.enums.items[enum_index].name,
+                            call.callee,
+                            analyzer.enums.items[enum_index].members[0].name,
+                        },
+                    );
+                }
+            }
             if (analyzer.fold_subject) |subject| {
                 return constantError(analyzer, call.span, "{s} is a constant: {s}(…) is a call", .{ subject, call.callee });
             }
@@ -984,6 +1024,16 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
                 const target = (try resolve.resolveAlias(analyzer, module, alias_index, field.span)) orelse
                     return null;
                 if (target == .enumeration) break :found target.enumeration.index;
+            }
+            // `from geo import Color` folds `Color.red` under the
+            // member's bare binding.
+            if (try naming.memberKey(analyzer, module, written.items)) |key| {
+                if (analyzer.enum_names.get(key)) |index| break :found index;
+                if (analyzer.alias_names.get(key)) |alias_index| {
+                    const target = (try resolve.resolveAlias(analyzer, module, alias_index, field.span)) orelse
+                        return null;
+                    if (target == .enumeration) break :found target.enumeration.index;
+                }
             }
             return null;
         }

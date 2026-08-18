@@ -72,18 +72,43 @@ pub fn importedName(self: *Analyzer, module: usize, written: []const u8) Error![
 /// importing file's own namespace, names the file, and the file
 /// names its module — which is what tells two same-named package
 /// internals apart when two modules each bind a `util`.
+///
+/// A member import binds its members and nothing else, so it never
+/// answers as a namespace here.
 fn importedPrefix(self: *const Analyzer, module: usize, head: []const u8) ?[]const u8 {
     for (self.modules[module].tree.imports) |imported| {
+        if (imported.members.len != 0) continue;
         if (!std.mem.eql(u8, imported.binding, head)) continue;
-        // The library keys by its binding wherever it is imported
-        // from, so the written head is already the prefix.
-        if (imported.origin == .standard) return head;
-        const namespace = self.diagnostics.sources.rootOf(self.modules[module].file);
-        const file = self.diagnostics.sources.claim(namespace, imported.name) orelse return head;
-        for (self.modules) |candidate| {
-            if (candidate.file == file) return candidate.prefix;
+        return resolvedPrefix(self, module, imported);
+    }
+    return null;
+}
+
+/// The qualification prefix of `imported`, resolved from `module` —
+/// the one registry walk `importedPrefix` and `memberKey` share.
+fn resolvedPrefix(self: *const Analyzer, module: usize, imported: ast.Import) []const u8 {
+    // The library keys by its binding wherever it is imported from,
+    // so the import's own last segment is already the prefix.
+    if (imported.origin == .standard) return imported.binding;
+    const namespace = self.diagnostics.sources.rootOf(self.modules[module].file);
+    const file = self.diagnostics.sources.claim(namespace, imported.name) orelse return imported.binding;
+    for (self.modules) |candidate| {
+        if (candidate.file == file) return candidate.prefix;
+    }
+    return imported.binding;
+}
+
+/// The declared key a member-import binding resolves to, or null when
+/// `module` binds no member as `head`: after `from geo import Point`,
+/// the bare "Point" answers "geo.Point" — through the importing
+/// file's own claim registry, so a package member keys under its
+/// package root exactly as the qualified spelling would.
+pub fn memberKey(self: *Analyzer, module: usize, head: []const u8) Error!?[]const u8 {
+    for (self.modules[module].tree.imports) |imported| {
+        for (imported.members) |member| {
+            if (!std.mem.eql(u8, member.binding, head)) continue;
+            return try qualify(self, resolvedPrefix(self, module, imported), member.name);
         }
-        return head;
     }
     return null;
 }
@@ -171,9 +196,11 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
 
 /// True when `module` imports something *bound* as `name` — the
 /// namespace a call site writes, which is an import's last segment
-/// unless an `as` chose otherwise.
+/// unless an `as` chose otherwise.  A member import binds only its
+/// members, so it never makes its module answer as a namespace.
 pub fn importsModule(self: *const Analyzer, module: usize, name: []const u8) bool {
     for (self.modules[module].tree.imports) |imported| {
+        if (imported.members.len != 0) continue;
         if (std.mem.eql(u8, imported.binding, name)) return true;
     }
     return false;
@@ -244,6 +271,132 @@ pub fn importSpelling(self: *Analyzer, name: []const u8) Error![]const u8 {
     }
     if (!source_mod.isStandard(name)) return name;
     return qualify(self, source_mod.standard_namespace, name);
+}
+
+/// Which module declared a qualified key and how visible it is,
+/// whichever table holds it — the member-import gate's one lookup.
+const DeclarationHome = struct { module: usize, visibility: ast.Visibility };
+
+fn declarationHome(self: *const Analyzer, qualified: []const u8) ?DeclarationHome {
+    if (self.alias_names.get(qualified)) |index| {
+        const info = self.alias_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.function_names.get(qualified)) |index| {
+        const info = self.functions.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.struct_names.get(qualified)) |index| {
+        const info = self.struct_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.interface_names.get(qualified)) |index| {
+        const info = self.interface_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.enum_names.get(qualified)) |index| {
+        const info = self.enum_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.variant_names.get(qualified)) |index| {
+        const info = self.variant_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    if (self.constant_names.get(qualified)) |index| {
+        const info = self.constant_infos.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
+    return null;
+}
+
+/// The member imports' own gate, run once every declaration table is
+/// filled: each named member must exist in its module and be
+/// reachable from the importing one, and each binding must be a
+/// fresh word there — not reserved, not a builtin, not a local
+/// declaration, not an import's namespace, not another member.
+/// Settling all of this at the import line is what lets every
+/// bare-name resolution skip per-use privacy checks.
+pub fn validateMemberImports(self: *Analyzer) Error!void {
+    for (self.modules, 0..) |module, module_index| {
+        if (module.tree.imports.len == 0) continue;
+        self.diagnostics.scope = module.file;
+        var bound: std.StringHashMapUnmanaged(void) = .empty;
+        defer bound.deinit(self.temporary);
+        for (module.tree.imports) |imported| {
+            for (imported.members) |member| {
+                const key = try qualify(self, resolvedPrefix(self, module_index, imported), member.name);
+                const home = declarationHome(self, key) orelse {
+                    try self.fail(
+                        "luce.sema.import",
+                        member.span,
+                        "{s} has no declaration named {s}",
+                        .{ imported.name, member.name },
+                    );
+                    continue;
+                };
+                if (!reachable(home.module, home.visibility, module_index)) {
+                    try self.fail("luce.sema.private", member.span, "{s} is private to {s}", .{
+                        member.name,
+                        moduleName(self, home.module),
+                    });
+                    continue;
+                }
+                if (context.isReserved(member.binding)) {
+                    try self.fail("luce.sema.reserved", member.span, "{s} is a reserved name", .{member.binding});
+                    continue;
+                }
+                if (visibleBuiltin(self, module_index, member.binding) != null) {
+                    try self.fail(
+                        "luce.sema.reserved",
+                        member.span,
+                        "{s} is a builtin type; bind the member under another name with as",
+                        .{member.binding},
+                    );
+                    continue;
+                }
+                const local = try qualify(self, module.prefix, member.binding);
+                if (try firstDeclarationOf(self, local)) |where| {
+                    try self.fail("luce.sema.duplicate", member.span, "duplicate name {s}; the first is{s}", .{
+                        member.binding,
+                        where,
+                    });
+                    continue;
+                }
+                if (importsModule(self, module_index, member.binding)) {
+                    try self.fail(
+                        "luce.sema.duplicate",
+                        member.span,
+                        "{s} is already an import's namespace in this file",
+                        .{member.binding},
+                    );
+                    continue;
+                }
+                const entry = try bound.getOrPut(self.temporary, member.binding);
+                if (entry.found_existing) {
+                    try self.fail(
+                        "luce.sema.duplicate",
+                        member.span,
+                        "duplicate name {s}; this file's imports already bind it",
+                        .{member.binding},
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// True when any declaration table holds this qualified key — the
+/// one-bit form of `firstDeclarationOf`, for callers that only need
+/// to know whether a name means something before trying another
+/// resolution.
+pub fn declares(self: *const Analyzer, qualified: []const u8) bool {
+    return self.alias_names.contains(qualified) or
+        self.function_names.contains(qualified) or
+        self.struct_names.contains(qualified) or
+        self.interface_names.contains(qualified) or
+        self.enum_names.contains(qualified) or
+        self.variant_names.contains(qualified) or
+        self.constant_names.contains(qualified);
 }
 
 /// Where a fully-qualified name is already declared, whichever of

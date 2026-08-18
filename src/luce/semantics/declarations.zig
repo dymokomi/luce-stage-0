@@ -313,6 +313,10 @@ pub const Analyzer = struct {
         try defaults.settleFieldDefaults(self);
         try defaults.settleVariantDefaults(self);
         try signatures.collectFunctions(self);
+        // Member imports are checked once, here, with every table
+        // filled — which is what lets bare-name resolution trust a
+        // member binding without repeating reachability per use.
+        try naming.validateMemberImports(self);
         try receiver.inferReceiverWrites(self);
         try signatures.synthesizeShapes(self);
         try interfaces.synthesizeShapes(self);

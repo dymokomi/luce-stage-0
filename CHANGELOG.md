@@ -6,6 +6,12 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Selective imports: `from geo import Point, length as span` binds the
+  named public members bare — any declaration kind — so a file writes
+  `Point`, not `geo.Point`. The module namespace stays unbound unless a
+  plain `import geo` also appears; members are checked where the import
+  is written, and there is no wildcard form. `from`, like `as`, is
+  contextual rather than reserved.
 - Class construction now requires `new`: `var app = new Application()`,
   `try new File(path)`, and bare `new VStack` when no arguments are
   needed. `new` is the one keyword that makes a reference identity —

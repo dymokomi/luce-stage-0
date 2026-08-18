@@ -87,6 +87,12 @@ either is refused.
   how a program uses both without forking one. (`as` is not available for
   `std.` imports, whose names are language surface.)
 
+- `from geo import Point, area` loads the module the same way and binds
+  the named public members bare, leaving the module namespace unbound;
+  a per-member `as` renames one. Members work across a package boundary
+  and key under the package's root identity exactly as the qualified
+  spelling would.
+
 Dots map to directories and nothing else — no index files, no implicit
 re-export; a directory is not a module, only a file is. Every path segment
 is matched case-exactly, per directory level. A module is one module

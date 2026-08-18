@@ -189,6 +189,47 @@ test "every declaration form at file scope parses into its own list" {
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
 }
 
+test "member imports record their module, members, and renames" {
+    var parsed = try expectClean(
+        \\from geo import Point, length as measure
+        \\from std.math import pi
+        \\from geo.shapes import Ring
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 3), parsed.program.imports.len);
+
+    const sibling = parsed.program.imports[0];
+    try testing.expectEqualStrings("geo", sibling.name);
+    try testing.expectEqualStrings("geo", sibling.binding);
+    try testing.expectEqual(source_mod.Origin.sibling, sibling.origin);
+    try testing.expectEqual(@as(usize, 2), sibling.members.len);
+    try testing.expectEqualStrings("Point", sibling.members[0].name);
+    try testing.expectEqualStrings("Point", sibling.members[0].binding);
+    try testing.expectEqualStrings("length", sibling.members[1].name);
+    try testing.expectEqualStrings("measure", sibling.members[1].binding);
+
+    const standard = parsed.program.imports[1];
+    try testing.expectEqualStrings("math", standard.name);
+    try testing.expectEqual(source_mod.Origin.standard, standard.origin);
+    try testing.expectEqual(@as(usize, 1), standard.members.len);
+    try testing.expectEqualStrings("pi", standard.members[0].name);
+
+    const dotted = parsed.program.imports[2];
+    try testing.expectEqualStrings("geo.shapes", dotted.name);
+    try testing.expectEqualStrings("shapes", dotted.binding);
+    try testing.expectEqual(@as(usize, 1), dotted.members.len);
+    try testing.expectEqualStrings("Ring", dotted.members[0].name);
+
+    // A whole import records no members.
+    var whole = try expectClean("import geo\n\nfunc main():\n    return\n");
+    defer whole.deinit();
+    try testing.expectEqual(@as(usize, 0), whole.program.imports[0].members.len);
+}
+
 test "type aliases parse their complete target and visibility" {
     var parsed = try expectClean(
         \\alias UserId = i64
@@ -1427,6 +1468,24 @@ test "the ordinary mistakes name themselves and point at the offending token" {
             .source = "import std.math as m\n\nfunc main():\n    return\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 20, .contains = "keeps its name" },
         },
+        // A member import names its members, and nothing else opens
+        // with `from`.
+        .{
+            .source = "from geo\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "write 'from geo import Name'" },
+        },
+        .{
+            .source = "from geo import *\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 17, .contains = "no wildcard import" },
+        },
+        .{
+            .source = "from geo import\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 16, .contains = "a member name after import" },
+        },
+        .{
+            .source = "from geo import Point as _\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 26, .contains = "a binding needs a name" },
+        },
         // range is two bounds, and says so instead of "expected ')'".
         .{
             .source = "func main():\n    for i in range(0, 10, 2):\n        return\n",
@@ -1490,8 +1549,11 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .source = "final width = 80\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'const'" },
         },
+        // `from math import sqrt` is real syntax now — a member
+        // import — so the habit that still needs an answer is the
+        // require/include family.
         .{
-            .source = "from math import sqrt\n",
+            .source = "require math\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "for the standard library" },
         },
         // A keyword in the wrong case is the same mistake, answered

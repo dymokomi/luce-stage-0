@@ -10,12 +10,15 @@ import name             binds the sibling file `name.luc`
 import std.name         binds a module embedded in the compiler
 import folder.name      binds `folder/name.luc` under the project root
 import folder.name as other   the same file, bound as `other`
+from name import a, b   binds the named members bare
+from name import a as c   the same member, bound as `c`
 ```
 
 An import binds the last path segment: `import std.math` and
 `import geo.math` both bind `math`. `as` chooses another module binding
-name; it is contextual syntax, not a reserved keyword. This is separate from
-an `alias Name = Type` declaration, which names a type rather than a module.
+name; it is contextual syntax, not a reserved keyword — and so is `from`.
+This is separate from an `alias Name = Type` declaration, which names a
+type rather than a module.
 
 An import reaches the imported file's top level:
 
@@ -35,6 +38,36 @@ Using an unimported namespace is `luce.sema.import`.
 Modules may import one another; each file is loaded once, so mutual
 recursion across files is allowed. A self-import is
 `luce.import.self`. The graph compiles to one module artifact.
+
+## Member imports
+
+`from name import a, b` loads the module exactly as `import name` loads
+it, and binds the named public declarations bare instead of binding the
+module namespace. A member may be any public file-scope declaration:
+function, struct, class, interface, enum, union, constant, or type alias.
+`as` renames one member. There is no wildcard form.
+
+The rules, each checked on the import line:
+
+- an unknown member is `luce.sema.import` ("name has no declaration
+  named member");
+- a `private` member is `luce.sema.private` — private is not unknown;
+- a member binding that collides with a local declaration, another
+  import's member, or an import's namespace binding is
+  `luce.sema.duplicate`;
+- a member binding may not take a reserved or builtin type name
+  (`luce.sema.reserved`); rename it with `as`;
+- the module namespace stays unbound: `name.other` after only a member
+  import is `luce.sema.import` with the advice to `import name`. The
+  whole-module and member forms may coexist in one file;
+- one module keeps one binding program-wide, so `import name as other`
+  in one file and `from name import a` in another still collide
+  (`luce.import.collision`) — the member import claims the module's own
+  last segment.
+
+`from std.name import a` works, including `as`: the standard module
+keeps-its-name rule protects the module binding, which a member import
+never touches.
 
 Errors inside an imported file render at the path it was really opened
 from, with the source line and a caret.

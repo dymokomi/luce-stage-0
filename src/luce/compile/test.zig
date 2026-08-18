@@ -2393,6 +2393,109 @@ test "a dotted import that is missing names the folder path it was probed as" {
     try testing.expect(std.mem.indexOf(u8, first.message, "geo/shapes.luc") != null);
 }
 
+test "member imports are checked at the import line" {
+    const script: types.CompileOptions = .{};
+    var files: TestLoader = .{ .modules = &.{.{
+        .name = "geo",
+        .source = "struct Point:\n    x: i64\n\nprivate func hidden() -> i64:\n    return 1\n\nfunc span(p: Point) -> i64:\n    return p.x\n",
+    }} };
+
+    // A member that does not exist is refused where it was asked for.
+    var unknown = try compile_mod.compileProject(testing.allocator,
+        \\from geo import missing
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer unknown.deinit();
+    try testing.expect(unknown == .failure);
+    try testing.expectEqualStrings("luce.sema.import", unknown.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, unknown.failure.at(0).?.message, "geo has no declaration named missing") != null);
+
+    // Private is not unknown: the name exists and is withheld.
+    var withheld = try compile_mod.compileProject(testing.allocator,
+        \\from geo import hidden
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer withheld.deinit();
+    try testing.expect(withheld == .failure);
+    try testing.expectEqualStrings("luce.sema.private", withheld.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, withheld.failure.at(0).?.message, "hidden is private to geo") != null);
+
+    // A member binding is a fresh word: a local declaration owns it.
+    var collided = try compile_mod.compileProject(testing.allocator,
+        \\from geo import Point
+        \\
+        \\struct Point:
+        \\    z: i64
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer collided.deinit();
+    try testing.expect(collided == .failure);
+    try testing.expectEqualStrings("luce.sema.duplicate", collided.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, collided.failure.at(0).?.message, "duplicate name Point") != null);
+
+    // A member import binds only its members; the namespace stays
+    // unbound and the advice names the import that would bind it.
+    var unbound = try compile_mod.compileProject(testing.allocator,
+        \\from geo import Point
+        \\
+        \\func main():
+        \\    let p = geo.Point(x = 1)
+        \\
+    , files.loader(), script);
+    defer unbound.deinit();
+    try testing.expect(unbound == .failure);
+    try testing.expectEqualStrings("luce.sema.import", unbound.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, unbound.failure.at(0).?.message, "import geo to use it") != null);
+
+    // One module, one binding, program-wide: an alias binding and a
+    // member import of the same module cannot disagree.
+    var double = try compile_mod.compileProject(testing.allocator,
+        \\import geo as g
+        \\from geo import Point
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer double.deinit();
+    try testing.expect(double == .failure);
+    try testing.expectEqualStrings("luce.import.collision", double.failure.at(0).?.code);
+
+    // The same member twice is a duplicate of this file's own making.
+    var twice = try compile_mod.compileProject(testing.allocator,
+        \\from geo import Point, Point
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer twice.deinit();
+    try testing.expect(twice == .failure);
+    try testing.expectEqualStrings("luce.sema.duplicate", twice.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, twice.failure.at(0).?.message, "already bind it") != null);
+
+    // A binding may not take a builtin type's name.
+    var reserved = try compile_mod.compileProject(testing.allocator,
+        \\from geo import span as str
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer reserved.deinit();
+    try testing.expect(reserved == .failure);
+    try testing.expectEqualStrings("luce.sema.reserved", reserved.failure.at(0).?.code);
+}
+
 test "the routed list comparator requires std lists, not a sibling named lists" {
     var files: TestLoader = .{ .modules = &.{.{
         .name = "lists",

@@ -687,6 +687,16 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
                     return .reported;
                 if (target == .enumeration) break :found target.enumeration.index;
             }
+            // `from geo import Color` binds the bare enum name; the
+            // import line already settled reachability.
+            if (try naming.memberKey(self.analyzer, self.module, spelled)) |key| {
+                if (self.analyzer.enum_names.get(key)) |index| break :found index;
+                if (self.analyzer.alias_names.get(key)) |alias_index| {
+                    const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                        return .reported;
+                    if (target == .enumeration) break :found target.enumeration.index;
+                }
+            }
             return .not_a_member;
         }
         if (!naming.importsModule(self.analyzer, self.module, chain.head())) return .not_a_member;
@@ -782,6 +792,16 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
                 const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
                     return .reported;
                 if (target == .variant) break :found target.variant;
+            }
+            // `from geo import Shape` binds the bare union name; the
+            // import line already settled reachability.
+            if (try naming.memberKey(self.analyzer, self.module, spelled)) |key| {
+                if (self.analyzer.variant_names.get(key)) |index| break :found index;
+                if (self.analyzer.alias_names.get(key)) |alias_index| {
+                    const target = (try resolve.resolveAlias(self.analyzer, self.module, alias_index, field.span)) orelse
+                        return .reported;
+                    if (target == .variant) break :found target.variant;
+                }
             }
             return .not_a_member;
         }
