@@ -240,11 +240,64 @@ private func end_record(archive: list[u8]) -> i64!:
         at -= 1
     error("zip: not an archive (no end-of-central-directory record)")
 
-# Every entry the archive's central directory lists (APPNOTE 4.3.12),
-# in the order it lists them — which APPNOTE 4.4.1.3 says need not be
-# the order the entries appear in.  The contents are not touched:
-# this reads the table, and `extract` reads an entry.
-func entries(archive: list[u8]) -> list[Entry]!:
+# An opened archive: the bytes, and the table its central directory
+# lists.  `try new Archive(data)` parses the directory once, so a
+# damaged archive fails where it is opened rather than on first use;
+# the contents are untouched until `extract` asks for an entry.
+class Archive:
+    private:
+        data: list[u8]
+        found: list[Entry]
+
+    init(archive: list[u8]) -> !:
+        self.data = archive
+        self.found = try scan(archive)
+
+    # Every entry the central directory lists, in the order it lists
+    # them — which APPNOTE 4.4.1.3 says need not be the order the
+    # entries appear in.
+    func entries() -> list[Entry]:
+        return self.found
+
+    # The entry's contents, checked against the size and the CRC-32
+    # the directory recorded for them.
+    #
+    # The local header (APPNOTE 4.3.7) is read for the two lengths in
+    # front of the data and for nothing else: its CRC and its sizes
+    # are zeros whenever flag bit 3 said so (4.4.4), and the
+    # directory's copy is the one 4.4.7 and 4.4.8 require to be
+    # right.  So an entry written by a program that could not seek
+    # reads like any other, and the data descriptor behind the data
+    # is never looked at.
+    func extract(entry: Entry) -> list[u8]!:
+        let archive = self.data
+        let at = entry.header_at
+        let signature = try read_u32(archive, at)
+        if signature != 0x0403_4B50:
+            error("zip: " + entry.path + " has no local header")
+        let name_length = try read_u16(archive, at + 26)
+        let extra_length = try read_u16(archive, at + 28)
+        let start = at + 30 + name_length + extra_length
+        let stop = start + entry.packed_size
+        if stop > len(archive):
+            error("zip: " + entry.path + " runs past the end of the archive")
+        let method = Method(u16(entry.method))
+        if method == none:
+            error("zip: " + entry.path + " uses compression method " + str(entry.method) + ", which zip cannot read")
+        match method:
+            stored:
+                let whole = archive[start:stop]
+                try verify(entry, whole)
+                return whole
+            deflated:
+                let packed = archive[start:stop]
+                let plain = try inflate(packed)
+                try verify(entry, plain)
+                return plain
+
+# The central directory, read into the table `Archive.entries`
+# answers (APPNOTE 4.3.12).
+private func scan(archive: list[u8]) -> list[Entry]!:
     let record = try end_record(archive)
     let count = try read_u16(archive, record + 10)
     let size = try read_u32(archive, record + 12)
@@ -286,40 +339,6 @@ func entries(archive: list[u8]) -> list[Entry]!:
         at += 46 + name_length + extra_length + comment_length
     return found
 
-# The entry's contents, checked against the size and the CRC-32 the
-# directory recorded for them.
-#
-# The local header (APPNOTE 4.3.7) is read for the two lengths in
-# front of the data and for nothing else: its CRC and its sizes are
-# zeros whenever flag bit 3 said so (4.4.4), and the directory's copy
-# is the one 4.4.7 and 4.4.8 require to be right.  So an entry
-# written by a program that could not seek reads like any other, and
-# the data descriptor behind the data is never looked at.
-func extract(archive: list[u8], entry: Entry) -> list[u8]!:
-    let at = entry.header_at
-    let signature = try read_u32(archive, at)
-    if signature != 0x0403_4B50:
-        error("zip: " + entry.path + " has no local header")
-    let name_length = try read_u16(archive, at + 26)
-    let extra_length = try read_u16(archive, at + 28)
-    let start = at + 30 + name_length + extra_length
-    let stop = start + entry.packed_size
-    if stop > len(archive):
-        error("zip: " + entry.path + " runs past the end of the archive")
-    let method = Method(u16(entry.method))
-    if method == none:
-        error("zip: " + entry.path + " uses compression method " + str(entry.method) + ", which zip cannot read")
-    match method:
-        stored:
-            let whole = archive[start:stop]
-            try verify(entry, whole)
-            return whole
-        deflated:
-            let packed = archive[start:stop]
-            let plain = try inflate(packed)
-            try verify(entry, plain)
-            return plain
-
 private func verify(entry: Entry, plain: list[u8]) -> !:
     if len(plain) != entry.plain_size:
         error("zip: " + entry.path + " is " + str(len(plain)) + " bytes, not the " + str(entry.plain_size) + " the archive claims")
@@ -329,11 +348,17 @@ private func verify(entry: Entry, plain: list[u8]) -> !:
 # --- writing ---------------------------------------------------------
 
 # An archive under construction: entries go in with `add`, and
-# `finish` answers the bytes.  Made by `zip.writer()` and owned by
-# the binding that received it, like any other object.
-struct Writer:
-    private out: list[u8]
-    private written: list[Entry]
+# `finish` answers the bytes.  A class, because a writer is an
+# accumulator with identity — two bindings to one writer see one
+# archive — made with `new zip.Writer()` and owned like any object.
+class Writer:
+    private:
+        out: list[u8]
+        written: list[Entry]
+
+    init():
+        self.out = new list[u8]
+        self.written = new list[Entry]
 
     # Store one entry.  `compress` deflates it and keeps whichever of
     # the two is smaller, so an entry never grows by being compressed.
@@ -418,10 +443,6 @@ struct Writer:
         put_u32(archive, directory)
         put_u16(archive, 0)
         return archive
-
-# A new, empty archive.
-func writer() -> Writer:
-    return Writer(out = new list[u8], written = new list[Entry])
 
 # The lowest version that can read an entry, APPNOTE 4.4.3.2: 1.0 for
 # a stored file, 2.0 for a deflated one, spelled the way 4.4.2.3
@@ -512,7 +533,7 @@ private enum Block(u8):
 # The decoder's cursor: one bit position into the compressed bytes.
 # Its methods advance that cursor directly through their implied
 # receiver; callers need only supply a mutable Stream place.
-struct Stream:
+private struct Stream:
     private position: i64
 
     # `count` bits, least significant first.  RFC 1951 §3.1.1: data
@@ -725,7 +746,7 @@ func inflate(data: list[u8]) -> list[u8]!:
 # The other end of the bit reader, and RFC 1951 §3.1.1 read the other
 # way: bits go out least significant first, and a Huffman code goes
 # out most significant first, which is `put_code`'s whole job.
-struct Packer:
+private struct Packer:
     private held: i64
     private count: i64
 
@@ -855,7 +876,7 @@ func read(path: str) -> list[u8]!:
 # Write an archive to disk.  Takes what `Writer.finish` answers, so
 # building one and saving it is two sentences:
 #
-#     var w = zip.writer()
+#     var w = new zip.Writer()
 #     try w.add("a.txt", zip.to_bytes("hello\n"))
 #     try zip.write("out.zip", w.finish())
 func write(path: str, archive: list[u8]) -> !:

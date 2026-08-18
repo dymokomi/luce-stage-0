@@ -38,8 +38,18 @@ func main():
 
 ## Reading archives
 
-`zip.entries(archive: list[u8]) -> list[Entry]!` reads the central
-directory without extracting contents. Each `Entry` provides:
+`zip.Archive` is a class made with a fallible init:
+`let opened = try new zip.Archive(archive: list[u8])` parses the central
+directory once, so bytes that are not an archive — truncated, damaged, or
+encrypted directory entries — fail at the `new` rather than on first use.
+Contents are not extracted at open.
+
+| Method | Result |
+|---|---|
+| `opened.entries() -> list[Entry]` | every entry the directory lists; cannot fail, the init already validated the directory |
+| `opened.extract(entry) -> list[u8]!` | one entry's contents, inflated when necessary and verified |
+
+Each `Entry` provides:
 
 | Method | Result |
 |---|---|
@@ -49,17 +59,18 @@ directory without extracting contents. Each `Entry` provides:
 | `entry.crc() -> i64` | recorded CRC-32 |
 | `entry.deflated() -> bool` | whether the entry uses DEFLATE rather than stored bytes |
 
-`zip.extract(archive, entry) -> list[u8]!` reads one local entry, inflates
-it when necessary, and verifies both its uncompressed size and CRC. Entry
-names and offsets are read from the archive; a self-extracting prefix and
-data-descriptor entries are supported. An encrypted entry, non-text name,
-unsupported method, truncated header, or checksum mismatch is refused.
+`extract` reads one local entry, inflates it when necessary, and verifies
+both its uncompressed size and CRC. Entry names and offsets are read from
+the archive; a self-extracting prefix and data-descriptor entries are
+supported. An encrypted entry or non-text name is refused when the archive
+is opened; an unsupported method, truncated local header, or checksum
+mismatch is refused by `extract` on the entry it belongs to.
 
 ## Writing archives
 
-`zip.writer() -> Writer` creates an empty archive builder. `Writer` is a value
-struct carrying shared lists; copying it refers to the same archive under
-construction.
+`zip.Writer` is a class made with `new zip.Writer()`: an empty archive
+builder. A writer is an accumulator with identity — two bindings to one
+writer see one archive under construction.
 
 | Method | Behavior |
 |---|---|
@@ -73,13 +84,13 @@ limited to 65535 entries and 4 GiB per entry because Zip64 is not supported.
 import std.zip
 
 func main() -> !:
-    var writer = zip.writer()
+    var writer = new zip.Writer()
     try writer.add("hello.txt", zip.to_bytes("hello\n"), compress = true)
-    let archive = writer.finish()
-    let found = try zip.entries(archive)
+    let archive = try new zip.Archive(writer.finish())
+    let found = archive.entries()
     for entry in found:
         print(f"{entry.name()} {entry.size()} {entry.deflated()}")
-    let contents = try zip.extract(archive, found[0])
+    let contents = try archive.extract(found[0])
     print(str(len(contents)))
 ```
 
@@ -133,7 +144,7 @@ These are the only host-facing functions in the module:
 Use them with a `Writer` when an archive belongs on disk:
 
 ```text
-var writer = zip.writer()
+var writer = new zip.Writer()
 try writer.add("data.txt", zip.to_bytes("content"))
 try zip.write("data.zip", writer.finish())
 ```

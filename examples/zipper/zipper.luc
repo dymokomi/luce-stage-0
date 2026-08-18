@@ -82,9 +82,10 @@ func is_letter(value: char) -> bool:
 # --- list ------------------------------------------------------------
 
 func list_archive(path: str) -> !:
-    let archive = try zip.read(path)
-    let entries = try zip.entries(archive)
-    print(counted(len(entries), "entry", "entries") + " in " + path + ", " + counted(len(archive), "byte", "bytes"))
+    let raw = try zip.read(path)
+    let archive = try new zip.Archive(raw)
+    let entries = archive.entries()
+    print(counted(len(entries), "entry", "entries") + " in " + path + ", " + counted(len(raw), "byte", "bytes"))
     for entry in entries:
         var line = new builder
         line.append("  ")
@@ -112,8 +113,8 @@ func method_of(entry: zip.Entry) -> str:
 # that is already there, so this is a call and not a bookkeeping
 # problem.
 func unzip_archive(path: str, into: str) -> !:
-    let archive = try zip.read(path)
-    let entries = try zip.entries(archive)
+    let archive = try new zip.Archive(try zip.read(path))
+    let entries = archive.entries()
     # The question this gate actually asks is "is there a *directory*
     # here", and `exists` answered "is there an entry" — so a file
     # holding the name sailed through and the run failed later, on the
@@ -138,7 +139,7 @@ func unzip_archive(path: str, into: str) -> !:
             try files.make_directory(target)
         else:
             try files.make_directory(paths.dir(target))
-            let data = try zip.extract(archive, entry)
+            let data = try archive.extract(entry)
             try files.write_bytes(target, data)
             print("  " + strings.pad_left(str(len(data)), 10) + "  " + target)
             written += 1
@@ -153,7 +154,7 @@ func unzip_archive(path: str, into: str) -> !:
 # Every entry is offered to DEFLATE and keeps whichever of the two is
 # smaller (`Writer.add`), so an entry never grows by being compressed.
 func zip_files(path: str, sources: list[str]) -> !:
-    var maker = zip.writer()
+    var maker = new zip.Writer()
     var total: i64 = 0
     for source in sources:
         let name = try safe_name(source)

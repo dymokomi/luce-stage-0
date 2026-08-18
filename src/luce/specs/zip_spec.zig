@@ -143,14 +143,14 @@ test "zip: an archive this module wrote is one it can read" {
         \\    for step in range(0, 5000):
         \\        large.append(u8(step % 251))
         \\
-        \\    var writer = zip.writer()
+        \\    var writer = new zip.Writer()
         \\    try writer.add("empty", nothing)
         \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    try writer.add("every.bin", every)
         \\    try writer.add("large.bin", large)
-        \\    let archive = writer.finish()
+        \\    let archive = try new zip.Archive(writer.finish())
         \\
-        \\    let found = try zip.entries(archive)
+        \\    let found = archive.entries()
         \\    assert(len(found) == 4)
         \\    assert(found[0].name() == "empty")
         \\    assert(found[0].size() == 0)
@@ -163,16 +163,16 @@ test "zip: an archive this module wrote is one it can read" {
         \\    for entry in found:
         \\        assert(not entry.deflated())
         \\
-        \\    let blank = try zip.extract(archive, found[0])
+        \\    let blank = try archive.extract(found[0])
         \\    assert(len(blank) == 0)
-        \\    let greeting = try zip.extract(archive, found[1])
+        \\    let greeting = try archive.extract(found[1])
         \\    let said = zip.text(greeting) else ""
         \\    assert(said == "hello, world\n")
-        \\    let back = try zip.extract(archive, found[2])
+        \\    let back = try archive.extract(found[2])
         \\    assert(len(back) == 256)
         \\    for index in range(0, 256):
         \\        assert(back[index] == u8(index))
-        \\    let bulk = try zip.extract(archive, found[3])
+        \\    let bulk = try archive.extract(found[3])
         \\    assert(len(bulk) == 5000)
         \\    for index in range(0, 5000):
         \\        assert(bulk[index] == u8(index % 251))
@@ -190,25 +190,25 @@ test "zip: compressing an entry changes its size and nothing else" {
         \\        text += "luce compiles bytes into machine code. "
         \\    let data = zip.to_bytes(text)
         \\
-        \\    var writer = zip.writer()
+        \\    var writer = new zip.Writer()
         \\    try writer.add("prose.txt", data, compress = true)
         \\    # Nothing to gain: a compressed entry never grows, so this
         \\    # one is stored whole instead.
         \\    var one: list[u8] = [7]
         \\    try writer.add("one.bin", one, compress = true)
-        \\    let archive = writer.finish()
+        \\    let archive = try new zip.Archive(writer.finish())
         \\
-        \\    let found = try zip.entries(archive)
+        \\    let found = archive.entries()
         \\    assert(found[0].deflated())
         \\    assert(found[0].packed() < found[0].size())
         \\    assert(found[0].size() == len(data))
         \\    assert(not found[1].deflated())
         \\    assert(found[1].packed() == 1)
         \\
-        \\    let prose = try zip.extract(archive, found[0])
+        \\    let prose = try archive.extract(found[0])
         \\    let said = zip.text(prose) else ""
         \\    assert(said == text)
-        \\    let one_back = try zip.extract(archive, found[1])
+        \\    let one_back = try archive.extract(found[1])
         \\    assert(len(one_back) == 1)
         \\    assert(one_back[0] == 7)
         \\
@@ -270,23 +270,24 @@ test "zip: what Info-ZIP stored, std.zip reads" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    let archive = stored()
-        \\    assert(len(archive) == 220)
-        \\    let found = try zip.entries(archive)
+        \\    let raw = stored()
+        \\    assert(len(raw) == 220)
+        \\    let archive = try new zip.Archive(raw)
+        \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\
         \\    assert(found[0].name() == "a.txt")
         \\    assert(found[0].size() == 6)
         \\    assert(not found[0].deflated())
         \\    assert(found[0].crc() == 909783072)
-        \\    let first = try zip.extract(archive, found[0])
+        \\    let first = try archive.extract(found[0])
         \\    let first_text = zip.text(first) else ""
         \\    assert(first_text == "hello\n")
         \\
         \\    assert(found[1].name() == "b.txt")
         \\    assert(found[1].size() == 20)
         \\    assert(found[1].crc() == 1272601271)
-        \\    let second = try zip.extract(archive, found[1])
+        \\    let second = try archive.extract(found[1])
         \\    let second_text = zip.text(second) else ""
         \\    assert(second_text == "world contents here\n")
         \\
@@ -324,10 +325,11 @@ test "zip: an archive Info-ZIP wrote survives a real file, both ways" {
         \\
         \\    # And it is still an archive after the round trip, which
         \\    # is the claim a u8 comparison alone does not make.
-        \\    let found = try zip.entries(back)
+        \\    let opened = try new zip.Archive(back)
+        \\    let found = opened.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")
-        \\    let first = try zip.extract(back, found[0])
+        \\    let first = try opened.extract(found[0])
         \\    assert((zip.text(first) else "") == "hello\n")
         \\
     ++ fixtures, provided);
@@ -344,22 +346,22 @@ test "zip: an archive std.zip wrote to a file is one it reads back" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    var writer = zip.writer()
+        \\    var writer = new zip.Writer()
         \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    var raw: list[u8] = [0, 255, 128, 1]
         \\    try writer.add("every.bin", raw)
         \\    try zip.write("built.zip", writer.finish())
         \\
-        \\    let found = try zip.entries(try zip.read("built.zip"))
+        \\    let archive = try new zip.Archive(try zip.read("built.zip"))
+        \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "greeting.txt")
         \\    assert(found[1].name() == "every.bin")
         \\
-        \\    let archive = try zip.read("built.zip")
-        \\    let said = try zip.extract(archive, found[0])
+        \\    let said = try archive.extract(found[0])
         \\    assert((zip.text(said) else "") == "hello, world\n")
         \\    # The entry no str could ever have held.
-        \\    let every = try zip.extract(archive, found[1])
+        \\    let every = try archive.extract(found[1])
         \\    assert(len(every) == 4)
         \\    assert(i32(every[1]) == 255)
         \\    assert(zip.text(every) == none)
@@ -375,8 +377,8 @@ test "zip: what Info-ZIP deflated, std.zip inflates" {
         \\func main() -> !:
         \\    # A dynamic Huffman block, written by Info-ZIP at -9: the
         \\    # tables come out of the stream, not out of RFC 1951.
-        \\    let archive = dynamic()
-        \\    let found = try zip.entries(archive)
+        \\    let archive = try new zip.Archive(dynamic())
+        \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "note.txt")
         \\    assert(found[0].deflated())
@@ -386,7 +388,7 @@ test "zip: what Info-ZIP deflated, std.zip inflates" {
         \\
         \\    # extract checks the CRC itself, so arriving here is most
         \\    # of the proof; the rest is that the bytes are the words.
-        \\    let data = try zip.extract(archive, found[0])
+        \\    let data = try archive.extract(found[0])
         \\    let note = zip.text(data) else ""
         \\    assert(len(note) == 3633)
         \\    assert(note.starts_with("entry trap huffman trap error ownership entry entry huffman"))
@@ -402,22 +404,22 @@ test "zip: an archive rebuilt out of one Info-ZIP wrote holds the same bytes" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    let original = stored()
-        \\    let found = try zip.entries(original)
-        \\    var writer = zip.writer()
+        \\    let original = try new zip.Archive(stored())
+        \\    let found = original.entries()
+        \\    var writer = new zip.Writer()
         \\    for entry in found:
-        \\        let data = try zip.extract(original, entry)
+        \\        let data = try original.extract(entry)
         \\        try writer.add(entry.name(), data, compress = true)
-        \\    let rebuilt = writer.finish()
+        \\    let rebuilt = try new zip.Archive(writer.finish())
         \\
-        \\    let again = try zip.entries(rebuilt)
+        \\    let again = rebuilt.entries()
         \\    assert(len(again) == 2)
         \\    for index in range(0, 2):
         \\        assert(again[index].name() == found[index].name())
         \\        assert(again[index].size() == found[index].size())
         \\        assert(again[index].crc() == found[index].crc())
-        \\        let was = try zip.extract(original, found[index])
-        \\        let now = try zip.extract(rebuilt, again[index])
+        \\        let was = try original.extract(found[index])
+        \\        let now = try rebuilt.extract(again[index])
         \\        assert(len(was) == len(now))
         \\        for at in range(0, len(was)):
         \\            assert(was[at] == now[at])
@@ -435,7 +437,7 @@ test "zip: bytes that are not an archive answer by name" {
         \\
         \\func main() -> !:
         \\    var scraps: list[u8] = [80, 75, 3]
-        \\    let found = try zip.entries(scraps)
+        \\    let opened = try new zip.Archive(scraps)
         \\
     , "zip: not an archive (only 3 bytes)");
 
@@ -444,7 +446,7 @@ test "zip: bytes that are not an archive answer by name" {
         \\
         \\func main() -> !:
         \\    let prose = zip.to_bytes("this file is prose, not an archive at all")
-        \\    let found = try zip.entries(prose)
+        \\    let opened = try new zip.Archive(prose)
         \\
     , "zip: not an archive (no end-of-central-directory record)");
 }
@@ -460,7 +462,7 @@ test "zip: an archive cut short says it is truncated" {
         \\    for index in range(0, len(whole)):
         \\        if index < 60 or index >= len(whole) - 22:
         \\            cut.append(whole[index])
-        \\    let found = try zip.entries(cut)
+        \\    let opened = try new zip.Archive(cut)
         \\
     ++ fixtures, "zip: the archive is truncated");
 }
@@ -473,7 +475,7 @@ test "zip: a directory entry with no header on it says which one" {
         \\    var damaged = copied()
         \\    # The central directory starts at 96; break its signature.
         \\    damaged[96] = 88
-        \\    let found = try zip.entries(damaged)
+        \\    let opened = try new zip.Archive(damaged)
         \\
     ++ fixtures, "zip: entry 1 of the central directory has no header");
 }
@@ -486,8 +488,9 @@ test "zip: contents that do not match their checksum are refused" {
         \\    var damaged = copied()
         \\    # "hello\n" begins at 35; make it "jello\n".
         \\    damaged[35] = 106
-        \\    let found = try zip.entries(damaged)
-        \\    let data = try zip.extract(damaged, found[0])
+        \\    let opened = try new zip.Archive(damaged)
+        \\    let found = opened.entries()
+        \\    let data = try opened.extract(found[0])
         \\
     ++ fixtures, "zip: a.txt fails its checksum");
 }
@@ -500,8 +503,9 @@ test "zip: a compression method this module does not have is named" {
         \\    var damaged = copied()
         \\    # Method 14 is LZMA, in the directory's copy of the field.
         \\    damaged[106] = 14
-        \\    let found = try zip.entries(damaged)
-        \\    let data = try zip.extract(damaged, found[0])
+        \\    let opened = try new zip.Archive(damaged)
+        \\    let found = opened.entries()
+        \\    let data = try opened.extract(found[0])
         \\
     ++ fixtures, "zip: a.txt uses compression method 14, which zip cannot read");
 }
@@ -514,7 +518,7 @@ test "zip: an entry an archive says is encrypted is not half-read" {
         \\    var damaged = copied()
         \\    # Flag bit 0, in the directory's copy of the flags.
         \\    damaged[104] = 1
-        \\    let found = try zip.entries(damaged)
+        \\    let opened = try new zip.Archive(damaged)
         \\
     ++ fixtures, "zip: entry 1 is encrypted");
 }
@@ -556,7 +560,7 @@ test "zip: an entry needs a name" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    var writer = zip.writer()
+        \\    var writer = new zip.Writer()
         \\    var nothing: list[u8] = []
         \\    try writer.add("", nothing)
         \\
@@ -571,14 +575,14 @@ test "zip: a fixed Huffman block, which is the one RFC 1951 prints" {
         \\func main() -> !:
         \\    # Short and repetitive, so Info-ZIP had nothing to gain by
         \\    # carrying its own tables and reached for §3.2.6's.
-        \\    let archive = fixed()
-        \\    let found = try zip.entries(archive)
+        \\    let archive = try new zip.Archive(fixed())
+        \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "song.txt")
         \\    assert(found[0].deflated())
         \\    assert(found[0].size() == 126)
         \\    assert(found[0].crc() == 1425122749)
-        \\    let data = try zip.extract(archive, found[0])
+        \\    let data = try archive.extract(found[0])
         \\    let song = zip.text(data) else ""
         \\    assert(song == "la la la la la la la la la la la la la la\n".repeat(3))
         \\
@@ -598,14 +602,14 @@ test "zip: an entry written without seeking reads from the directory" {
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    let archive = descriptor()
-        \\    let found = try zip.entries(archive)
+        \\    let archive = try new zip.Archive(descriptor())
+        \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "streamed.txt")
         \\    assert(found[0].deflated())
         \\    assert(found[0].size() == 160)
         \\    assert(found[0].crc() == 4101820766)
-        \\    let data = try zip.extract(archive, found[0])
+        \\    let data = try archive.extract(found[0])
         \\    let text = zip.text(data) else ""
         \\    assert(len(text) == 160)
         \\    assert(text.starts_with("a line that was written without seeking\n"))
@@ -622,17 +626,18 @@ test "zip: an archive with a program in front of it still reads" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    let archive = prefixed()
+        \\    let raw = prefixed()
         \\    let plain = stored()
-        \\    assert(len(archive) == len(plain) + 52)
-        \\    let found = try zip.entries(archive)
+        \\    assert(len(raw) == len(plain) + 52)
+        \\    let archive = try new zip.Archive(raw)
+        \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")
-        \\    let first = try zip.extract(archive, found[0])
+        \\    let first = try archive.extract(found[0])
         \\    let said = zip.text(first) else ""
         \\    assert(said == "hello\n")
         \\    assert(found[1].name() == "b.txt")
-        \\    let second = try zip.extract(archive, found[1])
+        \\    let second = try archive.extract(found[1])
         \\    let also = zip.text(second) else ""
         \\    assert(also == "world contents here\n")
         \\
@@ -659,7 +664,8 @@ test "zip: a signature inside a comment is not the end record" {
         \\    archive[len(archive) - 1] = u8(len(inner) >> 8 & 0xFF)
         \\    for index in range(0, len(inner)):
         \\        archive.append(inner[index])
-        \\    let found = try zip.entries(archive)
+        \\    let opened = try new zip.Archive(archive)
+        \\    let found = opened.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")
         \\

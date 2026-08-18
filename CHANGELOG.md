@@ -6,6 +6,14 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `std.zip`'s read path gets `zip.Archive`: opening -
+  `let opened = try new zip.Archive(data)` - parses the central
+  directory once, so a damaged archive fails where it is opened,
+  `opened.entries()` cannot fail anymore, and `opened.extract(entry)`
+  still can, because a bad local header or checksum belongs to the
+  entry it is found on. `Writer` is a class made with
+  `new zip.Writer()` - an accumulator with identity - and the free
+  `zip.entries`, `zip.extract`, and `zip.writer` are gone.
 - `http.Client` and `Response` methods: a client carries a base URL and
   default headers (`var api = new http.Client("http://host")`,
   `api.header(name, value)`, `api.get("/path")`), and a `Response`
