@@ -733,6 +733,7 @@ pub export fn luce_rt_files_install(
     runtime: *Runtime,
     context: ?*anyopaque,
     open: ?files.OpenFn,
+    standard: ?files.StandardFn,
     read: ?files.ReadFn,
     write: ?files.WriteFn,
     flush: ?files.FlushFn,
@@ -741,6 +742,7 @@ pub export fn luce_rt_files_install(
     runtime.files = .{
         .context = context,
         .open = open,
+        .standard = standard,
         .read = read,
         .write = write,
         .flush = flush,
@@ -928,6 +930,32 @@ pub export fn luce_rt_gpu_surface_present(
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.flush, "gpu.surface", runtime.frameAt(function, instruction));
+    return completed(runtime);
+}
+
+pub export fn luce_rt_standard_stream(
+    runtime: *Runtime,
+    which: i64,
+    out: [*c]Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    const answer = files.standard(runtime, which) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        const name: []const u8 = switch (which) {
+            0 => "<stdin>",
+            1 => "<stdout>",
+            else => "<stderr>",
+        };
+        runtime.raiseIo(.open, name, runtime.frameAt(function, instruction));
+    }
     return completed(runtime);
 }
 

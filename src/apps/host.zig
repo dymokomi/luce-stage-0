@@ -313,6 +313,7 @@ pub const Host = struct {
             .worker_spawn = cWorkerSpawn,
             .worker_join = cWorkerJoin,
             .shell_run = cShellRun,
+            .standard_stream = cStandardStream,
             .path_kind = cPathKind,
             // The portable host leaves these unset. A runner-installed
             // channel is adapted through this Host so the table's single
@@ -755,7 +756,7 @@ pub const Host = struct {
     /// output streams and a final status line together as one Luce
     /// string. A non-zero command status is data the caller can show;
     /// only failure to start the shell answers `null`.
-    fn runShell(self: *Host, command: []const u8) error{OutOfMemory}!?[]const u8 {
+    fn runShell(self: *Host, command: []const u8, input: []const u8) error{OutOfMemory}!?[]const u8 {
         const shell = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
         const flag = if (builtin.os.tag == .windows) "/C" else "-c";
         // A terminal launched from a GUI does not necessarily inherit the
@@ -784,10 +785,7 @@ pub const Host = struct {
             defer self.gpa.free(child_path);
             try environment.put("PATH", child_path);
         }
-        const ran = std.process.run(self.gpa, self.io, .{
-            .argv = &.{ shell, flag, command },
-            .environ_map = &environment,
-        }) catch |mistake| switch (mistake) {
+        const ran = self.runFed(&.{ shell, flag, command }, &environment, input) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
@@ -814,6 +812,61 @@ pub const Host = struct {
         };
         try self.shell_output.appendSlice(self.gpa, line);
         return self.shell_output.items;
+    }
+
+    /// Spawn, feed, and collect one child.  `std.process.run` pins the
+    /// child's stdin to `.ignore`, so feeding a child is spawn + a
+    /// writer thread + the same two-stream drain: the thread writes
+    /// and closes stdin while this thread drains stdout and stderr,
+    /// which is what makes a child that writes before it reads unable
+    /// to deadlock either side.
+    fn runFed(
+        self: *Host,
+        argv: []const []const u8,
+        environment: *const std.process.Environ.Map,
+        input: []const u8,
+    ) !std.process.RunResult {
+        var child = try std.process.spawn(self.io, .{
+            .argv = argv,
+            .environ_map = environment,
+            .stdin = if (input.len == 0) .ignore else .pipe,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        });
+        defer child.kill(self.io);
+
+        const Feeder = struct {
+            fn feed(io: std.Io, file: std.Io.File, bytes: []const u8) void {
+                file.writeStreamingAll(io, bytes) catch {};
+                file.close(io);
+            }
+        };
+        var feeder: ?std.Thread = null;
+        if (child.stdin) |stdin_pipe| {
+            feeder = std.Thread.spawn(.{}, Feeder.feed, .{ self.io, stdin_pipe, input }) catch null;
+            if (feeder == null) {
+                stdin_pipe.close(self.io);
+            }
+            // The feeder owns the descriptor now; wait() must not
+            // close it again.
+            child.stdin = null;
+        }
+        defer if (feeder) |running| running.join();
+
+        var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var multi_reader: std.Io.File.MultiReader = undefined;
+        multi_reader.init(self.gpa, self.io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+        defer multi_reader.deinit();
+        while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+            error.EndOfStream => {},
+            else => |mistake| return mistake,
+        }
+        try multi_reader.checkAnyError();
+        const term = try child.wait(self.io);
+        const stdout_slice = try multi_reader.toOwnedSlice(0);
+        errdefer self.gpa.free(stdout_slice);
+        const stderr_slice = try multi_reader.toOwnedSlice(1);
+        return .{ .term = term, .stdout = stdout_slice, .stderr = stderr_slice };
     }
 
     // -- the screen ----------------------------------------------------
@@ -1352,8 +1405,22 @@ pub const Host = struct {
         filled: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
-        // A socket handle travels the same slot a file's does — the
-        // channel is the handle's, and the number range says whose.
+        // A socket or standard-stream handle travels the same slot a
+        // file's does — the channel is the handle's, and the number
+        // range says whose.
+        if (handle >= standard_handle_base) {
+            if (handle - standard_handle_base != 0) return .no;
+            // A raw stream read: short is "what was available", zero
+            // is end of input.  A program should not mix term.read()
+            // with byte reads of stdin — the terminal owns the
+            // descriptor once a screen is up.
+            const landed = std.Io.File.stdin().readStreaming(
+                self.io,
+                &.{into[0..@intCast(capacity)]},
+            ) catch return .no;
+            filled.* = @intCast(landed);
+            return .yes;
+        }
         if (handle >= socket_handle_base) {
             const landed = self.socketRead(handle, into[0..@intCast(capacity)]) orelse
                 return .no;
@@ -1383,6 +1450,17 @@ pub const Host = struct {
         written: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
+        if (handle >= standard_handle_base) {
+            const bytes = from[0..@intCast(length)];
+            const stream: std.Io.File = switch (handle - standard_handle_base) {
+                1 => .stdout(),
+                2 => .stderr(),
+                else => return .no,
+            };
+            stream.writeStreamingAll(self.io, bytes) catch return .no;
+            written.* = @intCast(bytes.len);
+            return .yes;
+        }
         if (handle >= socket_handle_base) {
             const landed = self.socketWrite(handle, from[0..@intCast(length)]) orelse
                 return .no;
@@ -1399,8 +1477,12 @@ pub const Host = struct {
 
     fn cHandleFlush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
         const self = of(context);
-        // A socket has no host-side buffer to sync: the write already
+        // A standard stream write already reached the descriptor, and
+        // a socket has no host-side buffer to sync: the write already
         // handed the bytes to the kernel, so a flush is agreement.
+        if (handle >= standard_handle_base) {
+            return if (handle - standard_handle_base <= 2) .yes else .no;
+        }
         if (handle >= socket_handle_base) {
             return if (self.socketAt(handle)) |row|
                 (if (row == .stream) .yes else .no)
@@ -1414,6 +1496,11 @@ pub const Host = struct {
 
     fn cHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
         const self = of(context);
+        // The descriptor belongs to the process: releasing the last
+        // reference to os.stdin() must not close the real stdin.
+        if (handle >= standard_handle_base) {
+            return if (handle - standard_handle_base <= 2) .yes else .no;
+        }
         if (handle >= socket_handle_base) return cSocketClose(context, handle);
         const row = self.openRow(handle) orelse return .no;
         row.file.close(self.io);
@@ -1431,6 +1518,7 @@ pub const Host = struct {
         return .{
             .context = self,
             .open = pHandleOpen,
+            .standard = pStandardStream,
             .read = pHandleRead,
             .write = pHandleWrite,
             .flush = pHandleFlush,
@@ -1474,6 +1562,10 @@ pub const Host = struct {
 
     fn pHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
         return @intFromEnum(cHandleClose(context, handle));
+    }
+
+    fn pStandardStream(context: ?*anyopaque, which: i64, handle: *i64) callconv(.c) i32 {
+        return @intFromEnum(cStandardStream(context, which, handle));
     }
 
     // -- the transport channel (docs/NETWORK.md) ----------------------
@@ -1880,14 +1972,26 @@ pub const Host = struct {
         context: ?*anyopaque,
         command: [*]const u8,
         command_length: i64,
+        input: [*]const u8,
+        input_length: i64,
         text: *[*]const u8,
         length: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
-        const output = (self.runShell(command[0..@intCast(command_length)]) catch
+        const output = (self.runShell(
+            command[0..@intCast(command_length)],
+            input[0..@intCast(input_length)],
+        ) catch
             return .exhausted) orelse return .no;
         text.* = output.ptr;
         length.* = @intCast(output.len);
+        return .yes;
+    }
+
+    fn cStandardStream(context: ?*anyopaque, which: i64, handle: *i64) callconv(.c) abi.Answer {
+        _ = context;
+        if (which < 0 or which > 2) return .no;
+        handle.* = standard_handle_base + which;
         return .yes;
     }
 
@@ -1968,6 +2072,10 @@ const OpenFile = struct {
 /// this base.  The number is a host detail — nothing outside this file
 /// may interpret it.
 const socket_handle_base: i64 = 1 << 32;
+/// Standard-stream handles live above the sockets: 0/1/2 offsets for
+/// stdin, stdout, stderr.  The descriptors belong to the process, so
+/// "closing" one is agreement, not a close.
+const standard_handle_base: i64 = 1 << 33;
 
 /// One row of the transport registry: a connected stream, a listening
 /// server, or the shut sentinel a stale handle lands on.

@@ -372,6 +372,7 @@ pub const Intrinsic = enum {
     /// library presents this as `std.os.run`; the raw builtin is
     /// reserved so the host boundary stays in one place.
     shell_run,
+    os_standard_stream,
     /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -475,6 +476,7 @@ pub const Intrinsic = enum {
             .os_available_memory,
             .os_cpu_count,
             .shell_run,
+            .os_standard_stream,
             .term_event_data,
             => true,
 
@@ -617,6 +619,7 @@ pub const Intrinsic = enum {
             // what both readers of this table need it to mean.
             .task_wait,
             .shell_run,
+            .os_standard_stream,
             => true,
 
             .abs,
@@ -722,6 +725,7 @@ pub const Intrinsic = enum {
             .read_line,
             .env_get,
             .shell_run,
+            .os_standard_stream,
             .pop_value,
             .copy_object,
             .own_storage,
@@ -943,6 +947,7 @@ pub const Intrinsic = enum {
             .task_wait,
             .os_cpu_count,
             .shell_run,
+            .os_standard_stream,
             .term_event_data,
             .own_storage,
             .drop_storage,

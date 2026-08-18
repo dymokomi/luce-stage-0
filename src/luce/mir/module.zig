@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 59;
+pub const format_version: u32 = 60;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2251,8 +2251,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 58 -> 59: `term_copy` joins the terminal group after `term_write`
     // (docs/STD.md), so the hash moves with the new name and every tag
     // after it renumbers.
-    try testing.expectEqual(@as(u32, 59), format_version);
-    try testing.expectEqual(@as(u64, 3273612836651453177), hasher.final());
+    // 59 -> 60: `os_standard_stream` joins after `shell_run` and
+    // `shell_run` itself grows an input argument — the second is the
+    // shape-changed case the hash cannot catch, the first moves it.
+    try testing.expectEqual(@as(u32, 60), format_version);
+    try testing.expectEqual(@as(u64, 4723179142618083676), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

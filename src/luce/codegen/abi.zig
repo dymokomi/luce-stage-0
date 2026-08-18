@@ -265,10 +265,15 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 26;
+pub const version: u32 = 27;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
 // terminal owns what "the system clipboard" means over SSH and mux.
+// 27 — the process's own streams and a fed subprocess: one slot,
+// `standard_stream`, answering stdin/stdout/stderr as ordinary
+// handles, and `shell_run` grows an input the host feeds the child —
+// the two capabilities a tool that speaks a protocol over stdio (the
+// language server) stands on.
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -464,8 +469,21 @@ pub const ShellRunFn = *const fn (
     context: ?*anyopaque,
     command: [*]const u8,
     command_length: i64,
+    input: [*]const u8,
+    input_length: i64,
     text: *[*]const u8,
     length: *i64,
+) callconv(.c) Answer;
+
+/// One of the process's own byte streams as a handle: 0 standard
+/// input, 1 standard output, 2 standard error.  The handle rides the
+/// ordinary `handle_read`/`handle_write`/`handle_flush` slots; closing
+/// it is a safe no-op, because the descriptor belongs to the process,
+/// not the program.
+pub const StandardStreamFn = *const fn (
+    context: ?*anyopaque,
+    which: i64,
+    handle: *i64,
 ) callconv(.c) Answer;
 
 /// How many program arguments there are.  Cannot fail, so it answers
@@ -1031,6 +1049,7 @@ pub const Host = extern struct {
     /// terminal host emits OSC 52; a host with no clipboard leaves
     /// the slot null and the program traps `host_unavailable`.
     term_copy: ?TermWriteFn = null,
+    standard_stream: ?StandardStreamFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -1091,6 +1110,7 @@ pub const Slot = enum(u32) {
     socket_port = 51,
     socket_close = 52,
     term_copy = 53,
+    standard_stream = 54,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

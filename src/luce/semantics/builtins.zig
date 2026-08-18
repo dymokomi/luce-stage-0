@@ -162,7 +162,8 @@ pub const standard_intrinsics = [_]Builtin{
     .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
     .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
     .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
-    .{ .name = "shell_run", .kind = .shell_run, .parameters = &.{.{ .name = "command" }}, .host = true },
+    .{ .name = "shell_run", .kind = .shell_run, .parameters = &.{ .{ .name = "command" }, .{ .name = "input" } }, .host = true },
+    .{ .name = "os_standard_stream", .kind = .os_standard_stream, .parameters = &.{.{ .name = "which" }}, .host = true },
     .{ .name = "term_event_data", .kind = .term_event_data, .parameters = &.{.{ .name = "field" }}, .host = true },
 };
 

@@ -224,13 +224,15 @@ pub const Host = struct {
         arena: Allocator,
         name: []const u8,
     ) error{OutOfMemory}!?[]const u8 = null,
-    /// Run one command through the host shell.  The returned text is
-    /// borrowed from `arena`; a null answer means the shell itself could
-    /// not be started and becomes `io_failed` for the command.
+    /// Run one command through the host shell, feeding `input` to its
+    /// standard input.  The returned text is borrowed from `arena`; a
+    /// null answer means the shell itself could not be started and
+    /// becomes `io_failed` for the command.
     shell_run: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         command: []const u8,
+        input: []const u8,
     ) error{OutOfMemory}!?[]const u8 = null,
     /// The program said `exit(status)`.  Called at the site, before
     /// the unwind, so the host holds the number while the program is

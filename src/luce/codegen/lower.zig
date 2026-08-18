@@ -606,9 +606,10 @@ const Module = struct {
             .worker_join => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
             .shell_run => builder.fnType(
                 .i32,
-                &.{ .ptr, .ptr, .i64, .ptr, .ptr },
+                &.{ .ptr, .ptr, .i64, .ptr, .i64, .ptr, .ptr },
                 .normal,
             ),
+            .standard_stream => builder.fnType(.i32, &.{ .ptr, .i64, .ptr }, .normal),
         };
     }
 
@@ -2606,6 +2607,7 @@ const Module = struct {
             started,
             context,
             try self.loadHostSlot(&wip, host, .handle_open, "files.open.fn"),
+            try self.loadHostSlot(&wip, host, .standard_stream, "files.standard.fn"),
             try self.loadHostSlot(&wip, host, .handle_read, "files.read.fn"),
             try self.loadHostSlot(&wip, host, .handle_write, "files.write.fn"),
             try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
@@ -5462,16 +5464,23 @@ const Body = struct {
         });
     }
 
-    /// `shell_run(command)` — the host returns captured text through an
-    /// out-parameter. A command's exit status is part of that text; only
-    /// failure to start the shell takes the error path.
-    fn emitShellRun(self: *Body, register: mir.Register, command_register: mir.Register) Error!void {
+    /// `shell_run(command, input)` — the host feeds `input` to the
+    /// child and returns captured text through an out-parameter. A
+    /// command's exit status is part of that text; only failure to
+    /// start the shell takes the error path.
+    fn emitShellRun(
+        self: *Body,
+        register: mir.Register,
+        command_register: mir.Register,
+        input_register: mir.Register,
+    ) Error!void {
         const command, const command_length = try self.textParts(command_register, "command");
+        const input, const input_length = try self.textParts(input_register, "input");
         const output = try self.hostText("shell.output");
         try output.clear(self);
         const answer = try self.callHost(
             .shell_run,
-            &.{ command, command_length, output.text, output.length },
+            &.{ command, command_length, input, input_length, output.text, output.length },
             "shell",
         );
 
@@ -8329,7 +8338,18 @@ const Body = struct {
                 "line",
             ),
             .env_get => try self.emitMaybeText(register, .env, of[0], "env"),
-            .shell_run => try self.emitShellRun(register, of[0]),
+            .shell_run => try self.emitShellRun(register, of[0], of[1]),
+            .os_standard_stream => {
+                const box = try self.scratch(self.module.value_type, value_alignment, "stream.box");
+                const opened = try self.fileService(.luce_rt_standard_stream, &.{
+                    self.produced[of[0]].value,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "stream.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
             .print_error => {
                 const text, const length = try self.textParts(of[0], "diagnostic");
                 _ = try self.callHost(.print_error, &.{ text, length }, "reported");

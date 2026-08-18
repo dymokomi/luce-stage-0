@@ -58,6 +58,12 @@ pub const yes: i32 = 1;
 pub const no: i32 = 0;
 pub const exhausted: i32 = -1;
 
+pub const StandardFn = *const fn (
+    context: ?*anyopaque,
+    which: i64,
+    handle: *i64,
+) callconv(.c) i32;
+
 pub const OpenFn = *const fn (
     context: ?*anyopaque,
     path: [*]const u8,
@@ -100,6 +106,12 @@ pub const CloseFn = *const fn (context: ?*anyopaque, handle: i64) callconv(.c) i
 pub const Channel = struct {
     context: ?*anyopaque = null,
     open: ?OpenFn = null,
+    /// One of the process's own byte streams as a handle: 0 standard
+    /// input, 1 standard output, 2 standard error.  The handle rides
+    /// `read`/`write`/`flush` like any other; the host's `close` for
+    /// one is a safe no-op, because the descriptor belongs to the
+    /// process, not the program.
+    standard: ?StandardFn = null,
     read: ?ReadFn = null,
     write: ?WriteFn = null,
     flush: ?FlushFn = null,
@@ -188,6 +200,25 @@ const read_chunk: usize = 64 * 1024;
 ///
 /// Answers `null` when the world said no; the caller raises `io_failed`
 /// naming the path, exactly as the whole-file services always did.
+/// One standard stream as an owned handle resource.  The same object
+/// road as `open` — the row's last release calls the host's close,
+/// which for a standard handle is a no-op — so a program can hold,
+/// share, and drop `os.stdin()` exactly like a file.
+pub fn standard(runtime: *Runtime, which: i64) Error!?Value {
+    const service = runtime.files.standard orelse return runtime.fail(.host_unavailable);
+    if (runtime.files.close == null) return runtime.fail(.host_unavailable);
+    var handle: i64 = heap.no_file;
+    const answer = service(runtime.files.context, which, &handle);
+    if (!try hostAnswer(runtime, answer)) return null;
+    if (handle == heap.no_file) return runtime.fail(.host_unavailable);
+    const name = switch (which) {
+        0 => "<stdin>",
+        1 => "<stdout>",
+        else => "<stderr>",
+    };
+    return try runtime.newFile(handle, name);
+}
+
 pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     const service = runtime.files.open orelse return runtime.fail(.host_unavailable);
     // Opening a resource without a last-release close service would

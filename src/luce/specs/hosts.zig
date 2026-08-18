@@ -154,6 +154,11 @@ pub const World = struct {
     /// lets a spec see that a close happened.
     open_handle: ?i64 = null,
     next_handle: i64 = 0,
+    /// What the program's standard input will answer, and how much of
+    /// it has been taken.  Standard handles live at a fixed range so a
+    /// stale file handle can never alias one.
+    standard_input: []const u8 = "",
+    standard_read: usize = 0,
     // -- the transport (docs/NETWORK.md) -----------------------------
     //
     // One listener and one connected pair — the smallest world that
@@ -367,14 +372,47 @@ pub const World = struct {
         return if (self.unmeasurable) null else self.cpu_count;
     }
 
-    fn shellRun(self: *World, command: []const u8) ?[]const u8 {
-        const rendered = std.fmt.bufPrint(
-            &self.shell_output,
-            "mock shell: {s}\nexit status: 0\n",
-            .{command},
-        ) catch return null;
+    fn shellRun(self: *World, command: []const u8, input: []const u8) ?[]const u8 {
+        const rendered = if (input.len == 0)
+            std.fmt.bufPrint(
+                &self.shell_output,
+                "mock shell: {s}\nexit status: 0\n",
+                .{command},
+            ) catch return null
+        else
+            std.fmt.bufPrint(
+                &self.shell_output,
+                "mock shell: {s} << {s}\nexit status: 0\n",
+                .{ command, input },
+            ) catch return null;
         self.shell_output_length = rendered.len;
         return self.shell_output[0..self.shell_output_length];
+    }
+
+    /// Standard-stream handles: a fixed range no file or socket
+    /// handle can reach, so the channel dispatch is by number alone,
+    /// like the real host's.
+    const standard_base: i64 = 9_000;
+
+    fn standardAt(self: *World, which: i64, handle: *i64) abi.Answer {
+        _ = self;
+        if (which < 0 or which > 2) return .no;
+        handle.* = standard_base + which;
+        return .yes;
+    }
+
+    fn standardRole(handle: i64) ?i64 {
+        if (handle < standard_base or handle > standard_base + 2) return null;
+        return handle - standard_base;
+    }
+
+    fn standardReadFrom(self: *World, into: []u8, filled: *i64) abi.Answer {
+        const rest = self.standard_input[self.standard_read..];
+        const taken = @min(rest.len, into.len);
+        @memcpy(into[0..taken], rest[0..taken]);
+        self.standard_read += taken;
+        filled.* = @intCast(taken);
+        return .yes;
     }
 
     fn append(self: *World, path: []const u8, content: []const u8) bool {
@@ -916,6 +954,26 @@ fn HandleChannel(comptime Owner: type) type {
             return worldOf(context).openAt(path[0..@intCast(path_length)], mode, handle);
         }
 
+        fn ownerOf(context: ?*anyopaque) *Owner {
+            return @ptrCast(@alignCast(context.?));
+        }
+
+        /// Record into the owner's transcript whichever way this owner
+        /// spells recording, so a standard-stream write is part of
+        /// what the two engines must agree on.
+        fn note(context: ?*anyopaque, tag: []const u8, text: []const u8) abi.Answer {
+            const owner = ownerOf(context);
+            const recorded = owner.record(tag, text);
+            if (@TypeOf(recorded) != void) {
+                recorded catch return .exhausted;
+            }
+            return .yes;
+        }
+
+        fn standard(context: ?*anyopaque, which: i64, handle: *i64) callconv(.c) abi.Answer {
+            return worldOf(context).standardAt(which, handle);
+        }
+
         fn read(
             context: ?*anyopaque,
             handle: i64,
@@ -923,6 +981,10 @@ fn HandleChannel(comptime Owner: type) type {
             capacity: i64,
             filled: *i64,
         ) callconv(.c) abi.Answer {
+            if (World.standardRole(handle)) |role| {
+                if (role != 0) return .no;
+                return worldOf(context).standardReadFrom(into[0..@intCast(capacity)], filled);
+            }
             return worldOf(context).readFrom(handle, into[0..@intCast(capacity)], filled);
         }
 
@@ -933,18 +995,34 @@ fn HandleChannel(comptime Owner: type) type {
             length: i64,
             written: *i64,
         ) callconv(.c) abi.Answer {
+            if (World.standardRole(handle)) |role| {
+                if (role == 0) return .no;
+                const tag: []const u8 = if (role == 1) "[stdout]" else "[stderr]";
+                const answer = note(context, tag, from[0..@intCast(length)]);
+                if (answer != .yes) return answer;
+                written.* = length;
+                return .yes;
+            }
             return worldOf(context).writeTo(handle, from[0..@intCast(length)], written);
         }
 
         fn flush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            if (World.standardRole(handle)) |role| return if (role != 0) .yes else .no;
             return worldOf(context).flushAt(handle);
         }
 
         fn close(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            // The descriptor belongs to the process; agreeing without
+            // closing is the real host's behavior too.
+            if (World.standardRole(handle) != null) return .yes;
             return worldOf(context).closeAt(handle);
         }
 
         // The `i32` twins the runtime library's own channel takes.
+
+        fn standardPlain(context: ?*anyopaque, which: i64, handle: *i64) callconv(.c) i32 {
+            return @intFromEnum(standard(context, which, handle));
+        }
 
         fn openPlain(
             context: ?*anyopaque,
@@ -989,6 +1067,7 @@ fn HandleChannel(comptime Owner: type) type {
             return .{
                 .context = owner,
                 .open = openPlain,
+                .standard = standardPlain,
                 .read = readPlain,
                 .write = writePlain,
                 .flush = flushPlain,
@@ -1340,6 +1419,7 @@ pub const Capture = struct {
             .os_cpu_count = if (provided.machine) cpuCount else null,
             .shell_run = if (provided.shell) shellRun else null,
             .handle_open = if (provided.files) Handles.open else null,
+            .standard_stream = if (provided.files) Handles.standard else null,
             .handle_read = if (provided.files) Handles.read else null,
             .handle_write = if (provided.files) Handles.write else null,
             .handle_flush = if (provided.files) Handles.flush else null,
@@ -1631,10 +1711,15 @@ pub const Capture = struct {
         context: ?*anyopaque,
         command: [*]const u8,
         command_length: i64,
+        input: [*]const u8,
+        input_length: i64,
         text: *[*]const u8,
         length: *i64,
     ) callconv(.c) abi.Answer {
-        const output = of(context).world.shellRun(command[0..@intCast(command_length)]) orelse return .no;
+        const output = of(context).world.shellRun(
+            command[0..@intCast(command_length)],
+            input[0..@intCast(input_length)],
+        ) orelse return .no;
         text.* = output.ptr;
         length.* = @intCast(output.len);
         return .yes;
@@ -1924,8 +2009,9 @@ pub const Reference = struct {
         context: *anyopaque,
         arena: Allocator,
         command: []const u8,
+        input: []const u8,
     ) error{OutOfMemory}!?[]const u8 {
-        const output = of(context).world.shellRun(command) orelse return null;
+        const output = of(context).world.shellRun(command, input) orelse return null;
         return try arena.dupe(u8, output);
     }
 

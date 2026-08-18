@@ -873,6 +873,52 @@ test "term.copy hands the clipboard to the host on both engines" {
         "[flush]\n", session.printed());
 }
 
+test "os.run feeds the command's standard input on both engines" {
+    // The scripted shell shows what it was fed, so the spec pins the
+    // input crossing both host tables; the default is the empty feed
+    // the one-argument spelling always was.
+    var session = try hosted.compare(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    print(try os.run("sort", "b\na\n"))
+        \\    print(try os.run("date"))
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("mock shell: sort << b\na\n\nexit status: 0\n\n" ++
+        "mock shell: date\nexit status: 0\n\n", session.printed());
+}
+
+test "the standard streams read, write, and outlive their handles on both engines" {
+    // stdin is scripted, stdout and stderr land in the transcript, and
+    // releasing the classes must not close the process's descriptors —
+    // asking again after a release still answers a working stream.
+    var session = try hosted.compare(
+        \\import std.io
+        \\import std.os
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    let input = try os.stdin()
+        \\    let all = try io.drain(input)
+        \\    let text = strings.from_bytes(all) else "?"
+        \\    let out = try os.stdout()
+        \\    try io.send(out, strings.to_bytes("got " + text))
+        \\    let alarm = try os.stderr()
+        \\    try io.send(alarm, strings.to_bytes("warned"))
+        \\    let again = try os.stdout()
+        \\    try io.send(again, strings.to_bytes("still open"))
+        \\
+    , .{ .world = .{ .standard_input = "fed bytes" } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("[stdout]got fed bytes\n" ++
+        "[stderr]warned\n" ++
+        "[stdout]still open\n", session.printed());
+}
+
 test "term_style's defaults fill from the table, on both engines" {
     // docs/ARGS.md §3: the table is the builtin's signature, and its
     // two defaults — bg = -1, bold = false — are the whole of what

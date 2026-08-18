@@ -307,6 +307,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // The byte channel: `file_open` takes a table row and every
         // other one reaches the world through a handle.
         .file_open,
+        .os_standard_stream,
         .handle_read,
         .handle_write,
         .handle_flush,
@@ -538,6 +539,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // cannot survive.
             .dir_list,
             .file_open,
+            .os_standard_stream,
             .socket_connect,
             .socket_listen,
             .socket_accept,

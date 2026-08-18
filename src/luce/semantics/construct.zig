@@ -1096,9 +1096,14 @@ pub fn lowerIntrinsic(
             result = .none;
         },
         .shell_run => {
-            if (arguments[0].value_type != .str)
-                return failIntrinsic(self, call, "shell_run takes a str command");
+            if (arguments[0].value_type != .str or arguments[1].value_type != .str)
+                return failIntrinsic(self, call, "shell_run takes (command str, input str)");
             result = .str;
+        },
+        .os_standard_stream => {
+            if (!arguments[0].value_type.eql(.i64))
+                return failIntrinsic(self, call, "os_standard_stream takes a stream number");
+            result = try resolve.internHeapType(self.analyzer, .handle);
         },
         .file_read => {
             if (arguments[0].value_type != .str)

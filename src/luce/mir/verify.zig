@@ -1928,9 +1928,15 @@ fn verifyIntrinsic(
             try expectType(result, .none);
         },
         .shell_run => {
-            try exactly(arguments, 1);
+            try exactly(arguments, 2);
             try expectType(arguments[0], .str);
+            try expectType(arguments[1], .str);
             try expectType(result, .str);
+        },
+        .os_standard_stream => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .i64);
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
         },
         .file_read => {
             try exactly(arguments, 1);

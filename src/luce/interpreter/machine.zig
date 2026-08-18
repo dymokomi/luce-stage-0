@@ -2177,7 +2177,8 @@ pub const Machine = struct {
                 const callback = host.shell_run orelse
                     return self.runtime.fail(.host_unavailable);
                 const command = registers[arguments[0]].asStr();
-                const output = (try callback(host.context, self.arena, command)) orelse {
+                const fed = registers[arguments[1]].asStr();
+                const output = (try callback(host.context, self.arena, command, fed)) orelse {
                     self.runtime.raiseIo(.run, command, self.placeOf(site));
                     return .ofStr("");
                 };
@@ -2361,6 +2362,19 @@ pub const Machine = struct {
                 );
                 return opened orelse blk: {
                     self.runtime.raiseIo(.open, path, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .os_standard_stream => {
+                const which = registers[arguments[0]].asI64();
+                const opened = try files.standard(&self.runtime, which);
+                return opened orelse blk: {
+                    const name: []const u8 = switch (which) {
+                        0 => "<stdin>",
+                        1 => "<stdout>",
+                        else => "<stderr>",
+                    };
+                    self.runtime.raiseIo(.open, name, self.placeOf(site));
                     break :blk .none;
                 };
             },

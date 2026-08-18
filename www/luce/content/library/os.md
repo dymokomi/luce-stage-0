@@ -84,12 +84,14 @@ at least one processor: true
 ## Run a host-shell command
 
 ```
-os.run(command: str) -> str!
+os.run(command: str, input: str = "") -> str!
 ```
 
 `os.run` starts `/bin/sh -c` on Unix-like hosts and the platform shell on
-Windows. It captures standard output followed by standard error and appends
-one final line:
+Windows. `input` is fed to the command's standard input, whole, before
+output is collected — `os.run("sort", lines)` behaves like a pipe, and
+the default is the empty feed. It captures standard output followed by
+standard error and appends one final line:
 
 ```text
 exit status: 0
@@ -112,6 +114,38 @@ func main() -> !:
     let transcript = try os.run("printf 'hello\\n'")
     print(transcript)
 ```
+
+## The process's own byte streams
+
+```
+os.stdin() -> os.Input!
+os.stdout() -> os.Output!
+os.stderr() -> os.Output!
+```
+
+The standard streams as classes speaking [`std.io`](/library/io/)'s
+contract: `Input` conforms to `io.Reader` (`read(buffer) -> i64!`,
+zero at end of input), `Output` to `io.Writer` (`write(buffer, count)`,
+`flush`). A program that filters bytes or speaks a protocol over stdio
+composes with everything else that speaks `std.io`:
+
+```text
+import std.io
+import std.os
+
+func main() -> !:
+    let input = try os.stdin()
+    let all = try io.drain(input)
+    let out = try os.stdout()
+    try io.send(out, all)
+```
+
+The descriptors belong to the process: releasing the last reference to
+one of these classes does not close the real stream, and asking again
+answers a fresh handle onto the same stream. Construction is fallible
+for the reason `files.File`'s is — the world decides whether the
+channel exists. While a `std.term` screen is up, the terminal owns
+standard input; do not mix `term.read()` with byte reads of `stdin`.
 
 ## Host effects are explicit
 

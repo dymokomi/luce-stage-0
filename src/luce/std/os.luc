@@ -13,6 +13,8 @@
 # input, or an unset environment variable) is `none`; shell launch and I/O
 # failures use `!`.
 
+import std.io
+
 # Read one line after writing `prompt`, without the trailing newline. End of
 # input is absence rather than an error.
 func read_line(prompt: str) -> str?:
@@ -42,18 +44,68 @@ func sleep_ms(milliseconds: i64):
     Builtin.sleep_ms(milliseconds)
 
 # Run one host shell command, for tools that deliberately belong to the
-# host rather than to Luce's semantics.  Standard output and standard
-# error are captured, and the command's exit status is appended to the
-# returned text: a non-zero exit is data for the program to read, not an
-# error.  The error channel carries what kept the command from running
-# at all.  A command is intentionally one str: callers that need
-# argument boundaries should quote them for the host shell.
+# host rather than to Luce's semantics.  `input` is fed to the
+# command's standard input, whole, before any output is collected — so
+# `os.run("sort", lines)` behaves like a pipe.  Standard output and
+# standard error are captured, and the command's exit status is
+# appended to the returned text: a non-zero exit is data for the
+# program to read, not an error.  The error channel carries what kept
+# the command from running at all.  A command is intentionally one
+# str: callers that need argument boundaries should quote them for the
+# host shell.
 #
-# This is the seam used by the Luce editor for Ctrl-B. Keeping it here
-# means programs do not have to know the compiler-only host intrinsic or
-# its ABI shape.
-func run(command: str) -> str!:
-    return try Builtin.shell_run(command)
+# This is the seam used by the Luce editor for Ctrl-B and by the
+# language server for `luce query`.  Keeping it here means programs do
+# not have to know the compiler-only host intrinsic or its ABI shape.
+func run(command: str, input: str = "") -> str!:
+    return try Builtin.shell_run(command, input)
+
+# --- the process's own byte streams ----------------------------------
+#
+# `stdin()`, `stdout()`, and `stderr()` answer the process's standard
+# streams as classes speaking `io.Reader`/`io.Writer` — the same
+# contract files and connections speak — so a program that filters
+# bytes or speaks a protocol over stdio composes with everything else
+# in `std.io`.  The descriptors belong to the process: releasing the
+# last reference does not close the real stream, and asking twice
+# answers two handles onto the same stream.
+#
+# Construction is fallible for the reason `files.File`'s is: the world
+# decides whether the channel exists, and a host may withhold it.
+
+class Input: io.Reader:
+    private:
+        raw: handle
+
+    init(which: i64) -> !:
+        self.raw = try Builtin.os_standard_stream(which)
+
+    # Fill the buffer and answer how many bytes landed; zero is the
+    # end of input, not an error.
+    func read(buffer: array[u8, _]) -> i64!:
+        return try Builtin.handle_read(self.raw, buffer)
+
+class Output: io.Writer:
+    private:
+        raw: handle
+
+    init(which: i64) -> !:
+        self.raw = try Builtin.os_standard_stream(which)
+
+    func write(buffer: array[u8, _], count: i64) -> i64!:
+        return try Builtin.handle_write(self.raw, buffer, count)
+
+    func flush() -> !:
+        try Builtin.handle_flush(self.raw)
+
+func stdin() -> Input!:
+    return try Input(0)
+
+func stdout() -> Output!:
+    return try Output(1)
+
+func stderr() -> Output!:
+    return try Output(2)
 
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the

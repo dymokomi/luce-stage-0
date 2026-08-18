@@ -154,6 +154,7 @@ pub const Service = enum {
     // -- files: the byte channel, and text over it --------------------
     luce_rt_files_install,
     luce_rt_file_open,
+    luce_rt_standard_stream,
     luce_rt_file_read,
     luce_rt_file_write,
     luce_rt_file_flush,
@@ -592,7 +593,7 @@ pub fn describe(service: Service) Effect {
         // narrowed.
         .luce_rt_files_install => .{
             .memory = touches_run,
-            .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown },
+            .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown },
         },
         // The worker services, every one of them as wide as a call can
         // be: a spawn starts a thread that runs *this module's own
@@ -635,6 +636,18 @@ pub fn describe(service: Service) Effect {
                 .run,
                 .bytes_in,
                 .plain,
+                .plain,
+                .value_out,
+                .unknown,
+                .plain,
+                .plain,
+            },
+            .willreturn = false,
+        },
+        .luce_rt_standard_stream => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
                 .plain,
                 .value_out,
                 .unknown,
@@ -1164,6 +1177,7 @@ test "exactly callbacks, waits, deep copies, and release-reachable services with
             .luce_rt_report_error,
             .luce_rt_args_list,
             .luce_rt_file_open,
+            .luce_rt_standard_stream,
             .luce_rt_file_read,
             .luce_rt_file_write,
             .luce_rt_file_flush,
