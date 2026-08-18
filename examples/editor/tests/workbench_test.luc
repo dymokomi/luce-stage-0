@@ -7,7 +7,7 @@ import document
 import focus
 import model
 from filelist import FileList
-from source import Editor, gutter_width
+from source import Editor
 from console import Console
 from statusbar import StatusBar
 from workbench import Workbench
@@ -30,7 +30,7 @@ func built(shared: model.Model) -> (Workbench, Editor, FileList):
     let files = new FileList(shared)
     let pane = new Editor(shared)
     across.add(files, fixed(0))
-    across.add(pane, grow(minimum = gutter_width + 1))
+    across.add(pane, grow(minimum = Editor.minimum_columns()))
     var screen = new VStack()
     screen.add(across, grow(minimum = 1))
     screen.add(new Console(shared), fixed(0))

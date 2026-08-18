@@ -8,41 +8,41 @@ func total(values: list[i64]) -> i64:
     return result
 
 func test_fixed_and_minimum_grow_fill_the_axis():
-    let lengths: list[layout.Length] = [
-        layout.Length.fixed(cells = 5),
-        layout.Length.grow(weight = 1, minimum = 6),
+    let lengths: list[layout.Constraint] = [
+        layout.fixed(5),
+        layout.grow(minimum = 6),
     ]
     let sizes = layout.resolve(80, 0, lengths)
     assert(sizes[0] == 5 and sizes[1] == 75)
     assert(total(sizes) == 80)
 
 func test_grows_share_surplus_by_weight_and_keep_rounding_total():
-    let lengths: list[layout.Length] = [
-        layout.Length.grow(weight = 1, minimum = 0),
-        layout.Length.grow(weight = 3, minimum = 0),
+    let lengths: list[layout.Constraint] = [
+        layout.grow(),
+        layout.grow(weight = 3),
     ]
     let sizes = layout.resolve(41, 0, lengths)
     assert(sizes[0] == 11 and sizes[1] == 30)
     assert(total(sizes) == 41)
 
 func test_ratio_and_preferred_lengths_are_clamped():
-    let automatic: list[layout.Length] = [
-        layout.Length.ratio(low = 18, high = 24, percent = 25),
-        layout.Length.grow(weight = 1, minimum = 6),
+    let automatic: list[layout.Constraint] = [
+        layout.ratio(18, 24, 25),
+        layout.grow(minimum = 6),
     ]
     let wide = layout.resolve(80, 0, automatic)
     assert(wide[0] == 20 and wide[1] == 60)
-    let dragged: list[layout.Length] = [
-        layout.Length.preferred(low = 8, ideal = 21, high = 40),
-        layout.Length.grow(weight = 1, minimum = 6),
+    let dragged: list[layout.Constraint] = [
+        layout.preferred(8, 21, 40),
+        layout.grow(minimum = 6),
     ]
     let held = layout.resolve(80, 0, dragged)
     assert(held[0] == 21 and held[1] == 59)
 
 func test_optional_panes_compress_before_primary_content():
-    let lengths: list[layout.Length] = [
-        layout.Length.preferred(low = 8, ideal = 20, high = 24),
-        layout.Length.grow(weight = 1, minimum = 6),
+    let lengths: list[layout.Constraint] = [
+        layout.preferred(8, 20, 24),
+        layout.grow(minimum = 6),
     ]
     let cramped = layout.resolve(10, 0, lengths)
     assert(cramped[0] == 4 and cramped[1] == 6)
@@ -50,9 +50,9 @@ func test_optional_panes_compress_before_primary_content():
     assert(tiny[0] == 0 and tiny[1] == 3)
 
 func test_spacing_is_part_of_the_total_and_zero_is_total():
-    let lengths: list[layout.Length] = [
-        layout.Length.grow(weight = 1, minimum = 0),
-        layout.Length.grow(weight = 1, minimum = 0),
+    let lengths: list[layout.Constraint] = [
+        layout.grow(),
+        layout.grow(),
     ]
     let spaced = layout.resolve(21, 1, lengths)
     assert(spaced[0] == 10 and spaced[1] == 10)
@@ -60,9 +60,9 @@ func test_spacing_is_part_of_the_total_and_zero_is_total():
 
 func test_rows_and_columns_preserve_origin_and_order():
     let area = model.Rect(row = 2, column = 3, rows = 20, columns = 40)
-    let lengths: list[layout.Length] = [
-        layout.Length.fixed(cells = 10),
-        layout.Length.grow(weight = 1, minimum = 0),
+    let lengths: list[layout.Constraint] = [
+        layout.fixed(10),
+        layout.grow(),
     ]
     let across = layout.row(area, 1, lengths)
     assert(across[0].column == 3 and across[0].columns == 10)

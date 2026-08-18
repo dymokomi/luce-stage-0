@@ -12,9 +12,15 @@ import theme
 
 # Luce's lexer steps four columns; the gutter holds a line number and
 # one space inside five cells.
-const gutter_width: i64 = 5
+private const gutter_width: i64 = 5
 
 class Editor: termui.View:
+    # The narrowest useful pane: the gutter plus one text column.  The
+    # entry asks the component — the minimum is the pane's own
+    # knowledge, not a constant a caller imports.
+    static func minimum_columns() -> i64:
+        return gutter_width + 1
+
     private model: model.Model
 
     init(shared: model.Model):

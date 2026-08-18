@@ -2,7 +2,7 @@
   "name": "luce-language",
   "displayName": "Luce Language",
   "description": "Syntax highlighting and brace-aware editor configuration for Luce.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "luciaos",
   "license": "UNLICENSED",
   "engines": {

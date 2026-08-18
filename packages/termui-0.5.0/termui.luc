@@ -29,7 +29,7 @@ alias Pointer = input.Pointer
 alias Mouse = input.Mouse
 alias Event = input.Event
 
-alias Length = layout.Length
+alias Constraint = layout.Constraint
 alias View = view.View
 alias Surface = canvas.Surface
 alias Snapshot = canvas.Snapshot
@@ -50,16 +50,16 @@ alias CursorHost = components.CursorHost
 func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
 
-func fixed(cells: i64) -> Length:
+func fixed(cells: i64) -> Constraint:
     return layout.fixed(cells)
 
-func grow(weight: i64 = 1, minimum: i64 = 0) -> Length:
+func grow(weight: i64 = 1, minimum: i64 = 0) -> Constraint:
     return layout.grow(weight, minimum)
 
-func ratio(low: i64, high: i64, percent: i64) -> Length:
+func ratio(low: i64, high: i64, percent: i64) -> Constraint:
     return layout.ratio(low, high, percent)
 
-func preferred(low: i64, ideal: i64, high: i64) -> Length:
+func preferred(low: i64, ideal: i64, high: i64) -> Constraint:
     return layout.preferred(low, ideal, high)
 
 func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:

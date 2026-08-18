@@ -86,7 +86,7 @@ operations.
 | `Rows` | lazily rendered visible window over indexed lines |
 | `Fill`, `Empty` | background content and intentional absence |
 | `EventHost`, `CursorHost` | behavior and cursor placement wrapped around content |
-| `Length` | one-axis sizing |
+| `Constraint` | one-axis sizing: bounds, weight, and an optional preference |
 | `Event`, `Key`, `Mouse`, `Pointer` | terminal input, `std.term`'s own types plus `closed` |
 | `Response` | `ignored`, `handled`, or `quit` |
 | `Style`, `Color`, `Span`, `Line`, `Edges` | presentation values |
@@ -110,7 +110,7 @@ The distinction is deliberate:
   the one ownership line;
 - the internal `Surface` and `Screen` are classes because they own
   changing runtime state; and
-- `Rect`, `Style`, `Line`, `Length`, `Event`, and `Snapshot` are values
+- `Rect`, `Style`, `Line`, `Constraint`, `Event`, and `Snapshot` are values
   because they describe or observe one frame.
 
 **The model never holds a component strongly.** ARC collects no cycles,
@@ -182,7 +182,7 @@ in list order, so the last child is visually on top. A child enters with
 and `preferred(low, ideal, high)` spell a size the way the layout
 reads: `add(bar, fixed(1))`. A retained
 layout reshapes with `resize(index, size)` — a drag hands a pane its
-new `Length`, and a hidden pane is `fixed(cells = 0)`: zero cells draw
+new constraint, and a hidden pane is `fixed(cells = 0)`: zero cells draw
 nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
@@ -191,14 +191,17 @@ across.add(sidebar, termui.ratio(low = 12, high = 28, percent = 25))
 across.add(source)
 ```
 
-`Length` has four forms:
+A size is a `Constraint` — a value carrying `minimum`, an optional
+`maximum`, a `weight` for sharing surplus, and an optional preference
+(`ideal` cells, or a `share` of the axis in percent).  Four
+constructors spell the common shapes:
 
-| Form | Meaning |
+| Constructor | Meaning |
 |---|---|
-| `fixed(cells)` | request exactly this many cells |
+| `fixed(cells)` | exactly this many cells (`minimum = maximum`) |
 | `grow(weight, minimum)` | keep the minimum, then share surplus by weight |
-| `ratio(low, high, percent)` | choose a clamped percentage of the axis |
-| `preferred(low, ideal, high)` | use a stored user preference within bounds |
+| `ratio(low, high, percent)` | a clamped percentage of the axis |
+| `preferred(low, ideal, high)` | a remembered size within bounds |
 
 The solver is total. It includes spacing in the available axis, never returns a
 negative size, and never allocates beyond the axis. When space is short it

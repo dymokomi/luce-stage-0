@@ -3,7 +3,7 @@
 # Every component here draws through canvas.Surface and routes through
 # view.route, which is the whole of what a program's own component
 # does too — these are the first conformers, not a privileged set.
-# Values stay values (Style, Rect, Line, Length, Event); a component
+# Values stay values (Style, Rect, Line, Constraint, Event); a component
 # is a class because a tree node built in `body()` is handed around by
 # reference while it is composed.
 
@@ -14,14 +14,14 @@ import layout
 import canvas
 import view
 
-# Pairing a child with its length makes a row/column mismatch
+# Pairing a child with its constraint makes a row/column mismatch
 # impossible.
 private struct Slot:
-    size: layout.Length
+    size: layout.Constraint
     content: view.View
 
-private func lengths(slots: list[Slot]) -> list[layout.Length]:
-    var sizes = new list[layout.Length]
+private func constraints(slots: list[Slot]) -> list[layout.Constraint]:
+    var sizes = new list[layout.Constraint]
     for slot in slots:
         sizes.append(slot.size)
     return sizes
@@ -45,9 +45,9 @@ private func draw_line(
 
 # When absent, a child grows: filling what the siblings leave is the
 # most common intent, so it is the unstated one.
-private func slot_length(size: layout.Length?) -> layout.Length:
+private func slot_constraint(size: layout.Constraint?) -> layout.Constraint:
     if size == none:
-        return layout.Length.grow(weight = 1, minimum = 0)
+        return layout.grow()
     return size
 
 # --- stacks ----------------------------------------------------------
@@ -60,20 +60,19 @@ class VStack: view.View:
         self.slots = new list[Slot]
         self.spacing = spacing
 
-    func add(child: view.View, size: layout.Length? = none):
-        self.slots.append(Slot(size = slot_length(size), content = child))
+    func add(child: view.View, size: layout.Constraint? = none):
+        self.slots.append(Slot(size = slot_constraint(size), content = child))
 
     # Retained layouts reshape by slot: a drag hands a pane its new
-    # Length, and a hidden pane is `fixed(cells = 0)` — zero cells
-    # draw nothing and contain no pointer, so hiding needs no tree
-    # surgery.
-    func resize(index: i64, size: layout.Length):
+    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
+    # nothing and contain no pointer, so hiding needs no tree surgery.
+    func resize(index: i64, size: layout.Constraint):
         if index < 0 or index >= len(self.slots):
             return
         self.slots[index] = Slot(size = size, content = self.slots[index].content)
 
     func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
-        let rectangles = layout.column(area, self.spacing, lengths(self.slots))
+        let rectangles = layout.column(area, self.spacing, constraints(self.slots))
         var cursor: model.Cursor? = none
         for index in range(0, min(len(self.slots), len(rectangles))):
             let found = self.slots[index].content.draw(surface, rectangles[index])
@@ -82,7 +81,7 @@ class VStack: view.View:
         return cursor
 
     func dispatch(event: input.Event, area: model.Rect) -> model.Response:
-        let rectangles = layout.column(area, self.spacing, lengths(self.slots))
+        let rectangles = layout.column(area, self.spacing, constraints(self.slots))
         for index in range(0, min(len(self.slots), len(rectangles))):
             let response = view.route(self.slots[index].content, event, rectangles[index])
             if response != model.Response.ignored:
@@ -97,20 +96,19 @@ class HStack: view.View:
         self.slots = new list[Slot]
         self.spacing = spacing
 
-    func add(child: view.View, size: layout.Length? = none):
-        self.slots.append(Slot(size = slot_length(size), content = child))
+    func add(child: view.View, size: layout.Constraint? = none):
+        self.slots.append(Slot(size = slot_constraint(size), content = child))
 
     # Retained layouts reshape by slot: a drag hands a pane its new
-    # Length, and a hidden pane is `fixed(cells = 0)` — zero cells
-    # draw nothing and contain no pointer, so hiding needs no tree
-    # surgery.
-    func resize(index: i64, size: layout.Length):
+    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
+    # nothing and contain no pointer, so hiding needs no tree surgery.
+    func resize(index: i64, size: layout.Constraint):
         if index < 0 or index >= len(self.slots):
             return
         self.slots[index] = Slot(size = size, content = self.slots[index].content)
 
     func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
-        let rectangles = layout.row(area, self.spacing, lengths(self.slots))
+        let rectangles = layout.row(area, self.spacing, constraints(self.slots))
         var cursor: model.Cursor? = none
         for index in range(0, min(len(self.slots), len(rectangles))):
             let found = self.slots[index].content.draw(surface, rectangles[index])
@@ -119,7 +117,7 @@ class HStack: view.View:
         return cursor
 
     func dispatch(event: input.Event, area: model.Rect) -> model.Response:
-        let rectangles = layout.row(area, self.spacing, lengths(self.slots))
+        let rectangles = layout.row(area, self.spacing, constraints(self.slots))
         for index in range(0, min(len(self.slots), len(rectangles))):
             let response = view.route(self.slots[index].content, event, rectangles[index])
             if response != model.Response.ignored:

@@ -6,6 +6,16 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- A size is a `Constraint`, because that is what it is: `Length` the
+  four-member union is gone, and in its place one value struct carries
+  `minimum`, an optional `maximum`, a `weight` for surplus, and an
+  optional preference (`ideal` cells or a `share` of the axis). The
+  `fixed`/`grow`/`ratio`/`preferred` constructors and the solver's
+  behavior are unchanged - the editor's sessions replay
+  cell-identical. `from` and the member-renaming `as` now highlight on
+  import lines (they stay contextual words in the language), and the
+  editor pane's minimum width is `Editor.minimum_columns()` - the
+  pane's own knowledge - instead of an imported constant.
 - The editor's domain is classes: `Document` owns a file's text,
   cursor, scroll, dirty flag, message, and its own `History` (undo and
   redo as methods on one owned stack), so the model holds a list of

@@ -2,87 +2,83 @@
 
 import model
 
-union Length:
-    fixed(cells: i64)
-    grow(weight: i64, minimum: i64)
-    ratio(low: i64, high: i64, percent: i64)
-    preferred(low: i64, ideal: i64, high: i64)
+# What one child asks of its axis.  A constraint is a value: bounds,
+# an optional preference, and a weight for sharing surplus.  The four
+# constructors below spell the common shapes; the solver reads only
+# these fields, so any honest combination lays out.
+struct Constraint:
+    minimum: i64 = 0
+    # None is unbounded: the child takes whatever surplus its weight
+    # earns.
+    maximum: i64? = none
+    # The share of surplus this child claims relative to the other
+    # growers.  Zero — the default — is a child that never grows past
+    # its preference or minimum.
+    weight: i64 = 0
+    # A preferred size in cells, wanted exactly when the axis allows.
+    ideal: i64? = none
+    # A preferred size as a percentage of the axis, for panes that
+    # scale with the terminal rather than with their content.
+    share: i64? = none
 
-# The short spellings a screen is composed with — each answers the
-# Length member it names, with the defaults composition wants, so a
-# call site reads like the layout it makes: `add(bar, fixed(1))`,
-# `add(source, grow())`.
-func fixed(cells: i64) -> Length:
-    return Length.fixed(cells = cells)
+# Exactly `cells`, never more, never less — until the axis itself is
+# smaller than everything's minimums.
+func fixed(cells: i64) -> Constraint:
+    return Constraint(minimum = cells, maximum = cells)
 
-func grow(weight: i64 = 1, minimum: i64 = 0) -> Length:
-    return Length.grow(weight = weight, minimum = minimum)
+# Keep at least `minimum`, then take surplus in proportion to
+# `weight`.  The default is the main content of a screen: everything
+# the siblings leave.
+func grow(weight: i64 = 1, minimum: i64 = 0) -> Constraint:
+    return Constraint(minimum = minimum, weight = weight)
 
-func ratio(low: i64, high: i64, percent: i64) -> Length:
-    return Length.ratio(low = low, high = high, percent = percent)
+# A pane that scales with the terminal: `percent` of the axis, kept
+# between `low` and `high`.
+func ratio(low: i64, high: i64, percent: i64) -> Constraint:
+    return Constraint(minimum = low, maximum = high, share = percent)
 
-func preferred(low: i64, ideal: i64, high: i64) -> Length:
-    return Length.preferred(low = low, ideal = ideal, high = high)
+# A pane with a remembered size — after a person drags a divider —
+# kept between `low` and `high`.
+func preferred(low: i64, ideal: i64, high: i64) -> Constraint:
+    return Constraint(minimum = low, maximum = high, ideal = ideal)
 
 private func floor_div(numerator: i64, denominator: i64) -> i64:
     return i64(floor(numerator / denominator))
 
-# Turn one Length per child into non-negative sizes. Optional pane lengths
-# (`ratio` and `preferred`) compress before primary `grow` content.
-func resolve(total: i64, spacing: i64, lengths: list[Length]) -> list[i64]:
-    let count = len(lengths)
+# A constraint with a preference gives its slack back first when the
+# axis runs short — it asked for comfort, not necessity.
+private func prefers(constraint: Constraint) -> bool:
+    return constraint.ideal != none or constraint.share != none
+
+# Turn one Constraint per child into non-negative sizes.  Preferences
+# compress before growers, growers before rigid children, and nothing
+# is ever negative or beyond the axis.
+func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i64]:
+    let count = len(constraints)
     var sizes = new list[i64]
     if count == 0:
         return sizes
     let gap = max(spacing, 0)
     let usable = max(total - gap * (count - 1), 0)
-    var floors = new list[i64]
-    var weights = new list[i64]
-    var optional = new list[bool]
-    var growing = new list[bool]
     var claimed: i64 = 0
     var total_weight: i64 = 0
 
-    for length in lengths:
-        match length:
-            fixed(cells):
-                let size = max(cells, 0)
-                sizes.append(size)
-                floors.append(size)
-                weights.append(0)
-                optional.append(false)
-                growing.append(false)
-                claimed += size
-            grow(weight, minimum):
-                let floor_size = max(minimum, 0)
-                let share = max(weight, 0)
-                sizes.append(floor_size)
-                floors.append(floor_size)
-                weights.append(share)
-                optional.append(false)
-                growing.append(true)
-                claimed += floor_size
-                total_weight += share
-            ratio(low, high, percent):
-                let floor_size = max(low, 0)
-                let ceiling = max(high, floor_size)
-                let size = clamp(floor_div(usable * clamp(percent, 0, 100), 100), floor_size, ceiling)
-                sizes.append(size)
-                floors.append(floor_size)
-                weights.append(0)
-                optional.append(true)
-                growing.append(false)
-                claimed += size
-            preferred(low, ideal, high):
-                let floor_size = max(low, 0)
-                let ceiling = max(high, floor_size)
-                let size = clamp(ideal, floor_size, ceiling)
-                sizes.append(size)
-                floors.append(floor_size)
-                weights.append(0)
-                optional.append(true)
-                growing.append(false)
-                claimed += size
+    for constraint in constraints:
+        let floor_size = max(constraint.minimum, 0)
+        var size = floor_size
+        let wanted = constraint.share
+        if wanted != none:
+            size = floor_div(usable * clamp(wanted, 0, 100), 100)
+        let exact = constraint.ideal
+        if exact != none:
+            size = exact
+        let ceiling = constraint.maximum
+        if ceiling != none:
+            size = min(size, max(ceiling, floor_size))
+        size = max(size, floor_size)
+        sizes.append(size)
+        claimed += size
+        total_weight += max(constraint.weight, 0)
 
     if claimed <= usable:
         let remaining = usable - claimed
@@ -90,42 +86,52 @@ func resolve(total: i64, spacing: i64, lengths: list[Length]) -> list[i64]:
             var given: i64 = 0
             var first: i64 = -1
             for index in range(0, count):
-                if weights[index] > 0:
-                    let share = floor_div(remaining * weights[index], total_weight)
+                let weight = max(constraints[index].weight, 0)
+                if weight > 0:
+                    var share = floor_div(remaining * weight, total_weight)
+                    let ceiling = constraints[index].maximum
+                    if ceiling != none:
+                        share = min(share, max(ceiling - sizes[index], 0))
                     sizes[index] += share
                     given += share
                     if first < 0:
                         first = index
             if first >= 0:
-                sizes[first] += remaining - given
+                var leftover = remaining - given
+                let ceiling = constraints[first].maximum
+                if ceiling != none:
+                    leftover = min(leftover, max(ceiling - sizes[first], 0))
+                sizes[first] += leftover
         return sizes
 
     var over = claimed - usable
-    # First return optional regions' slack down to their declared floor.
+    # First return preferring children's slack down to their floor.
     for index in range(0, count):
         if over <= 0:
             break
-        if optional[index]:
-            let cut = min(max(sizes[index] - floors[index], 0), over)
+        if prefers(constraints[index]):
+            let cut = min(max(sizes[index] - max(constraints[index].minimum, 0), 0), over)
             sizes[index] -= cut
             over -= cut
-    # On a truly tiny axis, optional panes disappear before primary content.
+    # On a truly tiny axis, preferring panes disappear before primary
+    # content.
     for index in range(0, count):
         if over <= 0:
             break
-        if optional[index]:
+        if prefers(constraints[index]):
             let cut = min(sizes[index], over)
             sizes[index] -= cut
             over -= cut
     for index in range(0, count):
         if over <= 0:
             break
-        if growing[index]:
+        if constraints[index].weight > 0:
             let cut = min(sizes[index], over)
             sizes[index] -= cut
             over -= cut
-    # Fixed regions are the final claim. This branch is reached only when the
-    # complete axis is smaller than every other region reduced to zero.
+    # Rigid children are the final claim.  This branch is reached only
+    # when the complete axis is smaller than every other child reduced
+    # to zero.
     for index in range(0, count):
         if over <= 0:
             break
@@ -134,8 +140,8 @@ func resolve(total: i64, spacing: i64, lengths: list[Length]) -> list[i64]:
         over -= cut
     return sizes
 
-func row(area: model.Rect, spacing: i64, lengths: list[Length]) -> list[model.Rect]:
-    let widths = resolve(area.columns, spacing, lengths)
+func row(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
+    let widths = resolve(area.columns, spacing, constraints)
     var rectangles = new list[model.Rect]
     var at_column = area.column
     let gap = max(spacing, 0)
@@ -144,8 +150,8 @@ func row(area: model.Rect, spacing: i64, lengths: list[Length]) -> list[model.Re
         at_column += width + gap
     return rectangles
 
-func column(area: model.Rect, spacing: i64, lengths: list[Length]) -> list[model.Rect]:
-    let heights = resolve(area.rows, spacing, lengths)
+func column(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
+    let heights = resolve(area.rows, spacing, constraints)
     var rectangles = new list[model.Rect]
     var at_row = area.row
     let gap = max(spacing, 0)

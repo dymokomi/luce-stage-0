@@ -26,7 +26,7 @@ class Ticker: termui.View:
 func test_a_retained_layout_updates_in_place():
     var stack = new VStack()
     stack.add(new Fill("."))
-    stack.add(new Ticker(41), size = termui.Length.fixed(cells = 1))
+    stack.add(new Ticker(41), size = termui.fixed(1))
 
     var app = new termui.Application()
     app.set_layout(stack)

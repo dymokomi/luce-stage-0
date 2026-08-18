@@ -993,6 +993,65 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const operator_rules = try symbolRules(arena, false);
     const punctuation_rules = try symbolRules(arena, true);
 
+    // -- import lines --------------------------------------------------------
+    // `from` and the member-renaming `as` are contextual words, not
+    // reserved ones — a program may name a field `from` — so they
+    // colour only where the import grammar puts them: on a line that
+    // is an import.  The line is a region so `as` can repeat
+    // (`from geo import a as x, b as y`), and everything else on it
+    // falls through to the ordinary code rules.
+    const module_path = try std.fmt.allocPrint(arena, "{s}(?:\\.{s})*", .{ name, name });
+    // After `from M import`, everything left on the line is members:
+    // an uppercase member reads as the type it names and a lowercase
+    // one as the function it names — the same colours the same words
+    // wear at their use sites.
+    const member_rules = [_]Rule{
+        .{ .match = .{
+            .scope = "keyword.control.import.luce",
+            .pattern = "\\b(as)\\b",
+        } },
+        .{ .match = .{
+            .scope = "entity.name.type.luce",
+            .pattern = "\\b[A-Z][A-Za-z0-9_]*\\b",
+        } },
+        .{ .match = .{
+            .scope = "entity.name.function.luce",
+            .pattern = "\\b[a-z][A-Za-z0-9_]*\\b",
+        } },
+    };
+    const from_line = try std.fmt.allocPrint(
+        arena,
+        "^\\s*(from)\\s+({s})\\s+(import)\\b",
+        .{module_path},
+    );
+    const import_line = try std.fmt.allocPrint(
+        arena,
+        "^\\s*(import)\\s+({s})(?:\\s+(as)\\s+({s}))?\\s*$",
+        .{ module_path, name },
+    );
+    const import_rules = [_]Rule{
+        .{ .region = .{
+            .scope = "meta.import.luce",
+            .begin = from_line,
+            .begin_captures = &.{
+                .{ .group = "1", .scope = "keyword.control.import.luce" },
+                .{ .group = "2", .scope = "entity.name.namespace.luce" },
+                .{ .group = "3", .scope = "keyword.control.import.luce" },
+            },
+            .end = "$",
+            .patterns = &member_rules,
+        } },
+        .{ .match = .{
+            .pattern = import_line,
+            .captures = &.{
+                .{ .group = "1", .scope = "keyword.control.import.luce" },
+                .{ .group = "2", .scope = "entity.name.namespace.luce" },
+                .{ .group = "3", .scope = "keyword.control.import.luce" },
+                .{ .group = "4", .scope = "entity.name.namespace.luce" },
+            },
+        } },
+    };
+
     // -- the code group ----------------------------------------------------
     // Everything that is neither a comment nor a string, named once so
     // an f-string hole can reuse it exactly.
@@ -1011,6 +1070,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
 
     const groups = [_]Group{
         .{ .name = "accessors", .patterns = &accessor_rules },
+        .{ .name = "imports", .patterns = &import_rules },
         .{ .name = "builtins", .patterns = &builtin_rules },
         .{ .name = "braces", .patterns = &brace_rules },
         .{ .name = "calls", .patterns = &call_rules },
@@ -1030,6 +1090,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const top = [_]Rule{
         .{ .include = "#comments" },
         .{ .include = "#strings" },
+        .{ .include = "#imports" },
         .{ .include = "#declarations" },
         .{ .include = "#code" },
     };

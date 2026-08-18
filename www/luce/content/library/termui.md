@@ -76,7 +76,7 @@ This gives each kind of thing the right representation:
   state a rebuild used to destroy;
 - the model is a class the components hold strongly — app to layout to
   components to model is the one ownership line;
-- geometry, styles, lines, lengths, events, and snapshots are values.
+- geometry, styles, lines, constraints, events, and snapshots are values.
 
 **The model never holds a component strongly** — ARC collects no
 cycles, and component → model → component is one. A component that
@@ -144,14 +144,19 @@ across.add(source_rows)
 same rectangle and paints them in order, which is useful for a background plus
 foreground content.
 
-### Length
+### Constraint
 
-| Form | Behavior |
+A size is a `Constraint` — a value carrying `minimum`, an optional
+`maximum`, a `weight` for sharing surplus, and an optional preference
+(`ideal` cells, or a `share` of the axis in percent). Four
+constructors spell the common shapes:
+
+| Constructor | Behavior |
 |---|---|
-| `fixed(cells)` | requests exactly that many cells |
+| `fixed(cells)` | exactly that many cells (`minimum = maximum`) |
 | `grow(weight, minimum)` | keeps its minimum and shares remaining space |
 | `ratio(low, high, percent)` | takes a clamped percentage of the axis |
-| `preferred(low, ideal, high)` | uses a stored user preference within limits |
+| `preferred(low, ideal, high)` | uses a remembered size within limits |
 
 The solver is total: spacing is included, no result is negative, and allocated
 sizes never exceed the available axis. Optional `ratio` and `preferred` panes
@@ -374,7 +379,7 @@ The `termui` facade exports:
 - components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
   `VStack`, `ZStack`, `Panel`, `EventHost`, `CursorHost`;
 - the contract: `View`, `Surface`, `route`;
-- layout: `Length` with its short spellings `fixed`, `grow`, `ratio`, `preferred`; `Rect`, `Edges`;
+- layout: `Constraint` with its constructors `fixed`, `grow`, `ratio`, `preferred`; `Rect`, `Edges`;
 - text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
 - input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
 - application: `Application` (`set_layout`, `start`), `Cursor`; and

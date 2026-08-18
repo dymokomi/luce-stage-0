@@ -15,6 +15,9 @@
       "include": "#strings"
     },
     {
+      "include": "#imports"
+    },
+    {
       "include": "#declarations"
     },
     {
@@ -43,6 +46,43 @@
           "captures": {
             "1": { "name": "punctuation.accessor.luce" },
             "2": { "name": "variable.other.member.luce" }
+          }
+        }
+      ]
+    },
+    "imports": {
+      "patterns": [
+        {
+          "name": "meta.import.luce",
+          "begin": "^\\s*(from)\\s+([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)*)\\s+(import)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.import.luce" },
+            "2": { "name": "entity.name.namespace.luce" },
+            "3": { "name": "keyword.control.import.luce" }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "keyword.control.import.luce",
+              "match": "\\b(as)\\b"
+            },
+            {
+              "name": "entity.name.type.luce",
+              "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "entity.name.function.luce",
+              "match": "\\b[a-z][A-Za-z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "match": "^\\s*(import)\\s+([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)*)(?:\\s+(as)\\s+([A-Za-z][A-Za-z0-9_]*))?\\s*$",
+          "captures": {
+            "1": { "name": "keyword.control.import.luce" },
+            "2": { "name": "entity.name.namespace.luce" },
+            "3": { "name": "keyword.control.import.luce" },
+            "4": { "name": "entity.name.namespace.luce" }
           }
         }
       ]
