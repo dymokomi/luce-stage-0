@@ -1,90 +1,90 @@
 # The output pane: the retained component that shows build output and
 # starts the divider drag on its own top border.
 
-import termui
-import document
-import focus
-import keymap
-import model
-import theme
+from termui import View, Surface, Response, Rect, Event, Cursor, Line, Edges, Pointer, Rows, Panel, EventHost, CursorHost, plain, route
+from document import count_lines, line_at, line_end
+from focus import Focus
+from keymap import Intent, intent_of
+from model import Model, Drag
+from theme import palette, pane_style
 
-class Console: termui.View:
-    private model: model.Model
+class Console: View:
+    private model: Model
 
-    init(shared: model.Model):
+    init(shared: Model):
         self.model = shared
 
     # --- data provider ----------------------------------------------
 
-    func output_line(index: i64) -> termui.Line:
-        let start = document.line_at(self.model.output, index)
-        let finish = document.line_end(self.model.output, start)
-        return termui.plain(self.model.output[start:finish], theme.palette.plain)
+    func output_line(index: i64) -> Line:
+        let start = line_at(self.model.output, index)
+        let finish = line_end(self.model.output, start)
+        return plain(self.model.output[start:finish], palette.plain)
 
     # --- cursor projection ------------------------------------------
 
-    func output_cursor(area: termui.Rect) -> termui.Cursor?:
-        if self.model.focus != focus.Focus.output or area.is_empty():
+    func output_cursor(area: Rect) -> Cursor?:
+        if self.model.focus != Focus.output or area.is_empty():
             return none
-        return termui.Cursor(row = area.row, column = area.column)
+        return Cursor(row = area.row, column = area.column)
 
     # --- events ------------------------------------------------------
 
-    func frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func frame_event(event: Event, area: Rect) -> Response:
         match event:
             mouse(pointer):
-                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.row == area.row:
-                    self.model.dragging = model.Drag.output
-                    return termui.Response.handled
+                if pointer.kind == Pointer.press and pointer.button == 0 and pointer.row == area.row:
+                    self.model.dragging = Drag.output
+                    return Response.handled
             else:
-                return termui.Response.ignored
-        return termui.Response.ignored
+                return Response.ignored
+        return Response.ignored
 
-    func output_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func output_event(event: Event, area: Rect) -> Response:
         match event:
             key(pressed):
-                if self.model.focus != focus.Focus.output:
-                    return termui.Response.ignored
-                let intent = keymap.intent_of(pressed)
-                if intent == keymap.Intent.ignored:
-                    return termui.Response.ignored
+                if self.model.focus != Focus.output:
+                    return Response.ignored
+                let intent = intent_of(pressed)
+                if intent == Intent.ignored:
+                    return Response.ignored
                 self.model.key(intent, "", area.rows)
-                return termui.Response.handled
+                return Response.handled
             mouse(pointer):
-                if pointer.kind == termui.Pointer.wheel:
-                    self.model.focus = focus.Focus.output
+                if pointer.kind == Pointer.wheel:
+                    self.model.focus = Focus.output
                     self.model.output_scroll = max(self.model.output_scroll - pointer.wheel, 0)
-                    return termui.Response.handled
-                if pointer.kind == termui.Pointer.press and pointer.button == 0:
-                    self.model.focus = focus.Focus.output
+                    return Response.handled
+                if pointer.kind == Pointer.press and pointer.button == 0:
+                    self.model.focus = Focus.output
                     self.model.output_scroll = max(self.model.output_scroll + pointer.row - area.row, 0)
-                    return termui.Response.handled
-                return termui.Response.ignored
+                    return Response.handled
+                return Response.ignored
             else:
-                return termui.Response.ignored
+                return Response.ignored
 
     # --- the View contract ------------------------------------------
 
-    private func composed() -> termui.View:
-        let rows = termui.Rows(
-            document.count_lines(self.model.output),
+    private func composed() -> View:
+        let rows = Rows(
+            count_lines(self.model.output),
             self.output_line,
             top = self.model.output_scroll,
         )
-        let pane = termui.CursorHost(
-            termui.EventHost(rows, self.output_event),
+        let pane = CursorHost(
+            EventHost(rows, self.output_event),
             self.output_cursor,
         )
-        let framed = termui.Panel(
+        let framed = Panel(
             "output",
             pane,
-            style = theme.pane_style(self.model.focus == focus.Focus.output),
-            edges = termui.Edges(bottom = false),
+            style = pane_style(self.model.focus == Focus.output),
+            edges = Edges(bottom = false),
         )
-        return termui.EventHost(framed, self.frame_event)
+        return EventHost(framed, self.frame_event)
 
-    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+    func draw(surface: Surface, area: Rect) -> Cursor?:
         return self.composed().draw(surface, area)
 
-    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
-        return termui.route(self.composed(), event, area)
+    func dispatch(event: Event, area: Rect) -> Response:
+        return route(self.composed(), event, area)

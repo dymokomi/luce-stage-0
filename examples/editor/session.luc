@@ -7,7 +7,7 @@
 # operations it calls.
 
 import std.files
-import document
+from document import Document
 
 private func draft_path(path: str) -> str:
     return path + ".draft"
@@ -18,7 +18,7 @@ private func draft_path(path: str) -> str:
 # exactly what is on disk, which is the safety net for a draft that is
 # offered but not wanted.
 struct Loaded:
-    opened: document.Document
+    opened: Document
     base: str
     recovered: bool
 
@@ -51,7 +51,7 @@ func load(path: str) -> Loaded:
             content = draft_content
             message = "recovered unsaved changes — Ctrl-Z to discard, Ctrl-S to keep"
             recovered = true
-    let opened = document.Document(path = path, content = content, message = message, dirty = recovered)
+    let opened = Document(path = path, content = content, message = message, dirty = recovered)
     return Loaded(opened = opened, base = base, recovered = recovered)
 
 # Write the working content to a draft beside the file, so a crash loses

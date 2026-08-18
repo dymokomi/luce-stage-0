@@ -12,7 +12,7 @@
 # is not here: it is only a name after a receiver and a dot, and this
 # highlighter colours words, not receivers.
 
-import document
+from document import next_boundary
 
 # --- one character, before anything decides what it means ----------
 
@@ -163,7 +163,7 @@ func tokens(content: str, from: i64, to: i64) -> list[Token]:
             out.append(Token(text = content[at:stop], kind = classify_word(content[at:stop])))
             at = stop
         else:
-            var stop = document.next_boundary(content, at)
+            var stop = next_boundary(content, at)
             stop = min(stop, to)
             out.append(Token(text = content[at:stop], kind = TokenKind.punct))
             at = stop

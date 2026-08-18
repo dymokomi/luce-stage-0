@@ -1,6 +1,6 @@
 # Total one-axis layout for declarative rows and columns.
 
-import model
+from model import Rect
 
 # What one child asks of its axis.  Any conformer lays out: the
 # shipped Fixed, Grow, Ratio, and Preferred are the common shapes, and
@@ -202,22 +202,22 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
         over -= cut
     return sizes
 
-func row(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
+func row(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
     let widths = resolve(area.columns, spacing, constraints)
-    var rectangles = list[model.Rect]()
+    var rectangles = list[Rect]()
     var at_column = area.column
     let gap = max(spacing, 0)
     for width in widths:
-        rectangles.append(model.Rect(row = area.row, column = at_column, rows = area.rows, columns = width))
+        rectangles.append(Rect(row = area.row, column = at_column, rows = area.rows, columns = width))
         at_column += width + gap
     return rectangles
 
-func column(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
+func column(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
     let heights = resolve(area.rows, spacing, constraints)
-    var rectangles = list[model.Rect]()
+    var rectangles = list[Rect]()
     var at_row = area.row
     let gap = max(spacing, 0)
     for height in heights:
-        rectangles.append(model.Rect(row = at_row, column = area.column, rows = height, columns = area.columns))
+        rectangles.append(Rect(row = at_row, column = area.column, rows = height, columns = area.columns))
         at_row += height + gap
     return rectangles

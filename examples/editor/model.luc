@@ -14,13 +14,13 @@
 # cursor, scroll, and undo History.
 
 import std.files
-import document
+from document import Document, count_lines, previous_boundary
 import search
 import browser
 import shell
 import session
-import keymap
-import focus
+from keymap import Intent, steps_of
+from focus import Focus
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
@@ -64,7 +64,7 @@ enum Drag:
     output
 
 class Model:
-    documents: list[document.Document]
+    documents: list[Document]
     names: list[str]
     search_matches: list[i64]
     files: Selection
@@ -80,13 +80,13 @@ class Model:
     quit_pending: bool = false
     coalescing: bool = false
     quit: bool = false
-    focus: focus.Focus = focus.Focus.editor
+    focus: Focus = Focus.editor
     dragging: Drag = Drag.idle
     files_width: i64 = 0
     output_height: i64 = 0
     private watchers: list[(func())?]
 
-    init(documents: list[document.Document]):
+    init(documents: list[Document]):
         self.documents = documents
         self.names = list[str]()
         self.search_matches = list[i64]()
@@ -96,7 +96,7 @@ class Model:
     # The active file.  A Document is a reference, so panes and model
     # read and mutate the same one; switching files is switching which
     # reference this answers.
-    func document() -> document.Document:
+    func document() -> Document:
         return self.documents[self.active]
 
     # --- subscriptions ------------------------------------------------
@@ -165,13 +165,13 @@ class Model:
 
     func open_file(path: str):
         if path == self.document().path:
-            self.focus = focus.Focus.editor
+            self.focus = Focus.editor
             return
         for other in range(0, len(self.documents)):
             if self.documents[other].path == path:
                 self.active = other
                 self.switched()
-                self.focus = focus.Focus.editor
+                self.focus = Focus.editor
                 return
         # `session.load` rather than a bare read, so a file opened from
         # the pane recovers a draft exactly as one named on the command
@@ -183,7 +183,7 @@ class Model:
         self.documents.append(loaded.opened)
         self.active = len(self.documents) - 1
         self.switched()
-        self.focus = focus.Focus.editor
+        self.focus = Focus.editor
 
     # --- undo and redo -----------------------------------------------
 
@@ -222,7 +222,7 @@ class Model:
     # --- search ------------------------------------------------------
 
     func open_search():
-        self.focus = focus.Focus.search
+        self.focus = Focus.search
         self.search_query = ""
         self.search_matches.clear()
         self.search_current = -1
@@ -232,7 +232,7 @@ class Model:
         self.coalescing = false
 
     func close_search():
-        self.focus = focus.Focus.editor
+        self.focus = Focus.editor
         self.document().set_message("")
         self.coalescing = false
 
@@ -253,76 +253,76 @@ class Model:
         let doc = self.document()
         doc.cursor = self.search_matches[next]
 
-    func search_key(intent: keymap.Intent, inserted: str):
-        if intent == keymap.Intent.escape:
+    func search_key(intent: Intent, inserted: str):
+        if intent == Intent.escape:
             self.close_search()
-        elif intent == keymap.Intent.newline or intent == keymap.Intent.move_down or intent == keymap.Intent.move_right:
+        elif intent == Intent.newline or intent == Intent.move_down or intent == Intent.move_right:
             self.jump_match(1)
-        elif intent == keymap.Intent.move_up or intent == keymap.Intent.move_left:
+        elif intent == Intent.move_up or intent == Intent.move_left:
             self.jump_match(-1)
-        elif intent == keymap.Intent.erase_left:
+        elif intent == Intent.erase_left:
             if len(self.search_query) > 0:
-                let back = document.previous_boundary(self.search_query, len(self.search_query))
+                let back = previous_boundary(self.search_query, len(self.search_query))
                 self.search_query = self.search_query[0:back]
                 self.rescan()
-        elif intent == keymap.Intent.insert_text:
+        elif intent == Intent.insert_text:
             self.search_query = self.search_query + inserted
             self.rescan()
 
     # --- the other panes ---------------------------------------------
 
-    func file_key(intent: keymap.Intent):
+    func file_key(intent: Intent):
         if len(self.names) == 0:
             return
-        if intent == keymap.Intent.newline:
+        if intent == Intent.newline:
             self.open_row(self.files.selected)
             return
-        if intent == keymap.Intent.move_left or intent == keymap.Intent.escape:
-            self.focus = focus.Focus.editor
+        if intent == Intent.move_left or intent == Intent.escape:
+            self.focus = Focus.editor
             return
-        let steps = keymap.steps_of(intent)
+        let steps = steps_of(intent)
         if steps == 0:
             return
         self.files.count = len(self.names)
         self.files.move_by(steps)
 
-    func output_key(intent: keymap.Intent):
-        let steps = keymap.steps_of(intent)
+    func output_key(intent: Intent):
+        let steps = steps_of(intent)
         if steps == 0:
             return
-        let total = document.count_lines(self.output)
+        let total = count_lines(self.output)
         self.output_scroll = clamp(self.output_scroll + steps, 0, max(total - 1, 0))
 
     func toggle_files():
         self.file_pane = not self.file_pane
         if self.file_pane:
             self.refresh_files()
-        elif self.focus == focus.Focus.files:
-            self.focus = focus.Focus.editor
+        elif self.focus == Focus.files:
+            self.focus = Focus.editor
 
     func toggle_output():
         self.output_pane = not self.output_pane
         if self.output_pane:
-            self.focus = focus.Focus.output
-        elif self.focus == focus.Focus.output:
-            self.focus = focus.Focus.editor
+            self.focus = Focus.output
+        elif self.focus == Focus.output:
+            self.focus = Focus.editor
 
     func next_pane():
-        if self.focus == focus.Focus.editor:
+        if self.focus == Focus.editor:
             if self.file_pane:
-                self.focus = focus.Focus.files
+                self.focus = Focus.files
             elif self.output_pane:
-                self.focus = focus.Focus.output
-        elif self.focus == focus.Focus.files:
+                self.focus = Focus.output
+        elif self.focus == Focus.files:
             if self.output_pane:
-                self.focus = focus.Focus.output
+                self.focus = Focus.output
             else:
-                self.focus = focus.Focus.editor
+                self.focus = Focus.editor
         else:
             if self.file_pane:
-                self.focus = focus.Focus.files
+                self.focus = Focus.files
             else:
-                self.focus = focus.Focus.editor
+                self.focus = Focus.editor
 
     # --- build and save ----------------------------------------------
 
@@ -336,7 +336,7 @@ class Model:
             doc.message = "build/run finished"
         self.output_scroll = 0
         self.output_pane = true
-        self.focus = focus.Focus.output
+        self.focus = Focus.output
 
     func save():
         let doc = self.document()
@@ -363,12 +363,12 @@ class Model:
 
     # --- the keystroke router ----------------------------------------
 
-    func key(intent: keymap.Intent, inserted: str, visible: i64):
+    func key(intent: Intent, inserted: str, visible: i64):
         self.routed(intent, inserted, visible)
         self.notify()
 
-    private func routed(intent: keymap.Intent, inserted: str, visible: i64):
-        if intent == keymap.Intent.quit:
+    private func routed(intent: Intent, inserted: str, visible: i64):
+        if intent == Intent.quit:
             let doc = self.document()
             if doc.dirty and not self.quit_pending:
                 self.quit_pending = true
@@ -376,47 +376,47 @@ class Model:
             else:
                 self.quit = true
             return
-        if intent == keymap.Intent.save:
+        if intent == Intent.save:
             self.save()
             return
-        if intent == keymap.Intent.build:
+        if intent == Intent.build:
             self.build()
             return
-        if intent == keymap.Intent.toggle_files:
+        if intent == Intent.toggle_files:
             self.toggle_files()
             return
-        if intent == keymap.Intent.toggle_output:
+        if intent == Intent.toggle_output:
             self.toggle_output()
             return
-        if intent == keymap.Intent.next_pane:
+        if intent == Intent.next_pane:
             self.next_pane()
             return
-        if intent == keymap.Intent.find:
+        if intent == Intent.find:
             self.open_search()
             return
-        if intent == keymap.Intent.undo:
+        if intent == Intent.undo:
             self.undo()
             return
-        if intent == keymap.Intent.redo:
+        if intent == Intent.redo:
             self.redo()
             return
-        if intent == keymap.Intent.escape:
+        if intent == Intent.escape:
             # Escape always returns to the text; in search it closes the
             # find bar first.  Handled before pane dispatch so a pane that
             # ignores movement still gives focus back (an earlier version
             # let Escape fall into the output pane, which dropped it).
-            if self.focus == focus.Focus.search:
+            if self.focus == Focus.search:
                 self.close_search()
             else:
-                self.focus = focus.Focus.editor
+                self.focus = Focus.editor
             return
-        if self.focus == focus.Focus.search:
+        if self.focus == Focus.search:
             self.search_key(intent, inserted)
             return
-        if self.focus == focus.Focus.files:
+        if self.focus == Focus.files:
             self.file_key(intent)
             return
-        if self.focus == focus.Focus.output:
+        if self.focus == Focus.output:
             self.output_key(intent)
             return
         self.edit(intent, inserted, visible)
@@ -425,7 +425,7 @@ class Model:
     # text change records undo first.  The undo-grouping policy stays
     # here — the model knows the sequence of keys — and the Document
     # owns the text arithmetic each arm asks for.
-    func edit(intent: keymap.Intent, inserted: str, visible: i64):
+    func edit(intent: Intent, inserted: str, visible: i64):
         let doc = self.document()
         let line = doc.line_of(doc.cursor)
         self.quit_pending = false
@@ -490,7 +490,7 @@ class Model:
             redo:
                 return
             escape:
-                self.focus = focus.Focus.editor
+                self.focus = Focus.editor
             quit:
                 return
             ignored:
@@ -499,7 +499,7 @@ class Model:
 # Build a model from command-line paths.  File and draft loading
 # belongs at this boundary; the components receive the finished model.
 func open(paths: list[str]) -> Model:
-    var documents = list[document.Document]()
+    var documents = list[Document]()
     for path in paths:
         let loaded = session.load(path)
         if loaded.recovered:

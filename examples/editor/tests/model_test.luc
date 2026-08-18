@@ -1,77 +1,77 @@
 # The coordinator, driven through its key router: editing, undo
 # coalescing, and search all exercised end to end without a terminal.
 
-import model
-import keymap
-import document
-import focus
+from model import Model
+from keymap import Intent
+from document import Document
+from focus import Focus
 
-func fresh() -> model.Model:
-    var documents = list[document.Document]()
-    documents.append(document.Document(path = "f.luc"))
-    return model.Model(documents)
+func fresh() -> Model:
+    var documents = list[Document]()
+    documents.append(Document(path = "f.luc"))
+    return Model(documents)
 
 func test_typing_then_undo_and_redo():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "hello", 10)
+    ed.key(Intent.insert_text, "hello", 10)
     assert(ed.document().content == "hello")
     assert(ed.document().dirty)
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
-    ed.key(keymap.Intent.redo, "", 10)
+    ed.key(Intent.redo, "", 10)
     assert(ed.document().content == "hello")
 
 func test_a_run_of_insertions_is_one_undo():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "a", 10)
-    ed.key(keymap.Intent.insert_text, "b", 10)
-    ed.key(keymap.Intent.insert_text, "c", 10)
+    ed.key(Intent.insert_text, "a", 10)
+    ed.key(Intent.insert_text, "b", 10)
+    ed.key(Intent.insert_text, "c", 10)
     assert(ed.document().content == "abc")
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
 
 func test_a_movement_breaks_the_undo_run():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "ab", 10)
-    ed.key(keymap.Intent.move_left, "", 10)
-    ed.key(keymap.Intent.insert_text, "X", 10)
+    ed.key(Intent.insert_text, "ab", 10)
+    ed.key(Intent.move_left, "", 10)
+    ed.key(Intent.insert_text, "X", 10)
     assert(ed.document().content == "aXb")
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "ab")
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
 
 func test_newline_reindents_inside_a_block():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "if x:", 10)
-    ed.key(keymap.Intent.newline, "", 10)
+    ed.key(Intent.insert_text, "if x:", 10)
+    ed.key(Intent.newline, "", 10)
     # The new line keeps the block's indent plus one level.
     assert(ed.document().content == "if x:\n    ")
 
 func test_search_steps_through_matches():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "one two two", 10)
-    ed.key(keymap.Intent.find, "", 10)
-    assert(ed.focus == focus.Focus.search)
-    ed.key(keymap.Intent.insert_text, "two", 10)
+    ed.key(Intent.insert_text, "one two two", 10)
+    ed.key(Intent.find, "", 10)
+    assert(ed.focus == Focus.search)
+    ed.key(Intent.insert_text, "two", 10)
     assert(ed.document().cursor == 4)
-    ed.key(keymap.Intent.newline, "", 10)
+    ed.key(Intent.newline, "", 10)
     assert(ed.document().cursor == 8)
-    ed.key(keymap.Intent.escape, "", 10)
-    assert(ed.focus == focus.Focus.editor)
+    ed.key(Intent.escape, "", 10)
+    assert(ed.focus == Focus.editor)
 
 # A search jumps the cursor, so text typed after closing it is a fresh
 # undo group rather than coalescing across the jump.
 func test_search_starts_a_fresh_undo_group():
     var ed = fresh()
-    ed.key(keymap.Intent.insert_text, "ab", 10)
-    ed.key(keymap.Intent.find, "", 10)
-    ed.key(keymap.Intent.escape, "", 10)
-    ed.key(keymap.Intent.insert_text, "c", 10)
+    ed.key(Intent.insert_text, "ab", 10)
+    ed.key(Intent.find, "", 10)
+    ed.key(Intent.escape, "", 10)
+    ed.key(Intent.insert_text, "c", 10)
     assert(ed.document().content == "abc")
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "ab")
-    ed.key(keymap.Intent.undo, "", 10)
+    ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
 
 # The file pane's scroll window is persisted on `self.files`, so a mouse

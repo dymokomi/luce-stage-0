@@ -5,11 +5,11 @@
 # the next frame draws the new arrangement.
 
 import std.os
-import termui
-import keymap
-import model
+from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, HStack, VStack, Constraint, Fixed, Ratio, Preferred, route
+from keymap import Intent, intent_of
+from model import Model, Drag
 
-private func is_global(intent: keymap.Intent) -> bool:
+private func is_global(intent: Intent) -> bool:
     match intent:
         save:
             return true
@@ -34,13 +34,13 @@ private func is_global(intent: keymap.Intent) -> bool:
         else:
             return false
 
-class Workbench: termui.View:
-    private model: model.Model
-    private across: termui.HStack
-    private screen: termui.VStack
+class Workbench: View:
+    private model: Model
+    private across: HStack
+    private screen: VStack
     private subscribed: bool
 
-    init(shared: model.Model, across: termui.HStack, screen: termui.VStack):
+    init(shared: Model, across: HStack, screen: VStack):
         self.model = shared
         self.across = across
         self.screen = screen
@@ -62,47 +62,47 @@ class Workbench: termui.View:
     # The retained tree's shape, derived from the model: a hidden pane
     # is a zero-cell slot, a dragged divider is a preferred size.
     func apply_layout():
-        var files_size: termui.Constraint = termui.Fixed(0)
+        var files_size: Constraint = Fixed(0)
         if self.model.file_pane:
-            files_size = termui.Ratio(8, 24, 25)
+            files_size = Ratio(8, 24, 25)
             if self.model.files_width > 0:
-                files_size = termui.Preferred(8, self.model.files_width, 240)
+                files_size = Preferred(8, self.model.files_width, 240)
         self.across.resize(0, files_size)
-        var output_size: termui.Constraint = termui.Fixed(0)
+        var output_size: Constraint = Fixed(0)
         if self.model.output_pane:
-            output_size = termui.Ratio(3, 8, 33)
+            output_size = Ratio(3, 8, 33)
             if self.model.output_height > 0:
-                output_size = termui.Preferred(3, self.model.output_height, 80)
+                output_size = Preferred(3, self.model.output_height, 80)
         self.screen.resize(1, output_size)
 
-    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+    func draw(surface: Surface, area: Rect) -> Cursor?:
         self.attach()
         return self.screen.draw(surface, area)
 
-    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func dispatch(event: Event, area: Rect) -> Response:
         self.attach()
         self.model.autosave(os.clock_ms())
         match event:
             key(pressed):
-                let intent = keymap.intent_of(pressed)
+                let intent = intent_of(pressed)
                 if is_global(intent):
                     self.model.key(intent, "", max(area.rows - 1, 0))
                     if self.model.quit:
-                        return termui.Response.quit
-                    return termui.Response.handled
+                        return Response.quit
+                    return Response.handled
             mouse(pointer):
-                if pointer.kind == termui.Pointer.release and self.model.dragging != model.Drag.idle:
-                    self.model.dragging = model.Drag.idle
-                    return termui.Response.handled
-                if pointer.kind == termui.Pointer.drag:
-                    if self.model.dragging == model.Drag.files:
+                if pointer.kind == Pointer.release and self.model.dragging != Drag.idle:
+                    self.model.dragging = Drag.idle
+                    return Response.handled
+                if pointer.kind == Pointer.drag:
+                    if self.model.dragging == Drag.files:
                         self.model.files_width = max(pointer.column - area.column + 1, 0)
                         self.apply_layout()
-                        return termui.Response.handled
-                    if self.model.dragging == model.Drag.output:
+                        return Response.handled
+                    if self.model.dragging == Drag.output:
                         self.model.output_height = max(area.row + area.rows - 1 - pointer.row, 0)
                         self.apply_layout()
-                        return termui.Response.handled
+                        return Response.handled
             else:
-                return termui.route(self.screen, event, area)
-        return termui.route(self.screen, event, area)
+                return route(self.screen, event, area)
+        return route(self.screen, event, area)

@@ -6,49 +6,49 @@
 # from a highlighter token to a colour — the seam between the pure
 # classifier and the drawn frame.
 
-import termui
+from termui import Style
 import highlight
 
 struct Theme:
-    keyword: termui.Style
-    type_name: termui.Style
-    builtin: termui.Style
-    text: termui.Style
-    number: termui.Style
-    comment: termui.Style
-    plain: termui.Style
-    punct: termui.Style
-    gutter: termui.Style
-    gutter_current: termui.Style
-    status: termui.Style
-    status_key: termui.Style
-    selected: termui.Style
-    pane_border: termui.Style
-    pane_active: termui.Style
-    match_here: termui.Style
+    keyword: Style
+    type_name: Style
+    builtin: Style
+    text: Style
+    number: Style
+    comment: Style
+    plain: Style
+    punct: Style
+    gutter: Style
+    gutter_current: Style
+    status: Style
+    status_key: Style
+    selected: Style
+    pane_border: Style
+    pane_active: Style
+    match_here: Style
 
 const palette = Theme(
-    keyword = termui.Style(foreground = 176, bold = true),
-    type_name = termui.Style(foreground = 80),
-    builtin = termui.Style(foreground = 74),
-    text = termui.Style(foreground = 114),
-    number = termui.Style(foreground = 215),
-    comment = termui.Style(foreground = 244),
-    plain = termui.Style(foreground = 252),
-    punct = termui.Style(foreground = 249),
-    gutter = termui.Style(foreground = 240),
-    gutter_current = termui.Style(foreground = 250),
-    status = termui.Style(foreground = 252, background = 237),
-    status_key = termui.Style(foreground = 214, background = 237, bold = true),
-    selected = termui.Style(foreground = 252, background = 237, bold = true),
-    pane_border = termui.Style(foreground = 238),
-    pane_active = termui.Style(foreground = 255, background = 236, bold = true),
-    match_here = termui.Style(foreground = 236, background = 179, bold = true),
+    keyword = Style(foreground = 176, bold = true),
+    type_name = Style(foreground = 80),
+    builtin = Style(foreground = 74),
+    text = Style(foreground = 114),
+    number = Style(foreground = 215),
+    comment = Style(foreground = 244),
+    plain = Style(foreground = 252),
+    punct = Style(foreground = 249),
+    gutter = Style(foreground = 240),
+    gutter_current = Style(foreground = 250),
+    status = Style(foreground = 252, background = 237),
+    status_key = Style(foreground = 214, background = 237, bold = true),
+    selected = Style(foreground = 252, background = 237, bold = true),
+    pane_border = Style(foreground = 238),
+    pane_active = Style(foreground = 255, background = 236, bold = true),
+    match_here = Style(foreground = 236, background = 179, bold = true),
 )
 
 # The colour for a highlighter token.  Every member has an arm and there
 # is no `else`, so a new token kind is a compile error here.
-func style_for(theme: Theme, kind: highlight.TokenKind) -> termui.Style:
+func style_for(theme: Theme, kind: highlight.TokenKind) -> Style:
     match kind:
         keyword:
             return theme.keyword
@@ -70,7 +70,7 @@ func style_for(theme: Theme, kind: highlight.TokenKind) -> termui.Style:
 # The pane-border style for a pane that does or does not hold focus.
 # Here rather than in each component, because every framed pane asks
 # the same question of the same palette.
-func pane_style(active: bool) -> termui.Style:
+func pane_style(active: bool) -> Style:
     if active:
         return palette.pane_active
     return palette.pane_border

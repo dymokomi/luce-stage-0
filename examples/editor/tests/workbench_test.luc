@@ -2,30 +2,31 @@
 
 import std.strings
 import termui
-from termui import VStack, HStack, Fixed, Grow
-import document
-import focus
+from termui import VStack, HStack, Fixed, Grow, Rect, Event, Cursor, Key, Mouse, Pointer, Response, snapshot
+from document import Document
+from focus import Focus
 import model
+from model import Model, Drag
 from filelist import FileList
 from source import Editor
 from console import Console
 from statusbar import StatusBar
 from workbench import Workbench
 
-func model_of() -> model.Model:
-    var documents = list[document.Document]()
-    documents.append(document.Document(
+func model_of() -> Model:
+    var documents = list[Document]()
+    documents.append(Document(
         path = "sample.luc",
         content = "func main():\n    let x = 42",
     ))
-    let shared = model.Model(documents)
+    let shared = Model(documents)
     shared.names = ["a.luc", "b.luc"]
     shared.files.count = len(shared.names)
     shared.output = "build ok"
     return shared
 
 # The entry's composition, handed back with the parts a test drives.
-func built(shared: model.Model) -> (Workbench, Editor, FileList):
+func built(shared: Model) -> (Workbench, Editor, FileList):
     var across = HStack()
     let files = FileList(shared)
     let pane = Editor(shared)
@@ -39,12 +40,12 @@ func built(shared: model.Model) -> (Workbench, Editor, FileList):
 
 func test_the_retained_tree_describes_source_status_and_cursor():
     let bench, pane, files = built(model_of())
-    let screen = termui.snapshot(bench, 12, 60)
+    let screen = snapshot(bench, 12, 60)
     assert(strings.contains(screen.line(0), "1 func main():"))
     assert(strings.contains(screen.line(1), "2     let x = 42"))
     assert(strings.contains(screen.line(11), "sample.luc"))
     assert(strings.contains(screen.line(11), "[editor]"))
-    let cursor = screen.cursor else termui.Cursor()
+    let cursor = screen.cursor else Cursor()
     assert(cursor.row == 0)
     assert(cursor.column == 5)
 
@@ -53,7 +54,7 @@ func test_hidden_panes_are_zero_slots_the_subscription_reopens():
     let bench, pane, files = built(shared)
     shared.file_pane = true
     shared.output_pane = true
-    let screen = termui.snapshot(bench, 18, 78)
+    let screen = snapshot(bench, 18, 78)
     assert(strings.contains(screen.line(0), "files"))
     assert(strings.contains(screen.line(0), "func main():"))
     assert(strings.contains(screen.line(12), "output"))
@@ -66,27 +67,27 @@ func test_source_events_update_the_model_and_the_next_frame():
     let doc = shared.document()
     doc.cursor = len(doc.content)
     let response = pane.source_event(
-        termui.Event.text(typed = "!"),
-        termui.Rect(rows = 10, columns = 60),
+        Event.text(typed = "!"),
+        Rect(rows = 10, columns = 60),
     )
-    assert(response == termui.Response.handled)
+    assert(response == Response.handled)
     assert(strings.ends_with(shared.document().content, "!"))
-    let screen = termui.snapshot(bench, 12, 60)
+    let screen = snapshot(bench, 12, 60)
     assert(strings.contains(screen.line(1), "let x = 42!"))
 
 func test_global_commands_and_search_are_reflected_in_the_frame():
     let shared = model_of()
     let bench, pane, files = built(shared)
     assert(bench.dispatch(
-        termui.Event.key(pressed = termui.Key.ctrl_f),
-        termui.Rect(rows = 12, columns = 60),
-    ) == termui.Response.handled)
-    assert(shared.focus == focus.Focus.search)
+        Event.key(pressed = Key.ctrl_f),
+        Rect(rows = 12, columns = 60),
+    ) == Response.handled)
+    assert(shared.focus == Focus.search)
     pane.source_event(
-        termui.Event.text(typed = "let"),
-        termui.Rect(rows = 11, columns = 60),
+        Event.text(typed = "let"),
+        Rect(rows = 11, columns = 60),
     )
-    let screen = termui.snapshot(bench, 12, 60)
+    let screen = snapshot(bench, 12, 60)
     assert(strings.contains(screen.line(11), "find: let"))
     assert(strings.contains(screen.line(11), "1 of 1"))
 
@@ -94,23 +95,23 @@ func test_divider_drag_crosses_panes_through_the_model():
     let shared = model_of()
     let bench, pane, files = built(shared)
     shared.file_pane = true
-    let pane_area = termui.Rect(rows = 11, columns = 20)
+    let pane_area = Rect(rows = 11, columns = 20)
     assert(files.frame_event(
-        termui.Event.mouse(pointer = termui.Mouse(
-            kind = termui.Pointer.press,
+        Event.mouse(pointer = Mouse(
+            kind = Pointer.press,
             row = 3,
             column = 19,
             button = 0,
         )),
         pane_area,
-    ) == termui.Response.handled)
+    ) == Response.handled)
     bench.dispatch(
-        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.drag, row = 3, column = 13)),
-        termui.Rect(rows = 12, columns = 60),
+        Event.mouse(pointer = Mouse(kind = Pointer.drag, row = 3, column = 13)),
+        Rect(rows = 12, columns = 60),
     )
     assert(shared.files_width == 14)
     bench.dispatch(
-        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.release, row = 3, column = 13)),
-        termui.Rect(rows = 12, columns = 60),
+        Event.mouse(pointer = Mouse(kind = Pointer.release, row = 3, column = 13)),
+        Rect(rows = 12, columns = 60),
     )
-    assert(shared.dragging == model.Drag.idle)
+    assert(shared.dragging == Drag.idle)

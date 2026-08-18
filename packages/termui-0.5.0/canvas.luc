@@ -2,11 +2,11 @@
 
 import std.term
 import std.strings
-import model
+from model import Rect, Style, Cursor
 
 struct Cell:
     text: str = " "
-    style: model.Style = model.Style()
+    style: Style = Style()
 
 struct Painted:
     cells: i64 = 0
@@ -19,7 +19,7 @@ struct Snapshot:
     private cells: array[Cell, _, _]
     rows: i64
     columns: i64
-    cursor: model.Cursor?
+    cursor: Cursor?
 
     func cell(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
@@ -51,15 +51,15 @@ class Surface:
         self.rows = high
         self.columns = wide
 
-    func area() -> model.Rect:
-        return model.Rect(rows = self.rows, columns = self.columns)
+    func area() -> Rect:
+        return Rect(rows = self.rows, columns = self.columns)
 
     func clear():
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):
                 self.cells[at_row, at_column] = Cell()
 
-    func put(row: i64, column: i64, content: str, style: model.Style):
+    func put(row: i64, column: i64, content: str, style: Style):
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return
         self.cells[row, column] = Cell(text = content, style = style)
@@ -70,7 +70,7 @@ class Surface:
         return self.cells[row, column]
 
     # Offsets are relative to `area`; both the area and canvas clip writes.
-    func write(area: model.Rect, row: i64, column: i64, content: str, style: model.Style):
+    func write(area: Rect, row: i64, column: i64, content: str, style: Style):
         if row < 0 or row >= area.rows:
             return
         var at_column = column
@@ -81,7 +81,7 @@ class Surface:
                 self.put(area.row + row, area.column + at_column, character, style)
             at_column += 1
 
-    func fill(area: model.Rect, content: str, style: model.Style):
+    func fill(area: Rect, content: str, style: Style):
         for at_row in range(0, area.rows):
             for at_column in range(0, area.columns):
                 self.put(area.row + at_row, area.column + at_column, content, style)
@@ -93,14 +93,14 @@ class Surface:
     # because it reads the surface, it composes with any component's
     # borders, not only the shipped ones.
     func stroke(
-        area: model.Rect,
+        area: Rect,
         row: i64,
         column: i64,
         up: bool = false,
         right: bool = false,
         down: bool = false,
         left: bool = false,
-        style: model.Style = model.Style(),
+        style: Style = Style(),
     ):
         if row < 0 or row >= area.rows or column < 0 or column >= area.columns:
             return
@@ -110,7 +110,7 @@ class Surface:
         let added = Strokes(up = up, right = right, down = down, left = left)
         self.put(absolute_row, absolute_column, added.merged(prior).glyph(), style)
 
-    func snapshot(cursor: model.Cursor?) -> Snapshot:
+    func snapshot(cursor: Cursor?) -> Snapshot:
         let cells = array[Cell](self.rows, self.columns)
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):

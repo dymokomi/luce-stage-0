@@ -6,13 +6,13 @@
 # Both receive the exact rectangle the parent assigned, so geometry can
 # never disagree between drawing and routing.
 
-import model
-import input
-import canvas
+from model import Rect, Response, Cursor
+from input import Event
+from canvas import Surface, Snapshot
 
 interface View:
-    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?
-    func dispatch(event: input.Event, area: model.Rect) -> model.Response
+    func draw(surface: Surface, area: Rect) -> Cursor?
+    func dispatch(event: Event, area: Rect) -> Response
 
 # **The routing law.**  A container never calls `child.dispatch`
 # directly — it calls `route(child, event, child_area)`.  Route owns
@@ -22,23 +22,23 @@ interface View:
 # pointer.  Keyboard and text events continue until a child accepts
 # them.  Because the checks live here, a user container written
 # against `route` gets the same discipline as the shipped ones.
-func route(child: View, event: input.Event, area: model.Rect) -> model.Response:
+func route(child: View, event: Event, area: Rect) -> Response:
     match event:
         closed:
-            return model.Response.ignored
+            return Response.ignored
         resize:
-            return model.Response.ignored
+            return Response.ignored
         mouse(pointer):
             if not area.contains(pointer.row, pointer.column):
-                return model.Response.ignored
+                return Response.ignored
             return child.dispatch(event, area)
         else:
             return child.dispatch(event, area)
 
 # Render one tree host-free: tests and previews see exactly the cells
 # the live loop would present.
-func snapshot(content: View, rows: i64, columns: i64) -> canvas.Snapshot:
-    let surface = canvas.Surface(rows, columns)
+func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
+    let surface = Surface(rows, columns)
     surface.clear()
     let cursor = content.draw(surface, surface.area())
     return surface.snapshot(cursor)

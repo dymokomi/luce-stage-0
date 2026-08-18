@@ -1,72 +1,72 @@
 # The file pane: the retained component that lists the directory,
 # opens rows, and starts the divider drag on its own right border.
 
-import termui
-import focus
-import keymap
-import model
-import theme
+from termui import View, Surface, Response, Rect, Event, Cursor, Line, Pointer, Edges, Rows, Panel, EventHost, CursorHost, plain, visible_top, route
+from focus import Focus
+from keymap import Intent, intent_of
+from model import Model, Drag
+from theme import palette, pane_style
 
-class FileList: termui.View:
-    private model: model.Model
+class FileList: View:
+    private model: Model
 
-    init(shared: model.Model):
+    init(shared: Model):
         self.model = shared
 
     # --- data provider ----------------------------------------------
 
-    func file_line(index: i64) -> termui.Line:
-        return termui.plain(self.model.name_at(index), theme.palette.plain)
+    func file_line(index: i64) -> Line:
+        return plain(self.model.name_at(index), palette.plain)
 
     # --- cursor projection ------------------------------------------
 
-    func file_cursor(area: termui.Rect) -> termui.Cursor?:
-        if self.model.focus != focus.Focus.files or area.is_empty():
+    func file_cursor(area: Rect) -> Cursor?:
+        if self.model.focus != Focus.files or area.is_empty():
             return none
-        let top = termui.visible_top(
+        let top = visible_top(
             self.model.files.top,
             len(self.model.names),
             self.model.files.selected,
             area.rows,
         )
-        return termui.Cursor(
+        return Cursor(
             row = area.row + clamp(self.model.files.selected - top, 0, max(area.rows - 1, 0)),
             column = area.column,
         )
 
     # --- events ------------------------------------------------------
 
-    func frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func frame_event(event: Event, area: Rect) -> Response:
         match event:
             mouse(pointer):
-                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.column == area.column + area.columns - 1:
-                    self.model.dragging = model.Drag.files
-                    return termui.Response.handled
+                if pointer.kind == Pointer.press and pointer.button == 0 and pointer.column == area.column + area.columns - 1:
+                    self.model.dragging = Drag.files
+                    return Response.handled
             else:
-                return termui.Response.ignored
-        return termui.Response.ignored
+                return Response.ignored
+        return Response.ignored
 
-    func file_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func file_event(event: Event, area: Rect) -> Response:
         match event:
             key(pressed):
-                if self.model.focus != focus.Focus.files:
-                    return termui.Response.ignored
-                let intent = keymap.intent_of(pressed)
-                if intent == keymap.Intent.ignored:
-                    return termui.Response.ignored
+                if self.model.focus != Focus.files:
+                    return Response.ignored
+                let intent = intent_of(pressed)
+                if intent == Intent.ignored:
+                    return Response.ignored
                 self.model.key(intent, "", area.rows)
                 self.model.adjust_files(area.rows)
-                return termui.Response.handled
+                return Response.handled
             mouse(pointer):
-                if pointer.kind == termui.Pointer.wheel:
-                    self.model.focus = focus.Focus.files
+                if pointer.kind == Pointer.wheel:
+                    self.model.focus = Focus.files
                     self.model.files.move_by(-pointer.wheel)
                     self.model.adjust_files(area.rows)
-                    return termui.Response.handled
-                if pointer.kind != termui.Pointer.press or pointer.button != 0:
-                    return termui.Response.ignored
-                self.model.focus = focus.Focus.files
-                let top = termui.visible_top(
+                    return Response.handled
+                if pointer.kind != Pointer.press or pointer.button != 0:
+                    return Response.ignored
+                self.model.focus = Focus.files
+                let top = visible_top(
                     self.model.files.top,
                     len(self.model.names),
                     self.model.files.selected,
@@ -76,36 +76,36 @@ class FileList: termui.View:
                 if index >= 0 and index < len(self.model.names):
                     self.model.files.selected = index
                     self.model.open_row(index)
-                    self.model.focus = focus.Focus.files
-                return termui.Response.handled
+                    self.model.focus = Focus.files
+                return Response.handled
             else:
-                return termui.Response.ignored
+                return Response.ignored
 
     # --- the View contract ------------------------------------------
 
-    private func composed() -> termui.View:
-        let rows = termui.Rows(
+    private func composed() -> View:
+        let rows = Rows(
             len(self.model.names),
             self.file_line,
             top = self.model.files.top,
             anchor = self.model.files.selected,
             selected = self.model.files.selected,
-            selected_style = theme.palette.selected,
+            selected_style = palette.selected,
         )
-        let listing = termui.CursorHost(
-            termui.EventHost(rows, self.file_event),
+        let listing = CursorHost(
+            EventHost(rows, self.file_event),
             self.file_cursor,
         )
-        let framed = termui.Panel(
+        let framed = Panel(
             "files",
             listing,
-            style = theme.pane_style(self.model.focus == focus.Focus.files),
-            edges = termui.Edges(bottom = false),
+            style = pane_style(self.model.focus == Focus.files),
+            edges = Edges(bottom = false),
         )
-        return termui.EventHost(framed, self.frame_event)
+        return EventHost(framed, self.frame_event)
 
-    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+    func draw(surface: Surface, area: Rect) -> Cursor?:
         return self.composed().draw(surface, area)
 
-    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
-        return termui.route(self.composed(), event, area)
+    func dispatch(event: Event, area: Rect) -> Response:
+        return route(self.composed(), event, area)

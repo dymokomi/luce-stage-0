@@ -8,7 +8,7 @@
 # columns, and splice or erase text, each answering a value the caller
 # stores.
 
-import history
+from history import History
 
 # One open file: the text, the editing position, and the undo stack
 # that belongs to them.  A Document is a class — a reference the model
@@ -24,7 +24,7 @@ class Document:
     cursor: i64
     scroll: i64
     dirty: bool
-    history: history.History
+    history: History
 
     init(
         path: str = "",
@@ -40,7 +40,7 @@ class Document:
         self.cursor = cursor
         self.scroll = scroll
         self.dirty = dirty
-        self.history = history.History()
+        self.history = History()
 
     # The status line's message.  A setter because the model often
     # says one thing about the active document in passing —

@@ -9,20 +9,20 @@
 # subscriptions; nothing is rebuilt.
 
 import std.term
-import model
-import input
-import canvas
-import view
+from model import Cursor, Response
+from input import Stream
+from canvas import Screen
+from view import View, route
 
 class Application:
-    private root: view.View?
+    private root: View?
 
     init():
         self.root = none
 
     # The retained tree.  Calling it again replaces the layout whole,
     # which is the retained model's one honest reshape.
-    func set_layout(child: view.View):
+    func set_layout(child: View):
         self.root = child
 
     # Run until input closes or a routed event answers `quit`.  The
@@ -32,15 +32,15 @@ class Application:
         let root = self.root
         if root == none:
             return
-        let screen = canvas.Screen(term.rows(), term.cols())
-        let events = input.Stream()
+        let screen = Screen(term.rows(), term.cols())
+        let events = Stream()
         while true:
             screen.resize(term.rows(), term.cols())
             let surface = screen.surface
             surface.clear()
             let requested = root.draw(surface, surface.area())
             screen.present()
-            var cursor = model.Cursor()
+            var cursor = Cursor()
             if requested != none:
                 cursor = requested
             term.move(
@@ -56,5 +56,5 @@ class Application:
                 resize:
                     continue
                 else:
-                    if view.route(root, event, surface.area()) == model.Response.quit:
+                    if route(root, event, surface.area()) == Response.quit:
                         return
