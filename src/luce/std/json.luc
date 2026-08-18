@@ -286,9 +286,9 @@ union Json:
     # value itself, so `parse(j.write())` is a value equal to `j` and
     # writing *that* gives the same bytes again.
     func write() -> str:
-        var out = new builder
-        put_value(out, self, 0, 0)
-        return out.build()
+        let printer = Printer(out = new builder, spaces = 0)
+        printer.put(self, 0)
+        return printer.out.build()
 
     # The same, indented: every member and element on its own line,
     # `spaces` further in than its container.  `spaces` of 0 is
@@ -296,9 +296,9 @@ union Json:
     func pretty(spaces: i64) -> str:
         if spaces < 0:
             trap("json: pretty needs spaces >= 0")
-        var out = new builder
-        put_value(out, self, spaces, 0)
-        return out.build()
+        let printer = Printer(out = new builder, spaces = spaces)
+        printer.put(self, 0)
+        return printer.out.build()
 
 # --- parsing ---------------------------------------------------------
 
@@ -306,243 +306,336 @@ union Json:
 # whitespace allowed around it).
 #
 # Everything that can be wrong with the text is an error naming the
-# scalar position where it happened.
+# scalar position where it happened.  The document's boundaries are
+# checked here — a text with no value in it, and a text with more
+# after its one value — and everything between them is the Parser's.
 func parse(content: str) -> Json!:
-    let start = skip_blank(content, 0)
-    if start >= len(content):
+    var reader = Parser(content = content, at = 0)
+    reader.skip_blank()
+    if reader.at >= len(content):
         error("json: there is no value in the text")
-    let value, next = try read_value(content, start, 0)
-    let after = skip_blank(content, next)
-    if after != len(content):
-        error(f"json: text after the document's one value, at position {after}")
+    let value = try reader.read_value(0)
+    reader.skip_blank()
+    if reader.at != len(content):
+        error(f"json: text after the document's one value, at position {reader.at}")
     return value
 
-# One value, and the scalar position after it.
-#
-# Recursive descent: the shape of the grammar is the shape of the
-# walk, and a union has no flat tape to walk instead.
-#
-# **The two container grammars are inlined here rather than written as
-# `read_array` and `read_object`, and the reason is `max_depth`.**  A
-# nested value would otherwise cost *two* frames a level — the reader
-# for the container and the reader for the value inside it — and the
-# budget this module has to divide is loom's 128 nested calls, shared
-# with whatever the caller does with the answer.  One frame a level is
-# what lets the bound be a number worth having.  This is the one place
-# in the module where a function is longer than its parts because the
-# parts would cost something real (docs/CODING_GUIDE.md).
-private func read_value(content: str, from: i64, depth: i64) -> (Json, i64)!:
-    let at = skip_blank(content, from)
-    if at >= len(content):
-        error(f"json: a value was expected at position {at}")
-    let head = content[at]
+# The read head over the document: the text, and the scalar the parser
+# stands on.  Every reading method consumes what it read by advancing
+# `at`, so a value and the position after it never travel as a pair —
+# the cursor *is* the second half of every answer, and the position a
+# diagnostic names is the one the parser genuinely holds.
+private struct Parser:
+    private content: str
+    private at: i64
 
-    # RFC 8259 §5: values separated by commas, between brackets.
-    if head == bracket_open:
-        if depth >= max_depth:
-            error(f"json: values nested deeper than {max_depth}, at position {at}")
-        var items = new list[Json]
-        var in_list = skip_blank(content, at + 1)
-        # The loop leaves with `in_list` on the closing bracket,
-        # whichever way it got there, so the value is built once at the
-        # bottom, from the list assembled above.
-        if in_list >= len(content) or content[in_list] != bracket_close:
-            var listed = false
-            while not listed:
-                let element, after = try read_value(content, in_list, depth + 1)
-                items.append(element)
-                in_list = skip_blank(content, after)
-                if in_list >= len(content):
-                    error(f"json: the text ends inside the array opened at position {at}")
-                let mark = content[in_list]
-                if mark == comma:
-                    in_list += 1
-                elif mark == bracket_close:
-                    listed = true
-                else:
-                    error(f"json: a comma or a close was expected at position {in_list}")
-        return Json.array(items = items), in_list + 1
+    # One value, with the read head left after it.
+    #
+    # Recursive descent: the shape of the grammar is the shape of the
+    # walk, and a union has no flat tape to walk instead.
+    #
+    # **The two container grammars are inlined here rather than written
+    # as `read_array` and `read_object`, and the reason is
+    # `max_depth`.**  A nested value would otherwise cost *two* frames
+    # a level — the reader for the container and the reader for the
+    # value inside it — and the budget this module has to divide is
+    # loom's 128 nested calls, shared with whatever the caller does
+    # with the answer.  One frame a level is what lets the bound be a
+    # number worth having.  This is the one place in the module where a
+    # function is longer than its parts because the parts would cost
+    # something real (docs/CODING_GUIDE.md).
+    private func read_value(depth: i64) -> Json!:
+        self.skip_blank()
+        if self.at >= len(self.content):
+            error(f"json: a value was expected at position {self.at}")
+        let head = self.content[self.at]
 
-    # RFC 8259 §4: names, colons, values, commas, between braces.
-    if head == brace_open:
-        if depth >= max_depth:
-            error(f"json: values nested deeper than {max_depth}, at position {at}")
-        var fields = new map[str, Json]
-        var in_map = skip_blank(content, at + 1)
-        if in_map >= len(content) or content[in_map] != brace_close:
-            var mapped = false
-            while not mapped:
-                in_map = skip_blank(content, in_map)
-                if in_map >= len(content) or content[in_map] != quote_mark:
-                    error(f"json: a member name must be a string, at position {in_map}")
-                let name, after_name = try read_string(content, in_map)
-                in_map = skip_blank(content, after_name)
-                if in_map >= len(content) or content[in_map] != colon:
-                    error(f"json: a member name must be followed by a colon, at position {in_map}")
-                let member, after = try read_value(content, in_map + 1, depth + 1)
-                # §4 leaves a repeated name to the parser; a map is a
-                # mapping, so the last one written is what the name
-                # means, in the place the first one claimed.
-                fields[name] = member
-                in_map = skip_blank(content, after)
-                if in_map >= len(content):
-                    error(f"json: the text ends inside the object opened at position {at}")
-                let mark = content[in_map]
-                if mark == comma:
-                    in_map += 1
-                elif mark == brace_close:
-                    mapped = true
-                else:
-                    error(f"json: a comma or a close was expected at position {in_map}")
-        return Json.object(fields = fields), in_map + 1
+        # RFC 8259 §5: values separated by commas, between brackets.
+        if head == bracket_open:
+            if depth >= max_depth:
+                error(f"json: values nested deeper than {max_depth}, at position {self.at}")
+            let opened = self.at
+            var items = new list[Json]
+            self.at += 1
+            self.skip_blank()
+            # The loop leaves with the head on the closing bracket,
+            # whichever way it got there, so the value is built once at
+            # the bottom, from the list assembled above.
+            if self.at >= len(self.content) or self.content[self.at] != bracket_close:
+                var listed = false
+                while not listed:
+                    let element = try self.read_value(depth + 1)
+                    items.append(element)
+                    self.skip_blank()
+                    if self.at >= len(self.content):
+                        error(f"json: the text ends inside the array opened at position {opened}")
+                    let mark = self.content[self.at]
+                    if mark == comma:
+                        self.at += 1
+                    elif mark == bracket_close:
+                        listed = true
+                    else:
+                        error(f"json: a comma or a close was expected at position {self.at}")
+            self.at += 1
+            return Json.array(items = items)
 
-    # A multi-value answer is received by a destructuring bind and
-    # never passed straight through (docs/RETURNS.md), so each of these
-    # names what it got before handing it on.
-    if head == quote_mark:
-        let spelled, after_text = try read_string(content, at)
-        return Json.text(value = spelled), after_text
-    if head == minus or is_digit(head):
-        let counted, after_number = try read_number(content, at)
-        return counted, after_number
-    if word_at(content, at, "true"):
-        return Json.boolean(value = true), at + 4
-    if word_at(content, at, "false"):
-        return Json.boolean(value = false), at + 5
-    if word_at(content, at, "null"):
-        return Json.null, at + 4
-    error(f"json: a value was expected at position {at}")
+        # RFC 8259 §4: names, colons, values, commas, between braces.
+        if head == brace_open:
+            if depth >= max_depth:
+                error(f"json: values nested deeper than {max_depth}, at position {self.at}")
+            let opened = self.at
+            var fields = new map[str, Json]
+            self.at += 1
+            self.skip_blank()
+            if self.at >= len(self.content) or self.content[self.at] != brace_close:
+                var mapped = false
+                while not mapped:
+                    self.skip_blank()
+                    if self.at >= len(self.content) or self.content[self.at] != quote_mark:
+                        error(f"json: a member name must be a string, at position {self.at}")
+                    let name = try self.read_string()
+                    self.skip_blank()
+                    if self.at >= len(self.content) or self.content[self.at] != colon:
+                        error(f"json: a member name must be followed by a colon, at position {self.at}")
+                    self.at += 1
+                    let member = try self.read_value(depth + 1)
+                    # §4 leaves a repeated name to the parser; a map is
+                    # a mapping, so the last one written is what the
+                    # name means, in the place the first one claimed.
+                    fields[name] = member
+                    self.skip_blank()
+                    if self.at >= len(self.content):
+                        error(f"json: the text ends inside the object opened at position {opened}")
+                    let mark = self.content[self.at]
+                    if mark == comma:
+                        self.at += 1
+                    elif mark == brace_close:
+                        mapped = true
+                    else:
+                        error(f"json: a comma or a close was expected at position {self.at}")
+            self.at += 1
+            return Json.object(fields = fields)
 
-# RFC 8259 §2: whitespace is exactly these four bytes — space,
-# horizontal tab, line feed and carriage return.  Nothing else is
-# whitespace, which is why a vertical tab or a form feed between two
-# tokens is an error rather than a shrug.
-private func skip_blank(content: str, from: i64) -> i64:
-    var at = from
-    while at < len(content):
-        let c = content[at]
-        if c != ' ' and c != '\t' and c != '\n' and c != char(13):
-            return at
-        at += 1
-    return at
+        if head == quote_mark:
+            let spelled = try self.read_string()
+            return Json.text(value = spelled)
+        if head == minus or is_digit(head):
+            return try self.read_number()
+        if self.word("true"):
+            return Json.boolean(value = true)
+        if self.word("false"):
+            return Json.boolean(value = false)
+        if self.word("null"):
+            return Json.null
+        error(f"json: a value was expected at position {self.at}")
 
-# --- strings, both directions ----------------------------------------
+    # RFC 8259 §2: whitespace is exactly these four bytes — space,
+    # horizontal tab, line feed and carriage return.  Nothing else is
+    # whitespace, which is why a vertical tab or a form feed between
+    # two tokens is an error rather than a shrug.
+    private func skip_blank():
+        while self.at < len(self.content):
+            let c = self.content[self.at]
+            if c != ' ' and c != '\t' and c != '\n' and c != char(13):
+                return
+            self.at += 1
 
-# RFC 8259 §7. Answers the text the token spells and the scalar position after
-# the closing quote.
-#
-# Almost every str in almost every document holds no escape at all,
-# and that one is a slice of the input and needs no builder.  The first
-# backslash hands the rest of the token to `read_escaped`, which does.
-# The two loops repeat two of §7's sentences — a control character must
-# be escaped, and a str must be closed — because they are asking
-# different questions of the same scalars; folding them together would
-# mean building a str for every token that did not need one.
-private func read_string(content: str, from: i64) -> (str, i64)!:
-    var at = from + 1
-    while at < len(content):
-        let c = content[at]
-        if c == quote_mark:
-            return content[from + 1:at], at + 1
-        elif c == backslash:
-            let decoded, after = try read_escaped(content, from, at)
-            return decoded, after
-        elif u32(c) < 32:
-            # §7: the control characters must be escaped.  A raw
-            # newline inside a str is the usual way to meet this.
-            error(f"json: an unescaped control character inside a string, at position {at}")
-        at += 1
-    error(f"json: the string opened at position {from} is never closed")
+    # True when `spelling` stands at the read head, which then moves
+    # past it.  A miss moves nothing, so the refusal after the last
+    # miss still names the position a value was expected at.
+    private func word(spelling: str) -> bool:
+        if self.at + len(spelling) > len(self.content):
+            return false
+        for i in range(0, len(spelling)):
+            if self.content[self.at + i] != spelling[i]:
+                return false
+        self.at += len(spelling)
+        return true
 
-# The rest of a str token, from its first backslash, decoded.
-private func read_escaped(content: str, from: i64, first: i64) -> (str, i64)!:
-    var out = new builder
-    out.append(content[from + 1:first])
-    var at = first
-    while at < len(content):
-        let c = content[at]
-        if c == quote_mark:
-            return out.build(), at + 1
-        elif c == backslash:
-            at = try put_decoded(out, content, at)
-        elif u32(c) < 32:
-            error(f"json: an unescaped control character inside a string, at position {at}")
+    # RFC 8259 §7.  The read head stands on the opening quote and is
+    # left after the closing one; the answer is the text the token
+    # spells.
+    #
+    # Almost every str in almost every document holds no escape at all,
+    # and that one is a slice of the input and needs no builder.  The
+    # first backslash hands the rest of the token to `read_escaped`,
+    # which does.  The two loops repeat two of §7's sentences — a
+    # control character must be escaped, and a str must be closed —
+    # because they are asking different questions of the same scalars;
+    # folding them together would mean building a str for every token
+    # that did not need one.
+    private func read_string() -> str!:
+        let opened = self.at
+        self.at += 1
+        while self.at < len(self.content):
+            let c = self.content[self.at]
+            if c == quote_mark:
+                let spelled = self.content[opened + 1:self.at]
+                self.at += 1
+                return spelled
+            elif c == backslash:
+                return try self.read_escaped(opened)
+            elif u32(c) < 32:
+                # §7: the control characters must be escaped.  A raw
+                # newline inside a str is the usual way to meet this.
+                error(f"json: an unescaped control character inside a string, at position {self.at}")
+            self.at += 1
+        error(f"json: the string opened at position {opened} is never closed")
+
+    # The rest of a str token, decoded, with the read head on its
+    # first backslash.  `opened` is the opening quote, kept for the
+    # sentence a str that never closes deserves.
+    private func read_escaped(opened: i64) -> str!:
+        var out = new builder
+        out.append(self.content[opened + 1:self.at])
+        while self.at < len(self.content):
+            let c = self.content[self.at]
+            if c == quote_mark:
+                self.at += 1
+                return out.build()
+            elif c == backslash:
+                try self.decode_escape(out)
+            elif u32(c) < 32:
+                error(f"json: an unescaped control character inside a string, at position {self.at}")
+            else:
+                # A run of ordinary scalars goes in whole: it can hold
+                # whole characters of any width, and it ends at a
+                # backslash or at the closing quote, both of which are
+                # ASCII.
+                let run = self.at
+                while self.at < len(self.content) and self.content[self.at] != backslash and self.content[self.at] != quote_mark and u32(self.content[self.at]) >= 32:
+                    self.at += 1
+                out.append(self.content[run:self.at])
+        error(f"json: the string opened at position {opened} is never closed")
+
+    # RFC 8259 §7's eight escapes and `\uXXXX`.  Puts what the escape
+    # spells into `out`; the read head stands on the backslash and is
+    # left after the whole escape.  The diagnostics name the backslash,
+    # so its position is kept even as the head moves past it.
+    private func decode_escape(out: builder) -> !:
+        let slash = self.at
+        if slash + 1 >= len(self.content):
+            error(f"json: the text ends inside an escape, at position {slash}")
+        let c = self.content[slash + 1]
+        if c == letter_u:
+            # A high surrogate is half of a codepoint and must be
+            # followed by its low half (§7); a low one on its own is
+            # not a codepoint at all (§8.2).  Refusing both is what
+            # keeps every str this module accepts decodable into UTF-8,
+            # which is the only thing a Luce str can be.
+            self.at = slash + 2
+            var code = try self.read_hex4()
+            if code >= 55296 and code <= 56319:
+                # The head stands after the four digits, where the low
+                # half's own `\u` must be.
+                if self.at + 1 >= len(self.content) or self.content[self.at] != backslash or self.content[self.at + 1] != letter_u:
+                    error(f"json: a high surrogate escape at position {slash} is not followed by its low half")
+                self.at += 2
+                let low = try self.read_hex4()
+                if low < 56320 or low > 57343:
+                    error(f"json: a high surrogate escape at position {slash} is followed by something that is not a low surrogate")
+                # §7's own example is this exact pair: 𝄞 is one
+                # codepoint written as two escapes.
+                code = 65536 + (code - 55296) * 1024 + (low - 56320)
+            elif code >= 56320 and code <= 57343:
+                error(f"json: a low surrogate escape stands alone at position {slash}")
+            out.append(str(char(code)))
+            return
+        if c == quote_mark or c == backslash or c == '/':
+            out.append_ascii(i64(u32(c)))
+        elif c == 'b':
+            out.append_ascii(8)
+        elif c == 'f':
+            out.append_ascii(12)
+        elif c == 'n':
+            out.append_ascii(10)
+        elif c == 'r':
+            out.append_ascii(13)
+        elif c == 't':
+            out.append_ascii(9)
         else:
-            # A run of ordinary scalars goes in whole: it can hold whole
-            # characters of any width, and it ends at a backslash or
-            # at the closing quote, both of which are ASCII.
-            let run = at
-            while at < len(content) and content[at] != backslash and content[at] != quote_mark and u32(content[at]) >= 32:
-                at += 1
-            out.append(content[run:at])
-    error(f"json: the string opened at position {from} is never closed")
+            error(f"json: unknown escape at position {slash}")
+        self.at = slash + 2
 
-# RFC 8259 §7's eight escapes and `\uXXXX`.  Puts what the escape
-# spells into `out` and answers the scalar position after it.
-private func put_decoded(out: builder, content: str, from: i64) -> i64!:
-    if from + 1 >= len(content):
-        error(f"json: the text ends inside an escape, at position {from}")
-    let c = content[from + 1]
-    if c == letter_u:
-        # A high surrogate is half of a codepoint and must be followed
-        # by its low half (§7); a low one on its own is not a
-        # codepoint at all (§8.2).  Refusing both is what keeps every
-        # str this module accepts decodable into UTF-8, which is
-        # the only thing a Luce str can be.
-        var code = try read_hex4(content, from + 2)
-        var next = from + 6
-        if code >= 55296 and code <= 56319:
-            if from + 7 >= len(content) or content[from + 6] != backslash or content[from + 7] != letter_u:
-                error(f"json: a high surrogate escape at position {from} is not followed by its low half")
-            let low = try read_hex4(content, from + 8)
-            if low < 56320 or low > 57343:
-                error(f"json: a high surrogate escape at position {from} is followed by something that is not a low surrogate")
-            # §7's own example is this exact pair: 𝄞 is one
-            # codepoint written as two escapes.
-            code = 65536 + (code - 55296) * 1024 + (low - 56320)
-            next = from + 12
-        elif code >= 56320 and code <= 57343:
-            error(f"json: a low surrogate escape stands alone at position {from}")
-        out.append(str(char(code)))
-        return next
-    elif c == quote_mark or c == backslash or c == '/':
-        out.append_ascii(i64(u32(c)))
-        return from + 2
-    elif c == 'b':
-        out.append_ascii(8)
-        return from + 2
-    elif c == 'f':
-        out.append_ascii(12)
-        return from + 2
-    elif c == 'n':
-        out.append_ascii(10)
-        return from + 2
-    elif c == 'r':
-        out.append_ascii(13)
-        return from + 2
-    elif c == 't':
-        out.append_ascii(9)
-        return from + 2
-    error(f"json: unknown escape at position {from}")
+    # Four hexadecimal digits at the read head, as the number they
+    # spell.
+    private func read_hex4() -> i64!:
+        let start = self.at
+        if start + 4 > len(self.content):
+            error(f"json: an escape at position {start} wants four hexadecimal digits and the text ends first")
+        var value: i64 = 0
+        for i in range(0, 4):
+            let c = self.content[start + i]
+            var part = -1
+            if c >= digit_zero and c <= digit_nine:
+                part = i64(u32(c)) - i64(u32(digit_zero))
+            elif c >= 'a' and c <= 'f':
+                part = i64(u32(c)) - i64(u32('a')) + 10
+            elif c >= 'A' and c <= 'F':
+                part = i64(u32(c)) - i64(u32('A')) + 10
+            else:
+                error(f"json: an escape at position {start} wants four hexadecimal digits")
+            value = value * 16 + part
+        self.at = start + 4
+        return value
 
-# Four hexadecimal digits, as the number they spell.
-private func read_hex4(content: str, from: i64) -> i64!:
-    if from + 4 > len(content):
-        error(f"json: an escape at position {from} wants four hexadecimal digits and the text ends first")
-    var value: i64 = 0
-    for i in range(0, 4):
-        let c = content[from + i]
-        var part = -1
-        if c >= digit_zero and c <= digit_nine:
-            part = i64(u32(c)) - i64(u32(digit_zero))
-        elif c >= 'a' and c <= 'f':
-            part = i64(u32(c)) - i64(u32('a')) + 10
-        elif c >= 'A' and c <= 'F':
-            part = i64(u32(c)) - i64(u32('A')) + 10
+    # RFC 8259 §6, and the whole of it: an optional minus, an integer
+    # part that is either a single zero or a digit str not starting
+    # with one, an optional fraction with at least one digit, and an
+    # optional exponent with at least one digit.  `.5`, `5.`, `01`,
+    # `+1`, `1e`, `0x10`, `NaN` and `Infinity` are all outside it, and
+    # none of them reaches a caller as a number.
+    #
+    # The notation decides the member: written whole, it is an
+    # `integer`; written with a fraction or an exponent, it is a
+    # `real`.  A whole number too large for a `i64` is a `real` too,
+    # because that is where its precision honestly is — and a number
+    # too large for a `f64` is refused, since there is nothing left to
+    # hold it with.
+    private func read_number() -> Json!:
+        let start = self.at
+        if self.content[self.at] == minus:
+            self.at += 1
+        if self.at >= len(self.content) or not is_digit(self.content[self.at]):
+            error(f"json: a number needs a digit, at position {self.at}")
+        if self.content[self.at] == digit_zero:
+            self.at += 1
+            if self.at < len(self.content) and is_digit(self.content[self.at]):
+                error(f"json: a number may not have a leading zero, at position {start}")
         else:
-            error(f"json: an escape at position {from} wants four hexadecimal digits")
-        value = value * 16 + part
-    return value
+            while self.at < len(self.content) and is_digit(self.content[self.at]):
+                self.at += 1
+        var whole = true
+        if self.at < len(self.content) and self.content[self.at] == point:
+            whole = false
+            self.at += 1
+            if self.at >= len(self.content) or not is_digit(self.content[self.at]):
+                error(f"json: a fraction needs a digit after the point, at position {self.at}")
+            while self.at < len(self.content) and is_digit(self.content[self.at]):
+                self.at += 1
+        if self.at < len(self.content) and (self.content[self.at] == letter_e or self.content[self.at] == letter_e_capital):
+            whole = false
+            self.at += 1
+            if self.at < len(self.content) and (self.content[self.at] == plus or self.content[self.at] == minus):
+                self.at += 1
+            if self.at >= len(self.content) or not is_digit(self.content[self.at]):
+                error(f"json: an exponent needs a digit, at position {self.at}")
+            while self.at < len(self.content) and is_digit(self.content[self.at]):
+                self.at += 1
+        let token = self.content[start:self.at]
+        if whole:
+            let counted = parse_i64(token)
+            if counted != none:
+                return Json.integer(value = counted)
+        let measured = parse_f64(token)
+        if measured != none:
+            return Json.real(value = measured)
+        error(f"json: the number at position {start} is past what an f64 can hold")
+
+private func is_digit(c: char) -> bool:
+    return c >= digit_zero and c <= digit_nine
+
+# --- writing ---------------------------------------------------------
 
 # Text as a JSON str, quotes and escapes and all (RFC 8259 §7).
 #
@@ -558,205 +651,148 @@ private func read_hex4(content: str, from: i64) -> i64!:
 # of a builder rather than a value, and it is the same escaping
 # `write` puts around a str and a member name.
 func quote(content: str) -> str:
-    var out = new builder
-    put_quoted(out, content)
-    return out.build()
+    let printer = Printer(out = new builder, spaces = 0)
+    printer.put_quoted(content)
+    return printer.out.build()
 
-private func put_quoted(out: builder, content: str):
-    out.append_ascii(i64(u32(quote_mark)))
-    var run = 0
-    var at = 0
-    while at < len(content):
-        let c = content[at]
-        if c == quote_mark or c == backslash or u32(c) < 32:
-            if at > run:
-                out.append(content[run:at])
-            put_escape(out, c)
-            run = at + 1
-        at += 1
-    out.append(content[run:])
-    out.append_ascii(i64(u32(quote_mark)))
+# The write head: the builder every level appends into, and the indent
+# the caller asked for — `spaces` of 0 is the compact form.  Both are
+# settled at construction, and the builder is a reference, so nothing
+# here writes a field: a Printer sits happily in a `let`.
+private struct Printer:
+    private out: builder
+    private spaces: i64
 
-private func put_escape(out: builder, c: char):
-    out.append_ascii(i64(u32(backslash)))
-    if c == quote_mark or c == backslash:
-        out.append_ascii(i64(u32(c)))
-    elif c == char(8):
-        out.append_ascii(98)
-    elif c == char(12):
-        out.append_ascii(102)
-    elif c == '\n':
-        out.append_ascii(110)
-    elif c == char(13):
-        out.append_ascii(114)
-    elif c == '\t':
-        out.append_ascii(116)
-    else:
-        # Every other control character, four hexadecimal digits of
-        # it.  Lowercase, as JavaScript and Python both write them.
-        out.append_ascii(i64(u32(letter_u)))
-        out.append_ascii(i64(u32(digit_zero)))
-        out.append_ascii(i64(u32(digit_zero)))
-        let code = i64(u32(c))
-        out.append_ascii(hex_digit(code >> 4 & 15))
-        out.append_ascii(hex_digit(code & 15))
+    # One value and everything under it, as JSON text.
+    #
+    # Recursive, for the reason the reader is: the tree is the shape of
+    # the walk.  Every member of the union is written here and there is
+    # no `else`, so the day a member is added this function stops
+    # compiling and names it.
+    private func put(held: Json, depth: i64):
+        match held:
+            null:
+                self.out.append("null")
+            boolean(value):
+                self.out.append(str(value))
+            integer(value):
+                self.out.append(str(value))
+            real(value):
+                self.put_real(value)
+            text(value):
+                self.put_quoted(value)
+            array(items):
+                if len(items) == 0:
+                    self.out.append("[]")
+                else:
+                    self.out.append("[")
+                    var first = true
+                    for item in items:
+                        if not first:
+                            self.out.append(",")
+                        self.put_break(depth + 1)
+                        self.put(item, depth + 1)
+                        first = false
+                    self.put_break(depth)
+                    self.out.append("]")
+            object(fields):
+                if len(fields) == 0:
+                    self.out.append("{}")
+                else:
+                    self.out.append("{")
+                    var first = true
+                    for name, entry in fields:
+                        if not first:
+                            self.out.append(",")
+                        self.put_break(depth + 1)
+                        self.put_quoted(name)
+                        self.out.append(":")
+                        if self.spaces > 0:
+                            self.out.append(" ")
+                        self.put(entry, depth + 1)
+                        first = false
+                    self.put_break(depth)
+                    self.out.append("}")
+
+    # A str's text between its quotes, escaped as §7 asks — the one
+    # quoting path, shared by a value's text, a member's name, and the
+    # free `quote`.
+    private func put_quoted(content: str):
+        self.out.append_ascii(i64(u32(quote_mark)))
+        var run = 0
+        var at = 0
+        while at < len(content):
+            let c = content[at]
+            if c == quote_mark or c == backslash or u32(c) < 32:
+                if at > run:
+                    self.out.append(content[run:at])
+                self.put_escape(c)
+                run = at + 1
+            at += 1
+        self.out.append(content[run:])
+        self.out.append_ascii(i64(u32(quote_mark)))
+
+    private func put_escape(c: char):
+        self.out.append_ascii(i64(u32(backslash)))
+        if c == quote_mark or c == backslash:
+            self.out.append_ascii(i64(u32(c)))
+        elif c == char(8):
+            self.out.append_ascii(98)
+        elif c == char(12):
+            self.out.append_ascii(102)
+        elif c == '\n':
+            self.out.append_ascii(110)
+        elif c == char(13):
+            self.out.append_ascii(114)
+        elif c == '\t':
+            self.out.append_ascii(116)
+        else:
+            # Every other control character, four hexadecimal digits of
+            # it.  Lowercase, as JavaScript and Python both write them.
+            self.out.append_ascii(i64(u32(letter_u)))
+            self.out.append_ascii(i64(u32(digit_zero)))
+            self.out.append_ascii(i64(u32(digit_zero)))
+            let code = i64(u32(c))
+            self.out.append_ascii(hex_digit(code >> 4 & 15))
+            self.out.append_ascii(hex_digit(code & 15))
+
+    # A real, written so that reading it back gives a real.
+    #
+    # `str(d)` answers the shortest decimal that reads back as the same
+    # f64, which is what a JSON writer wants — but a whole-valued one
+    # comes out with no fraction, and `42` read back is an `integer`.
+    # So the point is put on, the way Python's `json` does, and the
+    # member survives the round trip.
+    #
+    # What `str(d)` does *not* do is write an exponent, so `1e300`
+    # leaves here as its three hundred and one digits.  That is longer
+    # than a JSON writer would choose and it is still the same number:
+    # the text reads back as the identical f64, which is the property
+    # this module owes.  Shortening it is a job for `str(f64)`, where
+    # every other caller would get it too, and not for a private helper
+    # here.
+    private func put_real(value: f64):
+        let written = str(value)
+        if written == "inf" or written == "-inf" or written == "nan":
+            # "inf", "-inf", "nan": RFC 8259 §6 has no grammar for any
+            # of them, so there is no text to write.  Nothing this
+            # module parses can get here; a value built by hand out of
+            # an overflowing sum can.
+            trap(f"json: {written} is not a number JSON can write")
+        self.out.append(written)
+        if written.find_byte(u8(46), 0) < 0:
+            self.out.append(".0")
+
+    # A line break and one level of indentation, or nothing at all when
+    # the printer was built for no spaces.
+    private func put_break(depth: i64):
+        if self.spaces <= 0:
+            return
+        self.out.append_ascii(10)
+        for i in range(0, self.spaces * depth):
+            self.out.append_ascii(32)
 
 private func hex_digit(value: i64) -> i64:
     if value < 10:
         return i64(u32(digit_zero)) + value
     return 97 + value - 10
-
-# --- numbers ---------------------------------------------------------
-
-# RFC 8259 §6, and the whole of it: an optional minus, an integer part
-# that is either a single zero or a digit str not starting with
-# one, an optional fraction with at least one digit, and an optional
-# exponent with at least one digit.  `.5`, `5.`, `01`, `+1`, `1e`,
-# `0x10`, `NaN` and `Infinity` are all outside it, and none of them
-# reaches a caller as a number.
-#
-# The notation decides the member: written whole, it is an `integer`;
-# written with a fraction or an exponent, it is a `real`.  A whole
-# number too large for a `i64` is a `real` too, because that is where
-# its precision honestly is — and a number too large for a `f64` is
-# refused, since there is nothing left to hold it with.
-private func read_number(content: str, from: i64) -> (Json, i64)!:
-    var at = from
-    if content[at] == minus:
-        at += 1
-    if at >= len(content) or not is_digit(content[at]):
-        error(f"json: a number needs a digit, at position {at}")
-    if content[at] == digit_zero:
-        at += 1
-        if at < len(content) and is_digit(content[at]):
-            error(f"json: a number may not have a leading zero, at position {from}")
-    else:
-        while at < len(content) and is_digit(content[at]):
-            at += 1
-    var whole = true
-    if at < len(content) and content[at] == point:
-        whole = false
-        at += 1
-        if at >= len(content) or not is_digit(content[at]):
-            error(f"json: a fraction needs a digit after the point, at position {at}")
-        while at < len(content) and is_digit(content[at]):
-            at += 1
-    if at < len(content) and (content[at] == letter_e or content[at] == letter_e_capital):
-        whole = false
-        at += 1
-        if at < len(content) and (content[at] == plus or content[at] == minus):
-            at += 1
-        if at >= len(content) or not is_digit(content[at]):
-            error(f"json: an exponent needs a digit, at position {at}")
-        while at < len(content) and is_digit(content[at]):
-            at += 1
-    let token = content[from:at]
-    if whole:
-        let counted = parse_i64(token)
-        if counted != none:
-            return Json.integer(value = counted), at
-    let measured = parse_f64(token)
-    if measured != none:
-        return Json.real(value = measured), at
-    error(f"json: the number at position {from} is past what an f64 can hold")
-
-private func is_digit(c: char) -> bool:
-    return c >= digit_zero and c <= digit_nine
-
-# True when `word` stands at `at`.
-private func word_at(content: str, at: i64, word: str) -> bool:
-    if at + len(word) > len(content):
-        return false
-    for i in range(0, len(word)):
-        if content[at + i] != word[i]:
-            return false
-    return true
-
-# --- writing ---------------------------------------------------------
-
-# One value and everything under it, as JSON text.
-#
-# Recursive, for the reason the reader is: the tree is the shape of
-# the walk.  Every member of the union is written here and there is no
-# `else`, so the day a member is added this function stops compiling
-# and names it.
-private func put_value(out: builder, held: Json, spaces: i64, depth: i64):
-    match held:
-        null:
-            out.append("null")
-        boolean(value):
-            out.append(str(value))
-        integer(value):
-            out.append(str(value))
-        real(value):
-            put_real(out, value)
-        text(value):
-            put_quoted(out, value)
-        array(items):
-            if len(items) == 0:
-                out.append("[]")
-            else:
-                out.append("[")
-                var first = true
-                for item in items:
-                    if not first:
-                        out.append(",")
-                    put_break(out, spaces, depth + 1)
-                    put_value(out, item, spaces, depth + 1)
-                    first = false
-                put_break(out, spaces, depth)
-                out.append("]")
-        object(fields):
-            if len(fields) == 0:
-                out.append("{}")
-            else:
-                out.append("{")
-                var first = true
-                for name, entry in fields:
-                    if not first:
-                        out.append(",")
-                    put_break(out, spaces, depth + 1)
-                    put_quoted(out, name)
-                    out.append(":")
-                    if spaces > 0:
-                        out.append(" ")
-                    put_value(out, entry, spaces, depth + 1)
-                    first = false
-                put_break(out, spaces, depth)
-                out.append("}")
-
-# A real, written so that reading it back gives a real.
-#
-# `str(d)` answers the shortest decimal that reads back as the same
-# f64, which is what a JSON writer wants — but a whole-valued one
-# comes out with no fraction, and `42` read back is an `integer`.  So
-# the point is put on, the way Python's `json` does, and the member
-# survives the round trip.
-#
-# What `str(d)` does *not* do is write an exponent, so `1e300`
-# leaves here as its three hundred and one digits.  That is longer than
-# a JSON writer would choose and it is still the same number: the text
-# reads back as the identical f64, which is the property this
-# module owes.  Shortening it is a job for `str(f64)`, where
-# every other caller would get it too, and not for a private helper
-# here.
-private func put_real(out: builder, value: f64):
-    let written = str(value)
-    if written == "inf" or written == "-inf" or written == "nan":
-        # "inf", "-inf", "nan": RFC 8259 §6 has no grammar for any of
-        # them, so there is no text to write.  Nothing this module
-        # parses can get here; a value built by hand out of an
-        # overflowing sum can.
-        trap(f"json: {written} is not a number JSON can write")
-    out.append(written)
-    if written.find_byte(u8(46), 0) < 0:
-        out.append(".0")
-
-# A line break and one level of indentation, or nothing at all when
-# the caller asked for no spaces.
-private func put_break(out: builder, spaces: i64, depth: i64):
-    if spaces <= 0:
-        return
-    out.append_ascii(10)
-    for i in range(0, spaces * depth):
-        out.append_ascii(32)
