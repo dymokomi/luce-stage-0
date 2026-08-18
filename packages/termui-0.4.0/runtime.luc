@@ -13,14 +13,15 @@ interface Application:
 # drawn and then receives the event, so pointer geometry can never be newer or
 # older than what the person saw.
 func run(app: Application):
-    let surface = new canvas.Surface(term.rows(), term.cols())
+    let screen = new canvas.Screen(term.rows(), term.cols())
     let events = new input.Stream()
     while true:
-        surface.resize(term.rows(), term.cols())
+        screen.resize(term.rows(), term.cols())
+        let surface = screen.surface
         surface.clear()
         let root = app.body()
         let requested = view.draw(root, surface, surface.area())
-        surface.present()
+        screen.present()
         var cursor = model.Cursor()
         if requested != none:
             cursor = requested

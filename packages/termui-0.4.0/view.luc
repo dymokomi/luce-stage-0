@@ -1,7 +1,6 @@
 # Declarative view values and the one traversal that interprets them.
 
 import std.strings
-import std.term
 import model
 import input
 import layout
@@ -102,62 +101,6 @@ func draw_line(
 func blank_line(index: i64) -> model.Line:
     return model.plain("")
 
-struct Strokes:
-    up: bool = false
-    right: bool = false
-    down: bool = false
-    left: bool = false
-
-    func glyph() -> str:
-        return term.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
-
-    func merged(other: Strokes) -> Strokes:
-        return Strokes(
-            up = self.up or other.up,
-            right = self.right or other.right,
-            down = self.down or other.down,
-            left = self.left or other.left,
-        )
-
-const STROKES = {
-    "┼": Strokes(up = true, right = true, down = true, left = true),
-    "├": Strokes(up = true, right = true, down = true),
-    "┤": Strokes(up = true, down = true, left = true),
-    "┴": Strokes(up = true, right = true, left = true),
-    "┬": Strokes(right = true, down = true, left = true),
-    "│": Strokes(up = true, down = true),
-    "─": Strokes(right = true, left = true),
-    "└": Strokes(up = true, right = true),
-    "┘": Strokes(up = true, left = true),
-    "┌": Strokes(right = true, down = true),
-    "┐": Strokes(down = true, left = true),
-    "╵": Strokes(up = true),
-    "╷": Strokes(down = true),
-    "╶": Strokes(right = true),
-    "╴": Strokes(left = true),
-}
-
-func strokes_of(glyph: str) -> Strokes:
-    let found = STROKES.get(glyph)
-    if found == none:
-        return Strokes()
-    return found
-
-func stroke(
-    surface: canvas.Surface,
-    area: model.Rect,
-    row: i64,
-    column: i64,
-    add: Strokes,
-    style: model.Style,
-):
-    if row < 0 or row >= area.rows or column < 0 or column >= area.columns:
-        return
-    let absolute_row = area.row + row
-    let absolute_column = area.column + column
-    let prior = strokes_of(surface.cell_at(absolute_row, absolute_column).text)
-    surface.put(absolute_row, absolute_column, add.merged(prior).glyph(), style)
-
 func frame_interior(area: model.Rect, edges: model.Edges) -> model.Rect:
     var at_row = area.row
     var at_column = area.column
@@ -193,16 +136,16 @@ func draw_frame(
     let last_column = area.columns - 1
     if edges.top:
         for at_column in range(0, area.columns):
-            stroke(surface, area, 0, at_column, Strokes(right = at_column < last_column, left = at_column > 0), style)
+            surface.stroke(area, 0, at_column, right = at_column < last_column, left = at_column > 0, style = style)
     if edges.bottom:
         for at_column in range(0, area.columns):
-            stroke(surface, area, last_row, at_column, Strokes(right = at_column < last_column, left = at_column > 0), style)
+            surface.stroke(area, last_row, at_column, right = at_column < last_column, left = at_column > 0, style = style)
     if edges.left:
         for at_row in range(0, area.rows):
-            stroke(surface, area, at_row, 0, Strokes(up = at_row > 0, down = at_row < last_row), style)
+            surface.stroke(area, at_row, 0, up = at_row > 0, down = at_row < last_row, style = style)
     if edges.right:
         for at_row in range(0, area.rows):
-            stroke(surface, area, at_row, last_column, Strokes(up = at_row > 0, down = at_row < last_row), style)
+            surface.stroke(area, at_row, last_column, up = at_row > 0, down = at_row < last_row, style = style)
     if edges.top and title != "" and last_column > 4:
         let shown = title.take(last_column - 4)
         surface.write(area, 0, 2, " " + shown + " ", style)

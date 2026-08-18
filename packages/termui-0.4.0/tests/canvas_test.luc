@@ -26,20 +26,40 @@ func test_a_snapshot_owns_characters_styles_and_cursor():
     surface.put(0, 0, "x", model.Style())
     assert(frame.cell(0, 0).text == "h")
 
+func test_crossing_strokes_merge_into_the_right_junction():
+    # Two borders laid independently share cells; the second stroke
+    # reads what the first left and the union picks the glyph, so a
+    # `─` crossed by a `│` is a `┼` and a corner meeting an edge is a
+    # `├` — without either caller knowing the other exists.
+    let surface = new canvas.Surface(3, 3)
+    surface.clear()
+    let area = surface.area()
+    surface.stroke(area, 1, 1, right = true, left = true)
+    assert(surface.cell_at(1, 1).text == "─")
+    surface.stroke(area, 1, 1, up = true, down = true)
+    assert(surface.cell_at(1, 1).text == "┼")
+    surface.stroke(area, 0, 0, right = true, down = true)
+    surface.stroke(area, 0, 0, up = true, down = true)
+    assert(surface.cell_at(0, 0).text == "├")
+    # A non-border cell contributes nothing to the merge.
+    surface.put(2, 2, "x", model.Style())
+    surface.stroke(area, 2, 2, left = true)
+    assert(surface.cell_at(2, 2).text == "╴")
+
 func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
-    let surface = new canvas.Surface(2, 3)
-    surface.clear()
-    assert(surface.present().cells == 6)
-    assert(surface.present().cells == 0)
-    surface.resize(3, 4)
-    surface.clear()
-    assert(surface.present().cells == 12)
+    let screen = new canvas.Screen(2, 3)
+    screen.surface.clear()
+    assert(screen.present().cells == 6)
+    assert(screen.present().cells == 0)
+    screen.resize(3, 4)
+    screen.surface.clear()
+    assert(screen.present().cells == 12)
 
 func test_a_one_cell_change_is_one_diff_run():
-    let surface = new canvas.Surface(2, 4)
-    surface.clear()
-    surface.present()
-    surface.put(1, 2, "x", model.Style(foreground = 4))
-    let painted = surface.present()
+    let screen = new canvas.Screen(2, 4)
+    screen.surface.clear()
+    screen.present()
+    screen.surface.put(1, 2, "x", model.Style(foreground = 4))
+    let painted = screen.present()
     assert(painted.cells == 1)
     assert(painted.runs == 1 and painted.moves == 1)

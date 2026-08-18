@@ -34,52 +34,40 @@ struct Snapshot:
             result.append(self.cells[index, at_column].text)
         return result.build()
 
-# `back` is the frame being described. `front` is the last frame committed to
-# the terminal. Only `present` changes the latter claim.
+# The frame being described: every drawing operation a component needs,
+# and nothing about the terminal.  A Surface is what `draw` receives —
+# the live loop hands out the screen's, and `snapshot` builds a private
+# one — so a user component draws for tests and for the terminal with
+# the same calls.
 class Surface:
-    private back: array[Cell, _, _]
-    private front: array[Cell, _, _]
+    private cells: array[Cell, _, _]
     rows: i64
     columns: i64
-    stale: bool
 
     init(rows: i64, columns: i64):
         let high = max(rows, 1)
         let wide = max(columns, 1)
-        self.back = new array[Cell](high, wide)
-        self.front = new array[Cell](high, wide)
+        self.cells = new array[Cell](high, wide)
         self.rows = high
         self.columns = wide
-        self.stale = true
 
     func area() -> model.Rect:
         return model.Rect(rows = self.rows, columns = self.columns)
 
-    func resize(rows: i64, columns: i64):
-        let high = max(rows, 1)
-        let wide = max(columns, 1)
-        if high == self.rows and wide == self.columns:
-            return
-        self.back = new array[Cell](high, wide)
-        self.front = new array[Cell](high, wide)
-        self.rows = high
-        self.columns = wide
-        self.stale = true
-
     func clear():
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):
-                self.back[at_row, at_column] = Cell()
+                self.cells[at_row, at_column] = Cell()
 
     func put(row: i64, column: i64, content: str, style: model.Style):
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return
-        self.back[row, column] = Cell(text = content, style = style)
+        self.cells[row, column] = Cell(text = content, style = style)
 
     func cell_at(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return Cell()
-        return self.back[row, column]
+        return self.cells[row, column]
 
     # Offsets are relative to `area`; both the area and canvas clip writes.
     func write(area: model.Rect, row: i64, column: i64, content: str, style: model.Style):
@@ -98,28 +86,121 @@ class Surface:
             for at_column in range(0, area.columns):
                 self.put(area.row + at_row, area.column + at_column, content, style)
 
+    # Lay one border cell, merging with whatever border is already
+    # there: the sides that continue through the cell combine with the
+    # cell's present strokes, and the junction glyph is chosen from the
+    # union.  This is why two adjacent panels share one clean `┬` — and
+    # because it reads the surface, it composes with any component's
+    # borders, not only the shipped ones.
+    func stroke(
+        area: model.Rect,
+        row: i64,
+        column: i64,
+        up: bool = false,
+        right: bool = false,
+        down: bool = false,
+        left: bool = false,
+        style: model.Style = model.Style(),
+    ):
+        if row < 0 or row >= area.rows or column < 0 or column >= area.columns:
+            return
+        let absolute_row = area.row + row
+        let absolute_column = area.column + column
+        let prior = strokes_of(self.cell_at(absolute_row, absolute_column).text)
+        let added = Strokes(up = up, right = right, down = down, left = left)
+        self.put(absolute_row, absolute_column, added.merged(prior).glyph(), style)
+
     func snapshot(cursor: model.Cursor?) -> Snapshot:
         let cells = new array[Cell](self.rows, self.columns)
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):
-                cells[at_row, at_column] = self.back[at_row, at_column]
+                cells[at_row, at_column] = self.cells[at_row, at_column]
         return Snapshot(cells = cells, rows = self.rows, columns = self.columns, cursor = cursor)
 
-    # Commit changed horizontal style runs. Resize marks the terminal unknown,
-    # so the first frame after one is always complete.
+# The sides continuing through one cell, and the merge that keeps
+# junctions honest when two borders cross.
+private struct Strokes:
+    up: bool = false
+    right: bool = false
+    down: bool = false
+    left: bool = false
+
+    func glyph() -> str:
+        return term.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
+
+    func merged(other: Strokes) -> Strokes:
+        return Strokes(
+            up = self.up or other.up,
+            right = self.right or other.right,
+            down = self.down or other.down,
+            left = self.left or other.left,
+        )
+
+private const STROKES = {
+    "┼": Strokes(up = true, right = true, down = true, left = true),
+    "├": Strokes(up = true, right = true, down = true),
+    "┤": Strokes(up = true, down = true, left = true),
+    "┴": Strokes(up = true, right = true, left = true),
+    "┬": Strokes(right = true, down = true, left = true),
+    "│": Strokes(up = true, down = true),
+    "─": Strokes(right = true, left = true),
+    "└": Strokes(up = true, right = true),
+    "┘": Strokes(up = true, left = true),
+    "┌": Strokes(right = true, down = true),
+    "┐": Strokes(down = true, left = true),
+    "╵": Strokes(up = true),
+    "╷": Strokes(down = true),
+    "╶": Strokes(right = true),
+    "╴": Strokes(left = true),
+}
+
+private func strokes_of(glyph: str) -> Strokes:
+    let found = STROKES.get(glyph)
+    if found == none:
+        return Strokes()
+    return found
+
+# The terminal's side of the canvas: the last frame committed, the
+# stale flag a resize raises, and the diff that turns a described
+# frame into terminal writes.  Only the runtime holds one; components
+# never see it, which is what keeps `draw` host-free.
+class Screen:
+    surface: Surface
+    private front: array[Cell, _, _]
+    private stale: bool
+
+    init(rows: i64, columns: i64):
+        self.surface = new Surface(rows, columns)
+        self.front = new array[Cell](self.surface.rows, self.surface.columns)
+        self.stale = true
+
+    # A new size replaces both grids: the described frame is meaningless
+    # at the old shape, and the terminal's contents are unknown at the
+    # new one, so the first frame after a resize is always complete.
+    func resize(rows: i64, columns: i64):
+        let high = max(rows, 1)
+        let wide = max(columns, 1)
+        if high == self.surface.rows and wide == self.surface.columns:
+            return
+        self.surface = new Surface(high, wide)
+        self.front = new array[Cell](high, wide)
+        self.stale = true
+
+    # Commit changed horizontal style runs.
     func present() -> Painted:
         var painted = Painted()
-        for at_row in range(0, self.rows):
+        let surface = self.surface
+        for at_row in range(0, surface.rows):
             var at_column: i64 = 0
-            while at_column < self.columns:
-                if self.back[at_row, at_column] == self.front[at_row, at_column] and not self.stale:
+            while at_column < surface.columns:
+                if surface.cell_at(at_row, at_column) == self.front[at_row, at_column] and not self.stale:
                     at_column += 1
                     continue
-                let style = self.back[at_row, at_column].style
+                let style = surface.cell_at(at_row, at_column).style
                 var stop = at_column
                 var content = new builder
-                while stop < self.columns:
-                    let current = self.back[at_row, stop]
+                while stop < surface.columns:
+                    let current = surface.cell_at(at_row, stop)
                     if current.style != style:
                         break
                     if current == self.front[at_row, stop] and not self.stale:
