@@ -6,6 +6,27 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- A key knows what was held with it: `std.term`'s `Event.key` answers
+  a `KeyPress` — the key plus `shift`/`alt`/`control` booleans — and
+  the host decodes the xterm CSI modifier parameter, alt's
+  ESC-prefixed word keys, and bracketed paste (a paste is ONE text
+  event and one undo step). A ctrl+letter stays its distinct
+  `Key.ctrl_a`..`ctrl_z` member. Modifiers ride the same event slot a
+  mouse report uses, so no ABI change.
+- `term.copy(text)` hands text to the system clipboard through the
+  terminal (OSC 52), so a copy works over SSH and inside a
+  multiplexer. One new host slot at the end of the ABI table
+  (version 25 → 26); the `term_copy` intrinsic joins MIR
+  (format 58 → 59).
+- The editor edits like an editor: shift+movement extends a selection
+  (anchor in the Document; every edit selection-aware by
+  construction), alt/ctrl+arrows jump words, alt+backspace erases
+  one, Ctrl-A selects all, and Ctrl-C/X/V copy, cut, and paste — the
+  whole-line gesture when nothing is selected, every copy also on the
+  system clipboard. Selected text draws on its own background,
+  a mouse drag or shift+click extends the selection, and escape,
+  search jumps, and undo drop it. A ninth scripted session drives
+  selection, clipboard, and drag through both engines.
 - termui's surface is grouped into public submodules, so an import
   line says what it brings: `from termui import Application, View`
   carries the contract and vocabulary, and `termui.layout` (the

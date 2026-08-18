@@ -23,6 +23,9 @@ struct Theme:
     status: Style
     status_key: Style
     selected: Style
+    # The text-selection background; `in_selection` keeps each token's
+    # own foreground over it.
+    selection: i64
     pane_border: Style
     pane_active: Style
     match_here: Style
@@ -41,6 +44,7 @@ const palette = Theme(
     status = Style(foreground = 252, background = 237),
     status_key = Style(foreground = 214, background = 237, bold = true),
     selected = Style(foreground = 252, background = 237, bold = true),
+    selection = 24,
     pane_border = Style(foreground = 238),
     pane_active = Style(foreground = 255, background = 236, bold = true),
     match_here = Style(foreground = 236, background = 179, bold = true),
@@ -66,6 +70,11 @@ func style_for(theme: Theme, kind: highlight.TokenKind) -> Style:
             return theme.number
         punct:
             return theme.punct
+
+# A token's style over the selection background: the syntax colour
+# stays, the background says "selected".
+func in_selection(theme: Theme, style: Style) -> Style:
+    return Style(foreground = style.foreground, background = theme.selection, bold = style.bold)
 
 # The pane-border style for a pane that does or does not hold focus.
 # Here rather than in each component, because every framed pane asks

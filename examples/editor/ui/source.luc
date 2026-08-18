@@ -7,7 +7,7 @@ from termui.widgets import Rows, EventHost, CursorHost
 import highlight
 from model import Model, Focus, Intent
 from ui.keymap import intent_of
-from ui.theme import palette, style_for
+from ui.theme import palette, style_for, in_selection
 
 # Luce's lexer steps four columns; the gutter holds a line number and
 # one space inside five cells.
@@ -40,8 +40,27 @@ class Editor: View:
         ))
         let start = doc.line_at(index)
         let finish = doc.line_end(start)
+        # The selection's slice of this line; empty when nothing is
+        # selected here.  A token crossing an edge is split so exactly
+        # the selected scalars carry the selection background.
+        let sel_lo = clamp(doc.selection_start(), start, finish)
+        let sel_hi = clamp(doc.selection_end(), start, finish)
+        let has_selection = doc.has_selection() and sel_hi > sel_lo
+        var at = start
         for token in highlight.tokens(doc.content, start, finish):
-            spans.append(Span(text = token.text, style = style_for(palette, token.kind)))
+            let style = style_for(palette, token.kind)
+            let token_end = at + len(token.text)
+            if not has_selection or token_end <= sel_lo or at >= sel_hi:
+                spans.append(Span(text = token.text, style = style))
+            else:
+                let lo = clamp(sel_lo - at, 0, len(token.text))
+                let hi = clamp(sel_hi - at, 0, len(token.text))
+                if lo > 0:
+                    spans.append(Span(text = token.text[0:lo], style = style))
+                spans.append(Span(text = token.text[lo:hi], style = in_selection(palette, style)))
+                if hi < len(token.text):
+                    spans.append(Span(text = token.text[hi:len(token.text)], style = style))
+            at = token_end
         return Line(spans = spans)
 
     # --- cursor projection ------------------------------------------
@@ -82,7 +101,9 @@ class Editor: View:
                     self.model.focus = Focus.editor
                     doc.scroll = max(doc.scroll - pointer.wheel, 0)
                     return Response.handled
-                if pointer.kind != Pointer.press or pointer.button != 0:
+                let pressing = pointer.kind == Pointer.press and pointer.button == 0
+                let dragging = pointer.kind == Pointer.drag and pointer.button == 0
+                if not pressing and not dragging:
                     return Response.ignored
                 self.model.focus = Focus.editor
                 let total = doc.count_lines()
@@ -90,6 +111,13 @@ class Editor: View:
                 let top = Rows.visible_top(doc.scroll, total, cursor_line, area.rows)
                 let line = top + pointer.row - area.row
                 if line < total:
+                    # A drag extends from where the press landed, and a
+                    # shift+click extends from where the cursor stood;
+                    # a plain press starts over.
+                    if dragging or pointer.has_shift():
+                        doc.extend()
+                    else:
+                        doc.drop_selection()
                     let start = doc.line_at(line)
                     let wanted = max(pointer.column - area.column - gutter_width, 0)
                     doc.cursor = doc.at_column(start, wanted)

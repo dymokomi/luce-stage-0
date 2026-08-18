@@ -316,6 +316,38 @@ test "a mouse click lands the cursor before editing" {
     try testing.expectEqualStrings("hello\nwZorld\n", session.file().?.content);
 }
 
+test "shift selects, the clipboard round-trips, and a drag extends" {
+    // Home, then shift+end takes the first line; ctrl_x cuts it;
+    // ctrl_v twice pastes it back doubled.  Then a mouse press and a
+    // drag select "wor" on the next line and typing replaces it — the
+    // whole selection model driven through the real event stream, and
+    // the copy handed to the host clipboard on both engines.
+    const keys = [_]agree.World.Key{
+        .{ .name = "home" },
+        .{ .name = "end", .modifiers = 1 },
+        .{ .name = "ctrl_x" },
+        .{ .name = "ctrl_v" },
+        .{ .name = "ctrl_v" },
+        .{ .name = "mouse_press", .row = 1, .column = 5, .button = 0 },
+        .{ .name = "mouse_drag", .row = 1, .column = 8, .button = 0 },
+        .{ .name = "text", .text = "W" },
+        .{ .name = "ctrl_s" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "hello\nworld\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    // "hello" cut then pasted twice = "hellohello"; "wor" dragged over
+    // and replaced by W leaves "Wld".  The cut hit the host clipboard.
+    try testing.expectEqualStrings("hellohello\nWld\n", session.file().?.content);
+    try testing.expect(std.mem.indexOf(u8, session.printed(), "[copy]hello") != null);
+}
+
 /// What the screen said, frame by frame.
 ///
 /// **This has to replay the transcript now, and that is the migration

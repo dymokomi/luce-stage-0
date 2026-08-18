@@ -1902,7 +1902,7 @@ test "files, arguments, the screen, and the keyboard agree" {
         \\    if event == none:
         \\        return "<end of input>"
         \\    match event:
-        \\        key(pressed):
+        \\        key(press):
         \\            return "key"
         \\        text(typed):
         \\            return "text/" + typed
