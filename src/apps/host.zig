@@ -95,7 +95,7 @@ pub const Host = struct {
     /// One directory listing, NUL-joined, which is the shape the ABI's
     /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
-    /// Captured stdout/stderr from the last `std.os.shell.run` call.
+    /// Captured stdout/stderr from the last `std.os.run` call.
     /// Borrowed by the generated program until the next command.
     shell_output: std.ArrayList(u8) = .empty,
     /// Every file the byte channel has open (docs/BYTES.md R5).  A
@@ -749,7 +749,7 @@ pub const Host = struct {
         return processEnvironment().getPosix(name);
     }
 
-    /// Run one shell command for `std.os.shell.run`, keeping the two
+    /// Run one shell command for `std.os.run`, keeping the two
     /// output streams and a final status line together as one Luce
     /// string. A non-zero command status is data the caller can show;
     /// only failure to start the shell answers `null`.

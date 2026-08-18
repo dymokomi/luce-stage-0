@@ -210,7 +210,7 @@ builtin's arguments may be named. Host APIs are ordinary declarations in
 the builtin surface:
 
 ```luce
-import std.os
+import std.term
 
 func fg() -> i64:
     return 3
@@ -218,8 +218,8 @@ func fg() -> i64:
 func main():
     let a = clamp(value = 5, low = 0, high = 10)
     let n = len(value = "abc")
-    os.term.style(fg())               # background and bold defaulted
-    os.term.style(fg(), bold = true)  # background defaulted
+    term.style(fg())               # background and bold defaulted
+    term.style(fg(), bold = true)  # background defaulted
     print(str(a + n))
 ```
 

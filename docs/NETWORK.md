@@ -61,7 +61,7 @@ carrying `cannot connect to HOST`, `cannot listen on :PORT`,
 split errno codes — the message is the story. A missing transport
 channel traps `host_unavailable` before touching anything. An HTTP
 status code, in `std.http` above this module, is data, never an error —
-`os.shell.run`'s "a non-zero exit is data" rule, transferred.
+`os.run`'s "a non-zero exit is data" rule, transferred.
 
 ## Concurrency: the one deliberate exception
 

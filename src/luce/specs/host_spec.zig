@@ -35,7 +35,7 @@ const testing = std.testing;
 /// operation under test without copying the same two setup lines hundreds of
 /// times; the line offset is fixed and intentional for trace assertions.
 const hosted = struct {
-    const imports = "import std.files\nimport std.os\n\n";
+    const imports = "import std.files\nimport std.os\nimport std.term\n\n";
 
     fn source(body: []const u8) ![]u8 {
         return std.fmt.allocPrint(testing.allocator, "{s}{s}", .{ imports, body });
@@ -774,17 +774,33 @@ test "terminal builtins drive the host screen and key queue" {
         .{ .name = "ctrl_q" },
     };
     var session = try hosted.compare(
+        \\func typed_in(event: term.Event?) -> str:
+        \\    if event == none:
+        \\        return "?"
+        \\    match event:
+        \\        text(typed):
+        \\            return typed
+        \\        else:
+        \\            return "?"
+        \\
         \\func main():
-        \\    os.term.clear()
-        \\    os.term.move(1, 2)
-        \\    os.term.style(114, -1, true)
-        \\    os.term.write("hi ")
-        \\    os.term.write(os.term.io.read() else "?")
-        \\    os.term.write(os.term.io.text())
-        \\    let quit = os.term.io.read()
-        \\    os.term.flush()
-        \\    print(quit else "?")
-        \\    print(str(os.term.rows()) + "x" + str(os.term.cols()))
+        \\    term.clear()
+        \\    term.move(1, 2)
+        \\    term.style(114, -1, true)
+        \\    term.write("hi ")
+        \\    term.write(typed_in(term.read()))
+        \\    let quit = term.read()
+        \\    term.flush()
+        \\    if quit == none:
+        \\        print("?")
+        \\    else:
+        \\        match quit:
+        \\            key(pressed):
+        \\                assert(pressed == term.Key.ctrl_q)
+        \\                print("ctrl_q")
+        \\            else:
+        \\                print("?")
+        \\    print(str(term.rows()) + "x" + str(term.cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();
@@ -793,7 +809,6 @@ test "terminal builtins drive the host screen and key queue" {
         "[move]1,2\n" ++
         "[style]114,-1,true\n" ++
         "[write]hi \n" ++
-        "[write]text\n" ++
         "[write]\u{3bb}\n" ++
         "[flush]\n" ++
         "ctrl_q\n" ++
@@ -808,10 +823,10 @@ test "term_style's defaults fill from the table, on both engines" {
     // them.
     var session = try hosted.compare(
         \\func main():
-        \\    os.term.style(114)
-        \\    os.term.style(200, bold = true)
-        \\    os.term.style(bold = true, foreground = 15, background = 3)
-        \\    os.term.flush()
+        \\    term.style(114)
+        \\    term.style(200, bold = true)
+        \\    term.style(bold = true, foreground = 15, background = 3)
+        \\    term.flush()
         \\
     , .{});
     defer session.deinit();
@@ -822,33 +837,36 @@ test "term_style's defaults fill from the table, on both engines" {
         "[flush]\n", session.printed());
 }
 
-test "a keyboard with nothing left on it answers none, and empties key_text with it" {
-    // One key, then the script is spent.  What the second `key_read`
+test "a keyboard with nothing left on it answers none, and stays none" {
+    // One key, then the script is spent.  What the second `read`
     // answers is the whole of this fix: `none`, so the program can
     // stop, rather than the host being asked again forever because
     // "no key yet" and "no key ever" arrived as the same answer.
-    //
-    // `os.term.io.text()` is checked *after* the dry read on purpose.  The
-    // payload of a key that never came is "", not the one before it —
-    // otherwise a program that reads the name and the text separately
-    // sees a key that is half there.
+    // The dry keyboard is asked twice because `none` must be the
+    // steady state, not a one-shot marker.
     const keys = [_]agree.World.Key{.{ .name = "text", .text = "x" }};
     var session = try hosted.compare(
+        \\func describe(event: term.Event?) -> str:
+        \\    if event == none:
+        \\        return "none"
+        \\    match event:
+        \\        text(typed):
+        \\            return "text/" + typed
+        \\        else:
+        \\            return "other"
+        \\
         \\func main():
-        \\    let first = os.term.io.read()
-        \\    print((first else "none") + "/" + os.term.io.text())
-        \\    let second = os.term.io.read()
-        \\    print((second else "none") + "/" + os.term.io.text())
-        \\    let third = os.term.io.read()
-        \\    print((third else "none") + "/" + os.term.io.text())
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();
 
     try testing.expectEqualStrings(
         "text/x\n" ++
-            "none/\n" ++
-            "none/\n",
+            "none\n" ++
+            "none\n",
         session.printed(),
     );
 }

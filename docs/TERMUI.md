@@ -94,8 +94,9 @@ small helpers remain lowercase.
 The distinction is deliberate:
 
 - an application is a class because its callbacks share mutable identity;
-- the internal `Surface` and input `Stream` are classes because they own
-  changing runtime state; and
+- the internal `Surface` is a class because it owns changing runtime
+  state, and the input `Stream` is a class because it stands for the one
+  terminal event source rather than describing a frame; and
 - `View`, `Rect`, `Style`, `Line`, `Length`, `Event`, and `Snapshot` are values
   because they describe or observe one frame.
 
@@ -203,9 +204,12 @@ children in display order; `ZStack` visits the visually topmost child first.
 Keyboard and text events continue until a focused child accepts them. Resize
 and closed input remain lifecycle events owned by `run`.
 
-The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. A `Mouse`
+The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. `Key`,
+`Pointer`, and `Mouse` are `std.term`'s own types, re-exported as aliases,
+so termui events and plain terminal events carry the same values; termui
+adds only `closed`, which `term.read()` spells as absence. A `Mouse`
 value contains its pointer kind, row, column, button, modifiers, and wheel
-delta. Unknown host key names become `Key.unknown` rather than an invalid enum.
+delta. Unknown keys arrive as `Key.unknown` rather than an invalid enum.
 
 ## Cursor
 

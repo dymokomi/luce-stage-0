@@ -21,6 +21,6 @@ func build_command(path: str) -> str:
 # if the shell service itself refused.
 func run(command: str) -> str:
     var output = ""
-    output = os.shell.run(command) catch reason:
+    output = os.run(command) catch reason:
         return reason
     return output

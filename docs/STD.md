@@ -32,8 +32,8 @@ cost of changing the embedded library.
 | `std.lists` | element-type-specialized list algorithms | stable `list.sort_by(func(T, T) -> bool)` routed as a method after import |
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
 | `std.files` | fallible whole-file, directory, and open-file APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `Mode` and the `File` class (fallible `init(path, mode)`, conforming to `io.Reader`/`io.Writer`), entries/list |
-| `std.os` | grouped console/time/environment/terminal/process services and machine facts | line input, standard error, clocks, environment, `os.term`, `os.shell.run`, memory and CPU facts |
-| `std.term` | short terminal compatibility surface | rows/columns, clear/move/style/write/flush |
+| `std.os` | console, time, environment, process and machine services | line input, standard error, clocks, environment, `os.run`, memory and CPU facts |
+| `std.term` | the terminal | frame drawing (rows/cols, clear/move/style/write/flush), one typed `Event` stream behind `read()`, border glyphs and `junction` |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |
@@ -48,10 +48,9 @@ resolution and standard-module embedding as two honest mechanisms.
 ## Pure and hosted modules
 
 Most standard code is pure Luce. `io`, `math`, `strings`, `lists`, `paths`,
-`json`, and the codec portions of `zip` use language operations only. `files`, `os`,
+`json`, and the codec portions of `zip` use language operations only. `files`, `os`, `term`,
 `ui`, `gpu`, and `network` reach host services through `Builtin.NAME`, a synthetic
 compiler namespace accepted only in embedded standard-library source.
-`std.term` delegates to `std.os`.
 
 `Builtin` is not importable and the spelling has no compiler privilege in
 project or package source; a program may even declare its own type by that

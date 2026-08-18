@@ -887,30 +887,34 @@ test "the public host surface type-checks and stays host-gated" {
     var hosted = try compile_mod.compile(testing.allocator,
         \\import std.files
         \\import std.os
+        \\import std.term
         \\
         \\func main(args: list[str]) -> !:
         \\    print("hello " + args[0])
         \\    let text = files.read("notes.txt") catch ""
         \\    try files.write("copy.txt", text)
         \\    print("copied")
-        \\    os.term.clear()
-        \\    os.term.move(0, 0)
-        \\    os.term.style(114, -1, false)
-        \\    os.term.write((os.term.io.read() else "eof") + os.term.io.text())
-        \\    os.term.flush()
+        \\    term.clear()
+        \\    term.move(0, 0)
+        \\    term.style(114, -1, false)
+        \\    let event = term.read()
+        \\    if event == none:
+        \\        term.write("eof")
+        \\    term.flush()
         \\
     , .{ .allow_host = true });
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
-    // `os.term.io.read` answers `str?`, so a program that treats a key
-    // that never came as a key is refused where it is written rather
+    // `os.read_line` answers `str?`, so a program that treats a line
+    // that never came as a line is refused where it is written rather
     // than looping on it at run time (docs/FAILURE.md).
     try expectRejectedOptions(
         \\import std.os
+        \\import std.term
         \\
         \\func main():
-        \\    os.term.write(os.term.io.read())
+        \\    term.write(os.read_line(""))
         \\
     , .{ .allow_host = true }, "luce.sema.type");
 
@@ -940,10 +944,10 @@ test "the public host surface type-checks and stays host-gated" {
         \\
     , .{ .allow_host = true }, "luce.sema.fallible");
     try expectRejectedOptions(
-        \\import std.os
+        \\import std.term
         \\
         \\func main():
-        \\    os.term.style(1, 2, 3)
+        \\    term.style(1, 2, 3)
         \\
     , .{ .allow_host = true }, "luce.sema.type");
 }

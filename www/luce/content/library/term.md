@@ -1,11 +1,11 @@
 # std.term
 
-`std.term` is the low-level terminal facade. It draws a frame into the
-alternate screen and reads decoded keyboard, mouse, wheel, and resize events.
-It is the shorter spelling of the same terminal value available as
-`std.os.term`.
+`std.term` is the terminal. It draws a frame into the alternate screen,
+reads typed keyboard, mouse, wheel, and resize events as ordinary values,
+and carries the one-cell Unicode border geometry terminal programs compose
+panes from.
 
-```text
+```
 import std.term
 ```
 
@@ -41,50 +41,48 @@ positive value is ignored. `move` clamps each coordinate to the supported
 terminal escape range.
 
 Drawing calls buffer output. `flush` writes one completed frame. A blocking
-`term.io.read()` also presents pending drawing first, so the ordinary loop can
+`term.read()` also presents pending drawing first, so the ordinary loop can
 draw and then wait without displaying a stale frame.
 
 Program text passed to `term.write` is sanitized: control bytes cannot inject
 their own terminal escape sequences. Styling, movement, alternate-screen
 entry, mouse tracking, and restoration remain operations owned by the host.
 
-## Border geometry
-
-`term.ui` provides one-cell Unicode drawing pieces:
-
-| Method | Glyph |
-|---|---|
-| `horizontal()` / `vertical()` | `─` / `│` |
-| `top_left()` / `top_right()` | `┌` / `┐` |
-| `bottom_left()` / `bottom_right()` | `└` / `┘` |
-| `shadow()` / `shadow_dark()` | `░` / `▒` |
-
-`term.ui.junction(top, right, bottom, left)` chooses the correct line glyph
-for the sides continuing through one cell. This keeps border composition in
-one table instead of making each application overwrite intersections in a
-different order.
-
 ## Read events
 
-```text
-term.io.read() -> str?
+```
+term.read() -> term.Event?
 ```
 
-The result is the next stable event name, or `none` when input has ended. A
-text event carries printable text in `term.io.text()`. Numeric accessors
-describe the event most recently returned by `read()`:
+The result is the next event as a value, or `none` when input has ended —
+nothing failed, there is simply nobody left to ask, so an empty input
+stream ends a draw loop cleanly. Every event is copied whole before `read`
+returns; a held event never changes under a later read.
 
-| Accessor | Meaning |
+`Event` is a union of four cases:
+
+| Case | Payload |
 |---|---|
-| `row()`, `column()` | zero-based mouse coordinates; zero for keyboard events |
-| `button()` | left `0`, middle `1`, right `2`; wheel uses `-1` |
-| `modifiers()` | bit set: shift `1`, alt `2`, control `4` |
-| `value()` | wheel `+1` up, `-1` down; otherwise zero |
+| `key(pressed: term.Key)` | one named key |
+| `text(typed: str)` | printable text |
+| `mouse(pointer: term.Mouse)` | one mouse action |
+| `resize` | the terminal changed size; ask `rows()`/`cols()` again |
 
-Keyboard names include `text`, `enter`, `tab`, `backspace`, `delete`, arrow
-keys, Home, End, Page Up, Page Down, Escape, and `ctrl_a` through `ctrl_z`.
-Pointer and terminal names are `mouse_press`, `mouse_release`, `mouse_drag`,
-`mouse_move`, `mouse_wheel`, and `resize`.
+`Key` names `enter`, `tab`, `backspace`, `delete`, the arrows `up`, `down`,
+`left`, `right`, `home`, `end`, `page_up`, `page_down`, `escape`, and
+`ctrl_a` through `ctrl_z`. A key the terminal decoded but this vocabulary
+does not know arrives as `Key.unknown` rather than being dropped.
+
+`Mouse` is a value describing one action:
+
+| Field or method | Meaning |
+|---|---|
+| `kind: term.Pointer` | `press`, `release`, `drag`, `move`, or `wheel` |
+| `row`, `column` | zero-based cell coordinates |
+| `button` | left `0`, middle `1`, right `2` |
+| `modifiers` | bit set: shift `1`, alt `2`, control `4` |
+| `wheel` | `+1` up, `-1` down; zero for non-wheel actions |
+| `has_shift()`, `has_alt()`, `has_control()` | the modifier bits as predicates |
 
 ```text
 import std.term
@@ -95,13 +93,17 @@ func main():
         term.clear()
         term.move(0, 0)
         term.style(114, bold = true)
-        term.write(term.ui.top_left() + " press q to leave")
+        term.write(term.top_left + " press q to leave")
 
-        let event = term.io.read()
+        let event = term.read()
         if event == none:
             return
-        if event == "text" and term.io.text() == "q":
-            running = false
+        match event:
+            text(typed):
+                if typed == "q":
+                    running = false
+            else:
+                continue
 ```
 
 The host enters raw mode lazily when the screen is first used. It restores the
@@ -110,12 +112,29 @@ returns, traps, raises an uncaught error, or the host tears down the run.
 Calling line-oriented `read_line` temporarily restores canonical input; a
 later terminal operation enters the screen again.
 
+## Border geometry
+
+Pure Unicode constants, one ordinary terminal cell each — the only part of
+the module that needs no host:
+
+| Constant | Glyph |
+|---|---|
+| `horizontal` / `vertical` | `─` / `│` |
+| `top_left` / `top_right` | `┌` / `┐` |
+| `bottom_left` / `bottom_right` | `└` / `┘` |
+| `shadow` / `shadow_dark` | `░` / `▒` |
+
+`term.junction(top, right, bottom, left)` chooses the correct line glyph
+for the sides continuing through one cell. This keeps border composition in
+one table instead of making each application overwrite intersections in a
+different order.
+
 ## Host behavior
 
-These methods are host-gated. A runtime that does not provide a terminal
-traps `host_unavailable`. Redirected output remains usable: if standard input
-is not a terminal, raw mode is not attempted, and end of input answers
-`none` rather than spinning.
+The frame and event operations are host-gated. A runtime that does not
+provide a terminal traps `host_unavailable`. Redirected output remains
+usable: if standard input is not a terminal, raw mode is not attempted, and
+end of input answers `none` rather than spinning.
 
 The low-level event stream has no application state, focus model, layout, or
 frame scheduling. Those policies belong in the program or in

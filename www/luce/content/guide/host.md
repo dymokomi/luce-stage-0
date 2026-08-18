@@ -213,12 +213,14 @@ this line went to standard error
 
 ## The terminal
 
-Terminal dimensions, drawing, and input are grouped under `os.term` (or the
-shorter `std.term` facade). `os.term.io.read()` returns a `str?`, so an empty
-input stream ends a draw loop cleanly. Terminal output is sanitized by the
-host. These services need a real terminal and are not demonstrated by the
-site's non-interactive examples. The [editor example](/tools/programs/) uses
-them in a complete program.
+Terminal dimensions, drawing, and input live in their own module,
+[`std.term`](/library/term/). `term.read()` returns a typed
+`term.Event?` — a key, typed text, a mouse action, or a resize — with
+`none` at end of input, so an empty input stream ends a draw loop
+cleanly. Terminal output is sanitized by the host. These services need
+a real terminal and are not demonstrated by the site's non-interactive
+examples. The [editor example](/tools/programs/) uses them in a
+complete program.
 
 ## The host gate
 

@@ -109,7 +109,7 @@ pub const FileAct = enum(i32) {
     /// `luce_rt_raise_io`.
     open,
     flush,
-    /// A host shell could not be started for `std.os.shell.run`.
+    /// A host shell could not be started for `std.os.run`.
     run,
     /// A directory `dir_create` was asked for is not there and could
     /// not be made — the permission was refused, or something that is

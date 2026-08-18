@@ -1,13 +1,15 @@
 import input
+import std.term
 
-func test_every_current_host_key_name_has_a_member():
-    assert(input.Stream.key_of("ctrl_s") == input.Key.ctrl_s)
-    assert(input.Stream.key_of("page_down") == input.Key.page_down)
-    assert(input.Stream.key_of("escape") == input.Key.escape)
-
-func test_an_unknown_host_name_stays_an_explicit_value():
-    assert(input.Stream.key_of("hyper_meta") == input.Key.unknown)
-    assert(input.Stream.key_of("") == input.Key.unknown)
+func test_the_vocabulary_is_the_terminals_own():
+    # The aliases are transparent: a termui Key is a std.term Key, so
+    # events pass between termui code and plain terminal code without
+    # translation.  Name decoding itself belongs to std.term and is
+    # proven by the standard library's own specification.
+    let pressed: term.Key = input.Key.ctrl_s
+    assert(pressed == term.Key.ctrl_s)
+    let kind: term.Pointer = input.Pointer.wheel
+    assert(kind == term.Pointer.wheel)
 
 func test_an_event_owns_the_mouse_snapshot_it_carries():
     let mouse = input.Mouse(kind = input.Pointer.press, row = 7, column = 2, modifiers = 5)

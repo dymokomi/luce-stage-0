@@ -6,6 +6,19 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The terminal moves into its own module: `std.term` is now the real
+  terminal - frame drawing (`rows`/`cols`, `clear`/`move`/`style`/
+  `write`/`flush`), typed input, and the border glyphs with
+  `junction` - and `std.os` keeps console, time, environment, process
+  and machine services. Input is one stream of values:
+  `term.read() -> Event?` answers a `key(Key)`, `text(str)`,
+  `mouse(Mouse)`, or `resize` event copied whole before it returns,
+  and `none` at end of input. The `os.term`/`os.term.io`/`os.term.ui`
+  facade structs, their token fields, and the hidden most-recent-event
+  accessors (`io.text/row/column/button/modifiers/value`) are gone;
+  `os.shell.run` is now plain `os.run`. termui's `Key`, `Pointer`,
+  and `Mouse` become aliases of `std.term`'s, so termui events and
+  plain terminal events are the same values.
 - `std.zip`'s read path gets `zip.Archive`: opening -
   `let opened = try new zip.Archive(data)` - parses the central
   directory once, so a damaged archive fails where it is opened,

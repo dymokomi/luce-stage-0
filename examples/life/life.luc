@@ -11,15 +11,16 @@
 # trap: there is no time left to wait, so the wait returns.
 
 import std.os
+import std.term
 
 const frame_ms = 80
 
 struct World:
     static func rows() -> i64:
-        return clamp(os.term.rows() - 2, 8, 40)
+        return clamp(term.rows() - 2, 8, 40)
 
     static func cols() -> i64:
-        return clamp((os.term.cols() - 1) // 2, 8, 60)
+        return clamp((term.cols() - 1) // 2, 8, 60)
 
     static func seed(grid: array[bool, _, _]):
         # A glider...
@@ -62,19 +63,19 @@ struct World:
         return next
 
     static func draw(grid: array[bool, _, _], generation: i64):
-        os.term.clear()
+        term.clear()
         for row in range(0, grid.dim(0)):
-            os.term.move(row, 0)
+            term.move(row, 0)
             for col in range(0, grid.dim(1)):
                 if grid[row, col]:
-                    os.term.style(114)
-                    os.term.write("██")
+                    term.style(114)
+                    term.write("██")
                 else:
-                    os.term.style(238)
-                    os.term.write(" ·")
-        os.term.move(grid.dim(0), 0)
-        os.term.style(252, 237)
-        os.term.write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
+                    term.style(238)
+                    term.write(" ·")
+        term.move(grid.dim(0), 0)
+        term.style(252, 237)
+        term.write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
     var grid = new array[bool](World.rows(), World.cols())
@@ -86,13 +87,21 @@ func main():
         # `none` is the keyboard running dry, which ends the run for
         # the same reason Ctrl-Q does: nobody is going to ask for
         # another generation.
-        let key = os.term.io.read()
-        if key == none or key == "ctrl_q":
+        let event = term.read()
+        if event == none:
             running = false
         else:
             var steps = 1
-            if key == "text" and os.term.io.text() == " ":
-                steps = 100
+            match event:
+                key(pressed):
+                    if pressed == term.Key.ctrl_q:
+                        steps = 0
+                        running = false
+                text(typed):
+                    if typed == " ":
+                        steps = 100
+                else:
+                    steps = 1
             for tick in range(0, steps):
                 let began = os.clock_ms()
                 grid = World.step(grid)   # the old grid frees right here (S5)

@@ -1249,19 +1249,19 @@ test "os: the machine's numbers cross the boundary intact, on both engines" {
     );
 }
 
-test "os.term.ui: Unicode borders keep their junctions intact" {
+test "term: Unicode borders keep their junctions intact" {
     try agreeOk(
-        \\import std.os
+        \\import std.term
         \\
         \\func main():
-        \\    assert(os.term.ui.horizontal() == "─")
-        \\    assert(os.term.ui.vertical() == "│")
-        \\    assert(os.term.ui.top_left() == "┌")
-        \\    assert(os.term.ui.bottom_right() == "┘")
-        \\    assert(os.term.ui.junction(top = true, right = true, bottom = true, left = true) == "┼")
-        \\    assert(os.term.ui.junction(top = true, right = true, bottom = false, left = true) == "┴")
-        \\    assert(os.term.ui.junction(top = false, right = true, bottom = true, left = true) == "┬")
-        \\    assert(os.term.ui.shadow() == "░")
+        \\    assert(term.horizontal == "─")
+        \\    assert(term.vertical == "│")
+        \\    assert(term.top_left == "┌")
+        \\    assert(term.bottom_right == "┘")
+        \\    assert(term.junction(top = true, right = true, bottom = true, left = true) == "┼")
+        \\    assert(term.junction(top = true, right = true, bottom = false, left = true) == "┴")
+        \\    assert(term.junction(top = false, right = true, bottom = true, left = true) == "┬")
+        \\    assert(term.shadow == "░")
         \\
     );
 }
@@ -1328,24 +1328,24 @@ test "os: a host that has the slots and cannot tell refuses the same way" {
     , unmeasurable, .host_unavailable);
 }
 
-test "os: shell.run crosses the host boundary as captured text" {
+test "os: run crosses the host boundary as captured text" {
     try agree.printsGiven(
         \\import std.os
         \\
         \\func main() -> !:
-        \\    print(try os.shell.run("echo hi"))
+        \\    print(try os.run("echo hi"))
         \\
     , budget, "mock shell: echo hi\nexit status: 0\n\n");
 }
 
-test "os: shell.run traps when the host withholds the shell" {
+test "os: run traps when the host withholds the shell" {
     var no_shell = budget;
     no_shell.shell = false;
     try agree.trapGiven(
         \\import std.os
         \\
         \\func main() -> !:
-        \\    print(try os.shell.run("echo hi"))
+        \\    print(try os.run("echo hi"))
         \\
     , no_shell, .host_unavailable);
 }
@@ -1354,7 +1354,7 @@ test "os: shell.run traps when the host withholds the shell" {
 // term
 // ---------------------------------------------------------------------------
 
-test "term: io carries mouse coordinates, modifiers, and wheel values" {
+test "term: a mouse event carries its coordinates, modifiers, and wheel" {
     const keys = [_]agree.World.Key{
         .{
             .name = "mouse_press",
@@ -1375,19 +1375,32 @@ test "term: io carries mouse coordinates, modifiers, and wheel values" {
     var session = try agree.compare(
         \\import std.term
         \\
+        \\func mouse_of(event: term.Event?) -> term.Mouse:
+        \\    if event == none:
+        \\        trap("the keyboard ran dry")
+        \\    match event:
+        \\        mouse(pointer):
+        \\            return pointer
+        \\        else:
+        \\            trap("not a mouse event")
+        \\
         \\func main():
-        \\    let pressed = term.io.read() else ""
-        \\    assert(pressed == "mouse_press")
-        \\    assert(term.io.text() == "")
-        \\    assert(term.io.row() == 6)
-        \\    assert(term.io.column() == 10)
-        \\    assert(term.io.button() == 0)
-        \\    assert(term.io.modifiers() == 1)
-        \\    let wheel = term.io.read() else ""
-        \\    assert(wheel == "mouse_wheel")
-        \\    assert(term.io.row() == 8)
-        \\    assert(term.io.column() == 4)
-        \\    assert(term.io.value() == -1)
+        \\    let press = mouse_of(term.read())
+        \\    let wheel = mouse_of(term.read())
+        \\    # The press was copied whole before the wheel was read: a
+        \\    # held event never changes under a later read.
+        \\    assert(press.kind == term.Pointer.press)
+        \\    assert(press.row == 6)
+        \\    assert(press.column == 10)
+        \\    assert(press.button == 0)
+        \\    assert(press.modifiers == 1)
+        \\    assert(press.has_shift())
+        \\    assert(not press.has_alt())
+        \\    assert(not press.has_control())
+        \\    assert(wheel.kind == term.Pointer.wheel)
+        \\    assert(wheel.row == 8)
+        \\    assert(wheel.column == 4)
+        \\    assert(wheel.wheel == -1)
         \\
     , provided);
     defer session.deinit();

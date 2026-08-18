@@ -92,7 +92,7 @@ pub const magic = "LUCE";
 /// 34 — ownership cycles are refused at every retaining store.  The
 /// `ownership_cycle` trap is appended to the stable trap vocabulary.
 ///
-/// 35 — `shell_run` joins the intrinsic set behind `std.os.shell.run`.
+/// 35 — `shell_run` joins the intrinsic set behind `std.os.run`.
 /// It is appended, but the tag is still part of the serialized program,
 /// so an older decoder must refuse it rather than guess.
 ///

@@ -275,7 +275,7 @@ test "shell services find the installed loom beside the running host" {
         \\import std.os
         \\
         \\func main(args: list[str]) -> !:
-        \\    print(try os.shell.run("loom --version"))
+        \\    print(try os.run("loom --version"))
         \\
     );
     const source = try install.at(gpa, "shell.luc");

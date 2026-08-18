@@ -1,72 +1,17 @@
 # Terminal input snapshotted as ordinary values.
+#
+# The vocabulary is `std.term`'s own: `Key`, `Pointer`, and `Mouse` are
+# the same types a program reading the terminal directly sees, so an
+# application can pass events between termui code and plain terminal
+# code without translating.  termui adds only `closed` — the end of
+# input, which `term.read()` spells as absence and a declarative event
+# loop wants as an ordinary case to match on.
 
 import std.term
 
-enum Key:
-    unknown
-    enter
-    tab
-    backspace
-    delete
-    up
-    down
-    left
-    right
-    home
-    end
-    page_up
-    page_down
-    escape
-    ctrl_a
-    ctrl_b
-    ctrl_c
-    ctrl_d
-    ctrl_e
-    ctrl_f
-    ctrl_g
-    ctrl_h
-    ctrl_i
-    ctrl_j
-    ctrl_k
-    ctrl_l
-    ctrl_m
-    ctrl_n
-    ctrl_o
-    ctrl_p
-    ctrl_q
-    ctrl_r
-    ctrl_s
-    ctrl_t
-    ctrl_u
-    ctrl_v
-    ctrl_w
-    ctrl_x
-    ctrl_y
-    ctrl_z
-
-enum Pointer:
-    press
-    release
-    drag
-    move
-    wheel
-
-struct Mouse:
-    kind: Pointer = Pointer.move
-    row: i64 = 0
-    column: i64 = 0
-    button: i64 = 0
-    modifiers: i64 = 0
-    wheel: i64 = 0
-
-    func has_shift() -> bool:
-        return (self.modifiers & 1) != 0
-
-    func has_alt() -> bool:
-        return (self.modifiers & 2) != 0
-
-    func has_control() -> bool:
-        return (self.modifiers & 4) != 0
+alias Key = term.Key
+alias Pointer = term.Pointer
+alias Mouse = term.Mouse
 
 union Event:
     closed
@@ -75,92 +20,24 @@ union Event:
     text(typed: str)
     mouse(pointer: Mouse)
 
-# The host keeps event details in mutable slots. Stream copies every slot
-# before returning, so a held Event never changes under a later read.
+# The event stream: each `next()` answers one Event, `closed` once the
+# terminal has nothing more to say.  `term.read()` copies every host
+# slot before returning, so a held Event never changes under a later
+# read.
 class Stream:
-    last_name: str
-
     init():
-        self.last_name = ""
+        return
 
     func next() -> Event:
-        let name = term.io.read()
-        if name == none:
+        let read = term.read()
+        if read == none:
             return Event.closed
-        self.last_name = name
-        if name == "resize":
-            return Event.resize
-        if name == "text":
-            return Event.text(typed = term.io.text())
-        let pointer = Stream.pointer_of(name)
-        if pointer != none:
-            return Event.mouse(pointer = Mouse(
-                kind = pointer,
-                row = term.io.row(),
-                column = term.io.column(),
-                button = term.io.button(),
-                modifiers = term.io.modifiers(),
-                wheel = term.io.value(),
-            ))
-        return Event.key(pressed = Stream.key_of(name))
-
-    static func pointer_of(name: str) -> Pointer?:
-        if name == "mouse_press":
-            return Pointer.press
-        if name == "mouse_release":
-            return Pointer.release
-        if name == "mouse_drag":
-            return Pointer.drag
-        if name == "mouse_move":
-            return Pointer.move
-        if name == "mouse_wheel":
-            return Pointer.wheel
-        return none
-
-    static func key_of(name: str) -> Key:
-        let named = NAMES.get(name)
-        if named == none:
-            return Key.unknown
-        return named
-
-const NAMES = {
-    "enter": Key.enter,
-    "tab": Key.tab,
-    "backspace": Key.backspace,
-    "delete": Key.delete,
-    "up": Key.up,
-    "down": Key.down,
-    "left": Key.left,
-    "right": Key.right,
-    "home": Key.home,
-    "end": Key.end,
-    "page_up": Key.page_up,
-    "page_down": Key.page_down,
-    "escape": Key.escape,
-    "ctrl_a": Key.ctrl_a,
-    "ctrl_b": Key.ctrl_b,
-    "ctrl_c": Key.ctrl_c,
-    "ctrl_d": Key.ctrl_d,
-    "ctrl_e": Key.ctrl_e,
-    "ctrl_f": Key.ctrl_f,
-    "ctrl_g": Key.ctrl_g,
-    "ctrl_h": Key.ctrl_h,
-    "ctrl_i": Key.ctrl_i,
-    "ctrl_j": Key.ctrl_j,
-    "ctrl_k": Key.ctrl_k,
-    "ctrl_l": Key.ctrl_l,
-    "ctrl_m": Key.ctrl_m,
-    "ctrl_n": Key.ctrl_n,
-    "ctrl_o": Key.ctrl_o,
-    "ctrl_p": Key.ctrl_p,
-    "ctrl_q": Key.ctrl_q,
-    "ctrl_r": Key.ctrl_r,
-    "ctrl_s": Key.ctrl_s,
-    "ctrl_t": Key.ctrl_t,
-    "ctrl_u": Key.ctrl_u,
-    "ctrl_v": Key.ctrl_v,
-    "ctrl_w": Key.ctrl_w,
-    "ctrl_x": Key.ctrl_x,
-    "ctrl_y": Key.ctrl_y,
-    "ctrl_z": Key.ctrl_z,
-}
+        match read:
+            resize:
+                return Event.resize
+            key(pressed):
+                return Event.key(pressed = pressed)
+            text(typed):
+                return Event.text(typed = typed)
+            mouse(pointer):
+                return Event.mouse(pointer = pointer)

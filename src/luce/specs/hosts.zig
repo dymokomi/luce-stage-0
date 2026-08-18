@@ -1113,7 +1113,7 @@ pub const Provided = struct {
     /// refusals arrive at the same trap by different roads, and both
     /// are worth a spec.
     machine: bool = true,
-    /// Whether this host can launch the shell behind `std.os.shell.run`.
+    /// Whether this host can launch the shell behind `std.os.run`.
     shell: bool = true,
     /// Whether this host can thread (docs/THREADS.md D8).  A host that
     /// cannot is the fail-closed row: a `spawn` traps

@@ -851,11 +851,7 @@ test "each std page names every function and constant its module exports" {
     {
         var names = try standardModule(repository, "os");
         defer names.deinit();
-        // Term, IO, and UI are the terminal facade's carrier structs,
-        // read only through `os.term`; the os/term inversion that
-        // deletes them is the next standard-library change, so the
-        // page does not learn their names on the way out.
-        try expectDocumented(repository, "library/os.md", names, &.{ "IO", "Term", "UI" });
+        try expectDocumented(repository, "library/os.md", names, &.{});
     }
     {
         var names = try standardModule(repository, "io");

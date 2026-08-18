@@ -42,7 +42,7 @@ const agreeGiven = spec.agreeGiven;
 /// Backend tests that cross the host boundary do so through the public
 /// standard modules. The shared prefix keeps those tests focused on emitted
 /// behavior while still compiling exactly the source surface users get.
-const standard_host_imports = "import std.files\nimport std.os\n\n";
+const standard_host_imports = "import std.files\nimport std.os\nimport std.term\n\n";
 
 fn standardHostSource(source: []const u8) ![]u8 {
     return std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ standard_host_imports, source });
@@ -140,8 +140,8 @@ test "floats, structs, and the host services all lower" {
         \\    let p = Point(x = 1.5, y = -0.0)
         \\    print(str(p.x * 2.0) + str(i64(p.y)) + str(sqrt(f32(4.0))) + str(sqrt(p.x)))
         \\    print(args[0] + str(len(args)) + str((try files.kind("nowhere")) != none))
-        \\    os.term.move(os.term.rows(), os.term.cols())
-        \\    os.term.flush()
+        \\    term.move(term.rows(), term.cols())
+        \\    term.flush()
         \\
     )).?;
     defer gpa.free(rendered);
@@ -1898,21 +1898,33 @@ test "the null object put in a T? is present, because absence is not a handle" {
 
 test "files, arguments, the screen, and the keyboard agree" {
     try agreeHost(
+        \\func describe(event: term.Event?) -> str:
+        \\    if event == none:
+        \\        return "<end of input>"
+        \\    match event:
+        \\        key(pressed):
+        \\            return "key"
+        \\        text(typed):
+        \\            return "text/" + typed
+        \\        mouse(pointer):
+        \\            return "mouse"
+        \\        resize:
+        \\            return "resize"
+        \\
         \\func main(args: list[str]) -> !:
         \\    print(str(len(args)) + " " + args[0] + "," + args[1])
         \\    print(str((try files.kind("notes.txt")) != none))
         \\    try files.write("notes.txt", "hello world")
         \\    print(str((try files.kind("notes.txt")) != none) + " " + try files.read("notes.txt"))
-        \\    print(str(os.term.rows()) + "x" + str(os.term.cols()))
-        \\    os.term.clear()
-        \\    os.term.move(2, 3)
-        \\    os.term.style(114, 236, true)
-        \\    os.term.write("drawn")
-        \\    os.term.flush()
+        \\    print(str(term.rows()) + "x" + str(term.cols()))
+        \\    term.clear()
+        \\    term.move(2, 3)
+        \\    term.style(114, 236, true)
+        \\    term.write("drawn")
+        \\    term.flush()
         \\    var pressed = 0
         \\    while pressed < 4:
-        \\        let name = os.term.io.read()
-        \\        print((name else "<end of input>") + "/" + os.term.io.text())
+        \\        print(describe(term.read()))
         \\        pressed = pressed + 1
         \\
     );
@@ -1921,9 +1933,8 @@ test "files, arguments, the screen, and the keyboard agree" {
 test "a keyboard that has run dry answers none on both engines" {
     // The default script is three keys and this asks for five, so the
     // last two are end of input.  Both engines have to say `none`, and
-    // both have to empty `key_text` with it: a payload left standing
-    // from the last real key would make the two answers differ in the
-    // one place a program looks.
+    // keep saying it: a keyboard that has run dry is dry every time it
+    // is asked, not once.
     //
     // This is the case that used to have no answer at all.  `no` from
     // the host was read by nobody, so a program at the end of its
@@ -1932,11 +1943,11 @@ test "a keyboard that has run dry answers none on both engines" {
         \\func main():
         \\    var pressed = 0
         \\    while pressed < 5:
-        \\        let name = os.term.io.read()
-        \\        if name == none:
-        \\            print("dry/" + os.term.io.text())
+        \\        let event = term.read()
+        \\        if event == none:
+        \\            print("dry")
         \\        else:
-        \\            print(name + "/" + os.term.io.text())
+        \\            print("event")
         \\        pressed = pressed + 1
         \\
     );
@@ -2228,12 +2239,13 @@ test "a withheld service group fails closed on both engines" {
     , .{ .files = false });
     try agreeHostGiven(
         \\func main():
-        \\    print(str(os.term.rows()))
+        \\    print(str(term.rows()))
         \\
     , .{ .terminal = false });
     try agreeHostGiven(
         \\func main():
-        \\    print(os.term.io.text())
+        \\    let event = term.read()
+        \\    print("read")
         \\
     , .{ .terminal = false });
 }

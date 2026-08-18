@@ -1,32 +1,271 @@
-# The low-level terminal module. `std.os` owns the host-facing system facts and
-# shell service; `std.term` gives a terminal program the same terminal value
-# without making it reach through the larger OS namespace.
+# term — the terminal: a drawn frame, a typed event stream, and the
+# border geometry a terminal program composes panes from.
 #
-# Both spellings are the same immutable facade.  `term.ui` is pure Unicode
-# geometry, while `term.io` is the input event stream and its mouse data.
+# Drawing is a pending frame: `clear`, `move`, `style`, and `write`
+# accumulate, and `flush` presents what accumulated.  Input is one
+# stream of values: `read()` answers the next `Event` — a key, typed
+# text, a mouse action, or a resize — or `none` when the input has
+# ended, which is how a program knows nobody will ask it for anything
+# again.  Every event is a value copied whole before `read` returns,
+# so a held event never changes under a later read.
+#
+# The host gate applies to the terminal as a channel: a host that
+# withholds it traps with `host_unavailable`.  The border glyphs and
+# `junction` are pure Unicode geometry and need no host at all.
 
-import std.os
+# --- the frame -------------------------------------------------------
 
-const ui = os.term.ui
-const io = os.term.io
-
+# Terminal cells, not bytes or Unicode scalars.  Ask again after a
+# resize event.
 func rows() -> i64:
-    return os.term.rows()
+    return Builtin.term_rows()
 
 func cols() -> i64:
-    return os.term.cols()
+    return Builtin.term_cols()
 
+# Reset style, clear the alternate screen, and move home.
 func clear():
-    os.term.clear()
+    Builtin.term_clear()
 
+# Place the cursor at a zero-based cell.
 func move(row: i64, column: i64):
-    os.term.move(row, column)
+    Builtin.term_move(row, column)
 
+# Reset style, then select 256-color foreground and background and
+# bold.  A negative color uses the terminal default.
 func style(foreground: i64, background: i64 = -1, bold: bool = false):
-    os.term.style(foreground, background, bold)
+    Builtin.term_style(fg = foreground, bg = background, bold = bold)
 
+# Append sanitized text to the pending frame.
 func write(text: str):
-    os.term.write(text)
+    Builtin.term_write(text)
 
+# Present the pending frame and make the cursor visible.
 func flush():
-    os.term.flush()
+    Builtin.term_flush()
+
+# --- input -----------------------------------------------------------
+
+# Every key the terminal decodes by name.  A key the terminal read but
+# this vocabulary does not know arrives as `unknown` rather than being
+# dropped: the program learns a key happened even when it cannot say
+# which.
+enum Key:
+    unknown
+    enter
+    tab
+    backspace
+    delete
+    up
+    down
+    left
+    right
+    home
+    end
+    page_up
+    page_down
+    escape
+    ctrl_a
+    ctrl_b
+    ctrl_c
+    ctrl_d
+    ctrl_e
+    ctrl_f
+    ctrl_g
+    ctrl_h
+    ctrl_i
+    ctrl_j
+    ctrl_k
+    ctrl_l
+    ctrl_m
+    ctrl_n
+    ctrl_o
+    ctrl_p
+    ctrl_q
+    ctrl_r
+    ctrl_s
+    ctrl_t
+    ctrl_u
+    ctrl_v
+    ctrl_w
+    ctrl_x
+    ctrl_y
+    ctrl_z
+
+# What a mouse did.
+enum Pointer:
+    press
+    release
+    drag
+    move
+    wheel
+
+# One mouse action, coordinates zero-based.  Buttons are left=0,
+# middle=1, right=2; a wheel event carries the direction in `wheel`,
+# +1 up and -1 down.
+struct Mouse:
+    kind: Pointer = Pointer.move
+    row: i64 = 0
+    column: i64 = 0
+    button: i64 = 0
+    modifiers: i64 = 0
+    wheel: i64 = 0
+
+    func has_shift() -> bool:
+        return (self.modifiers & 1) != 0
+
+    func has_alt() -> bool:
+        return (self.modifiers & 2) != 0
+
+    func has_control() -> bool:
+        return (self.modifiers & 4) != 0
+
+# One terminal event.  `resize` carries no size: geometry is a fact of
+# the terminal, so a program asks `rows()` and `cols()` when it hears
+# the terminal moved.
+union Event:
+    resize
+    key(pressed: Key)
+    text(typed: str)
+    mouse(pointer: Mouse)
+
+# The next event, or `none` when the input has ended.  End of input is
+# absence rather than an error for the same reason `read_line`'s is:
+# nothing failed, there is simply nobody left to ask.
+#
+# The host keeps event details in mutable slots; this copies every
+# slot into the value before returning, so the event a program holds
+# is its own.
+func read() -> Event?:
+    let name = Builtin.key_read()
+    if name == none:
+        return none
+    if name == "resize":
+        return Event.resize
+    if name == "text":
+        return Event.text(typed = Builtin.key_text())
+    let pointer = pointer_of(name)
+    if pointer != none:
+        return Event.mouse(pointer = Mouse(
+            kind = pointer,
+            row = Builtin.term_event_data(0),
+            column = Builtin.term_event_data(1),
+            button = Builtin.term_event_data(2),
+            modifiers = Builtin.term_event_data(3),
+            wheel = Builtin.term_event_data(4),
+        ))
+    return Event.key(pressed = key_of(name))
+
+private func pointer_of(name: str) -> Pointer?:
+    if name == "mouse_press":
+        return Pointer.press
+    if name == "mouse_release":
+        return Pointer.release
+    if name == "mouse_drag":
+        return Pointer.drag
+    if name == "mouse_move":
+        return Pointer.move
+    if name == "mouse_wheel":
+        return Pointer.wheel
+    return none
+
+private func key_of(name: str) -> Key:
+    let named = NAMES.get(name)
+    if named == none:
+        return Key.unknown
+    return named
+
+private const NAMES = {
+    "enter": Key.enter,
+    "tab": Key.tab,
+    "backspace": Key.backspace,
+    "delete": Key.delete,
+    "up": Key.up,
+    "down": Key.down,
+    "left": Key.left,
+    "right": Key.right,
+    "home": Key.home,
+    "end": Key.end,
+    "page_up": Key.page_up,
+    "page_down": Key.page_down,
+    "escape": Key.escape,
+    "ctrl_a": Key.ctrl_a,
+    "ctrl_b": Key.ctrl_b,
+    "ctrl_c": Key.ctrl_c,
+    "ctrl_d": Key.ctrl_d,
+    "ctrl_e": Key.ctrl_e,
+    "ctrl_f": Key.ctrl_f,
+    "ctrl_g": Key.ctrl_g,
+    "ctrl_h": Key.ctrl_h,
+    "ctrl_i": Key.ctrl_i,
+    "ctrl_j": Key.ctrl_j,
+    "ctrl_k": Key.ctrl_k,
+    "ctrl_l": Key.ctrl_l,
+    "ctrl_m": Key.ctrl_m,
+    "ctrl_n": Key.ctrl_n,
+    "ctrl_o": Key.ctrl_o,
+    "ctrl_p": Key.ctrl_p,
+    "ctrl_q": Key.ctrl_q,
+    "ctrl_r": Key.ctrl_r,
+    "ctrl_s": Key.ctrl_s,
+    "ctrl_t": Key.ctrl_t,
+    "ctrl_u": Key.ctrl_u,
+    "ctrl_v": Key.ctrl_v,
+    "ctrl_w": Key.ctrl_w,
+    "ctrl_x": Key.ctrl_x,
+    "ctrl_y": Key.ctrl_y,
+    "ctrl_z": Key.ctrl_z,
+}
+
+# --- border geometry -------------------------------------------------
+#
+# Pure Unicode, one normal terminal cell each.  `junction` takes the
+# four sides that continue through a cell, so a layout compositor can
+# choose the correct intersection instead of overwriting one border
+# with another.
+
+const horizontal = "─"
+const vertical = "│"
+const top_left = "┌"
+const top_right = "┐"
+const bottom_left = "└"
+const bottom_right = "┘"
+
+# A light block makes a reliable one-cell shadow even on terminals
+# that do not render faint background colours consistently; programs
+# can combine it with a dim style for a softer shadow.
+const shadow = "░"
+const shadow_dark = "▒"
+
+func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
+    if top and right and bottom and left:
+        return "┼"
+    if top and right and bottom:
+        return "├"
+    if top and bottom and left:
+        return "┤"
+    if top and right and left:
+        return "┴"
+    if right and bottom and left:
+        return "┬"
+    if top and bottom:
+        return "│"
+    if right and left:
+        return "─"
+    if top and right:
+        return "└"
+    if top and left:
+        return "┘"
+    if right and bottom:
+        return "┌"
+    if bottom and left:
+        return "┐"
+    if top:
+        return "╵"
+    if bottom:
+        return "╷"
+    if right:
+        return "╶"
+    if left:
+        return "╴"
+    return " "

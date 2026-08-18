@@ -3996,10 +3996,10 @@ test "luce.sema.call: a builtin's argument names come from its table" {
 }
 
 test "luce.sema.method: a standard method's wrong parameter name offers the closest slot" {
-    try expectHostSaying(
-        "import std.os\n\nfunc main():\n    os.term.style(114, bald = true)\n",
+    try expectSaying(
+        "import std.math\n\nfunc main():\n    var rng = new math.Rng(1)\n    let roll = rng.in_range(1, hgh = 7)\n",
         "luce.sema.method",
-        "style has no parameter bald; did you mean bold?",
+        "in_range has no parameter hgh; did you mean high?",
     );
 }
 
@@ -5582,11 +5582,11 @@ test "luce.sema.host: files.kind is gated" {
 }
 
 test "luce.sema.host: terminal input is gated" {
-    try expectRejected("import std.os\n\nfunc main():\n    let a = os.term.io.read()\n", "luce.sema.host");
+    try expectRejected("import std.term\n\nfunc main():\n    let a = term.read()\n", "luce.sema.host");
 }
 
 test "luce.sema.host: terminal output is gated" {
-    try expectRejected("import std.os\n\nfunc main():\n    os.term.write(\"x\")\n", "luce.sema.host");
+    try expectRejected("import std.term\n\nfunc main():\n    term.write(\"x\")\n", "luce.sema.host");
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 #
 # **A status code is data, never an error.**  A 404 is the server
 # answering, and the answer comes back in `Response.status` for the
-# program to read — `os.shell.run`'s "a non-zero exit is data" rule,
+# program to read — `os.run`'s "a non-zero exit is data" rule,
 # transferred.  The error channel carries what it always carries: the
 # world refusing — an unreachable host, a reset connection, a reply
 # that is not HTTP.

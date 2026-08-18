@@ -368,7 +368,7 @@ pub const Intrinsic = enum {
     os_cpu_count,
     /// `shell_run(command)` — run one host-shell command, capture its
     /// output, and hand the text back to the caller. The standard
-    /// library presents this as `std.os.shell.run`; the raw builtin is
+    /// library presents this as `std.os.run`; the raw builtin is
     /// reserved so the host boundary stays in one place.
     shell_run,
     /// The two halves of value storage (docs/STRINGS.md).  A string's

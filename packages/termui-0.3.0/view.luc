@@ -109,7 +109,7 @@ struct Strokes:
     left: bool = false
 
     func glyph() -> str:
-        return term.ui.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
+        return term.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
 
     func merged(other: Strokes) -> Strokes:
         return Strokes(

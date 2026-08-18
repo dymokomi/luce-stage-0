@@ -1,10 +1,11 @@
 # os — the Luce standard boundary for console, time, environment,
-# terminal, process and machine services.
+# process and machine services.  The terminal is its own module,
+# `std.term`.
 #
 # Every public name here is an ordinary Luce declaration.  The host's raw
 # implementation vocabulary lives behind the compiler-only `Builtin`
 # namespace, which only embedded standard-library source may use.  A project
-# can therefore use names such as `clock_ms` or `term_rows` for its own
+# can therefore use names such as `clock_ms` or `run` for its own
 # functions without colliding with the runtime.
 #
 # The host gate still applies.  A host that withholds a requested channel
@@ -40,154 +41,19 @@ func epoch_ms() -> i64:
 func sleep_ms(milliseconds: i64):
     Builtin.sleep_ms(milliseconds)
 
-# A command runner for tools that deliberately belong to the host rather
-# than to Luce's semantics. `shell.run` captures standard output and
-# standard error and appends the command's exit status to the returned
-# text. A shell command is intentionally one str: callers that need
+# Run one host shell command, for tools that deliberately belong to the
+# host rather than to Luce's semantics.  Standard output and standard
+# error are captured, and the command's exit status is appended to the
+# returned text: a non-zero exit is data for the program to read, not an
+# error.  The error channel carries what kept the command from running
+# at all.  A command is intentionally one str: callers that need
 # argument boundaries should quote them for the host shell.
 #
 # This is the seam used by the Luce editor for Ctrl-B. Keeping it here
-# means programs do not have to know the compiler-only host intrinsic or its ABI
-# shape, and gives future process helpers one standard home.
-struct shell:
-    static func run(command: str) -> str!:
-        return try Builtin.shell_run(command)
-
-# The terminal facade.  The raw names remain compiler-owned host services;
-# this value gives Luce programs one stable home for them and leaves room for
-# mouse, resize, alternate-screen and event APIs without adding another flat
-# family of globals.
-struct Term:
-    ui: UI
-    io: IO
-
-    func rows() -> i64:
-        return Builtin.term_rows()
-
-    func cols() -> i64:
-        return Builtin.term_cols()
-
-    func clear():
-        Builtin.term_clear()
-
-    func move(row: i64, column: i64):
-        Builtin.term_move(row, column)
-
-    func style(foreground: i64, background: i64 = -1, bold: bool = false):
-        Builtin.term_style(fg = foreground, bg = background, bold = bold)
-
-    func write(text: str):
-        Builtin.term_write(text)
-
-    func flush():
-        Builtin.term_flush()
-
-# Terminal input is one event stream.  `read()` answers a stable event name:
-# text, enter, ctrl_s, mouse_press, mouse_release, mouse_drag, mouse_move,
-# mouse_wheel, resize, or none at end of input.  The accessors read numeric
-# data belonging to the event most recently returned by `read()`.
-struct IO:
-    private:
-        token: i64
-
-    func read() -> str?:
-        return Builtin.key_read()
-
-    func text() -> str:
-        return Builtin.key_text()
-
-    # Coordinates are zero based.  For keyboard events these answer 0.
-    func row() -> i64:
-        return Builtin.term_event_data(0)
-
-    func column() -> i64:
-        return Builtin.term_event_data(1)
-
-    # Mouse buttons are left=0, middle=1 and right=2.  A wheel event uses -1.
-    func button() -> i64:
-        return Builtin.term_event_data(2)
-
-    # Modifier bits are shift=1, alt=2 and ctrl=4.
-    func modifiers() -> i64:
-        return Builtin.term_event_data(3)
-
-    # Wheel events answer +1 for up and -1 for down; other events answer 0.
-    func value() -> i64:
-        return Builtin.term_event_data(4)
-
-# Unicode terminal geometry belongs here rather than in every program that
-# draws a pane.  `junction` takes the four sides that continue through the
-# cell, so a layout compositor can choose the correct intersection instead of
-# overwriting one border with another.  All returned glyphs occupy one normal
-# terminal cell.
-struct UI:
-    private:
-        token: i64
-
-    func horizontal() -> str:
-        return "─"
-
-    func vertical() -> str:
-        return "│"
-
-    func top_left() -> str:
-        return "┌"
-
-    func top_right() -> str:
-        return "┐"
-
-    func bottom_left() -> str:
-        return "└"
-
-    func bottom_right() -> str:
-        return "┘"
-
-    func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
-        if top and right and bottom and left:
-            return "┼"
-        if top and right and bottom:
-            return "├"
-        if top and bottom and left:
-            return "┤"
-        if top and right and left:
-            return "┴"
-        if right and bottom and left:
-            return "┬"
-        if top and bottom:
-            return "│"
-        if right and left:
-            return "─"
-        if top and right:
-            return "└"
-        if top and left:
-            return "┘"
-        if right and bottom:
-            return "┌"
-        if bottom and left:
-            return "┐"
-        if top:
-            return "╵"
-        if bottom:
-            return "╷"
-        if right:
-            return "╶"
-        if left:
-            return "╴"
-        return " "
-
-    # A light block makes a reliable one-cell shadow even on terminals that
-    # do not render faint background colours consistently.  Programs can
-    # combine it with a dim style for a softer shadow.
-    func shadow() -> str:
-        return "░"
-
-    func shadow_dark() -> str:
-        return "▒"
-
-# One immutable facade value gives callers the requested `os.term.ui` path.
-# The token makes UI an ordinary object-free struct while remaining invisible
-# to callers; all useful state lives in the terminal host, not in this value.
-const term = Term(ui = UI(token = 0), io = IO(token = 0))
+# means programs do not have to know the compiler-only host intrinsic or
+# its ABI shape.
+func run(command: str) -> str!:
+    return try Builtin.shell_run(command)
 
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the

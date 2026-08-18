@@ -11,7 +11,7 @@ import std.http
 **A status code is data, never an error.** A 404 is the server
 answering, and the answer arrives in `Response.status` for the program
 to read — the same rule that makes a non-zero exit from
-[`os.shell.run`](/library/os/) data. The error channel carries what it
+[`os.run`](/library/os/) data. The error channel carries what it
 always carries: the world refusing — an unreachable host, a reset
 connection, a reply that is not HTTP.
 
