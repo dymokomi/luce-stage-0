@@ -285,6 +285,7 @@ pub const Host = struct {
             .term_move = cTermMove,
             .term_style = cTermStyle,
             .term_write = cTermWrite,
+            .term_copy = cTermCopy,
             .term_flush = cTermFlush,
             .term_event_data = cTermEventData,
             .key_read = cKeyRead,
@@ -899,6 +900,29 @@ pub const Host = struct {
     fn write(self: *Host, text: []const u8) error{OutOfMemory}!void {
         try self.ensureScreen();
         try sanitize.append(&self.screen.buffer, self.gpa, text);
+    }
+
+    /// Hand `text` to the system clipboard as OSC 52.  The escape goes
+    /// through the frame buffer when a frame is up — so the copy lands
+    /// in order with the drawing around it — and straight out
+    /// otherwise; either way the surrounding terminal owns what "the
+    /// clipboard" means, which is exactly why OSC 52 works over SSH
+    /// and inside a multiplexer.
+    fn copyToClipboard(self: *Host, text: []const u8) error{OutOfMemory}!void {
+        const encoder = std.base64.standard.Encoder;
+        const encoded = try self.gpa.alloc(u8, encoder.calcSize(text.len));
+        defer self.gpa.free(encoded);
+        _ = encoder.encode(encoded, text);
+        if (self.screen.active) {
+            try self.screen.buffer.appendSlice(self.gpa, "\x1b]52;c;");
+            try self.screen.buffer.appendSlice(self.gpa, encoded);
+            try self.screen.buffer.appendSlice(self.gpa, "\x07");
+            return;
+        }
+        self.out.writeAll("\x1b]52;c;") catch {};
+        self.out.writeAll(encoded) catch {};
+        self.out.writeAll("\x07") catch {};
+        self.out.flush() catch {};
     }
 
     fn flush(self: *Host) error{OutOfMemory}!void {
@@ -1753,6 +1777,11 @@ pub const Host = struct {
 
     fn cTermWrite(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
         of(context).write(text[0..@intCast(length)]) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTermCopy(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        of(context).copyToClipboard(text[0..@intCast(length)]) catch return .exhausted;
         return .yes;
     }
 

@@ -33,7 +33,7 @@ cost of changing the embedded library.
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
 | `std.files` | fallible whole-file, directory, and open-file APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `Mode` and the `File` class (fallible `init(path, mode)`, conforming to `io.Reader`/`io.Writer`), entries/list |
 | `std.os` | console, time, environment, process and machine services | line input, standard error, clocks, environment, `os.run`, memory and CPU facts |
-| `std.term` | the terminal | frame drawing (rows/cols, clear/move/style/write/flush), one typed `Event` stream behind `read()`, border glyphs and `junction` |
+| `std.term` | the terminal | frame drawing (rows/cols, clear/move/style/write/flush), `copy` to the system clipboard, one typed `Event` stream behind `read()`, border glyphs and `junction` |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |

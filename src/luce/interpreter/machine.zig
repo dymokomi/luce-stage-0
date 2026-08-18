@@ -2317,6 +2317,11 @@ pub const Machine = struct {
                 try screen.term_write(screen.context, registers[arguments[0]].asStr());
                 return .none;
             },
+            .term_copy => {
+                const screen = try self.terminal();
+                try screen.term_copy(screen.context, registers[arguments[0]].asStr());
+                return .none;
+            },
             .term_flush => {
                 const screen = try self.terminal();
                 try screen.term_flush(screen.context);

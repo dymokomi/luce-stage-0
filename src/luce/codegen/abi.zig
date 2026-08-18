@@ -265,7 +265,10 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 25;
+pub const version: u32 = 26;
+// 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
+// of the table.  A terminal host emits OSC 52 so the surrounding
+// terminal owns what "the system clipboard" means over SSH and mux.
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -1024,6 +1027,10 @@ pub const Host = extern struct {
     socket_accept: ?SocketAcceptFn = null,
     socket_port: ?SocketPortFn = null,
     socket_close: ?SocketCloseFn = null,
+    /// The system clipboard, receiving what the program copied.  A
+    /// terminal host emits OSC 52; a host with no clipboard leaves
+    /// the slot null and the program traps `host_unavailable`.
+    term_copy: ?TermWriteFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -1083,6 +1090,7 @@ pub const Slot = enum(u32) {
     socket_accept = 50,
     socket_port = 51,
     socket_close = 52,
+    term_copy = 53,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

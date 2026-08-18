@@ -1090,7 +1090,7 @@ pub fn lowerIntrinsic(
         },
         // Emitted by `try` and `catch`; never written by a reader.
         .errored, .error_message, .forget => unreachable,
-        .print, .term_write => {
+        .print, .term_write, .term_copy => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "this builtin takes a str");
             result = .none;

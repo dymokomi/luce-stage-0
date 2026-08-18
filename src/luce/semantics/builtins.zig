@@ -121,6 +121,7 @@ pub const standard_intrinsics = [_]Builtin{
         .{ .name = "bold", .default = default_not_bold },
     } },
     .{ .name = "term_write", .kind = .term_write, .parameters = &.{.{ .name = "text" }}, .host = true },
+    .{ .name = "term_copy", .kind = .term_copy, .parameters = &.{.{ .name = "text" }}, .host = true },
     .{ .name = "term_flush", .kind = .term_flush, .host = true },
     .{ .name = "key_read", .kind = .key_read, .host = true },
     .{ .name = "key_text", .kind = .key_text, .host = true },

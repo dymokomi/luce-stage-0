@@ -44,6 +44,12 @@ func write(text: str):
 func flush():
     Builtin.term_flush()
 
+# Hand text to the system clipboard.  The terminal carries it (OSC 52),
+# so a copy works over SSH and inside a multiplexer; the surrounding
+# terminal owns what "the clipboard" means.
+func copy(text: str):
+    Builtin.term_copy(text)
+
 # --- input -----------------------------------------------------------
 
 # Every key the terminal decodes by name.  A key the terminal read but

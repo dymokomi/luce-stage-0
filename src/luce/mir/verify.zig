@@ -1922,7 +1922,7 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .bytes);
             try expectType(result, .{ .optional = .str });
         },
-        .print, .term_write => {
+        .print, .term_write, .term_copy => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);
             try expectType(result, .none);

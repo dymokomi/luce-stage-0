@@ -856,6 +856,23 @@ test "a key's modifiers cross the boundary as the KeyPress they were" {
     try testing.expectEqualStrings("-\ns\na\nsc\n", session.printed());
 }
 
+test "term.copy hands the clipboard to the host on both engines" {
+    // The host records what it was handed; OSC 52 encoding is the real
+    // host's own concern, not the language's.  Copy is a terminal
+    // service, so a world without a terminal refuses it as
+    // host_unavailable like every other term builtin.
+    var session = try hosted.compare(
+        \\func main():
+        \\    term.copy("selected text")
+        \\    term.flush()
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("[copy]selected text\n" ++
+        "[flush]\n", session.printed());
+}
+
 test "term_style's defaults fill from the table, on both engines" {
     // docs/ARGS.md §3: the table is the builtin's signature, and its
     // two defaults — bg = -1, bold = false — are the whole of what

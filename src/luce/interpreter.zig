@@ -312,6 +312,7 @@ pub const Terminal = struct {
         bold: bool,
     ) error{OutOfMemory}!void,
     term_write: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
+    term_copy: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
     term_flush: *const fn (context: *anyopaque) error{OutOfMemory}!void,
     /// Numeric data belonging to the most recently returned event: row,
     /// column, button, modifiers, or wheel value by field number.  The

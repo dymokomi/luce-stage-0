@@ -34,6 +34,7 @@ passed to `move`.
 | `term.style(foreground: i64, background: i64 = -1, bold: bool = false)` | reset style, then select 256-color foreground/background and bold |
 | `term.write(text: str)` | append sanitized text to the pending frame |
 | `term.flush()` | present the pending frame and make the cursor visible |
+| `term.copy(text: str)` | hand text to the system clipboard |
 
 Foreground and background values from 0 through 255 select the terminal's
 256-color palette. A negative value uses the terminal default; an out-of-range
@@ -47,6 +48,11 @@ draw and then wait without displaying a stale frame.
 Program text passed to `term.write` is sanitized: control bytes cannot inject
 their own terminal escape sequences. Styling, movement, alternate-screen
 entry, mouse tracking, and restoration remain operations owned by the host.
+
+`term.copy` reaches the system clipboard through the terminal itself
+(OSC 52), so a copy works over SSH and inside a multiplexer; the
+surrounding terminal owns what "the clipboard" means and may ask for
+permission the first time.
 
 ## Read events
 

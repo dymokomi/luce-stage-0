@@ -488,6 +488,7 @@ const Module = struct {
             .term_move => builder.fnType(.i32, &.{ .ptr, .i64, .i64 }, .normal),
             .term_style => builder.fnType(.i32, &.{ .ptr, .i64, .i64, .i32 }, .normal),
             .term_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            .term_copy => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .key_read => builder.fnType(.i32, &.{ .ptr, .ptr, .ptr, .ptr, .ptr }, .normal),
             .call_depth => builder.fnType(.i64, &.{.ptr}, .normal),
             // Prompt in, line out — one call, so the prompt is on the
@@ -8447,6 +8448,10 @@ const Body = struct {
             .term_write => {
                 const text, const length = try self.textParts(of[0], "term");
                 _ = try self.callHost(.term_write, &.{ text, length }, "wrote");
+            },
+            .term_copy => {
+                const text, const length = try self.textParts(of[0], "term");
+                _ = try self.callHost(.term_copy, &.{ text, length }, "copied");
             },
             .term_flush => _ = try self.callHost(.term_flush, &.{}, "flushed"),
             .key_read => {

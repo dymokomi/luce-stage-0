@@ -1319,6 +1319,7 @@ pub const Capture = struct {
             .term_move = if (provided.terminal) termMove else null,
             .term_style = if (provided.terminal) termStyle else null,
             .term_write = if (provided.terminal) termWrite else null,
+            .term_copy = if (provided.terminal) termCopy else null,
             .term_flush = if (provided.terminal) termFlush else null,
             .term_event_data = if (provided.terminal) termEventData else null,
             .key_read = if (provided.terminal) keyRead else null,
@@ -1509,6 +1510,11 @@ pub const Capture = struct {
 
     fn termWrite(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
         of(context).record("[write]", text[0..@intCast(length)]);
+        return .yes;
+    }
+
+    fn termCopy(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        of(context).record("[copy]", text[0..@intCast(length)]);
         return .yes;
     }
 
@@ -1752,6 +1758,7 @@ pub const Reference = struct {
                 .term_move = termMove,
                 .term_style = termStyle,
                 .term_write = termWrite,
+                .term_copy = termCopy,
                 .term_flush = termFlush,
                 .event_data = eventData,
                 .key_read = keyRead,
@@ -1877,6 +1884,10 @@ pub const Reference = struct {
 
     fn termWrite(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
         try of(context).record("[write]", text);
+    }
+
+    fn termCopy(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        try of(context).record("[copy]", text);
     }
 
     fn termFlush(context: *anyopaque) error{OutOfMemory}!void {
