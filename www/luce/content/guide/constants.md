@@ -103,7 +103,7 @@ pear: 2
 plum: 7
 ```
 
-An empty `{}` has no key or value type. Use `new map[K, V]` for an empty
+An empty `{}` has no key or value type. Use `map[K, V]()` for an empty
 mutable map. A duplicate key in a constant map is rejected because the
 constant must describe one stable table.
 

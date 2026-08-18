@@ -67,7 +67,7 @@ func main():
     var b: u8 = 1
     print(str(a + b))     # traps integer_overflow at u8
 
-    let pixels = new array[u8](3)
+    let pixels = array[u8](3)
     pixels[0] = 200          # 200 fits a u8
     print(str(pixels[0]))
 ```
@@ -144,7 +144,7 @@ literal, and parameterized by their element types:
 - `builder` — an append-only text buffer, finished with `b.build()`.
 
 ```luce fragment
-let xs = new list[i64]
+let xs = list[i64]()
 xs.append(10)
 xs.append(20)
 let totals = {"a": 1, "b": 2}
@@ -202,7 +202,7 @@ func main():
 ```
 
 A `class` declares fields and methods like a structure, but its value is an ARC
-reference with identity. Construction requires `new`—`new Name(...)`—like
+reference with identity. Construction requires `new`—`Name(...)`—like
 every other reference identity. Without `init` the `new` call is memberwise;
 one `init(parameters)` body may replace that surface and must establish every
 field before the new identity exists. Assignment shares the object, `let`

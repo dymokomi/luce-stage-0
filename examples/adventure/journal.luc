@@ -64,7 +64,7 @@ struct Save:
 
     # The five lines, which `read` below is the inverse of.
     func text() -> str:
-        var out = new builder
+        var out = builder()
         out.append(tag + "\n")
         out.append("room " + self.room + "\n")
         out.append("moves " + str(self.moves) + "\n")
@@ -142,7 +142,7 @@ func read(path: str) -> Save!:
 # rather than one empty name.
 private func pieces(text: str) -> list[str]:
     if len(text) == 0:
-        return new list[str]
+        return list[str]()
     return text.split("|")
 
 private func first_word(line: str) -> str:

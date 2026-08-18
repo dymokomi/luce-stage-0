@@ -53,7 +53,7 @@ usual shape for accumulating text:
 
 ```luce run
 func main():
-    var joined = new builder
+    var joined = builder()
     for i in range(0, 4):
         if i > 0:
             joined.append(" ")

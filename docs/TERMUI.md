@@ -16,7 +16,7 @@ There is no renderer protocol for an application to coordinate and no public
 screen to clear or present. The entry point is three calls:
 
 ```text
-var app = new termui.Application()
+var app = termui.Application()
 app.set_layout(root)
 app.start()
 ```
@@ -55,11 +55,11 @@ class Counter: termui.View:
         return termui.Response.ignored
 
 func main():
-    var stack = new VStack
-    stack.add(new Counter())
-    stack.add(new Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
-    var app = new termui.Application()
-    app.set_layout(new termui.Panel("counter", stack))
+    var stack = VStack()
+    stack.add(Counter())
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
+    var app = termui.Application()
+    app.set_layout(termui.Panel("counter", stack))
     app.start()
 ```
 
@@ -186,7 +186,7 @@ new constraint, and a hidden pane is `fixed(cells = 0)`: zero cells draw
 nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
-var across = new termui.HStack(spacing = 1)
+var across = termui.HStack(spacing = 1)
 across.add(sidebar, termui.ratio(low = 12, high = 28, percent = 25))
 across.add(source)
 ```
@@ -210,7 +210,7 @@ truly tiny terminal optional regions may disappear.
 
 ## Text and styles
 
-`new Label(text, style)` is the common one-line component. `new
+`Label(text, style)` is the common one-line component. `new
 StyledText(lines)` accepts `list[Line]`. A line contains styled spans:
 
 ```text
@@ -218,7 +218,7 @@ let warning = termui.Line(spans = [
     termui.Span(text = "warning: ", style = termui.Style(foreground = 3, bold = true)),
     termui.Span(text = "unsaved changes", style = termui.Style(foreground = 7)),
 ])
-let message = new termui.StyledText([warning])
+let message = termui.StyledText([warning])
 ```
 
 The package has no global palette. An application owns its theme as ordinary
@@ -226,13 +226,13 @@ The package has no global palette. An application owns its theme as ordinary
 
 ## Panels
 
-`new Panel(title, content, style, edges)` draws a border and gives its
+`Panel(title, content, style, edges)` draws a border and gives its
 interior to the content. `Edges` defaults to all four sides. Adjacent strokes
 merge into the correct box-drawing junction; applications describe geometry
 and never choose `┼`, `├`, or `┴` themselves.
 
 ```text
-new termui.Panel(
+termui.Panel(
     "output",
     output,
     style = active_border,
@@ -245,7 +245,7 @@ new termui.Panel(
 `Rows` renders only the indexes visible in its assigned height:
 
 ```text
-new termui.Rows(total, render, top, anchor, selected, selected_style)
+termui.Rows(total, render, top, anchor, selected, selected_style)
 ```
 
 `render(index) -> Line` supplies content and is required — a lazy window with
@@ -261,7 +261,7 @@ hidden collection or selection model.
 
 ## Events
 
-Wrap behavior around content with `new EventHost(content, respond)`. The
+Wrap behavior around content with `EventHost(content, respond)`. The
 responder receives the event and the exact rectangle assigned to that view:
 
 ```text
@@ -289,7 +289,7 @@ delta. Unknown keys arrive as `Key.unknown` rather than an invalid enum.
 
 ## Cursor
 
-`new CursorHost(content, locate)` attaches a function `func(Rect) ->
+`CursorHost(content, locate)` attaches a function `func(Rect) ->
 Cursor?`. An active view returns its terminal cursor; inactive views return
 `none`. The child's request is computed first and the host's `locate`
 overrides it when it answers one. The callback sees the same assigned

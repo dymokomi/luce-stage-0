@@ -66,22 +66,22 @@ class Console: termui.View:
     # --- the View contract ------------------------------------------
 
     private func composed() -> termui.View:
-        let rows = new termui.Rows(
+        let rows = termui.Rows(
             document.count_lines(self.model.output),
             self.output_line,
             top = self.model.output_scroll,
         )
-        let pane = new termui.CursorHost(
-            new termui.EventHost(rows, self.output_event),
+        let pane = termui.CursorHost(
+            termui.EventHost(rows, self.output_event),
             self.output_cursor,
         )
-        let framed = new termui.Panel(
+        let framed = termui.Panel(
             "output",
             pane,
             style = theme.pane_style(self.model.focus == focus.Focus.output),
             edges = termui.Edges(bottom = false),
         )
-        return new termui.EventHost(framed, self.frame_event)
+        return termui.EventHost(framed, self.frame_event)
 
     func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
         return self.composed().draw(surface, area)

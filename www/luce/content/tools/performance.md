@@ -60,7 +60,7 @@ buffer and returns a `str` at the end:
 
 ```luce run
 func main():
-    var out = new builder
+    var out = builder()
     for i in range(0, 4):
         if i > 0:
             out.append(",")

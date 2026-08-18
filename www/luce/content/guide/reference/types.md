@@ -272,7 +272,7 @@ class Counter:
         return self.value
 
 func main():
-    let first = new Counter(value = 1)
+    let first = Counter(value = 1)
     let same = first
     assert(first is same)
     print(str(same.add(41)))
@@ -290,7 +290,7 @@ conform to interfaces, use weak class fields, and declare one bare `deinit`
 body that runs at the last strong release before its fields release. `deinit`
 cannot resurrect its dying `self`.
 
-Construction requires `new`—`new Name(...)`—the keyword that creates every
+Construction requires `new`—`Name(...)`—the keyword that creates every
 reference identity; a bare `Name(...)` call on a class is a compile error.
 Without an `init` declaration, the `new` call takes the same memberwise
 arguments as a structure constructor. One class-only initializer may replace
@@ -310,7 +310,7 @@ class Name:
 
 The two `init` forms above are alternatives, not overloads. The only permitted
 result marker is bare `-> !`; success answers the enclosing class implicitly.
-Construction writes `new Name(...)`, with ordinary positional, named,
+Construction writes `Name(...)`, with ordinary positional, named,
 trailing-default, fallibility, and visibility rules. `Name.init(...)` and a
 bare `Name(...)` call are invalid.
 
@@ -388,7 +388,7 @@ size.
 ## `list[T]`
 
 A growable ARC reference sequence. Non-empty literals infer an element type;
-an empty list uses `new list[T]`. Indexes and lengths are `i64`. Slicing
+an empty list uses `list[T]()`. Indexes and lengths are `i64`. Slicing
 creates a new outer list: value elements copy and reference elements remain
 shared.
 
@@ -400,7 +400,7 @@ reference type.
 
 An insertion-ordered ARC reference map. `K` is an integer, `str`, or an enum.
 `get(key)` answers `V?`; indexing an absent key traps `key_missing`. `{}` has
-no type, so an empty map uses `new map[K, V]`.
+no type, so an empty map uses `map[K, V]()`.
 
 ## `array[T, ...]`
 
@@ -408,7 +408,7 @@ A fixed-after-construction ARC reference grid. Each `_` in the type records
 one rank; runtime extents are arguments to construction:
 
 ```text
-let pixels: array[u8, _, _] = new array[u8](height, width)
+let pixels: array[u8, _, _] = array[u8](height, width)
 ```
 
 Arrays are densely packed at the element's declared width and are indexed

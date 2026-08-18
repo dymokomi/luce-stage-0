@@ -121,7 +121,7 @@ value remains the same shared reference:
 import std.json
 
 func main():
-    var fields = new map[str, json.Json]
+    var fields = map[str, json.Json]()
     fields["name"] = json.Json.text(value = "Luce")
     fields["version"] = json.Json.integer(value = 1)
     fields["tags"] = json.Json.array(items = [json.Json.text(value = "language")])

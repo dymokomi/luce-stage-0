@@ -34,7 +34,7 @@ reference objects, so assignment and arguments share one buffer.
 
 ```luce
 func main():
-    let buffer = new list[u8]
+    let buffer = list[u8]()
     buffer.append(72)
     buffer.append(105)
     let same = buffer
@@ -69,7 +69,7 @@ raw `handle` currency is spellable only inside embedded standard source,
 so a program holds a `File`, never a number (the Swift shape: a
 descriptor lives behind the session object that owns it). Construction
 is the class's fallible `init(path: str, mode: Mode = Mode.read) -> !`
-— `try new files.File(path)` to read, with `files.Mode.create` and
+— `try files.File(path)` to read, with `files.Mode.create` and
 `files.Mode.append` as the other two doors. A `File` conforms to
 `io.Reader` and `io.Writer` (`std.io`, the pure byte-stream contract),
 and its methods operate on a caller-owned `array[u8, _]` and are
@@ -89,8 +89,8 @@ would make aliases unsafe.
 import std.files
 
 func size(path: str) -> i64!:
-    let f = try new files.File(path)
-    let buffer = new array[u8](4096)
+    let f = try files.File(path)
+    let buffer = array[u8](4096)
     var total: i64 = 0
     var filled = try f.read(buffer)
     while filled > 0:

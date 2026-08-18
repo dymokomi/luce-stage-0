@@ -156,7 +156,7 @@ test "constants: values and every flat container shape materialize once" {
         \\        sum += index + value
         \\    assert(sum == 9)
         \\    assert(AGES.has("ada") and AGES["alan"] == 41)
-        \\    var joined = new builder
+        \\    var joined = builder()
         \\    for key, value in AGES:
         \\        joined.append(key + str(value))
         \\    assert(joined.build() == "ada36alan41")
@@ -188,7 +188,7 @@ test "constants: a runtime map literal is fresh, mutable, ordered, and owns valu
         \\    var same_shape = {1: "last", 2: "two"}
         \\    assert(len(numbers) == 2 and numbers[1] == "last")
         \\    assert(numbers != same_shape)
-        \\    var order = new builder
+        \\    var order = builder()
         \\    for key, value in numbers:
         \\        order.append(str(key) + value)
         \\    assert(order.build() == "1last2two")
@@ -523,7 +523,7 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\func main():
         \\    assert(len(EMPTY) == 0)
         \\
-    , "luce.parse.expression", "an empty map has no literal; write 'new map[K, V]' so its key and value types are explicit", "{}");
+    , "luce.parse.expression", "an empty map has no literal; write 'map[K, V]()' so its key and value types are explicit", "{}");
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +644,7 @@ test "constants: file.read through a parameter traps before changing the world" 
         \\    return try file.read(into)
         \\
         \\func main() -> !:
-        \\    var file = try new files.File("notes.txt")
+        \\    var file = try files.File("notes.txt")
         \\    let count = try read(file, BUFFER)
         \\    print(str(count))
         \\

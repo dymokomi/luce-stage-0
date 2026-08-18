@@ -56,7 +56,7 @@ test "character literals and conversions preserve Unicode scalar values" {
 test "the complete Unicode scalar boundary converts and orders" {
     try agree.prints(
         \\func main():
-        \\    var points = new list[u32]
+        \\    var points = list[u32]()
         \\    points.append(u32(0))
         \\    points.append(u32(0xd7ff))
         \\    points.append(u32(0xe000))
@@ -88,10 +88,10 @@ test "characters retain their type in optionals lists arrays and structs" {
         \\
         \\func main():
         \\    let mark = Mark(value = 'λ', fallback = none)
-        \\    var values = new list[char]
+        \\    var values = list[char]()
         \\    values.append(mark.value)
         \\    values.append('🙂')
-        \\    var grid = new array[char](2)
+        \\    var grid = array[char](2)
         \\    grid[0] = values[1]
         \\    grid[1] = mark.fallback else 'x'
         \\    print(str(values[0]) + str(grid[0]) + str(grid[1]))
@@ -102,7 +102,7 @@ test "characters retain their type in optionals lists arrays and structs" {
 test "character containers sort at scalar order" {
     try agree.prints(
         \\func main():
-        \\    var values = new list[char]
+        \\    var values = list[char]()
         \\    values.append('λ')
         \\    values.append('A')
         \\    values.append('🙂')
@@ -137,14 +137,14 @@ test "bytes copy text lists and rank-one arrays without aliasing" {
         \\    let middle = encoded[1:5]
         \\    print(parse_str(middle) else "not text")
         \\
-        \\    var source = new list[u8]
+        \\    var source = list[u8]()
         \\    source.append(u8(65))
         \\    source.append(u8(66))
         \\    let copied = bytes(source)
         \\    source[0] = u8(90)
         \\    print(parse_str(copied) else "not text")
         \\
-        \\    var buffer = new array[u8](3)
+        \\    var buffer = array[u8](3)
         \\    buffer[0] = u8(67)
         \\    buffer[1] = u8(68)
         \\    buffer[2] = u8(69)
@@ -162,7 +162,7 @@ test "bytes concatenate compare slice and reject invalid UTF-8 as text" {
         \\    print(str(joined == bytes("abcd")))
         \\    print(str(first < second))
         \\    print(parse_str(joined[1:3]) else "not text")
-        \\    var raw = new list[u8]
+        \\    var raw = list[u8]()
         \\    raw.append(u8(0xff))
         \\    raw.append(u8(0xfe))
         \\    print(parse_str(bytes(raw)) else "not text")

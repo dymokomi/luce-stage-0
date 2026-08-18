@@ -241,7 +241,7 @@ private func end_record(archive: list[u8]) -> i64!:
     error("zip: not an archive (no end-of-central-directory record)")
 
 # An opened archive: the bytes, and the table its central directory
-# lists.  `try new Archive(data)` parses the directory once, so a
+# lists.  `try Archive(data)` parses the directory once, so a
 # damaged archive fails where it is opened rather than on first use;
 # the contents are untouched until `extract` asks for an entry.
 class Archive:
@@ -350,15 +350,15 @@ private func verify(entry: Entry, plain: list[u8]) -> !:
 # An archive under construction: entries go in with `add`, and
 # `finish` answers the bytes.  A class, because a writer is an
 # accumulator with identity — two bindings to one writer see one
-# archive — made with `new zip.Writer()` and owned like any object.
+# archive — made with `zip.Writer()` and owned like any object.
 class Writer:
     private:
         out: list[u8]
         written: list[Entry]
 
     init():
-        self.out = new list[u8]
-        self.written = new list[Entry]
+        self.out = list[u8]()
+        self.written = list[Entry]()
 
     # Store one entry.  `compress` deflates it and keeps whichever of
     # the two is smaller, so an entry never grows by being compressed.
@@ -401,7 +401,7 @@ class Writer:
     # The whole archive: everything added, then the central directory
     # over it.  A fresh list every time, so the writer stays usable.
     func finish() -> list[u8]:
-        var archive = new list[u8]
+        var archive = list[u8]()
         for value in self.out:
             archive.append(value)
         let directory = len(archive)
@@ -725,7 +725,7 @@ private struct Stream:
 # world's, not the program's.
 func inflate(data: list[u8]) -> list[u8]!:
     var reader = Stream(position = 0)
-    var out = new list[u8]
+    var out = list[u8]()
     var last: i64 = 0
     while last == 0:
         last = try reader.take(data, 1)
@@ -799,7 +799,7 @@ private func fixed_code(symbol: i64) -> i64:
 # Compression cannot fail — worst case every u8 goes out as a
 # literal — so this answers bytes rather than an error.
 func deflate(data: list[u8]) -> list[u8]:
-    var out = new list[u8]
+    var out = list[u8]()
     var packer = Packer(held = 0, count = 0)
     packer.put(out, 1, 1)
     packer.put(out, 1, 2)
@@ -807,7 +807,7 @@ func deflate(data: list[u8]) -> list[u8]:
     let length_bits = length_extras
     let distances = distance_bases
     let distance_bits = distance_extras
-    var recent = new map[i64, i64]
+    var recent = map[i64, i64]()
     var earlier: list[i64] = []
     for slot in range(0, len(data)):
         earlier.append(-1)
@@ -876,7 +876,7 @@ func read(path: str) -> list[u8]!:
 # Write an archive to disk.  Takes what `Writer.finish` answers, so
 # building one and saving it is two sentences:
 #
-#     var w = new zip.Writer()
+#     var w = zip.Writer()
 #     try w.add("a.txt", zip.to_bytes("hello\n"))
 #     try zip.write("out.zip", w.finish())
 func write(path: str, archive: list[u8]) -> !:

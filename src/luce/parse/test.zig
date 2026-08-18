@@ -613,7 +613,7 @@ test "late declarations parse: var with annotation only" {
         \\    var report: builder
         \\    var grid: array[i64, _, _]
         \\    var count: i64
-        \\    report = new builder
+        \\    report = builder()
         \\
     );
     defer parsed.deinit();
@@ -637,7 +637,7 @@ test "every assignment place parses, nested and compound" {
         \\func main():
         \\    var n = 0
         \\    var p = Point(x = 1)
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    var cells = [Point(x = 1)]
         \\    n = 1
         \\    p.x = 2
@@ -698,7 +698,7 @@ test "every for form parses into the node its lowering needs" {
     var parsed = try expectClean(
         \\func main():
         \\    var xs = [1]
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    for i in range(0, 10):
         \\        print(i)
         \\    for x in xs:
@@ -1047,11 +1047,11 @@ test "every literal form parses" {
         \\    let g = "text"
         \\    let h = [1, 2, 3]
         \\    let i = []
-        \\    let j = new builder
-        \\    let k = new builder
-        \\    let l = new list[i64]
-        \\    let m = new map[str, i64]
-        \\    let n = new array[f64](4, 8)
+        \\    let j = builder()
+        \\    let k = builder()
+        \\    let l = list[i64]()
+        \\    let m = map[str, i64]()
+        \\    let n = array[f64](4, 8)
         \\
     );
     defer parsed.deinit();
@@ -1111,7 +1111,7 @@ test "empty, malformed, and truncated map literals refuse once and recover" {
     defer empty.deinit();
     try testing.expectEqual(@as(usize, 1), empty.diagnostics.count());
     try testing.expectEqualStrings("luce.parse.expression", empty.diagnostics.at(0).?.code);
-    try testing.expect(std.mem.indexOf(u8, empty.diagnostics.at(0).?.message, "new map[K, V]") != null);
+    try testing.expect(std.mem.indexOf(u8, empty.diagnostics.at(0).?.message, "map[K, V]()") != null);
     try testing.expectEqual(@as(usize, 1), empty.program.functions[0].body.statements.len);
     try testing.expectEqualStrings("okay", empty.program.functions[0].body.statements[0].let.name);
 
@@ -1130,9 +1130,9 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
     var parsed = try expectClean(
         \\func main():
         \\    var xs: list[i64] = [1, 2, 3]
-        \\    var m = new map[str, list[i64]]
-        \\    var grid = new array[f64](4, 8)
-        \\    var b = new builder
+        \\    var m = map[str, list[i64]]()
+        \\    var grid = array[f64](4, 8)
+        \\    var b = builder()
         \\    xs[0] = 10
         \\    grid[1, 2] = 3.5
         \\    m["ones"] = xs
@@ -1621,23 +1621,23 @@ test "a missing comma is reported as a missing comma, in every list there is" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 17, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let m = new map[str i64]\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 25, .contains = "missing ',' before 'i64'" },
+            .source = "func main():\n    let m = map[str i64]()\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 21, .contains = "missing ',' before 'i64'" },
         },
         .{
             .source = "func main():\n    let v = grid[1 2]\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let g = new array[i64](2 3)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 30, .contains = "missing ','" },
+            .source = "func main():\n    let g = array[i64](2 3)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 26, .contains = "missing ','" },
         },
         .{
             .source = "func f(a: i64 b: i64):\n    return\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "missing ',' before 'b'" },
         },
         .{
-            .source = "func main():\n    var x: map[str i64] = new map[str, i64]\n",
+            .source = "func main():\n    var x: map[str i64] = map[str, i64]()\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ',' before 'i64'" },
         },
     };
@@ -1659,7 +1659,7 @@ test "a list that runs out of input blames the bracket, not the element that nev
         "func main():\n    let xs = [1, 2,\n",
         "func main():\n    let x = xs[0,\n",
         "func main():\n    var x: list[i64,\n",
-        "func main():\n    let g = new array[i64](2,\n",
+        "func main():\n    let g = array[i64](2,\n",
         "func main():\n    f(a,\n",
         "func f(a: i64,\n",
         "func main():\n    let p = Point(x = 1,\n",
@@ -1896,7 +1896,7 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\
         \\func main():
         \\    var xs = [1, 2]
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    for i, x in xs:
         \\        if x % 2 == 0 and x > width:
         \\            m[f"k{i}"] += x
@@ -1929,8 +1929,8 @@ const fragments = [_][]const u8{
     "import math",           "let x = ",               "var y: i64",          "return ",
     "if ",                   "elif ",                  "else:",               "while ",
     "for i in range(0, 3):", "for x in xs:",           "break",               "continue",
-    "print(x)",              "xs.append(",             "new map[str, i64]",   "new list(",
-    "new array[i64](2, 2)",  "not ",                   "and ",                "or ",
+    "print(x)",              "xs.append(",             "map[str, i64]()",     "list(",
+    "array[i64](2, 2)",      "not ",                   "and ",                "or ",
     "==",                    "<",                      "+",                   "(",
     ")",                     "[",                      "]",                   ",",
     ":",                     ".",                      "=",                   "f\"{x}\"",

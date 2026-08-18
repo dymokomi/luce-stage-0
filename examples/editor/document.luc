@@ -40,7 +40,7 @@ class Document:
         self.cursor = cursor
         self.scroll = scroll
         self.dirty = dirty
-        self.history = new history.History()
+        self.history = history.History()
 
     # The status line's message.  A setter because the model often
     # says one thing about the active document in passing —

@@ -52,7 +52,7 @@ test "a listener opens, says its port, and carries one round trip" {
         \\func send(conn: network.Connection, data: array[u8, _], count: i64) -> !:
         \\    var at: i64 = 0
         \\    while at < count:
-        \\        var piece = new array[u8](count - at)
+        \\        var piece = array[u8](count - at)
         \\        var held: i64 = 0
         \\        while at + held < count:
         \\            piece[held] = data[at + held]
@@ -64,8 +64,8 @@ test "a listener opens, says its port, and carries one round trip" {
         \\    try conn.flush()
         \\
         \\func take(conn: network.Connection, count: i64) -> list[u8]!:
-        \\    var got = new list[u8]
-        \\    var buffer = new array[u8](count)
+        \\    var got = list[u8]()
+        \\    var buffer = array[u8](count)
         \\    while len(got) < count:
         \\        let landed = try conn.read(buffer)
         \\        if landed == 0:
@@ -77,13 +77,13 @@ test "a listener opens, says its port, and carries one round trip" {
         \\    return got
         \\
         \\func main() -> !:
-        \\    let door = try new network.Listener(0)
+        \\    let door = try network.Listener(0)
         \\    print(str(try door.port()))
         \\
         \\    let client = try network.Connection.dial("localhost", try door.port())
         \\    let served = try door.accept()
         \\
-        \\    var hello = new array[u8](5)
+        \\    var hello = array[u8](5)
         \\    var at: i64 = 0
         \\    while at < 5:
         \\        hello[at] = u8(104 + at)
@@ -92,7 +92,7 @@ test "a listener opens, says its port, and carries one round trip" {
         \\    let heard = try take(served, 5)
         \\    print(str(heard[0]) + " " + str(heard[4]))
         \\
-        \\    var reply = new array[u8](2)
+        \\    var reply = array[u8](2)
         \\    reply[0] = 111
         \\    reply[1] = 107
         \\    try send(served, reply, 2)
@@ -111,7 +111,7 @@ test "dropping the dialing end is the served end's end of stream" {
         \\func dial_and_send(door: network.Listener) -> network.Connection!:
         \\    let client = try network.Connection.dial("localhost", 4000)
         \\    let served = try door.accept()
-        \\    var one = new array[u8](1)
+        \\    var one = array[u8](1)
         \\    one[0] = 42
         \\    let sent = try client.write(one, 1)
         \\    if sent != 1:
@@ -119,9 +119,9 @@ test "dropping the dialing end is the served end's end of stream" {
         \\    return served
         \\
         \\func main() -> !:
-        \\    let door = try new network.Listener(4000)
+        \\    let door = try network.Listener(4000)
         \\    let served = try dial_and_send(door)
-        \\    var buffer = new array[u8](8)
+        \\    var buffer = array[u8](8)
         \\    let drained = try served.read(buffer)
         \\    print("drained " + str(drained) + " worth " + str(buffer[0]))
         \\    let finished = try served.read(buffer)
@@ -138,7 +138,7 @@ test "a refused world answers io_failed naming the transport verb" {
         \\    let held = try network.Connection.dial("localhost", 80)
         \\
         \\func open_door() -> !:
-        \\    let held = try new network.Listener(80)
+        \\    let held = try network.Listener(80)
         \\
         \\func main():
         \\    dial() catch reason:
@@ -158,7 +158,7 @@ test "an accept with nobody dialing is the world refusing, not a hang" {
         \\    let held = try door.accept()
         \\
         \\func main() -> !:
-        \\    let door = try new network.Listener(5000)
+        \\    let door = try network.Listener(5000)
         \\    wait_for_peer(door) catch reason:
         \\        print(reason)
         \\
@@ -173,7 +173,7 @@ test "a worker inherits the transport channel" {
     // while its parent dialed happily.
     try hosted.prints(
         \\func open_door() -> i64!:
-        \\    let door = try new network.Listener(0)
+        \\    let door = try network.Listener(0)
         \\    return try door.port()
         \\
         \\func main() -> !:
@@ -189,7 +189,7 @@ test "a host without the transport channel fails closed" {
     // both engines, and no `catch` stands in a trap's way.
     try hosted.trapGiven(
         \\func main() -> !:
-        \\    let held = try new network.Listener(80)
+        \\    let held = try network.Listener(80)
         \\
     , .{ .network = false }, .host_unavailable);
 }

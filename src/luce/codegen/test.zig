@@ -184,7 +184,7 @@ test "a union builds through the struct path and is read inline" {
         \\            return 2
         \\
         \\func main():
-        \\    var cells = new array[Shape](2)
+        \\    var cells = array[Shape](2)
         \\    cells[1] = Shape.circle(radius = 4.0)
         \\    print(str(kind(cells[1])))
         \\
@@ -216,8 +216,8 @@ test "the runtime library is called, not reimplemented" {
     // `len` of a list or an array is generated inline (docs/CODEGEN.md).
     const rendered = (try render(
         \\func main():
-        \\    let xs = new list[i64]
-        \\    let counts = new map[str, i64]
+        \\    let xs = list[i64]()
+        \\    let counts = map[str, i64]()
         \\    xs.append(1)
         \\    print(str(len(counts)) + str(xs.pop()))
         \\
@@ -389,7 +389,7 @@ test "a hoisted container read lands on the retired row when the handle is null"
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    var row = 0
         \\    while row < 2:
         \\        grid[row, 0] = row * 2
@@ -420,7 +420,7 @@ test "every runtime declaration carries what the compiler knows about it" {
     // what proves the saying reaches the module.
     const rendered = (try render(
         \\func main():
-        \\    let counts = new map[str, i64]
+        \\    let counts = map[str, i64]()
         \\    counts["one"] = 1
         \\    print(str(len(counts)) + str(counts["one"]))
         \\
@@ -1092,7 +1092,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    return sum
         \\
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    var i = 1
         \\    while i <= 5:
         \\        xs.append(i * i)
@@ -1103,7 +1103,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    print(str(total(xs)))
         \\    print(str(xs.find(9) else -1) + " " + str(xs.contains(7)))
         \\
-        \\    let names = new map[str, i64]
+        \\    let names = map[str, i64]()
         \\    names["one"] = 1
         \\    names["two"] = 2
         \\    names["one"] = 11
@@ -1112,7 +1112,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\        print(name + "=" + str(count))
         \\    print(str(names.has("two")) + " " + str(len(names.keys())))
         \\
-        \\    let text = new builder
+        \\    let text = builder()
         \\    text.append("ab")
         \\    text.append_ascii(99)
         \\    let word = text.build()
@@ -1164,16 +1164,16 @@ test "a fallible call's result is carried, not taken, and still agrees" {
 test "a nested container agrees, and the leak census counts the same" {
     try agree(
         \\func main():
-        \\    let rows = new list[list[i64]]
+        \\    let rows = list[list[i64]]()
         \\    var r = 0
         \\    while r < 3:
-        \\        let row = new list[i64]
+        \\        let row = list[i64]()
         \\        row.append(r)
         \\        row.append(r * 10)
         \\        rows.append(row)
         \\        r = r + 1
         \\    print(str(len(rows)) + " " + str(rows[2][1]))
-        \\    let leaked = new list[i64]
+        \\    let leaked = list[i64]()
         \\    leaked.append(1)
         \\    print("done")
         \\
@@ -1183,7 +1183,7 @@ test "a nested container agrees, and the leak census counts the same" {
 test "an index out of bounds agrees" {
     try agree(
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(1)
         \\    print("one")
         \\    print(str(xs[3]))
@@ -1203,7 +1203,7 @@ test "an index out of bounds agrees" {
 test "float arithmetic, comparison, and formatting agree over the special values" {
     try agree(
         \\func main():
-        \\    let values = new list[f64]
+        \\    let values = list[f64]()
         \\    values.append(0.0)
         \\    values.append(-0.0)
         \\    values.append(1.5)
@@ -1266,12 +1266,12 @@ test "min and max reductions over an array agree, signed zeros and all" {
         \\    return largest
         \\
         \\func main():
-        \\    let control = new list[f64]
+        \\    let control = list[f64]()
         \\    control.append(0.0)
         \\    control.append(-0.0)
         \\    control.append(0.0 / 0.0)
         \\    let n = len(control) * 5
-        \\    var xs = new array[f64](n)
+        \\    var xs = array[f64](n)
         \\    for pattern in range(0, 32):
         \\        for i in range(0, n):
         \\            xs[i] = control[(pattern // (i % 5 + 1)) % 2]
@@ -1291,7 +1291,7 @@ test "min and max reductions over an array agree, signed zeros and all" {
 test "clamp agrees when the bounds cross and when they are not numbers" {
     try agree(
         \\func main():
-        \\    let bounds = new list[f64]
+        \\    let bounds = list[f64]()
         \\    bounds.append(-1.0)
         \\    bounds.append(1.0)
         \\    bounds.append(0.0)
@@ -1313,7 +1313,7 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
 test "the floating builtins agree" {
     try agree(
         \\func main():
-        \\    let xs = new list[f64]
+        \\    let xs = list[f64]()
         \\    xs.append(0.0)
         \\    xs.append(4.0)
         \\    xs.append(2.999)
@@ -1363,7 +1363,7 @@ test "i64(NaN) and i64(infinity) trap the same way" {
 test "the i64 math builtins agree, and abs of the smallest i64 traps" {
     try agree(
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(0)
         \\    xs.append(7)
         \\    xs.append(-7)
@@ -1375,7 +1375,7 @@ test "the i64 math builtins agree, and abs of the smallest i64 traps" {
     );
     try agree(
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(0 - 9223372036854775807 - 1)
         \\    print(str(abs(7)) + " " + str(abs(-7)))
         \\    print(str(abs(xs[0])))
@@ -1443,7 +1443,7 @@ test "zero-initialized structs agree, nested ones included" {
         \\    weight: f64
         \\
         \\func main():
-        \\    var grid = new array[Outer](2, 2)
+        \\    var grid = array[Outer](2, 2)
         \\    print("[" + grid[0, 0].label + "][" + grid[0, 0].inner.tag + "]")
         \\    print(str(grid[1, 1].inner.n) + " " + str(grid[1, 1].weight))
         \\    grid[1, 0].inner.n = 7
@@ -1461,7 +1461,7 @@ test "an inline array access agrees on every element kind and rank" {
     // two ranks, both engines.
     try agree(
         \\func main():
-        \\    var grid = new array[i64](3, 4)
+        \\    var grid = array[i64](3, 4)
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            grid[r, c] = r * 10 + c
@@ -1471,9 +1471,9 @@ test "an inline array access agrees on every element kind and rank" {
         \\            total += grid[r, c]
         \\    print(str(total) + " " + str(grid.dim(0)) + " " + str(grid.dim(1)) + " " + str(len(grid)))
         \\
-        \\    var names = new array[str](3)
-        \\    var flags = new array[bool](3)
-        \\    var weights = new array[f64](3)
+        \\    var names = array[str](3)
+        \\    var flags = array[bool](3)
+        \\    var weights = array[f64](3)
         \\    for i in range(0, 3):
         \\        names[i] = "n" + str(i)
         \\        flags[i] = i % 2 == 0
@@ -1481,9 +1481,9 @@ test "an inline array access agrees on every element kind and rank" {
         \\    for i in range(0, 3):
         \\        print(names[i] + " " + str(flags[i]) + " " + str(weights[i]))
         \\
-        \\    var rows = new array[list[i64]](2)
+        \\    var rows = array[list[i64]](2)
         \\    for i in range(0, 2):
-        \\        var row = new list[i64]
+        \\        var row = list[i64]()
         \\        row.append(i)
         \\        rows[i] = row
         \\    print(str(rows[0][0] + rows[1][0]))
@@ -1499,7 +1499,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
     // loop's resolution already lifted above it.
     try agree(
         \\func main():
-        \\    var a = new array[f64](4)
+        \\    var a = array[f64](4)
         \\    var total: f64 = 0.0
         \\    for i in range(0, 6):
         \\        total += a[i]
@@ -1514,7 +1514,7 @@ test "a lifted resolution on a null row still traps at the access" {
     // not at the preheader.
     try agree(
         \\func main():
-        \\    var rows = new array[array[i64, _]](2)
+        \\    var rows = array[array[i64, _]](2)
         \\    var inner = rows[0]
         \\    var total: i64 = 0
         \\    for i in range(0, 3):
@@ -1581,7 +1581,7 @@ test "a struct carrying an object is owned and released through its fields" {
         \\    label: str
         \\
         \\func fill(label: str) -> Bag:
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return Bag(items = xs, label = label)
@@ -1746,7 +1746,7 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
     try agree(
         \\func pick(want: bool) -> list[i64]?:
         \\    if want:
-        \\        let made = new list[i64]
+        \\        let made = list[i64]()
         \\        made.append(3)
         \\        made.append(4)
         \\        return made
@@ -1805,7 +1805,7 @@ test "optionals in a loop agree, boxed into container cells and back" {
         \\        last = even(j)
         \\        j = j + 1
         \\    print("last=" + str(last else -1))
-        \\    let cells = new list[Cell]
+        \\    let cells = list[Cell]()
         \\    var k = 0
         \\    while k < 4:
         \\        cells.append(Cell(tag = str(k), room = even(k)))
@@ -1885,7 +1885,7 @@ test "the null object put in a T? is present, because absence is not a handle" {
         \\func main():
         \\    var raw: list[i64]
         \\    print("absent=" + str(look(raw)))
-        \\    let real = new list[i64]
+        \\    let real = list[i64]()
         \\    real.append(1)
         \\    print("absent=" + str(look(real)))
         \\
@@ -2052,7 +2052,7 @@ test "a caught listing failure leaks nothing on either engine" {
     try agreeHost(
         \\func main():
         \\    var found: i64 = 0
-        \\    let names = files.list("nowhere") catch new list[str]
+        \\    let names = files.list("nowhere") catch list[str]()
         \\    found = len(names)
         \\    print("caught, " + str(found) + " names")
         \\
@@ -2145,7 +2145,7 @@ test "an error path releases the objects and the str storage it owns" {
     // heap exactly where a returning call would (S4, S34).
     try agreeHost(
         \\func gather(path: str) -> i64!:
-        \\    let words = new list[str]
+        \\    let words = list[str]()
         \\    words.append("alpha")
         \\    words.append("beta")
         \\    let held = "prefix-" + path
@@ -2209,12 +2209,12 @@ test "a caught error leaves the value it never produced releasable" {
 test "a fallible call handing back an object gives it up on both paths" {
     try agreeHost(
         \\func load(path: str) -> list[str]!:
-        \\    let lines = new list[str]
+        \\    let lines = list[str]()
         \\    lines.append(try files.read(path))
         \\    return lines
         \\
         \\func main():
-        \\    let missing = load("nothing-here.txt") catch new list[str]
+        \\    let missing = load("nothing-here.txt") catch list[str]()
         \\    print(str(len(missing)))
         \\
     );
@@ -2279,7 +2279,7 @@ test "owned str bytes agree, census included" {
         \\    let trimmed = widen("   padded   ")
         \\    print(trimmed)
         \\
-        \\    var names = new list[str]
+        \\    var names = list[str]()
         \\    names.append("ada")
         \\    names.append(trimmed + "-lovelace")
         \\    names[0] = names[1]
@@ -2294,7 +2294,7 @@ test "owned str bytes agree, census included" {
         \\    copied.label = "other"
         \\    print(tag.label + " " + copied.label)
         \\
-        \\    var table = new map[str, str]
+        \\    var table = map[str, str]()
         \\    table["k" + str(1)] = "v1"
         \\    table["k1"] = "v" + str(2)
         \\    var keys = table.keys()
@@ -2302,7 +2302,7 @@ test "owned str bytes agree, census included" {
         \\    print(keys[0] + values[0])
         \\    table.remove("k1")
         \\
-        \\    var pieces = new list[str]
+        \\    var pieces = list[str]()
         \\    pieces.append("first-piece")
         \\    pieces.append("second")
         \\    print(str(measure(pieces[0], drop_first(pieces))))
@@ -2312,7 +2312,7 @@ test "owned str bytes agree, census included" {
         \\    text = text + text
         \\    print(text)
         \\
-        \\    var cells = new array[str](3)
+        \\    var cells = array[str](3)
         \\    cells[0] = "x" + str(0)
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
@@ -2344,8 +2344,8 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\    return s + s
         \\
         \\func main():
-        \\    var words = new list[str]
-        \\    var table = new map[str, str]
+        \\    var words = list[str]()
+        \\    var table = map[str, str]()
         \\    for size in [0, 1, 21, 22, 23, 64]:
         \\        let text = strings.repeat("a", size)
         \\        let kept = echo(text)
@@ -2366,7 +2366,7 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\    return s + s
         \\
         \\func main():
-        \\    var kept = new list[str]
+        \\    var kept = list[str]()
         \\    for size in [1, 11, 12, 21, 22, 23]:
         \\        var text = strings.repeat("b", size)
         \\        text = grow(text)
@@ -2390,7 +2390,7 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\func main():
         \\    var source = strings.repeat("cd", 40)
         \\    var small = source[0:6]
-        \\    var cells = new array[str](2)
+        \\    var cells = array[str](2)
         \\    cells[0] = small
         \\    cells[1] = source
         \\    source = "replaced"
@@ -2403,7 +2403,7 @@ test "text agrees on both sides of the boundary between its two forms" {
 test "a loop name agrees whether it borrows its element or copies it" {
     try agree(
         \\func main():
-        \\    var words = new list[str]
+        \\    var words = list[str]()
         \\    words.append("aa")
         \\    words.append("bb")
         \\    words.append("cc")
@@ -2417,7 +2417,7 @@ test "a loop name agrees whether it borrows its element or copies it" {
         \\        words[0] = "zz"
         \\    print(seen)
         \\
-        \\    var table = new map[str, str]
+        \\    var table = map[str, str]()
         \\    table["a"] = "1"
         \\    table["b"] = "2"
         \\    var joined = ""
@@ -2457,7 +2457,7 @@ test "array loops carry the two alias scopes, and runtime calls carry neither" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var grid = new array[i64](64)
+        \\    var grid = array[i64](64)
         \\    var i = 0
         \\    while i < 64:
         \\        grid[i] = i * 2
@@ -2497,7 +2497,7 @@ test "fresh container writes omit the constant guard and unknown aliases keep it
     const gpa = std.testing.allocator;
     const fresh = (try render(
         \\func main():
-        \\    var values = new array[i64](64)
+        \\    var values = array[i64](64)
         \\    for i in range(0, 64):
         \\        values[i] = i
         \\    print(str(values[63]))

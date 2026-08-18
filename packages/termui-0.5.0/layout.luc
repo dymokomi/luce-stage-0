@@ -55,7 +55,7 @@ private func prefers(constraint: Constraint) -> bool:
 # is ever negative or beyond the axis.
 func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i64]:
     let count = len(constraints)
-    var sizes = new list[i64]
+    var sizes = list[i64]()
     if count == 0:
         return sizes
     let gap = max(spacing, 0)
@@ -142,7 +142,7 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
 
 func row(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
     let widths = resolve(area.columns, spacing, constraints)
-    var rectangles = new list[model.Rect]
+    var rectangles = list[model.Rect]()
     var at_column = area.column
     let gap = max(spacing, 0)
     for width in widths:
@@ -152,7 +152,7 @@ func row(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[
 
 func column(area: model.Rect, spacing: i64, constraints: list[Constraint]) -> list[model.Rect]:
     let heights = resolve(area.rows, spacing, constraints)
-    var rectangles = new list[model.Rect]
+    var rectangles = list[model.Rect]()
     var at_row = area.row
     let gap = max(spacing, 0)
     for height in heights:

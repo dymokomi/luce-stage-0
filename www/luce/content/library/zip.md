@@ -39,7 +39,7 @@ func main():
 ## Reading archives
 
 `zip.Archive` is a class made with a fallible init:
-`let opened = try new zip.Archive(archive: list[u8])` parses the central
+`let opened = try zip.Archive(archive: list[u8])` parses the central
 directory once, so bytes that are not an archive — truncated, damaged, or
 encrypted directory entries — fail at the `new` rather than on first use.
 Contents are not extracted at open.
@@ -68,7 +68,7 @@ mismatch is refused by `extract` on the entry it belongs to.
 
 ## Writing archives
 
-`zip.Writer` is a class made with `new zip.Writer()`: an empty archive
+`zip.Writer` is a class made with `zip.Writer()`: an empty archive
 builder. A writer is an accumulator with identity — two bindings to one
 writer see one archive under construction.
 
@@ -84,9 +84,9 @@ limited to 65535 entries and 4 GiB per entry because Zip64 is not supported.
 import std.zip
 
 func main() -> !:
-    var writer = new zip.Writer()
+    var writer = zip.Writer()
     try writer.add("hello.txt", zip.to_bytes("hello\n"), compress = true)
-    let archive = try new zip.Archive(writer.finish())
+    let archive = try zip.Archive(writer.finish())
     let found = archive.entries()
     for entry in found:
         print(f"{entry.name()} {entry.size()} {entry.deflated()}")
@@ -144,7 +144,7 @@ These are the only host-facing functions in the module:
 Use them with a `Writer` when an archive belongs on disk:
 
 ```text
-var writer = new zip.Writer()
+var writer = zip.Writer()
 try writer.add("data.txt", zip.to_bytes("content"))
 try zip.write("data.zip", writer.finish())
 ```

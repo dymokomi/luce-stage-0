@@ -24,11 +24,11 @@ class Ticker: termui.View:
         return termui.Response.ignored
 
 func test_a_retained_layout_updates_in_place():
-    var stack = new VStack()
-    stack.add(new Fill("."))
-    stack.add(new Ticker(41), size = termui.fixed(1))
+    var stack = VStack()
+    stack.add(Fill("."))
+    stack.add(Ticker(41), size = termui.fixed(1))
 
-    var app = new termui.Application()
+    var app = termui.Application()
     app.set_layout(stack)
 
     let first = termui.snapshot(stack, 3, 10)

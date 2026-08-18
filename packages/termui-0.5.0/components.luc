@@ -21,7 +21,7 @@ private struct Slot:
     content: view.View
 
 private func constraints(slots: list[Slot]) -> list[layout.Constraint]:
-    var sizes = new list[layout.Constraint]
+    var sizes = list[layout.Constraint]()
     for slot in slots:
         sizes.append(slot.size)
     return sizes
@@ -57,7 +57,7 @@ class VStack: view.View:
     private spacing: i64
 
     init(spacing: i64 = 0):
-        self.slots = new list[Slot]
+        self.slots = list[Slot]()
         self.spacing = spacing
 
     func add(child: view.View, size: layout.Constraint? = none):
@@ -93,7 +93,7 @@ class HStack: view.View:
     private spacing: i64
 
     init(spacing: i64 = 0):
-        self.slots = new list[Slot]
+        self.slots = list[Slot]()
         self.spacing = spacing
 
     func add(child: view.View, size: layout.Constraint? = none):
@@ -130,7 +130,7 @@ class ZStack: view.View:
     private children: list[view.View]
 
     init():
-        self.children = new list[view.View]
+        self.children = list[view.View]()
 
     func add(child: view.View):
         self.children.append(child)

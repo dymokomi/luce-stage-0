@@ -11,8 +11,8 @@
 func main():
     let n = 200000
     let reps = 400
-    var a = new array[f64](n)
-    var b = new array[f64](n)
+    var a = array[f64](n)
+    var b = array[f64](n)
     for i in range(0, n):
         a[i] = f64(i % 100) * 0.5
         b[i] = f64((i * 7) % 100) * 0.25

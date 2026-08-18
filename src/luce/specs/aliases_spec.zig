@@ -36,11 +36,11 @@ test "container aliases resolve recursively and may be constructed with new" {
         \\alias Grid = array[UserId, _, _]
         \\
         \\func main():
-        \\    var users: Users = new Users
+        \\    var users: Users = Users()
         \\    users.append(40)
-        \\    var index: UserIndex = new UserIndex
+        \\    var index: UserIndex = UserIndex()
         \\    index["answer"] = users[0] + 2
-        \\    let grid: Grid = new Grid(1, 1)
+        \\    let grid: Grid = Grid(1, 1)
         \\    grid[0, 0] = index["answer"]
         \\    print(str(grid[0, 0]))
         \\
@@ -173,10 +173,10 @@ test "an interface alias keeps heterogeneous list and map dispatch" {
         \\        return value + 2
         \\
         \\func main():
-        \\    var items: Elements = new Elements
+        \\    var items: Elements = Elements()
         \\    items.append(AddOne(marker = 0))
         \\    items.append(AddTwo(marker = 0))
-        \\    var by_name: ElementMap = new ElementMap
+        \\    var by_name: ElementMap = ElementMap()
         \\    by_name["one"] = items[0]
         \\    by_name["two"] = items[1]
         \\    print(str(by_name["two"].render(40)))
@@ -197,7 +197,7 @@ test "public aliases cross a module boundary without runtime identity" {
         \\import models
         \\
         \\func main():
-        \\    var users: models.Users = new models.Users
+        \\    var users: models.Users = models.Users()
         \\    let value: models.UserId = models.answer()
         \\    users.append(value)
         \\    assert(users[0] == 42)

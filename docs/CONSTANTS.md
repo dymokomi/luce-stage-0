@@ -135,7 +135,7 @@ func main():
 ```
 
 Empty `{}` has no literal: it is refused with a sentence naming
-`new map[K, V]`, which spells the key and value types out. That keeps
+`map[K, V]()`, which spells the key and value types out. That keeps
 `{}` unclaimed. There is no `set` type; a constant `map[T, bool]` is the
 constant-time membership test, and it comes with the duplicate-key
 refusal for free.

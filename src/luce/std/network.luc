@@ -47,7 +47,7 @@ class Connection: io.Reader, io.Writer:
     # tries what it finds; a world that refuses every road answers the
     # error with the reason it gave.
     static func dial(host: str, port: i64) -> Connection!:
-        return new Connection(raw = try Builtin.socket_connect(host, port))
+        return Connection(raw = try Builtin.socket_connect(host, port))
 
     func read(buffer: array[u8, _]) -> i64!:
         return try Builtin.handle_read(self.raw, buffer)
@@ -58,7 +58,7 @@ class Connection: io.Reader, io.Writer:
     func flush() -> !:
         try Builtin.handle_flush(self.raw)
 
-# A door peers arrive through.  `try new Listener(port)` opens it on
+# A door peers arrive through.  `try Listener(port)` opens it on
 # every interface — port 0 asks the host for any free port, and
 # `port()` says which one landed.  A port another program holds is the
 # world saying no.  `accept` waits for one connection and answers it;
@@ -72,9 +72,9 @@ class Listener:
         self.raw = try Builtin.socket_listen(port)
 
     func accept() -> Connection!:
-        return new Connection(raw = try Builtin.socket_accept(self.raw))
+        return Connection(raw = try Builtin.socket_accept(self.raw))
 
     # The port this listener actually holds — the answer to
-    # `new Listener(0)`, which asks the host for any free port.
+    # `Listener(0)`, which asks the host for any free port.
     func port() -> i64!:
         return try Builtin.socket_port(self.raw)

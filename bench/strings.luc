@@ -6,7 +6,7 @@
 import std.strings
 
 func main():
-    var b = new builder
+    var b = builder()
     for i in range(0, 400000):
         b.append("item-")
         b.append(str(i))

@@ -7,9 +7,9 @@ import document
 import focus
 
 func fresh() -> model.Model:
-    var documents = new list[document.Document]
-    documents.append(new document.Document(path = "f.luc"))
-    return new model.Model(documents)
+    var documents = list[document.Document]()
+    documents.append(document.Document(path = "f.luc"))
+    return model.Model(documents)
 
 func test_typing_then_undo_and_redo():
     var ed = fresh()

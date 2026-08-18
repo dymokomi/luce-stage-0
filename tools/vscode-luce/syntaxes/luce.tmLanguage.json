@@ -252,7 +252,7 @@
         },
         {
           "name": "keyword.other.ownership.luce",
-          "match": "\\b(?:new|spawn)\\b"
+          "match": "\\b(?:spawn)\\b"
         },
         {
           "name": "variable.language.luce",

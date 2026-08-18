@@ -43,7 +43,7 @@ A program does not construct `gpu.Surface` directly. Ask a UI window for one:
 ```text
 import std.ui
 
-let window = try new ui.Window("Canvas", 640, 480)
+let window = try ui.Window("Canvas", 640, 480)
 let surface = try window.surface()
 ```
 
@@ -94,7 +94,7 @@ func draw(surface: gpu.Surface) -> !:
     try surface.present()
 
 func main() -> !:
-    let window = try new ui.Window("Luce", 640, 480)
+    let window = try ui.Window("Luce", 640, 480)
     let surface = try window.surface()
     try draw(surface)
 ```

@@ -88,10 +88,10 @@ class Model:
 
     init(documents: list[document.Document]):
         self.documents = documents
-        self.names = new list[str]
-        self.search_matches = new list[i64]
-        self.files = new Selection()
-        self.watchers = new list[(func())?]
+        self.names = list[str]()
+        self.search_matches = list[i64]()
+        self.files = Selection()
+        self.watchers = list[(func())?]()
 
     # The active file.  A Document is a reference, so panes and model
     # read and mutate the same one; switching files is switching which
@@ -499,10 +499,10 @@ class Model:
 # Build a model from command-line paths.  File and draft loading
 # belongs at this boundary; the components receive the finished model.
 func open(paths: list[str]) -> Model:
-    var documents = new list[document.Document]
+    var documents = list[document.Document]()
     for path in paths:
         let loaded = session.load(path)
         if loaded.recovered:
             loaded.opened.history.record(loaded.base, 0)
         documents.append(loaded.opened)
-    return new Model(documents)
+    return Model(documents)

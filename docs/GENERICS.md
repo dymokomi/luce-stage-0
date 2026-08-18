@@ -110,7 +110,7 @@ interface Named:
     func name() -> str
 
 func labels[T: Named](values: list[T]) -> list[str]:
-    var result = new list[str]
+    var result = list[str]()
     for value in values:
         result.append(value.name())
     return result

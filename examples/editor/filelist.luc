@@ -84,7 +84,7 @@ class FileList: termui.View:
     # --- the View contract ------------------------------------------
 
     private func composed() -> termui.View:
-        let rows = new termui.Rows(
+        let rows = termui.Rows(
             len(self.model.names),
             self.file_line,
             top = self.model.files.top,
@@ -92,17 +92,17 @@ class FileList: termui.View:
             selected = self.model.files.selected,
             selected_style = theme.palette.selected,
         )
-        let listing = new termui.CursorHost(
-            new termui.EventHost(rows, self.file_event),
+        let listing = termui.CursorHost(
+            termui.EventHost(rows, self.file_event),
             self.file_cursor,
         )
-        let framed = new termui.Panel(
+        let framed = termui.Panel(
             "files",
             listing,
             style = theme.pane_style(self.model.focus == focus.Focus.files),
             edges = termui.Edges(bottom = false),
         )
-        return new termui.EventHost(framed, self.frame_event)
+        return termui.EventHost(framed, self.frame_event)
 
     func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
         return self.composed().draw(surface, area)

@@ -40,7 +40,7 @@
 # **Building one reads the way taking one apart does.**  The map and
 # the list *are* the builder:
 #
-#     var fields = new map[str, Json]
+#     var fields = map[str, Json]()
 #     fields["name"] = Json.text(value = "luce")
 #     fields["tags"] = Json.array(items = [Json.integer(value = 1)])
 #     let doc = Json.object(fields = fields)
@@ -160,7 +160,7 @@ private const max_depth = 64
 # Seven members for six kinds: JSON's one number type arrives here as
 # the two Luce has, and which one a value holds is the notation it was
 # written in.  `null` is first, so it is also the zero — what a
-# `var j: Json` starts at and what fills a `new array[Json](n)`.
+# `var j: Json` starts at and what fills a `array[Json](n)`.
 #
 # The names are the specification's own except for the str kind:
 # `str` is a reserved name in Luce (it is the type, and the
@@ -286,7 +286,7 @@ union Json:
     # value itself, so `parse(j.write())` is a value equal to `j` and
     # writing *that* gives the same bytes again.
     func write() -> str:
-        let printer = Printer(out = new builder, spaces = 0)
+        let printer = Printer(out = builder(), spaces = 0)
         printer.put(self, 0)
         return printer.out.build()
 
@@ -296,7 +296,7 @@ union Json:
     func pretty(spaces: i64) -> str:
         if spaces < 0:
             trap("json: pretty needs spaces >= 0")
-        let printer = Printer(out = new builder, spaces = spaces)
+        let printer = Printer(out = builder(), spaces = spaces)
         printer.put(self, 0)
         return printer.out.build()
 
@@ -356,7 +356,7 @@ private struct Parser:
                 if depth >= max_depth:
                     error(f"json: values nested deeper than {max_depth}, at position {self.at}")
                 let opened = self.at
-                var items = new list[Json]
+                var items = list[Json]()
                 self.at += 1
                 self.skip_blank()
                 # The loop leaves with the head on the closing
@@ -386,7 +386,7 @@ private struct Parser:
                 if depth >= max_depth:
                     error(f"json: values nested deeper than {max_depth}, at position {self.at}")
                 let opened = self.at
-                var fields = new map[str, Json]
+                var fields = map[str, Json]()
                 self.at += 1
                 self.skip_blank()
                 if self.at >= len(self.content) or self.content[self.at] != brace_close:
@@ -496,7 +496,7 @@ private struct Parser:
     # first backslash.  `opened` is the opening quote, kept for the
     # sentence a str that never closes deserves.
     private func read_escaped(opened: i64) -> str!:
-        var out = new builder
+        var out = builder()
         out.append(self.content[opened + 1:self.at])
         while self.at < len(self.content):
             let c = self.content[self.at]
@@ -662,7 +662,7 @@ private func is_digit(c: char) -> bool:
 # of a builder rather than a value, and it is the same escaping
 # `write` puts around a str and a member name.
 func quote(content: str) -> str:
-    let printer = Printer(out = new builder, spaces = 0)
+    let printer = Printer(out = builder(), spaces = 0)
     printer.put_quoted(content)
     return printer.out.build()
 

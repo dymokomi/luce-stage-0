@@ -16,7 +16,7 @@ higher-level package rather than own window lifecycle and drawing directly.
 ## Open a window
 
 ```text
-new ui.Window(title: str, width: i64, height: i64) -> ui.Window!
+ui.Window(title: str, width: i64, height: i64) -> ui.Window!
 ```
 
 Construction takes a UTF-8 title and dimensions in backend pixels. Width and height
@@ -26,7 +26,7 @@ or window-system failure. Those conditions arrive as an ordinary error.
 
 ```text
 func main() -> !:
-    let window = try new ui.Window("Hello", 800, 600)
+    let window = try ui.Window("Hello", 800, 600)
 ```
 
 `Window` is a class owning the native window. Assigning or
@@ -48,7 +48,7 @@ is returned from or released before the surface. Drawing is explicit:
 import std.ui
 
 func main() -> !:
-    let window = try new ui.Window("Hello", 800, 600)
+    let window = try ui.Window("Hello", 800, 600)
     let surface = try window.surface()
     try surface.clear(0, 0, 0)
     try surface.fill_rect(40, 40, 240, 120, 70, 130, 220)

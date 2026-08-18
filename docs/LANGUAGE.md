@@ -133,11 +133,11 @@ numeric/scalar boundary.
   enum of the exact declared key type.
 - `array[T, _, ...]` is a fixed-shape, densely stored reference grid of one to
   four dimensions. Each `_` states one rank in a type; construction supplies
-  the extents with `new array[T](sizes...)`.
+  the extents with `array[T](sizes...)`.
 - `builder` is a mutable text accumulator whose `build()` result is `str`.
 
 Bracket literals infer a `list` unless an array landing type supplies rank.
-Nonempty brace literals infer a map; `{}` needs an explicit `new map[K, V]`.
+Nonempty brace literals infer a map; `{}` needs an explicit `map[K, V]()`.
 Containers share identity. Slices create a new outer list while reference
 elements remain shared and retained. Optional element types are deliberately
 restricted; function slots use the storable optional form described in
@@ -179,7 +179,7 @@ member rules.
 
 A `class` is a final ARC reference type. Assignment shares identity, fields
 and methods may mutate through a stable `let`, and `is` compares identity.
-Construction requires `new`—`new Name(...)`—the same keyword that creates
+Construction requires `new`—`Name(...)`—the same keyword that creates
 every other reference identity; a bare `Name(...)` call on a class is
 rejected. Without `init`, the `new` call is memberwise. One `init(parameters)`
 body may instead define the class's construction surface; every successful

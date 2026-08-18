@@ -174,7 +174,7 @@ func make_directory(path: str) -> !:
 # -- the u8 channel (docs/BYTES.md) ---------------------------------
 #
 # A file is bytes reached through an open handle, and text is a
-# validation the language performs on the bytes.  `new File(path)`
+# validation the language performs on the bytes.  `File(path)`
 # answers an ordinary class holding the host's descriptor, closed when
 # its last reference goes away; using one after it is closed traps
 # like any use after free, because it is the same mistake.
@@ -203,8 +203,8 @@ class File: io.Reader, io.Writer:
     private:
         raw: handle
 
-    # Open a file: `try new File(path)` to read,
-    # `try new File(path, files.Mode.append)` for a log.  The world
+    # Open a file: `try File(path)` to read,
+    # `try File(path, files.Mode.append)` for a log.  The world
     # decides whether the open lands, so construction is fallible.
     init(path: str, mode: Mode = Mode.read) -> !:
         self.raw = try Builtin.file_open(path, mode_code(mode))
@@ -239,17 +239,17 @@ private func mode_code(mode: Mode) -> i64:
 # text — that is what `strings.from_bytes` is for — so this reads a
 # JPEG as happily as a note.
 func read_bytes(path: str) -> list[u8]!:
-    var f = try new File(path)
+    var f = try File(path)
     return try io.drain(f)
 
 # Write bytes, replacing whatever was there.
 func write_bytes(path: str, data: list[u8]) -> !:
-    var f = try new File(path, Mode.create)
+    var f = try File(path, Mode.create)
     try io.send(f, data)
 
 # Add bytes to the end of a file, creating it if it is not there.
 func append_bytes(path: str, data: list[u8]) -> !:
-    var f = try new File(path, Mode.append)
+    var f = try File(path, Mode.append)
     try io.send(f, data)
 
 # -- listing a directory ----------------------------------------------
@@ -290,7 +290,7 @@ struct Entry:
 func entries(path: str) -> list[Entry]!:
     var names = try Builtin.dir_list(path)
     names.sort()
-    var found = new list[Entry]
+    var found = list[Entry]()
     for name in names:
         let whole = paths.join(path, name)
         let what = try kind(whole)

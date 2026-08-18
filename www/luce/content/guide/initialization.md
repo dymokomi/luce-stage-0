@@ -44,7 +44,7 @@ or partially initialized storage behind the constructor.
 
 A class without `init` uses the same field-named surface behind `new`, the
 keyword that creates every reference identity. A bare `User(...)` call is a
-compile error—a class makes a new identity: write `new User(...)`.
+compile error—a class makes a new identity: write `User(...)`.
 
 ```luce run
 class User:
@@ -52,7 +52,7 @@ class User:
     visits: i64 = 0
 
 func main():
-    let user = new User(name = "Ada")
+    let user = User(name = "Ada")
     user.visits += 1
     print(f"{user.name} {user.visits}")
 ```
@@ -87,7 +87,7 @@ class Rectangle:
         self.area = self.width * self.height
 
 func main():
-    let rectangle = new Rectangle(6, height = 7)
+    let rectangle = Rectangle(6, height = 7)
     print(rectangle.label)
     print(str(rectangle.area))
 ```
@@ -97,7 +97,7 @@ rectangle
 42
 ```
 
-Write `new Rectangle(...)` rather than `Rectangle.init(...)`.
+Write `Rectangle(...)` rather than `Rectangle.init(...)`.
 Initializer parameters follow the ordinary function rules: each has a type,
 trailing parameters may have compile-time defaults, positional arguments come
 first, and named arguments may be reordered.
@@ -176,8 +176,8 @@ class Port:
         self.number = number
 
 func main() -> !:
-    let web = try new Port(8080)
-    new Port(70000) catch reason:
+    let web = try Port(8080)
+    Port(70000) catch reason:
         print(reason)
     print(str(web.number))
 ```

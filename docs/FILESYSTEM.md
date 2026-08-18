@@ -264,7 +264,7 @@ import std.files
 import std.paths
 
 func main(args: list[str]) -> !:
-    var pending = new list[str]
+    var pending = list[str]()
     pending.append(args[0])
 
     var largest = ""
@@ -300,9 +300,9 @@ them:
 
 | construction | opens |
 |---|---|
-| `try new files.File(path)` | an existing file, to read from the start (`Mode.read`, the default) |
-| `try new files.File(path, files.Mode.create)` | a file to write from the start, creating and emptying it |
-| `try new files.File(path, files.Mode.append)` | a file to write at its end, creating it if absent |
+| `try files.File(path)` | an existing file, to read from the start (`Mode.read`, the default) |
+| `try files.File(path, files.Mode.create)` | a file to write from the start, creating and emptying it |
+| `try files.File(path, files.Mode.append)` | a file to write at its end, creating it if absent |
 
 `files.File` is an ordinary ARC class with the byte methods `read`,
 `write`, and `flush`; the host descriptor it owns is private to the
@@ -328,7 +328,7 @@ f.close()
 | Python | Luce | why |
 |---|---|---|
 | `open(p, "w")` | opening modes are a named enum (`files.Mode.create`, `files.Mode.append`) | a mode string is a magic value with no type and no completion |
-| `with open(p) as f:` | `var f = try new files.File(p)` | ARC closes at the last strong release |
+| `with open(p) as f:` | `var f = try files.File(p)` | ARC closes at the last strong release |
 | `f.close()` | let the last reference go | a `close()` would be a second lifetime story |
 | `for line in f:` | `files.read_lines(p)`, or a loop over the byte handle | Luce has no generators |
 | `os.path.join(a, b, c)` | `paths.joined([a, b, c])` | no variadics, no `/` operator |

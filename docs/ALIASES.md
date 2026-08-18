@@ -14,7 +14,7 @@ func find(ids: UserIds, wanted: UserId) -> MaybeUserId:
     return none
 
 func main():
-    var ids: UserIds = new UserIds
+    var ids: UserIds = UserIds()
     ids.append(42)
     let found: i64? = find(ids, 42)
     assert((found else 0) == 42)
@@ -72,7 +72,7 @@ struct Button: Element:
         return value + self.offset
 
 func main():
-    var elements: Elements = new Elements
+    var elements: Elements = Elements()
     let item: Item = Item(offset = 2)
     elements.append(item)
     print(str(elements[0].render(40)))

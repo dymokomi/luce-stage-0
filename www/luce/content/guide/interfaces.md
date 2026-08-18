@@ -54,7 +54,7 @@ func describe(item: Drawable) -> str:
 func main():
     let button = Button(caption = "button", offset = 1)
     let badge = Badge(caption = "badge")
-    var items = new list[Drawable]
+    var items = list[Drawable]()
     items.append(button)
     items.append(badge)
     print(describe(items[0]))
@@ -213,7 +213,7 @@ func main():
     let decimal = Decimal(marker = 0)
     let brackets = Brackets(marker = 0)
 
-    var formats = new map[str, Formatter]
+    var formats = map[str, Formatter]()
     formats["plain"] = decimal
     formats["marked"] = brackets
 
@@ -255,7 +255,7 @@ func advance(sequence: Sequence) -> i64:
     return sequence.next()
 
 func main():
-    let counter = new Counter(value = 40)
+    let counter = Counter(value = 40)
     print(str(advance(counter)))
     print(str(counter.value))
 ```

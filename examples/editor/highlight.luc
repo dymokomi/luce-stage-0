@@ -57,7 +57,7 @@ private const keyword_words = {
     "const": true, "continue": true, "deinit": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
     "if": true, "import": true, "in": true, "init": true, "interface": true, "is": true,
-    "let": true, "match": true, "mutating": true, "new": true, "none": true,
+    "let": true, "match": true, "mutating": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,
     "struct": true, "true": true, "try": true, "union": true,
@@ -116,7 +116,7 @@ func classify_word(text: str) -> TokenKind:
 # produced without clipping — display clipping is the surface's job at
 # draw time — so a token may be wider than the pane it lands in.
 func tokens(content: str, from: i64, to: i64) -> list[Token]:
-    var out = new list[Token]
+    var out = list[Token]()
     var at = from
     while at < to:
         let code = content[at]

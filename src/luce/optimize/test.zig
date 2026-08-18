@@ -86,7 +86,7 @@ fn localCount(program: *const Program) usize {
 test "dead code sweeps unread values and compacts the pool" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(1)
         \\    let unused = len(xs)
         \\    print(str(len(xs)))
@@ -229,7 +229,7 @@ test "class deinitializers and their callees survive implicit lifetime reachabil
 test "running the stage twice changes nothing the second time" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    var index = 0
         \\    while index < 5:
         \\        xs.append(index * index)
@@ -252,7 +252,7 @@ test "running the stage twice changes nothing the second time" {
 test "every pass on its own leaves verifiable MIR" {
     const sources = [_][]const u8{
         \\func main():
-        \\    let m = new map[str, i64]
+        \\    let m = map[str, i64]()
         \\    m["a"] = 1
         \\    if m.has("a"):
         \\        print(str(m["a"]))
@@ -616,7 +616,7 @@ test "a read that writes is never pure, whatever a later pass would like to beli
     // can be checked without a program having to run.
     var program = try compileRaw(
         \\func main():
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts["fig"] += 1
         \\    print(str(counts["fig"]))
         \\

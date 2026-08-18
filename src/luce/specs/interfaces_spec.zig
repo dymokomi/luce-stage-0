@@ -44,10 +44,10 @@ test "lists and maps store different concrete implementations behind one interfa
         \\func main():
         \\    let one = AddOne(label = "one")
         \\    let two = AddTwo(label = "two")
-        \\    var items = new list[UIElement]
+        \\    var items = list[UIElement]()
         \\    items.append(one)
         \\    items.append(two)
-        \\    var table = new map[str, UIElement]
+        \\    var table = map[str, UIElement]()
         \\    table["one"] = one
         \\    table["two"] = two
         \\    let from_list = items[1]
@@ -296,7 +296,7 @@ test "arrays and struct fields store interface values" {
         \\    let one = Button(offset = 1)
         \\    let two = Button(offset = 2)
         \\    let panel = Panel(element = one)
-        \\    var items = new array[Drawable](2)
+        \\    var items = array[Drawable](2)
         \\    items[0] = one
         \\    items[1] = two
         \\    print(str(panel.element.render(40)))
@@ -344,7 +344,7 @@ test "interface methods take object arguments" {
         \\
         \\func main():
         \\    let sink = Collector(marker = 0)
-        \\    var values = new list[i64]
+        \\    var values = list[i64]()
         \\    values.append(1)
         \\    values.append(2)
         \\    print(str(sink.accept(values)))
@@ -364,7 +364,7 @@ test "a named carrying receiver can live behind an interface while its owner liv
         \\
         \\func main():
         \\    var box = Box(values = [1, 2, 3])
-        \\    var views = new list[Sized]
+        \\    var views = list[Sized]()
         \\    views.append(box)
         \\    print(str(views[0].size()))
         \\
@@ -433,7 +433,7 @@ test "an interface method can return another owned interface value" {
         \\struct Maker: Factory:
         \\    offset: i64
         \\    func make(value: i64) -> Named:
-        \\        return new Item(value = value + self.offset)
+        \\        return Item(value = value + self.offset)
         \\
         \\func main():
         \\    let factory: Factory = Maker(offset = 1)
@@ -468,9 +468,9 @@ test "replacing heterogeneous class witnesses releases the old receiver first" {
         \\        print("closed second")
         \\
         \\func main():
-        \\    var current: Reading = new First(value = 1)
+        \\    var current: Reading = First(value = 1)
         \\    print(current.kind() + ":" + str(current.read()))
-        \\    current = new Second(value = 42)
+        \\    current = Second(value = 42)
         \\    print(current.kind() + ":" + str(current.read()))
         \\    print("leaving")
         \\
@@ -572,7 +572,7 @@ test "copied class existentials retain shared identity" {
         \\        return self.current
         \\
         \\func main():
-        \\    var first: Counter = new Shared(current = 1)
+        \\    var first: Counter = Shared(current = 1)
         \\    var second = first
         \\    first.add(41)
         \\    print(str(second.value()))
@@ -652,7 +652,7 @@ test "heterogeneous collections can round-trip mutating interface values" {
         \\        return self.current
         \\
         \\func main():
-        \\    var items = new list[Counter]
+        \\    var items = list[Counter]()
         \\    items.append(Number(current = 1))
         \\    items.append(Offset(current = 39))
         \\    var first = items[0]
@@ -661,7 +661,7 @@ test "heterogeneous collections can round-trip mutating interface values" {
         \\    second.add(1)
         \\    items[0] = first
         \\    items[1] = second
-        \\    var table = new map[str, Counter]
+        \\    var table = map[str, Counter]()
         \\    table["first"] = items[0]
         \\    table["second"] = items[1]
         \\    let fallback: Counter = Number(current = 0)

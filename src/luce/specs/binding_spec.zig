@@ -81,7 +81,7 @@ test "the written type drops the receiver's parameter and keeps every other" {
         \\
         \\func main():
         \\    let window = Between(low = 3, high = 6)
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(4)
         \\    xs.append(8)
@@ -232,7 +232,7 @@ test "a bound comparator sorts by state the comparator carries" {
         \\
         \\func main():
         \\    let near = Nearest(origin = 10)
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(14)
         \\    xs.append(9)
@@ -255,7 +255,7 @@ test "two binds of one method with different receivers sort differently" {
         \\        return abs(a - self.origin) < abs(b - self.origin)
         \\
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(14)
         \\    xs.append(9)
@@ -580,7 +580,7 @@ test "a function value lives in a list element and is called through else" {
         \\    return n
         \\
         \\func main():
-        \\    var steps = new list[(func(i64) -> i64)?]
+        \\    var steps = list[(func(i64) -> i64)?]()
         \\    steps.append(twice)
         \\    steps.append(none)
         \\    steps.append(negate)
@@ -604,7 +604,7 @@ test "a map value is written bare, and get carries the absence" {
         \\    return n * 2
         \\
         \\func main():
-        \\    var actions = new map[str, func(i64) -> i64]
+        \\    var actions = map[str, func(i64) -> i64]()
         \\    actions["double"] = twice
         \\    let found = actions.get("double")
         \\    if found != none:
@@ -620,7 +620,7 @@ test "a function value lives in an array cell, absent until it is filled" {
         \\    return n * 2
         \\
         \\func main():
-        \\    var cells = new array[(func(i64) -> i64)?](2)
+        \\    var cells = array[(func(i64) -> i64)?](2)
         \\    print(str(cells[0] == none))
         \\    cells[1] = twice
         \\    let second = cells[1]
@@ -686,7 +686,7 @@ test "a stored function value is released with what holds it" {
         \\
         \\func main():
         \\    let three = Scale(factor = 3)
-        \\    var steps = new list[(func(i64) -> i64)?]
+        \\    var steps = list[(func(i64) -> i64)?]()
         \\    steps.append(twice)
         \\    steps.append(three.times)
         \\    steps.append(none)
@@ -781,15 +781,15 @@ test "a function value lands on the field of an element, in a list, an array and
         \\    return "plain " + str(index)
         \\
         \\func main():
-        \\    var names = Names(items = new list[str])
+        \\    var names = Names(items = list[str]())
         \\    names.items.append("zero")
         \\    names.items.append("one")
-        \\    var rows = new list[Cell]
+        \\    var rows = list[Cell]()
         \\    rows.append(Cell())
         \\    rows[0].render = (n) -> "lambda " + str(n)
-        \\    var grid = new array[Cell](2, 2)
+        \\    var grid = array[Cell](2, 2)
         \\    grid[1, 1].render = names.at
-        \\    var by_name = new map[str, Cell]
+        \\    var by_name = map[str, Cell]()
         \\    by_name["head"] = Cell()
         \\    by_name["head"].render = plain
         \\    let listed = rows[0].render
@@ -896,7 +896,7 @@ test "a union payload composes with a bound method and a stored callback" {
         \\            return render(4)
         \\
         \\func main():
-        \\    var items = new list[Item]
+        \\    var items = list[Item]()
         \\    items.append(Item(prefix = "item", scale = 2))
         \\    let plan = Plan(work = Work.batch(items = items), finish = suffix)
         \\    print(evaluate(plan))
@@ -956,7 +956,7 @@ test "a builtin method's parameter is a landing place, whatever the receiver nam
         \\    return "plain " + str(index)
         \\
         \\func main():
-        \\    var steps = new list[(func(i64) -> str)?]
+        \\    var steps = list[(func(i64) -> str)?]()
         \\    steps.append(plain)
         \\    steps.insert(0, (n) -> "lambda " + str(n))
         \\    steps.append(none)
@@ -965,19 +965,19 @@ test "a builtin method's parameter is a landing place, whatever the receiver nam
         \\            print(step(1))
         \\        else:
         \\            print("none")
-        \\    var cells = new array[(func(i64) -> str)?](2)
+        \\    var cells = array[(func(i64) -> str)?](2)
         \\    cells.fill(plain)
         \\    let filled = cells[1]
         \\    if filled != none:
         \\        print(filled(2))
         \\    let ordering = Row(weight = 1)
-        \\    var numbers = new list[i64]
+        \\    var numbers = list[i64]()
         \\    numbers.append(1)
         \\    numbers.append(3)
         \\    numbers.append(2)
         \\    numbers.sort_by(ordering.heavier)
         \\    print(str(numbers[0]) + str(numbers[1]) + str(numbers[2]))
-        \\    var small = new list[u8]
+        \\    var small = list[u8]()
         \\    small.append(200)
         \\    small.insert(0, 255)
         \\    print(str(small[0]) + " " + str(small[1]))
@@ -1068,12 +1068,12 @@ test "a struct holding a container of function values compares by handle, and is
         \\    buttons: list[Button]
         \\
         \\func main():
-        \\    var buttons = new list[Button]
+        \\    var buttons = list[Button]()
         \\    buttons.append(Button(on_click = twice))
         \\    let panel = Panel(buttons = buttons)
         \\    let same_panel = panel
         \\    print(str(panel == same_panel))
-        \\    var others = new list[Button]
+        \\    var others = list[Button]()
         \\    others.append(Button(on_click = twice))
         \\    let second = Panel(buttons = others)
         \\    print(str(panel == second))
@@ -1088,15 +1088,15 @@ test "searching a container of values that do compare is untouched" {
         \\    y: i64
         \\
         \\func main():
-        \\    var numbers = new list[i64]
+        \\    var numbers = list[i64]()
         \\    numbers.append(3)
         \\    numbers.append(7)
         \\    print(str(numbers.find(7) else -1))
         \\    print(str(numbers.contains(4)))
-        \\    var names = new list[str]
+        \\    var names = list[str]()
         \\    names.append("a")
         \\    print(str(names.contains("a")))
-        \\    var points = new list[Point]
+        \\    var points = list[Point]()
         \\    points.append(Point(x = 1, y = 2))
         \\    print(str(points.contains(Point(x = 1, y = 2))))
         \\    print(str(points.find(Point(x = 9, y = 9)) else -1))
@@ -1114,16 +1114,16 @@ test "values() of an ordinary map still answers the list of them" {
         \\    y: i64
         \\
         \\func main():
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts["a"] = 1
         \\    counts["b"] = 2
         \\    let numbers = counts.values()
         \\    print(str(len(numbers)))
-        \\    var places = new map[str, Point]
+        \\    var places = map[str, Point]()
         \\    places["home"] = Point(x = 1, y = 2)
         \\    let points = places.values()
         \\    print(str(points[0].x))
-        \\    var handlers = new map[str, func(i64) -> i64]
+        \\    var handlers = map[str, func(i64) -> i64]()
         \\    print(str(len(handlers.keys())))
         \\
     , "2\n1\n0\n");

@@ -14,7 +14,7 @@ Two nominal classes and two doors:
 import std.network
 
 func main() -> !:
-    let door = try new network.Listener(0)
+    let door = try network.Listener(0)
     let client = try network.Connection.dial("localhost", try door.port())
     let served = try door.accept()
 ```
@@ -26,7 +26,7 @@ func main() -> !:
   and being accepted — both ask the world, so `Connection` keeps its
   `init` private and `dial` is a static function rather than a
   "make me a connection from parts" constructor.
-- `try new network.Listener(port)` opens a door on every interface
+- `try network.Listener(port)` opens a door on every interface
   through the class's fallible `init(port: i64) -> !`. Port `0` asks
   for any free port; `listener.port()` answers which one landed.
 - `listener.accept() -> Connection!` waits for one peer.

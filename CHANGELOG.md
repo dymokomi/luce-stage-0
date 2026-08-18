@@ -6,6 +6,17 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The `new` keyword leaves the language: everything constructs by
+  call. Classes construct as `Counter()`; containers as `list[i64]()`,
+  `map[str, i64]()`, `array[i64](5, 5)`, and `builder()`; a container
+  alias constructs under its own name (`Cells()`, `models.Users()`),
+  and literals `[]`/`{}` are unchanged. The compiler always knows what
+  a name is, capitalization carries the reader, and `spawn` remains
+  the one word that makes a resource. The whole tree - standard
+  library, termui, the editor, examples, benchmarks, specifications,
+  and documentation - migrates in this change, and the vocabulary
+  tripwires (the reference's keyword table, both highlighters, and
+  the TextMate grammar) move with the compiler's own word list.
 - A size is a `Constraint`, because that is what it is: `Length` the
   four-member union is gone, and in its place one value struct carries
   `minimum`, an optional `maximum`, a `weight` for surplus, and an
@@ -25,7 +36,7 @@ release is a complete toolchain rather than a compatibility promise.
   window dance. The pure line and boundary arithmetic stays free: it
   answers questions about any text, the output transcript included.
 - termui 0.5.0: the tree is retained. `Application` is a class -
-  `new Application()`, `set_layout(root)`, `start()` - and the
+  `Application()`, `set_layout(root)`, `start()` - and the
   `body()` interface with its rebuild-each-frame protocol is gone.
   Components are constructed once (typically with the model they
   observe), keep their own pane state for the life of the run, and the
@@ -54,9 +65,9 @@ release is a complete toolchain rather than a compatibility promise.
   Response` - and the shipped components become classes conforming to
   it, so a program's own component participates in layout, drawing,
   and routing exactly like a shipped one. Stacks compose with
-  `new VStack(spacing = 0)` and `add(child, size = none)` (absence
+  `VStack(spacing = 0)` and `add(child, size = none)` (absence
   means grow); behavior and cursor placement wrap as
-  `new EventHost(content, respond)` and `new CursorHost(content,
+  `EventHost(content, respond)` and `new CursorHost(content,
   locate)` in place of the `.sized/.on_event/.cursor` modifier chain;
   `route(child, event, area)` is the one door a container dispatches
   through, owning the lifecycle and pointer-containment pre-checks.
@@ -79,21 +90,21 @@ release is a complete toolchain rather than a compatibility promise.
   and `Mouse` become aliases of `std.term`'s, so termui events and
   plain terminal events are the same values.
 - `std.zip`'s read path gets `zip.Archive`: opening -
-  `let opened = try new zip.Archive(data)` - parses the central
+  `let opened = try zip.Archive(data)` - parses the central
   directory once, so a damaged archive fails where it is opened,
   `opened.entries()` cannot fail anymore, and `opened.extract(entry)`
   still can, because a bad local header or checksum belongs to the
   entry it is found on. `Writer` is a class made with
-  `new zip.Writer()` - an accumulator with identity - and the free
+  `zip.Writer()` - an accumulator with identity - and the free
   `zip.entries`, `zip.extract`, and `zip.writer` are gone.
 - Construction idiom sweep: `math.Rng` is a class made with
-  `new math.Rng(seed)` (a generator is stateful identity; the struct
+  `math.Rng(seed)` (a generator is stateful identity; the struct
   copy was a footgun) and the free `math.rng` is gone; `ui.Window`
   opens through its own fallible init - `try new ui.Window(title, w,
   h)` - and the free `ui.open` is gone; `gpu.Surface` is a class whose
   only door is the std-internal `from_handle` seam `ui` uses.
 - `http.Client` and `Response` methods: a client carries a base URL and
-  default headers (`var api = new http.Client("http://host")`,
+  default headers (`var api = http.Client("http://host")`,
   `api.header(name, value)`, `api.get("/path")`), and a `Response`
   answers `ok()` (200-299), `text()` (UTF-8 or absent), and `json()`
   (a `json.Json` document, or the error it says). Still one request
@@ -109,12 +120,12 @@ release is a complete toolchain rather than a compatibility promise.
   by declaring the same functions. With the contract in place,
   opening moved onto the classes themselves: `files.open`/`create`/
   `append_to` became the `files.Mode` enum and a fallible
-  `File` init — `try new files.File(path)`,
-  `try new files.File(path, files.Mode.append)` — and
+  `File` init — `try files.File(path)`,
+  `try files.File(path, files.Mode.append)` — and
   `network.connect`/`listen` became
   `network.Connection.dial(host, port)` (a static function over a
   private init, because both of a connection's doors ask the world)
-  and `try new network.Listener(0)`.
+  and `try network.Listener(0)`.
   `std.http` dials through `Connection.dial`; its public surface is
   unchanged.
 - Selective imports: `from geo import Point, length as span` binds the
@@ -123,14 +134,14 @@ release is a complete toolchain rather than a compatibility promise.
   plain `import geo` also appears; members are checked where the import
   is written, and there is no wildcard form. `from`, like `as`, is
   contextual rather than reserved.
-- Class construction now requires `new`: `var app = new Application()`,
-  `try new File(path)`, and bare `new VStack` when no arguments are
+- Class construction now requires `new`: `var app = Application()`,
+  `try File(path)`, and bare `VStack()` when no arguments are
   needed. `new` is the one keyword that makes a reference identity —
-  it already builds containers (`new list[str]`, `new map[K, V]`,
-  `new array[i64](5)`, `new builder`) and now builds classes the same
+  it already builds containers (`list[str]()`, `map[K, V]()`,
+  `array[i64](5)`, `builder()`) and now builds classes the same
   way. Structs, enums, and unions keep plain call syntax
   (`Point(x = 1)`). A bare `ClassName(...)` call is a compile error:
-  a class makes a new identity — write `new ClassName(...)`.
+  a class makes a new identity — write `ClassName(...)`.
 - `std.http` arrives: the HTTP/1.1 client in pure Luce over the
   transport. `get` and `post` answer a `Response` whose status is
   data — a 404 is an answer, not an error — with lowercased headers
@@ -142,7 +153,7 @@ release is a complete toolchain rather than a compatibility promise.
 - `std.network` arrives: TCP transport as two library classes,
   `Connection` (read/write/flush — the byte channel files carry) and
   `Listener` (accept/port), dialed with `Connection.dial(host, port)`
-  and opened with `try new Listener(port)`; port 0 asks for any free
+  and opened with `try Listener(port)`; port 0 asks for any free
   port. No `close()` — ARC's
   last release closes, and a dropped peer reads as end of stream.
   Refusals are `io_failed` with the world's reason; a host without the

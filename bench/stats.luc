@@ -21,8 +21,8 @@ import std.math
 
 func main():
     let n = 2000000
-    var a = new array[f64](n)
-    var b = new array[f64](n)
+    var a = array[f64](n)
+    var b = array[f64](n)
     for i in range(0, n):
         a[i] = f64((i * 7) % 32) * 0.25
         b[i] = f64((i * 13) % 32) * 0.25

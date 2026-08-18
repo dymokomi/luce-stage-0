@@ -19,8 +19,8 @@
 func main():
     let n = 200000
     let reps = 400
-    var a = new array[i32](n)
-    var b = new array[i32](n)
+    var a = array[i32](n)
+    var b = array[i32](n)
     for i in range(0, n):
         a[i] = i32(i % 100)
         b[i] = i32((i * 7) % 100)

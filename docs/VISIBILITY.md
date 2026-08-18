@@ -327,7 +327,7 @@ discipline: an internal is marked, everything else says nothing.
   `format_float`, and the rest are public.
 - `math` marks the constants `ln2`, `ln10` (internals of `log2`/`log10`)
   and the field `Rng.state` `private`; the generator is constructed
-  through its own `init` — `new math.Rng(seed)` — never by reaching
+  through its own `init` — `math.Rng(seed)` — never by reaching
   at the state.
 - `files` marks its mode numbering `private`.
   Its `Builtin.NAME` calls are not declarations at all: they are a

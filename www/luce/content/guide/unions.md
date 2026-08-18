@@ -105,7 +105,7 @@ task retains that reference through ARC, just like a struct field. Matching
 gives access to the payload and keeps its references alive.
 
 ```text
-var items = new list[Json]
+var items = list[Json]()
 items.append(Json.text(value = "ready"))
 let document = Json.array(items = items)
 ```

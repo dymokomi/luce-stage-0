@@ -55,7 +55,7 @@ test "a get reads status, headers, and a content-length body" {
         \\        print("no kind")
         \\        return
         \\    print(kind)
-        \\    var held = new list[u8]
+        \\    var held = list[u8]()
         \\    for b in page.body:
         \\        held.append(b)
         \\    let text = strings.from_bytes(held)
@@ -86,7 +86,7 @@ test "a chunked reply is decoded into the body it framed" {
     try hosted.printsGiven(
         \\func main() -> !:
         \\    let page = try http.get("http://example.test/")
-        \\    var held = new list[u8]
+        \\    var held = list[u8]()
         \\    for b in page.body:
         \\        held.append(b)
         \\    let text = strings.from_bytes(held)
@@ -136,7 +136,7 @@ test "a client joins its base, sends its headers, and answers through the method
         \\import std.json
         \\
         \\func main() -> !:
-        \\    var api = new http.Client("http://example.test")
+        \\    var api = http.Client("http://example.test")
         \\    api.header("authorization", "Bearer opensesame")
         \\    let answer = try api.get("/status")
         \\    print(str(answer.ok()))

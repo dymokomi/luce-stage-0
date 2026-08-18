@@ -103,7 +103,7 @@ func upper(s: str) -> str:
     return fold_case(s, first = 'a', last = 'z', shift = -32)
 
 private func fold_case(s: str, first: char, last: char, shift: i64) -> str:
-    var out = new builder
+    var out = builder()
     var run = 0
     var at = 0
     let size = len(s)
@@ -129,7 +129,7 @@ private func fold_case(s: str, first: char, last: char, shift: i64) -> str:
 func replace(s: str, old: str, replacement: str) -> str:
     if len(old) == 0:
         return s
-    var out = new builder
+    var out = builder()
     var run: i64 = 0
     var at = find(s, old) else -1
     while at >= 0:
@@ -146,7 +146,7 @@ func replace(s: str, old: str, replacement: str) -> str:
 func repeat(s: str, times: i64) -> str:
     if times <= 0 or len(s) == 0:
         return ""
-    var out = new builder
+    var out = builder()
     for i in range(0, times):
         out.append(s)
     return out.build()
@@ -179,7 +179,7 @@ func split(s: str, separator: str) -> list[str]:
 
 # The pieces joined with a separator between each pair.
 func join(parts: list[str], separator: str) -> str:
-    var out = new builder
+    var out = builder()
     for i, piece in parts:
         if i > 0:
             out.append(separator)
@@ -292,7 +292,7 @@ func format_float(value: f64, decimals: i64) -> str:
 # are the encoding, not the characters: `len(to_bytes("é"))` is 2
 # while `len("é")` is 1.
 func to_bytes(s: str) -> list[u8]:
-    var out = new list[u8]
+    var out = list[u8]()
     let encoded = bytes(s)
     var at: i64 = 0
     while at < len(encoded):

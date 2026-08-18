@@ -38,7 +38,7 @@ func route(child: View, event: input.Event, area: model.Rect) -> model.Response:
 # Render one tree host-free: tests and previews see exactly the cells
 # the live loop would present.
 func snapshot(content: View, rows: i64, columns: i64) -> canvas.Snapshot:
-    let surface = new canvas.Surface(rows, columns)
+    let surface = canvas.Surface(rows, columns)
     surface.clear()
     let cursor = content.draw(surface, surface.area())
     return surface.snapshot(cursor)

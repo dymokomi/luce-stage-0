@@ -11,7 +11,7 @@
 # inherits the same boundary.
 #
 # Randomness is a Lehmer generator with identity: `var rng =
-# new math.Rng(42)` then `rng.next()`.  Every draw advances the one
+# math.Rng(42)` then `rng.next()`.  Every draw advances the one
 # state the class owns; no hidden globals.
 
 # These constants state `f64` explicitly because the module's accuracy
@@ -276,7 +276,7 @@ func axpy(xs: array[f64, _], factor: f64, ys: array[f64, _]):
 # the struct shape's one footgun, a helper's draws that never
 # advanced the caller's generator.
 #
-#     var rng = new math.Rng(42)
+#     var rng = math.Rng(42)
 #     let roll = rng.in_range(1, 7)
 class Rng:
     private:

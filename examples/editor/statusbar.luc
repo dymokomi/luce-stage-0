@@ -56,20 +56,20 @@ class StatusBar: termui.View:
 
     private func composed() -> termui.View:
         let line = self.status_text()
-        let background = new termui.Fill(" ", theme.palette.status)
+        let background = termui.Fill(" ", theme.palette.status)
         if self.model.focus == focus.Focus.search:
-            var prompt = new termui.ZStack()
+            var prompt = termui.ZStack()
             prompt.add(background)
-            prompt.add(new termui.Label(line, theme.palette.status))
-            return new termui.CursorHost(prompt, self.status_cursor)
+            prompt.add(termui.Label(line, theme.palette.status))
+            return termui.CursorHost(prompt, self.status_cursor)
         let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
-        var pieces = new termui.HStack()
-        pieces.add(new termui.Label(line, theme.palette.status), termui.grow(minimum = line.width()))
-        pieces.add(new termui.Label(hint, theme.palette.status), termui.preferred(0, hint.width(), hint.width()))
-        var layered = new termui.ZStack()
+        var pieces = termui.HStack()
+        pieces.add(termui.Label(line, theme.palette.status), termui.grow(minimum = line.width()))
+        pieces.add(termui.Label(hint, theme.palette.status), termui.preferred(0, hint.width(), hint.width()))
+        var layered = termui.ZStack()
         layered.add(background)
         layered.add(pieces)
-        return new termui.CursorHost(layered, self.status_cursor)
+        return termui.CursorHost(layered, self.status_cursor)
 
     func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
         return self.composed().draw(surface, area)

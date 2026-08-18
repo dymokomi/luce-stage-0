@@ -217,7 +217,7 @@ func total(j: Json) -> f64:
             return sum
 
 func main():
-    var items = new list[Json]
+    var items = list[Json]()
     items.append(Json.number(value = 1.5))
     items.append(Json.number(value = 2.5))
     let doc = Json.array(items = items)
@@ -318,10 +318,10 @@ func kindOf(s: Shape) -> Kind:
             return Kind.square
 
 func main():
-    var shapes = new list[Shape]
+    var shapes = list[Shape]()
     shapes.append(Shape.circle(radius = 1.0))
     shapes.append(Shape.square(side = 2.0))
-    var kinds = new list[Kind]
+    var kinds = list[Kind]()
     for s in shapes:
         kinds.append(kindOf(s))
     assert(kinds.contains(Kind.square))

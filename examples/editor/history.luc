@@ -20,8 +20,8 @@ class History:
     private future: list[Revision]
 
     init():
-        self.past = new list[Revision]
-        self.future = new list[Revision]
+        self.past = list[Revision]()
+        self.future = list[Revision]()
 
     # Record the state *before* an edit.  A new edit invalidates redo,
     # so the future stack is cleared.  Call this once per undo group —

@@ -143,12 +143,12 @@ test "zip: an archive this module wrote is one it can read" {
         \\    for step in range(0, 5000):
         \\        large.append(u8(step % 251))
         \\
-        \\    var writer = new zip.Writer()
+        \\    var writer = zip.Writer()
         \\    try writer.add("empty", nothing)
         \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    try writer.add("every.bin", every)
         \\    try writer.add("large.bin", large)
-        \\    let archive = try new zip.Archive(writer.finish())
+        \\    let archive = try zip.Archive(writer.finish())
         \\
         \\    let found = archive.entries()
         \\    assert(len(found) == 4)
@@ -190,13 +190,13 @@ test "zip: compressing an entry changes its size and nothing else" {
         \\        text += "luce compiles bytes into machine code. "
         \\    let data = zip.to_bytes(text)
         \\
-        \\    var writer = new zip.Writer()
+        \\    var writer = zip.Writer()
         \\    try writer.add("prose.txt", data, compress = true)
         \\    # Nothing to gain: a compressed entry never grows, so this
         \\    # one is stored whole instead.
         \\    var one: list[u8] = [7]
         \\    try writer.add("one.bin", one, compress = true)
-        \\    let archive = try new zip.Archive(writer.finish())
+        \\    let archive = try zip.Archive(writer.finish())
         \\
         \\    let found = archive.entries()
         \\    assert(found[0].deflated())
@@ -272,7 +272,7 @@ test "zip: what Info-ZIP stored, std.zip reads" {
         \\func main() -> !:
         \\    let raw = stored()
         \\    assert(len(raw) == 220)
-        \\    let archive = try new zip.Archive(raw)
+        \\    let archive = try zip.Archive(raw)
         \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\
@@ -325,7 +325,7 @@ test "zip: an archive Info-ZIP wrote survives a real file, both ways" {
         \\
         \\    # And it is still an archive after the round trip, which
         \\    # is the claim a u8 comparison alone does not make.
-        \\    let opened = try new zip.Archive(back)
+        \\    let opened = try zip.Archive(back)
         \\    let found = opened.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")
@@ -346,13 +346,13 @@ test "zip: an archive std.zip wrote to a file is one it reads back" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    var writer = new zip.Writer()
+        \\    var writer = zip.Writer()
         \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    var raw: list[u8] = [0, 255, 128, 1]
         \\    try writer.add("every.bin", raw)
         \\    try zip.write("built.zip", writer.finish())
         \\
-        \\    let archive = try new zip.Archive(try zip.read("built.zip"))
+        \\    let archive = try zip.Archive(try zip.read("built.zip"))
         \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "greeting.txt")
@@ -377,7 +377,7 @@ test "zip: what Info-ZIP deflated, std.zip inflates" {
         \\func main() -> !:
         \\    # A dynamic Huffman block, written by Info-ZIP at -9: the
         \\    # tables come out of the stream, not out of RFC 1951.
-        \\    let archive = try new zip.Archive(dynamic())
+        \\    let archive = try zip.Archive(dynamic())
         \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "note.txt")
@@ -404,13 +404,13 @@ test "zip: an archive rebuilt out of one Info-ZIP wrote holds the same bytes" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    let original = try new zip.Archive(stored())
+        \\    let original = try zip.Archive(stored())
         \\    let found = original.entries()
-        \\    var writer = new zip.Writer()
+        \\    var writer = zip.Writer()
         \\    for entry in found:
         \\        let data = try original.extract(entry)
         \\        try writer.add(entry.name(), data, compress = true)
-        \\    let rebuilt = try new zip.Archive(writer.finish())
+        \\    let rebuilt = try zip.Archive(writer.finish())
         \\
         \\    let again = rebuilt.entries()
         \\    assert(len(again) == 2)
@@ -437,7 +437,7 @@ test "zip: bytes that are not an archive answer by name" {
         \\
         \\func main() -> !:
         \\    var scraps: list[u8] = [80, 75, 3]
-        \\    let opened = try new zip.Archive(scraps)
+        \\    let opened = try zip.Archive(scraps)
         \\
     , "zip: not an archive (only 3 bytes)");
 
@@ -446,7 +446,7 @@ test "zip: bytes that are not an archive answer by name" {
         \\
         \\func main() -> !:
         \\    let prose = zip.to_bytes("this file is prose, not an archive at all")
-        \\    let opened = try new zip.Archive(prose)
+        \\    let opened = try zip.Archive(prose)
         \\
     , "zip: not an archive (no end-of-central-directory record)");
 }
@@ -462,7 +462,7 @@ test "zip: an archive cut short says it is truncated" {
         \\    for index in range(0, len(whole)):
         \\        if index < 60 or index >= len(whole) - 22:
         \\            cut.append(whole[index])
-        \\    let opened = try new zip.Archive(cut)
+        \\    let opened = try zip.Archive(cut)
         \\
     ++ fixtures, "zip: the archive is truncated");
 }
@@ -475,7 +475,7 @@ test "zip: a directory entry with no header on it says which one" {
         \\    var damaged = copied()
         \\    # The central directory starts at 96; break its signature.
         \\    damaged[96] = 88
-        \\    let opened = try new zip.Archive(damaged)
+        \\    let opened = try zip.Archive(damaged)
         \\
     ++ fixtures, "zip: entry 1 of the central directory has no header");
 }
@@ -488,7 +488,7 @@ test "zip: contents that do not match their checksum are refused" {
         \\    var damaged = copied()
         \\    # "hello\n" begins at 35; make it "jello\n".
         \\    damaged[35] = 106
-        \\    let opened = try new zip.Archive(damaged)
+        \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
         \\    let data = try opened.extract(found[0])
         \\
@@ -503,7 +503,7 @@ test "zip: a compression method this module does not have is named" {
         \\    var damaged = copied()
         \\    # Method 14 is LZMA, in the directory's copy of the field.
         \\    damaged[106] = 14
-        \\    let opened = try new zip.Archive(damaged)
+        \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
         \\    let data = try opened.extract(found[0])
         \\
@@ -518,7 +518,7 @@ test "zip: an entry an archive says is encrypted is not half-read" {
         \\    var damaged = copied()
         \\    # Flag bit 0, in the directory's copy of the flags.
         \\    damaged[104] = 1
-        \\    let opened = try new zip.Archive(damaged)
+        \\    let opened = try zip.Archive(damaged)
         \\
     ++ fixtures, "zip: entry 1 is encrypted");
 }
@@ -560,7 +560,7 @@ test "zip: an entry needs a name" {
         \\import std.zip
         \\
         \\func main() -> !:
-        \\    var writer = new zip.Writer()
+        \\    var writer = zip.Writer()
         \\    var nothing: list[u8] = []
         \\    try writer.add("", nothing)
         \\
@@ -575,7 +575,7 @@ test "zip: a fixed Huffman block, which is the one RFC 1951 prints" {
         \\func main() -> !:
         \\    # Short and repetitive, so Info-ZIP had nothing to gain by
         \\    # carrying its own tables and reached for §3.2.6's.
-        \\    let archive = try new zip.Archive(fixed())
+        \\    let archive = try zip.Archive(fixed())
         \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "song.txt")
@@ -602,7 +602,7 @@ test "zip: an entry written without seeking reads from the directory" {
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    let archive = try new zip.Archive(descriptor())
+        \\    let archive = try zip.Archive(descriptor())
         \\    let found = archive.entries()
         \\    assert(len(found) == 1)
         \\    assert(found[0].name() == "streamed.txt")
@@ -629,7 +629,7 @@ test "zip: an archive with a program in front of it still reads" {
         \\    let raw = prefixed()
         \\    let plain = stored()
         \\    assert(len(raw) == len(plain) + 52)
-        \\    let archive = try new zip.Archive(raw)
+        \\    let archive = try zip.Archive(raw)
         \\    let found = archive.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")
@@ -664,7 +664,7 @@ test "zip: a signature inside a comment is not the end record" {
         \\    archive[len(archive) - 1] = u8(len(inner) >> 8 & 0xFF)
         \\    for index in range(0, len(inner)):
         \\        archive.append(inner[index])
-        \\    let opened = try new zip.Archive(archive)
+        \\    let opened = try zip.Archive(archive)
         \\    let found = opened.entries()
         \\    assert(len(found) == 2)
         \\    assert(found[0].name() == "a.txt")

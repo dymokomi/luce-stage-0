@@ -36,7 +36,7 @@ func test_a_404_is_an_answer() -> !:
 
 func test_a_client_carries_base_and_headers_over_loopback() -> !:
     let server = spawn serve(18664, json_reply())
-    var api = new http.Client("http://127.0.0.1:18664")
+    var api = http.Client("http://127.0.0.1:18664")
     api.header("x-luce-test", "loopback")
     let answer = try fetch_with(api)
     try server.wait()
@@ -80,12 +80,12 @@ func fetch_elsewhere() -> !:
 # -- the server half, in ordinary Luce --------------------------------
 
 func serve(port: i64, reply: str) -> !:
-    let door = try new network.Listener(port)
+    let door = try network.Listener(port)
     let guest = try door.accept()
-    var request = new array[u8](2048)
+    var request = array[u8](2048)
     assert(try guest.read(request) > 0)
     var wire = strings.to_bytes(reply)
-    var buffer = new array[u8](2048)
+    var buffer = array[u8](2048)
     var at: i64 = 0
     while at < len(wire):
         buffer[at] = wire[at]
@@ -100,8 +100,8 @@ func serve(port: i64, reply: str) -> !:
 func fetch(port: i64) -> http.Response!:
     let not_yet = http.Response(
         status = 0,
-        headers = new map[str, str],
-        body = bytes(new list[u8]),
+        headers = map[str, str](),
+        body = bytes(list[u8]()),
     )
     var tries = 0
     while true:
@@ -114,7 +114,7 @@ func fetch(port: i64) -> http.Response!:
         os.sleep_ms(10)
 
 func body_text(page: http.Response) -> str:
-    var held = new list[u8]
+    var held = list[u8]()
     for b in page.body:
         held.append(b)
     let text = strings.from_bytes(held)

@@ -94,7 +94,7 @@ func display_name(names: UserNames, id: UserId) -> str:
     return names.get(id) else "unknown"
 
 func main():
-    var names: UserNames = new UserNames
+    var names: UserNames = UserNames()
     names[UserId(42)] = "Mina"
     print(display_name(names, 42))
 ```
@@ -157,7 +157,7 @@ Narrow arrays are useful when storage size matters:
 
 ```luce run
 func main():
-    var pixels = new array[u8](4)
+    var pixels = array[u8](4)
     pixels[0] = 255
     pixels[1] = 128
     print(str(u16(pixels[0]) + u16(pixels[1])))

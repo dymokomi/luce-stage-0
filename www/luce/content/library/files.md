@@ -85,7 +85,7 @@ and construction is fallible because the world decides whether the open
 lands:
 
 ```text
-try new files.File(path: str, mode: Mode = Mode.read) -> File!
+try files.File(path: str, mode: Mode = Mode.read) -> File!
 ```
 
 `Mode` names the three doors, instead of numbering them or spelling
@@ -97,8 +97,8 @@ them in a mode string:
 | `Mode.create` | to write from the start, creating the file and emptying it |
 | `Mode.append` | to write at the end, creating the file if it is not there |
 
-`mode` defaults to `Mode.read`, so `try new files.File(path)` opens a
-file to read and `try new files.File(path, files.Mode.append)` opens a
+`mode` defaults to `Mode.read`, so `try files.File(path)` opens a
+file to read and `try files.File(path, files.Mode.append)` opens a
 log. `File` is an ordinary class. Assignment shares one ARC reference,
 `weak` storage works as it does for any class, and the descriptor it
 wraps is a private field no program reaches directly. There is no

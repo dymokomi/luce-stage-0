@@ -28,7 +28,7 @@ test "a module encoded and decoded again is the same program on both engines" {
         \\    return value * 2
         \\
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    for i in range(0, 8):
         \\        xs.append(twice(i))
         \\    let here = Point(x = xs[3], y = len(xs))
@@ -114,7 +114,7 @@ test "optimized object graphs execute after module round-trip" {
         \\    counter.add(2)
         \\    assert(counter.value == 3)
         \\
-        \\    var items = new list[Item]
+        \\    var items = list[Item]()
         \\    items.append(Item(prefix = "item", scale = 2))
         \\    let plan = Plan(work = Work.batch(items = items), finish = suffix)
         \\    print(evaluate(plan))

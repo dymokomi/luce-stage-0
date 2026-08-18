@@ -470,7 +470,7 @@ verify hashes and publish the package.
 The local authoring commands keep the two manifests in step:
 
 ```text
-luce package new NAME [VERSION]
+luce package NAME() [VERSION]
 luce package version NAME VERSION
 luce package publish NAME
 ```

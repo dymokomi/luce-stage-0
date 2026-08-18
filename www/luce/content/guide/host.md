@@ -141,7 +141,7 @@ import std.files
 import std.strings
 
 func main() -> !:
-    var data = new list[u8]
+    var data = list[u8]()
     data.append(u8(0x89))
     data.append(u8(0x50))
     data.append(u8(0x00))
@@ -160,7 +160,7 @@ func main() -> !:
 (not text as a string either)
 ```
 
-`try new files.File(path)` opens a `File`, an ordinary `std.files` class
+`try files.File(path)` opens a `File`, an ordinary `std.files` class
 that owns the open descriptor; a second `files.Mode` argument chooses
 `Mode.read`, `Mode.create`, or `Mode.append`, and reading is the default.
 ARC closes the descriptor after the last strong reference goes away. A
@@ -171,8 +171,8 @@ import std.files
 
 func main() -> !:
     try files.write("stock.txt", "fig\npear\nplum\n")
-    var f = try new files.File("stock.txt")
-    var buffer = new array[u8](4)
+    var f = try files.File("stock.txt")
+    var buffer = array[u8](4)
     print(str(try f.read(buffer)))
     print(str(try f.read(buffer)))
     print(str(i32(buffer[0])))

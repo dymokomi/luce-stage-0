@@ -217,7 +217,7 @@ pub fn lowerNew(
             try self.fail(
                 "luce.sema.container.type",
                 new.type_name.span,
-                "new array writes one element type, then its sizes: new array[i64](5, 5)",
+                "array construction writes one element type, then its sizes: array[i64](5, 5)",
                 .{},
             );
             return null;
@@ -249,7 +249,7 @@ pub fn lowerNew(
             try self.fail(
                 "luce.sema.new",
                 new.span,
-                "new makes a reference: a class, list, map, array, or builder; {s} is a value type and is constructed as {s}(...) without new",
+                "{s} is a value type and is constructed as {s}(...)",
                 .{ try self.analyzer.typeName(object_type), new.type_name.name },
             );
             return null;
@@ -294,7 +294,6 @@ pub fn lowerNew(
                 as_statement,
                 fallible_allowed,
                 shape_position,
-                true,
             );
         }
         if (descriptor == .array) {
@@ -304,8 +303,8 @@ pub fn lowerNew(
             try self.fail(
                 "luce.sema.container.type",
                 new.span,
-                "new {s} takes no construction values; write new {s}",
-                .{ try self.analyzer.typeName(object_type), new.type_name.name },
+                "{s} takes no construction values; write {s}()",
+                .{ try self.analyzer.typeName(object_type), try self.analyzer.typeName(object_type) },
             );
             return null;
         }
@@ -316,6 +315,46 @@ pub fn lowerNew(
             .operands = recorded_dims,
             .result = object_type,
             .span = new.span,
+        } }),
+        .value_type = object_type,
+    };
+}
+
+/// Construct a container whose type is already resolved — the alias
+/// call path, where the name arrived through a namespace and
+/// re-resolving the written spelling would lose its qualifier.
+pub fn lowerResolvedContainer(
+    self: *FunctionBuilder,
+    object_type: Type,
+    written: []const u8,
+    arguments: []ast.Argument,
+    span: Span,
+) Error!?Typed {
+    var recorded_dims: []nodes.Operand = &.{};
+    const descriptor = self.analyzer.heap_types.items[object_type.heap];
+    const synthetic: ast.NewObject = .{
+        .type_name = .{ .name = written, .span = span },
+        .arguments = arguments,
+        .span = span,
+    };
+    if (descriptor == .array) {
+        const dims = (try arrayDimensions(self, synthetic)) orelse return null;
+        recorded_dims = (try lowerArrayDimensions(self, synthetic, dims, descriptor.array.rank)) orelse return null;
+    } else if (arguments.len != 0) {
+        try self.fail(
+            "luce.sema.container.type",
+            span,
+            "{s} takes no construction values; write {s}()",
+            .{ try self.analyzer.typeName(object_type), written },
+        );
+        return null;
+    }
+    return .{
+        .node = try recorder.recordNode(self, .{ .new_object = .{
+            .heap_type = object_type.heap,
+            .operands = recorded_dims,
+            .result = object_type,
+            .span = span,
         } }),
         .value_type = object_type,
     };
@@ -334,7 +373,7 @@ fn lowerArrayDimensions(
         try self.fail(
             "luce.sema.container.type",
             new.span,
-            "new array takes 1 to 4 dimension sizes: new array[i64](5, 5)",
+            "array construction takes 1 to 4 dimension sizes: array[i64](5, 5)",
             .{},
         );
         return null;
@@ -344,7 +383,7 @@ fn lowerArrayDimensions(
             try self.fail(
                 "luce.sema.container.type",
                 new.span,
-                "new {s} needs {d} dimension sizes, got {d}",
+                "{s} needs {d} dimension sizes, got {d}",
                 .{ new.type_name.name, expected, dims.len },
             );
             return null;
@@ -369,7 +408,7 @@ fn arrayDimensions(self: *FunctionBuilder, new: ast.NewObject) Error!?[]*ast.Exp
             try self.fail(
                 "luce.sema.container.type",
                 argument.span,
-                "array sizes are positional: new array[i64](5, 5)",
+                "array sizes are positional: array[i64](5, 5)",
                 .{},
             );
             return null;

@@ -174,10 +174,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_true, .keyword_false, .keyword_none => .constant,
 
-        // `spawn` sits beside `new` because that is what it is: it makes
-        // a resource — a worker with a heap of its own — the way `new`
-        // makes an object (docs/THREADS.md).
-        .keyword_new, .keyword_spawn => .ownership,
+        // `spawn` makes a resource — a worker with a heap of its own
+        // (docs/THREADS.md).
+        .keyword_spawn => .ownership,
 
         .keyword_self => .receiver,
 

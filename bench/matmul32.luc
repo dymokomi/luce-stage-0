@@ -20,9 +20,9 @@
 
 func main():
     let n = 400
-    var a = new array[f32](n * n)
-    var b = new array[f32](n * n)
-    var c = new array[f32](n * n)
+    var a = array[f32](n * n)
+    var b = array[f32](n * n)
+    var c = array[f32](n * n)
     for i in range(0, n * n):
         a[i] = f32((i * 7) % 4)
         b[i] = f32((i * 13) % 4)

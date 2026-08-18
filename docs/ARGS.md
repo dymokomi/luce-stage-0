@@ -118,7 +118,7 @@ A default may **not** be a freshly built object, a call, or another
 parameter:
 
 ```text
-func f(xs: list[i64] = new list[i64]):   # refused:
+func f(xs: list[i64] = list[i64]()):   # refused:
 # a default must fold at compile time; new, slicing, and indexing belong in a function
 
 func g(a: i64, b: i64 = a):              # refused:
@@ -246,7 +246,7 @@ one per compile.
 | `f(1)` where `f` takes `(a, b, c = 0)` | `luce.sema.call` | `f is missing b` |
 | `func f(a: i64 = 0, b: i64)` | `luce.sema.call` | `a has a default, so b needs one too — the parameters with defaults come last` |
 | `func f(a: i64, b: i64 = a)` | `luce.sema.const` | `a default cannot use a: it is folded before any call is made` |
-| `func f(xs: list[i64] = new list[i64])` | `luce.sema.const` | `a default must fold at compile time; new, slicing, and indexing belong in a function` |
+| `func f(xs: list[i64] = list[i64]())` | `luce.sema.const` | `a default must fold at compile time; new, slicing, and indexing belong in a function` |
 | `Point.scaled(p, …)` on a method | `luce.sema.self` | `scaled is a method with implicit self; call it as p.scaled(…)` |
 | `"abc".find(needle = "b")` | `luce.sema.method` | `find routes to std.strings and its arguments are positional here; write strings.find(…) to name them` |
 | `Point(1, 2)` | `luce.sema.construct` | `Point is built with named fields: Point(field = ...)` |

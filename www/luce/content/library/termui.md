@@ -51,11 +51,11 @@ class Counter: termui.View:
         return termui.Response.ignored
 
 func main():
-    var stack = new VStack
-    stack.add(new Counter())
-    stack.add(new Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
-    var app = new termui.Application()
-    app.set_layout(new termui.Panel("counter", stack))
+    var stack = VStack()
+    stack.add(Counter())
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
+    var app = termui.Application()
+    app.set_layout(termui.Panel("counter", stack))
     app.start()
 ```
 
@@ -65,7 +65,7 @@ it starts and returns when input closes or a routed event answers `quit`.
 ## How to think about it
 
 A shared model class is the source of truth: construct components with
-it (`new Editor(model)`), and each component draws its pane from the
+it (`Editor(model)`), and each component draws its pane from the
 model in `draw` and mutates it in `dispatch`. After every event the
 runtime redraws the retained tree; the cell diff keeps an unchanged
 frame cheap.
@@ -106,17 +106,17 @@ The shipped components are classes conforming to `termui.View`:
 
 | Component | Use it for |
 |---|---|
-| `new Label(text, style)` | one line of text |
-| `new StyledText(lines)` | one or more lines made from styled spans |
-| `new HStack(spacing)` then `add` | children from left to right |
-| `new VStack(spacing)` then `add` | children from top to bottom |
-| `new ZStack()` then `add` | overlapping children; the last is on top |
-| `new Panel(title, content, style, edges)` | titled, junction-aware border |
-| `new Rows(total, render, top, anchor, selected, selected_style)` | a visible window over indexed content |
-| `new Fill(glyph, style)` | fill an assigned rectangle |
-| `new Empty()` | intentionally draw nothing |
-| `new EventHost(content, respond)` | behavior wrapped around content |
-| `new CursorHost(content, locate)` | cursor placement wrapped around content |
+| `Label(text, style)` | one line of text |
+| `StyledText(lines)` | one or more lines made from styled spans |
+| `HStack(spacing)` then `add` | children from left to right |
+| `VStack(spacing)` then `add` | children from top to bottom |
+| `ZStack()` then `add` | overlapping children; the last is on top |
+| `Panel(title, content, style, edges)` | titled, junction-aware border |
+| `Rows(total, render, top, anchor, selected, selected_style)` | a visible window over indexed content |
+| `Fill(glyph, style)` | fill an assigned rectangle |
+| `Empty()` | intentionally draw nothing |
+| `EventHost(content, respond)` | behavior wrapped around content |
+| `CursorHost(content, locate)` | cursor placement wrapped around content |
 
 The uppercase names are UI components. Lowercase names are operations or
 small helpers.
@@ -132,9 +132,9 @@ pane is `fixed(cells = 0)` — zero cells draw nothing and contain no
 pointer:
 
 ```text
-var across = new termui.HStack(spacing = 1)
+var across = termui.HStack(spacing = 1)
 across.add(
-    new termui.Panel("files", file_rows),
+    termui.Panel("files", file_rows),
     termui.ratio(low = 12, high = 28, percent = 25),
 )
 across.add(source_rows)
@@ -187,7 +187,7 @@ let warning = termui.Line(spans = [
     ),
 ])
 
-let message = new termui.StyledText([warning])
+let message = termui.StyledText([warning])
 ```
 
 `plain(text, style)` constructs a one-span `Line`. Drawing clips content to the
@@ -199,7 +199,7 @@ rectangle assigned by the parent.
 interior. All four edges are present by default:
 
 ```text
-new termui.Panel(
+termui.Panel(
     "output",
     output,
     style = active_border,
@@ -216,7 +216,7 @@ chooses junction characters.
 `Rows` calls a provider only for visible indexes:
 
 ```text
-new termui.Rows(
+termui.Rows(
     total,
     self.line_at,
     top = top,

@@ -242,7 +242,7 @@ test "the macOS loom supplies std.ui and std.gpu" {
         \\import std.ui
         \\
         \\func main(args: list[str]) -> !:
-        \\    let window = try new ui.Window("test", 320, 240)
+        \\    let window = try ui.Window("test", 320, 240)
         \\    let surface = try window.surface()
         \\    try surface.clear(10, 20, 30)
         \\    try surface.fill_rect(8, 8, 80, 40, 200, 120, 40)

@@ -13,12 +13,12 @@ from statusbar import StatusBar
 from workbench import Workbench
 
 func model_of() -> model.Model:
-    var documents = new list[document.Document]
-    documents.append(new document.Document(
+    var documents = list[document.Document]()
+    documents.append(document.Document(
         path = "sample.luc",
         content = "func main():\n    let x = 42",
     ))
-    let shared = new model.Model(documents)
+    let shared = model.Model(documents)
     shared.names = ["a.luc", "b.luc"]
     shared.files.count = len(shared.names)
     shared.output = "build ok"
@@ -26,16 +26,16 @@ func model_of() -> model.Model:
 
 # The entry's composition, handed back with the parts a test drives.
 func built(shared: model.Model) -> (Workbench, Editor, FileList):
-    var across = new HStack()
-    let files = new FileList(shared)
-    let pane = new Editor(shared)
+    var across = HStack()
+    let files = FileList(shared)
+    let pane = Editor(shared)
     across.add(files, fixed(0))
     across.add(pane, grow(minimum = Editor.minimum_columns()))
-    var screen = new VStack()
+    var screen = VStack()
     screen.add(across, grow(minimum = 1))
-    screen.add(new Console(shared), fixed(0))
-    screen.add(new StatusBar(shared), fixed(1))
-    return new Workbench(shared, across, screen), pane, files
+    screen.add(Console(shared), fixed(0))
+    screen.add(StatusBar(shared), fixed(1))
+    return Workbench(shared, across, screen), pane, files
 
 func test_the_retained_tree_describes_source_status_and_cursor():
     let bench, pane, files = built(model_of())

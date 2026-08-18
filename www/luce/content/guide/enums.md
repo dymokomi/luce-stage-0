@@ -56,7 +56,7 @@ enum Cell(u8):
     door
 
 func main():
-    var room = new array[Cell](3, 3)
+    var room = array[Cell](3, 3)
     room[1, 1] = Cell.wall
     room[0, 2] = Cell.door
     var walls = 0

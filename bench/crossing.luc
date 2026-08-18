@@ -31,14 +31,14 @@ func slice_sum(values: list[i64]) -> i64:
     return total
 
 func chunk(source: list[i64], from: i64, upto: i64) -> list[i64]:
-    var made = new list[i64]
+    var made = list[i64]()
     for i in range(from, upto):
         made.append(source[i])
     return made
 
 func main():
     let size: i64 = 1000000
-    var numbers = new list[i64]
+    var numbers = list[i64]()
     for i in range(0, size):
         numbers.append(i)
 
@@ -58,13 +58,13 @@ func main():
     let one_total = single.wait()
     let one_ms = os.clock_ms() - before_one
 
-    var pieces = new list[list[i64]]
+    var pieces = list[list[i64]]()
     let step = work // 4
     for part in range(0, 4):
         pieces.append(chunk(numbers, part * step, (part + 1) * step))
 
     let before_four = os.clock_ms()
-    var tasks = new list[task[i64]]
+    var tasks = list[task[i64]]()
     for piece in pieces:
         tasks.append(spawn slice_sum(piece))
     var four_total: i64 = 0

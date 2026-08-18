@@ -53,7 +53,7 @@ luce build FILE [-o OUT] [--release] [--emit=WHAT]
 luce check FILE
 luce ir FILE [--full]
 luce test [PATH ...]
-luce package new NAME [VERSION]
+luce package NAME() [VERSION]
 luce package version NAME VERSION
 luce package publish NAME
 ```

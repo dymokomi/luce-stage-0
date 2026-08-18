@@ -32,7 +32,7 @@ private func under(here: str, name: str) -> str:
 # Answers an error message, or none.
 func refresh(names: list[str], directory: str, active_path: str) -> str?:
     names.clear()
-    var found = new list[files.Entry]
+    var found = list[files.Entry]()
     found = files.entries(directory) catch reason:
         return reason
     if directory != ".":

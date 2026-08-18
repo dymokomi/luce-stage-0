@@ -1,6 +1,6 @@
 # ui — the low-level window boundary.
 #
-# `try new ui.Window(title, width, height)` asks the host for a window.
+# `try ui.Window(title, width, height)` asks the host for a window.
 # A Window owns the native window handle;
 # `surface` turns that window into the `std.gpu.Surface` used for drawing. A
 # returned Surface retains the native drawing state, so it may safely outlive

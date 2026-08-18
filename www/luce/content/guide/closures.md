@@ -144,13 +144,13 @@ class Item:
 
 func make_reader(item: Item) -> func() -> i64:
     return [weak item] func():
-        let live = item else new Item(value = 0)
+        let live = item else Item(value = 0)
         return live.value
 
 func main():
     var reader: (func() -> i64)? = none
     if true:
-        let item = new Item(value = 7)
+        let item = Item(value = 7)
         reader = make_reader(item)
         print(str(reader()))
     let read = reader else () -> -1
@@ -180,13 +180,13 @@ class Node:
 
     func install():
         self.callback = [weak self] func():
-            let live = self else new Node(value = 0, callback = none)
+            let live = self else Node(value = 0, callback = none)
             return live.value
 
 func main():
     var callback: (func() -> i64)? = none
     if true:
-        let node = new Node(value = 42, callback = none)
+        let node = Node(value = 42, callback = none)
         node.install()
         let installed = node.callback else () -> -1
         callback = installed

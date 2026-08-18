@@ -25,15 +25,15 @@ func main(args: list[str]):
         return
     let shared = model.open(args)
 
-    var across = new HStack()
-    across.add(new FileList(shared), fixed(0))
-    across.add(new Editor(shared), grow(minimum = Editor.minimum_columns()))
+    var across = HStack()
+    across.add(FileList(shared), fixed(0))
+    across.add(Editor(shared), grow(minimum = Editor.minimum_columns()))
 
-    var screen = new VStack()
+    var screen = VStack()
     screen.add(across, grow(minimum = 1))
-    screen.add(new Console(shared), fixed(0))
-    screen.add(new StatusBar(shared), fixed(1))
+    screen.add(Console(shared), fixed(0))
+    screen.add(StatusBar(shared), fixed(1))
 
-    var app = new termui.Application()
-    app.set_layout(new Workbench(shared, across, screen))
+    var app = termui.Application()
+    app.set_layout(Workbench(shared, across, screen))
     app.start()

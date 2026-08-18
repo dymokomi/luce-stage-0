@@ -380,7 +380,6 @@ pub fn lowerCall(
             as_statement,
             fallible_allowed,
             shape_position,
-            false,
         );
     }
     if (self.analyzer.interface_names.get(resolved)) |interface_index| {
@@ -1084,7 +1083,6 @@ pub fn lowerMethod(
                     as_statement,
                     fallible_allowed,
                     shape_position,
-                    false,
                 );
             }
             if (self.analyzer.interface_names.get(resolved)) |interface_index| {
@@ -1145,12 +1143,9 @@ fn isStandardIntrinsicCall(self: *FunctionBuilder, method: ast.Method) bool {
 /// Build a nominal value. Classes with `init` route through their hidden
 /// factory function; every other class and every struct keeps the direct
 /// memberwise construction path. This is the one fork shared by bare,
-/// imported, aliased, and `new`-constructed type names.
-///
-/// `via_new` says the construction was written `new Name(...)`. A class
-/// makes a new reference identity and must be written with `new`; a
-/// value type must not be. Every call route converges here, so this is
-/// the single place that rule is enforced.
+/// imported, and aliased type names: values and classes alike
+/// construct by call, and what differs is what the construction
+/// answers — a copyable value or a new reference identity.
 pub fn lowerNominalConstruct(
     self: *FunctionBuilder,
     layout: u32,
@@ -1160,25 +1155,9 @@ pub fn lowerNominalConstruct(
     as_statement: bool,
     fallible_allowed: bool,
     shape_position: ShapePosition,
-    via_new: bool,
 ) Error!?Typed {
-    if (self.analyzer.structs.items[layout].reference and !via_new) {
-        try self.fail(
-            "luce.sema.new",
-            span,
-            "a class makes a new identity: write new {s}(...)",
-            .{written_name},
-        );
-        return null;
-    }
     if (self.analyzer.struct_decls.items[layout].initializer) |initializer| {
-        // Diagnostics about the construction — a missing argument, a
-        // missing `try` — should spell it the way the reader must
-        // write it, and for a class that spelling includes `new`.
-        const spelled = if (self.analyzer.structs.items[layout].reference)
-            try std.fmt.allocPrint(self.arena(), "new {s}", .{written_name})
-        else
-            written_name;
+        const spelled = written_name;
         return lowerUserCall(
             self,
             initializer,
@@ -1218,7 +1197,6 @@ fn lowerAliasCall(
             as_statement,
             fallible_allowed,
             shape_position,
-            false,
         ),
         .enumeration => |reference| construct.lowerEnumOfNumber(
             self,
@@ -1243,16 +1221,20 @@ fn lowerAliasCall(
                         as_statement,
                         fallible_allowed,
                         shape_position,
-                        false,
                     ),
-                    .list, .map, .array, .builder => {
-                        try self.fail(
-                            "luce.sema.call",
-                            call.span,
-                            "{s} is a type alias for {s}, not a callable value; construct it with new {s}",
-                            .{ declaration.name, try self.analyzer.typeName(target), declaration.name },
-                        );
-                    },
+                    // A container alias constructs by call exactly the
+                    // way its target does: `Cells()` is `list[i64]()`
+                    // under the alias's name.  The target type is
+                    // already resolved, so construction goes straight
+                    // to it — re-resolving the written spelling would
+                    // lose a namespace qualifier.
+                    .list, .map, .array, .builder => return expressions.lowerResolvedContainer(
+                        self,
+                        target,
+                        call.callee,
+                        call.arguments,
+                        call.span,
+                    ),
                     .handle => try self.fail(
                         "luce.sema.call",
                         call.span,

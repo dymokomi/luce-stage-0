@@ -488,7 +488,7 @@ test "json: a member name is compared decoded, however it was written" {
 test "json: nesting is bounded at 64, and a deeper document is refused rather than run out of stack" {
     try agreeOk(asks ++
         \\func nest(depth: i64) -> str:
-        \\    var out = new builder
+        \\    var out = builder()
         \\    for step in range(0, depth):
         \\        out.append("[")
         \\    out.append("1")
@@ -520,7 +520,7 @@ test "json: a document at the bound parses, walks and writes inside loom's own c
         \\import std.json
         \\
         \\func nest(depth: i64) -> str:
-        \\    var out = new builder
+        \\    var out = builder()
         \\    for step in range(0, depth):
         \\        out.append("[")
         \\    out.append("1")
@@ -720,7 +720,7 @@ test "json: a value is built the way it is taken apart" {
         \\func main():
         \\    # docs/UNION.md's own construction paragraph, run: every
         \\    # inner value is a fresh Json placed into the map.
-        \\    var fields = new map[str, json.Json]
+        \\    var fields = map[str, json.Json]()
         \\    fields["name"] = json.Json.text(value = "luce")
         \\    fields["version"] = json.Json.integer(value = 2)
         \\    fields["ratio"] = json.Json.real(value = 0.5)
@@ -1031,7 +1031,7 @@ test "json: a refusal names the problem and its scalar position" {
         \\import std.json
         \\
         \\func main() -> !:
-        \\    var deep = new builder
+        \\    var deep = builder()
         \\    for step in range(0, 65):
         \\        deep.append("[")
         \\    deep.append("1")
@@ -1146,7 +1146,7 @@ test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what t
         \\
         \\    # i_structure_500_nested_arrays: refused, at 65 (see the
         \\    # nesting spec above for why that number).
-        \\    var deep = new builder
+        \\    var deep = builder()
         \\    for step in range(0, 500):
         \\        deep.append("[")
         \\    for step in range(0, 500):

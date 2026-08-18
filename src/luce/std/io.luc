@@ -34,8 +34,8 @@ private const chunk = 65536
 
 # Read the source to its end.
 func drain(source: Reader) -> list[u8]!:
-    var buffer = new array[u8](chunk)
-    var all = new list[u8]
+    var buffer = array[u8](chunk)
+    var all = list[u8]()
     var filled = try source.read(buffer)
     while filled > 0:
         var at: i64 = 0
@@ -48,7 +48,7 @@ func drain(source: Reader) -> list[u8]!:
 # Write all of `data`, then flush.  A sink that accepts nothing at all
 # has stopped writing, and says so as an error instead of spinning.
 func send(sink: Writer, data: list[u8]) -> !:
-    var buffer = new array[u8](chunk)
+    var buffer = array[u8](chunk)
     var at: i64 = 0
     while at < len(data):
         var held: i64 = 0

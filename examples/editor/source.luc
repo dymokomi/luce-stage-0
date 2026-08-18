@@ -30,7 +30,7 @@ class Editor: termui.View:
 
     func source_line(index: i64) -> termui.Line:
         let doc = self.model.document()
-        var spans = new list[termui.Span]
+        var spans = list[termui.Span]()
         var gutter_style = theme.palette.gutter
         let cursor_line = doc.line_of(doc.cursor)
         if index == cursor_line and self.model.focus == focus.Focus.editor:
@@ -106,14 +106,14 @@ class Editor: termui.View:
     # component and its state are retained.
     private func composed() -> termui.View:
         let doc = self.model.document()
-        let rows = new termui.Rows(
+        let rows = termui.Rows(
             doc.count_lines(),
             self.source_line,
             top = doc.scroll,
             anchor = doc.line_of(doc.cursor),
         )
-        return new termui.CursorHost(
-            new termui.EventHost(rows, self.source_event),
+        return termui.CursorHost(
+            termui.EventHost(rows, self.source_event),
             self.source_cursor,
         )
 

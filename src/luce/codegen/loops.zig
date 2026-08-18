@@ -575,7 +575,7 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new array[f64](8)
+        \\    var a = array[f64](8)
         \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
@@ -602,9 +602,9 @@ test "a loop that writes plain elements still lifts; matmul's nest lifts all thr
     var built = try planned(gpa,
         \\func main():
         \\    let n = 4
-        \\    var a = new array[f64](n * n)
-        \\    var b = new array[f64](n * n)
-        \\    var c = new array[f64](n * n)
+        \\    var a = array[f64](n * n)
+        \\    var b = array[f64](n * n)
+        \\    var c = array[f64](n * n)
         \\    for i in range(0, n):
         \\        for k in range(0, n):
         \\            let pivot = a[i * n + k]
@@ -632,7 +632,7 @@ test "a loop that can allocate or call refuses to lift" {
         \\    return xs[0]
         \\
         \\func main():
-        \\    var a = new array[f64](8)
+        \\    var a = array[f64](8)
         \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + touch(a)
@@ -641,10 +641,10 @@ test "a loop that can allocate or call refuses to lift" {
         ,
         // A fresh object grows the table, and the rows move with it.
         \\func main():
-        \\    var a = new array[f64](8)
+        \\    var a = array[f64](8)
         \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
-        \\        var xs = new list[i64]
+        \\        var xs = list[i64]()
         \\        total = total + a[i]
         \\    print(str(i64(total)))
         \\
@@ -661,7 +661,7 @@ test "an inner loop lifts even when the loop around it cannot" {
         \\func main():
         \\    var total: f64 = 0.0
         \\    for r in range(0, 2):
-        \\        var a = new array[f64](8)
+        \\        var a = array[f64](8)
         \\        for i in range(0, 8):
         \\            total = total + a[i]
         \\    print(str(i64(total)))
@@ -684,7 +684,7 @@ test "the local assignment guard remains independent of the effect gate" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new array[f64](8)
+        \\    var a = array[f64](8)
         \\    var total: f64 = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]

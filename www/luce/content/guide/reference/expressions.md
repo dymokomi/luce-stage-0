@@ -296,7 +296,7 @@ func chooser() -> func(i64) -> i64:
     return twice
 
 func main():
-    var actions = new map[str, func(i64) -> i64]
+    var actions = map[str, func(i64) -> i64]()
     actions["double"] = twice
     print(str(chooser()(21)))
     print(str(actions["double"](21)))
@@ -391,7 +391,7 @@ and both counts:
 
 ```luce fail
 func main():
-    var xs = new list[i64]
+    var xs = list[i64]()
     xs.append(1, 2)
 ```
 
@@ -408,7 +408,7 @@ rather than at the call:
 
 ```luce fail
 func main():
-    var xs = new list[i64]
+    var xs = list[i64]()
     xs.append("hello")
 ```
 
@@ -424,7 +424,7 @@ a spelling when one is close enough:
 
 ```luce fail
 func main():
-    var xs = new list[i64]
+    var xs = list[i64]()
     let found = xs.has(1)
 ```
 
@@ -453,30 +453,29 @@ Open slice ends default to `0` and to the length.
 [1, 2, 3]                  a list literal; element type inferred
 []                         empty; needs an annotated binding
 {"one": 1, "two": 2}       a map literal; key and value inferred
-new list[T]
-new map[K, V]
-new array[T](size, ...)
-new builder
+list[T]()
+map[K, V]()
+array[T](size, ...)
+builder()
 Struct(field = expr, ...)      every field, by name
-new Class(field = expr, ...)   one new class identity; every required field, by name
-new Class(args)                through the class's custom init surface
+Class(field = expr, ...)   one new class identity; every required field, by name
+Class(args)                through the class's custom init surface
 ```
 
 A map literal evaluates its entries in written order and creates a
 fresh mutable map. A later equal key replaces the earlier value while
 keeping its insertion position. An unannotated integer key is `i64`.
 Empty `{}` is refused because it supplies neither `K` nor `V`; write
-`new map[K, V]`. At file scope the same nonempty literal may initialize
+`map[K, V]()`. At file scope the same nonempty literal may initialize
 an immutable [constant container](../statements/#file-scope-constants).
 
 ## Reference construction and sharing
 
-`new` makes every reference identity: `new list[T]`, `new map[K, V]`,
-`new array[T](...)`, `new builder`, and `new Class(...)` create reference
-objects, while value types construct without it. A bare `Class(...)` call is
-a compile error—a class makes a new identity: write `new Class(...)`. List
-and map literals also create fresh reference objects. A capturing block
-closure creates an ARC environment.
+Everything constructs by call, and the type decides what the call
+answers: `list[T]()`, `map[K, V]()`, `array[T](...)`, `builder()`, and
+`Class(...)` create reference objects, while a struct call answers a
+copyable value. List and map literals also create fresh reference
+objects. A capturing block closure creates an ARC environment.
 Assignment, calls, returns, fields, optionals, and container stores retain and
 share these references; no ownership operator appears in the expression.
 

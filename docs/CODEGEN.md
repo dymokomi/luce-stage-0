@@ -655,7 +655,7 @@ Three things make it pay, and all three are needed together:
   untagged doubles is the only kind that can ever reach a SIMD unit or
   a GPU.
 - **Which kind is a fact of the type, not of the builder.**  A
-  `list[i64]` is `i64` cells whether `new list[i64]` made it or
+  `list[i64]` is `i64` cells whether `list[i64]()` made it or
   `m.keys()` did (`runtime/containers.zig`'s `emptyList`), so a cell's
   width is a compile-time constant here and there is no kind to branch
   on.  The two operations that could once produce either — `m.keys()`

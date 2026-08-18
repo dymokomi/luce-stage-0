@@ -51,7 +51,7 @@ func load(path: str) -> Loaded:
             content = draft_content
             message = "recovered unsaved changes — Ctrl-Z to discard, Ctrl-S to keep"
             recovered = true
-    let opened = new document.Document(path = path, content = content, message = message, dirty = recovered)
+    let opened = document.Document(path = path, content = content, message = message, dirty = recovered)
     return Loaded(opened = opened, base = base, recovered = recovered)
 
 # Write the working content to a draft beside the file, so a crash loses

@@ -32,8 +32,8 @@ class Application:
         let root = self.root
         if root == none:
             return
-        let screen = new canvas.Screen(term.rows(), term.cols())
-        let events = new input.Stream()
+        let screen = canvas.Screen(term.rows(), term.cols())
+        let events = input.Stream()
         while true:
             screen.resize(term.rows(), term.cols())
             let surface = screen.surface

@@ -19,7 +19,7 @@ creating an independent outer collection.
 
 A `list[T]` is a growable, ordered sequence. A nonempty literal infers its
 element type. An empty literal needs an annotation, or you can use
-`new list[T]`.
+`list[T]()`.
 
 ```luce run
 func main():
@@ -114,7 +114,7 @@ be independently resizable.
 
 ```luce run
 func main():
-    var rows = new list[list[i64]]
+    var rows = list[list[i64]]()
     rows.append([1, 2])
 
     var loose: list[i64] = [3, 4]
@@ -134,7 +134,7 @@ shared 3, independent 2
 
 A `map[K, V]` is an insertion-ordered dictionary. Keys are integers, `str`,
 or enums. A literal creates a fresh mutable map; an empty map needs
-`new map[K, V]`.
+`map[K, V]()`.
 
 ```luce run
 func main():
@@ -167,7 +167,7 @@ Indexing a missing key traps because it asserts that the key exists. Use
 
 ```luce trap
 func main():
-    var ages = new map[str, i64]
+    var ages = map[str, i64]()
     ages["ada"] = 36
     print(str(ages["unknown"]))
 ```
@@ -186,7 +186,7 @@ import std.strings
 
 func main():
     let text = "the cat sat on the mat the end"
-    var counts = new map[str, i64]
+    var counts = map[str, i64]()
     for word in text.split(" "):
         counts[word] += 1
 
@@ -209,11 +209,11 @@ and resizing would be meaningless or harmful.
 
 ```luce run
 func main():
-    var row = new array[i64](5)
+    var row = array[i64](5)
     for index in range(0, len(row)):
         row[index] = index * index
 
-    var flags = new array[bool](3)
+    var flags = array[bool](3)
     print(f"{len(row)} elements, last {row[4]}")
     print(f"zero value is {flags[0]}")
 ```
@@ -235,7 +235,7 @@ func sum(grid: array[i64, _, _]) -> i64:
     return total
 
 func main():
-    var grid = new array[i64](4, 4)
+    var grid = array[i64](4, 4)
     for row in range(0, 4):
         for column in range(0, 4):
             grid[row, column] = row * column

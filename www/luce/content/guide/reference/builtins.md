@@ -111,7 +111,7 @@ new outer list; referenced elements remain shared under ARC.
 
 ```luce run
 func main():
-    var grid = new array[i64](2, 3)
+    var grid = array[i64](2, 3)
     grid.fill(7)
     print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[1, 2]}")
 ```

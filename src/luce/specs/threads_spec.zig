@@ -131,7 +131,7 @@ test "a worker's str crosses the join in inline and allocated forms" {
 test "a worker's list crosses the join and the joiner owns it" {
     try agree.prints(
         \\func build(n: i64) -> list[i64]:
-        \\    var made = new list[i64]
+        \\    var made = list[i64]()
         \\    for i in range(0, n):
         \\        made.append(i * i)
         \\    return made
@@ -150,7 +150,7 @@ test "a worker's list crosses the join and the joiner owns it" {
 test "a worker's nested object crosses whole" {
     try agree.prints(
         \\func build() -> map[str, list[i64]]:
-        \\    var made = new map[str, list[i64]]
+        \\    var made = map[str, list[i64]]()
         \\    made["a comfortably long key, longer than inline"] = [1, 2, 3]
         \\    made["b"] = [4]
         \\    return made
@@ -353,7 +353,7 @@ test "a struct composes a union optional task callback and recursive children" {
         \\    let packet = Envelope(
         \\        job = Job.running(task = spawn work()),
         \\        callback = twice,
-        \\        children = new list[Envelope],
+        \\        children = list[Envelope](),
         \\    )
         \\    print(str(consume(packet)))
         \\
@@ -384,9 +384,9 @@ test "a resource graph survives union optional container give return and failure
         \\    return crate
         \\
         \\func finish(parcel: Parcel, callback: (func(i64) -> i64)?, fail: bool) -> Crate!:
-        \\    var contents = new map[str, i64]
+        \\    var contents = map[str, i64]()
         \\    contents["kind"] = 1
-        \\    var grid = new array[i64](2)
+        \\    var grid = array[i64](2)
         \\    grid.fill(7)
         \\    let crate = Crate(
         \\        parcel = parcel,
@@ -399,13 +399,13 @@ test "a resource graph survives union optional container give return and failure
         \\    return route(crate)
         \\
         \\func absent(fail: bool) -> Crate!:
-        \\    var tasks = new list[task[i64]]
+        \\    var tasks = list[task[i64]]()
         \\    tasks.append(spawn work(2))
         \\    let parcel = Parcel.loaded(tasks = tasks, extra = none)
         \\    return try finish(parcel, none, fail)
         \\
         \\func present(fail: bool) -> Crate!:
-        \\    var tasks = new list[task[i64]]
+        \\    var tasks = list[task[i64]]()
         \\    tasks.append(spawn work(2))
         \\    let parcel = Parcel.loaded(tasks = tasks, extra = spawn work(3))
         \\    return try finish(parcel, bump, fail)
@@ -461,7 +461,7 @@ test "a list slice retains resource elements after the source releases them" {
         \\    return 17
         \\
         \\func main():
-        \\    var running = new list[task[i64]]
+        \\    var running = list[task[i64]]()
         \\    running.append(spawn work())
         \\    let kept = running[0:1]
         \\    running.clear()
@@ -476,7 +476,7 @@ test "map values retain resource elements after the map releases them" {
         \\    return 23
         \\
         \\func main():
-        \\    var running = new map[str, task[i64]]
+        \\    var running = map[str, task[i64]]()
         \\    running["job"] = spawn work()
         \\    let kept = running.values()
         \\    running.clear()
@@ -493,7 +493,7 @@ test "tasks in a list are joined in the order the list holds them" {
         \\    return n * n
         \\
         \\func main():
-        \\    var tasks = new list[task[i64]]
+        \\    var tasks = list[task[i64]]()
         \\    for i in range(1, 5):
         \\        tasks.append(spawn square(i))
         \\    var total: i64 = 0
@@ -718,7 +718,7 @@ test "sibling workers may each spawn and join a child" {
         \\    return inner.wait() * 10
         \\
         \\func main():
-        \\    var tasks = new list[task[i64]]
+        \\    var tasks = list[task[i64]]()
         \\    for i in range(1, 9):
         \\        tasks.append(spawn branch(i))
         \\    var total: i64 = 0
@@ -756,7 +756,7 @@ test "a worker that leaks is counted in this program's census" {
 test "a program that spawns and joins leaves nothing alive" {
     try agree.ok(
         \\func build(n: i64) -> list[i64]:
-        \\    var made = new list[i64]
+        \\    var made = list[i64]()
         \\    for i in range(0, n):
         \\        made.append(i)
         \\    return made

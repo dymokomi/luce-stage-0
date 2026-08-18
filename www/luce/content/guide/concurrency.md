@@ -77,7 +77,7 @@ into the joiner's runtime before the worker runtime is torn down:
 
 ```luce run
 func squares(n: i64) -> list[i64]:
-    var made = new list[i64]
+    var made = list[i64]()
     for i in range(0, n):
         made.append(i * i)
     return made
@@ -136,7 +136,7 @@ func square(n: i64) -> i64:
     return n * n
 
 func main():
-    var tasks = new list[task[i64]]
+    var tasks = list[task[i64]]()
     for i in range(1, 5):
         tasks.append(spawn square(i))
     var total: i64 = 0

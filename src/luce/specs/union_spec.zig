@@ -268,7 +268,7 @@ test "a union copies a function-valued field and dispatches both choices" {
         \\            return chosen(n + len(label))
         \\
         \\func main():
-        \\    var jobs = new list[Job]
+        \\    var jobs = list[Job]()
         \\    jobs.append(Job.action(run = twice, label = "!"))
         \\    jobs.append(Job.action(run = none, label = "?"))
         \\    let copied = jobs
@@ -411,7 +411,7 @@ test "B2: every cell of a new array holds the union's zero, and a cell takes a n
         \\            return 2
         \\
         \\func main():
-        \\    var cells = new array[Shape](3)
+        \\    var cells = array[Shape](3)
         \\    assert(kind(cells[0]) == 0)
         \\    assert(kind(cells[2]) == 0)
         \\    cells[1] = Shape.circle(radius = 5.0)
@@ -433,7 +433,7 @@ test "B2: a list of unions is handed the element zero, and elements come back wh
         \\    text(value: str)
         \\
         \\func main():
-        \\    var xs = new list[Json]
+        \\    var xs = list[Json]()
         \\    xs.append(Json.null)
         \\    xs.append(Json.number(value = 2.5))
         \\    xs.append(Json.text(value = "kept words long enough to own outside bytes"))
@@ -484,11 +484,11 @@ test "D12: a Json tree builds through containers, walks recursively, and frees c
         \\            return sum
         \\
         \\func main():
-        \\    var items = new list[Json]
+        \\    var items = list[Json]()
         \\    items.append(Json.number(value = 1.5))
         \\    items.append(Json.number(value = 2.5))
         \\    items.append(Json.null)
-        \\    var fields = new map[str, Json]
+        \\    var fields = map[str, Json]()
         \\    fields["values"] = Json.array(items = items)
         \\    fields["extra"] = Json.number(value = 4.0)
         \\    let doc = Json.object(fields = fields)
@@ -561,8 +561,8 @@ test "D16: str(u) answers the member's name for every member" {
         \\    assert(str(Json.boolean(value = true)) == "boolean")
         \\    assert(str(Json.number(value = 3.0)) == "number")
         \\    assert(str(Json.text(value = "words")) == "text")
-        \\    assert(str(Json.array(items = new list[Json])) == "array")
-        \\    assert(str(Json.object(fields = new map[str, Json])) == "object")
+        \\    assert(str(Json.array(items = list[Json]())) == "array")
+        \\    assert(str(Json.object(fields = map[str, Json]())) == "object")
         \\
     );
 }
@@ -727,10 +727,10 @@ test "D16: a container of unions is searched by what identifies the member" {
         \\            return Kind.square
         \\
         \\func main():
-        \\    var shapes = new list[Shape]
+        \\    var shapes = list[Shape]()
         \\    shapes.append(Shape.circle(radius = 1.0))
         \\    shapes.append(Shape.square(side = 2.0))
-        \\    var kinds = new list[Kind]
+        \\    var kinds = list[Kind]()
         \\    for s in shapes:
         \\        kinds.append(kindOf(s))
         \\    print(str(kinds.contains(Kind.square)))

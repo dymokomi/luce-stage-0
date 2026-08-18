@@ -503,7 +503,7 @@ test "a bare map value is called where it is read" {
         \\    return 0 - n
         \\
         \\func main():
-        \\    var actions = new map[str, func(i64) -> i64]
+        \\    var actions = map[str, func(i64) -> i64]()
         \\    actions["double"] = twice
         \\    actions["negate"] = negate
         \\    print(str(actions["double"](21)))
@@ -525,7 +525,7 @@ test "a stored bound method is called out of the map that holds it" {
         \\func main():
         \\    let two = Counter(step = 2)
         \\    let three = Counter(step = 3)
-        \\    var scales = new map[str, func(i64) -> i64]
+        \\    var scales = map[str, func(i64) -> i64]()
         \\    scales["two"] = two.times
         \\    scales["three"] = three.times
         \\    print(str(scales["two"](10)))
@@ -720,7 +720,7 @@ test "a callee borrowed from a container survives an argument that empties it" {
         \\    return 5
         \\
         \\func main():
-        \\    var actions = new map[str, func(i64) -> i64]
+        \\    var actions = map[str, func(i64) -> i64]()
         \\    actions["double"] = twice
         \\    print(str(actions["double"](wipe(actions))))
         \\    print(str(len(actions)))

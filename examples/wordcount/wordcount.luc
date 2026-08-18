@@ -56,14 +56,14 @@ func main(args: list[str]) -> !:
     # read this used to write had a window between the two calls that
     # nothing could close, and it could not tell "not there" from
     # "would not open" either (docs/FAILURE.md).
-    var counts = new map[str, i64]
+    var counts = map[str, i64]()
     count_words(try files.read(path), counts)
     print(str(len(counts)) + " distinct words in " + path)
 
     var shown = 0
     while shown < top and len(counts) > 0:
         let word, count = heaviest(counts)
-        var line = new builder
+        var line = builder()
         line.append("  ")
         line.append(str(count))
         line.append("  ")

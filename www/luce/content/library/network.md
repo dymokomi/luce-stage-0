@@ -35,14 +35,14 @@ connection from parts".
 ## Listen and accept
 
 ```text
-try new network.Listener(port: i64) -> Listener!
+try network.Listener(port: i64) -> Listener!
 listener.accept() -> network.Connection!
 listener.port() -> i64!
 ```
 
 A `Listener` is constructed the way any class is — with `new` — and its
 `init` is fallible because opening the door asks the world.
-`try new network.Listener(0)` opens a door on every interface: port `0`
+`try network.Listener(0)` opens a door on every interface: port `0`
 asks for any free port, and `port()` answers which one landed — which
 is how a program listens without claiming a number in advance. `accept`
 waits for one peer and answers the connection; a server loops on it for
@@ -75,11 +75,11 @@ other workers keep printing and reading files while one waits.
 import std.network
 
 func main() -> !:
-    let door = try new network.Listener(0)
+    let door = try network.Listener(0)
     let client = try network.Connection.dial("127.0.0.1", try door.port())
     let served = try door.accept()
 
-    var word = new array[u8](2)
+    var word = array[u8](2)
     word[0] = 104
     word[1] = 105
     var sent: i64 = 0
@@ -90,7 +90,7 @@ func main() -> !:
         sent += landed
     try client.flush()
 
-    var heard = new array[u8](2)
+    var heard = array[u8](2)
     var got: i64 = 0
     while got < 2:
         let landed = try served.read(heard)

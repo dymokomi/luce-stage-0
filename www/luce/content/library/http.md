@@ -35,7 +35,7 @@ handed and the `Content-Length` it measured.
 ## A client
 
 ```text
-new http.Client(base: str = "")
+http.Client(base: str = "")
 client.header(name: str, value: str)
 client.get(path: str) -> http.Response!
 client.post(path: str, body: list[u8], content_type: str) -> http.Response!
@@ -45,7 +45,7 @@ A `Client` carries what every request repeats: the base each path is
 joined onto, and the headers sent with every exchange.
 
 ```text
-var api = new http.Client("http://127.0.0.1:8080")
+var api = http.Client("http://127.0.0.1:8080")
 api.header("authorization", "Bearer " + token)
 let answer = try api.get("/status")
 ```
@@ -95,9 +95,9 @@ import std.strings
 
 func serve_one() -> !:
     let crlf = str(char(13)) + "\n"
-    let door = try new network.Listener(18641)
+    let door = try network.Listener(18641)
     let guest = try door.accept()
-    var request = new array[u8](2048)
+    var request = array[u8](2048)
     let heard = try guest.read(request)
     if heard <= 0:
         error("the guest said nothing")
@@ -106,7 +106,7 @@ func serve_one() -> !:
     reply = reply + "Content-Length: 9" + crlf + crlf
     reply = reply + "from luce"
     var wire = strings.to_bytes(reply)
-    var buffer = new array[u8](2048)
+    var buffer = array[u8](2048)
     var at: i64 = 0
     while at < len(wire):
         buffer[at] = wire[at]
@@ -122,8 +122,8 @@ func serve_one() -> !:
 func fetch() -> http.Response!:
     let not_yet = http.Response(
         status = 0,
-        headers = new map[str, str],
-        body = bytes(new list[u8]),
+        headers = map[str, str](),
+        body = bytes(list[u8]()),
     )
     var tries = 0
     while true:
@@ -142,7 +142,7 @@ func main() -> !:
     let server = spawn serve_one()
     let page = try fetch()
     print(str(page.status))
-    var held = new list[u8]
+    var held = list[u8]()
     for b in page.body:
         held.append(b)
     let text = strings.from_bytes(held)

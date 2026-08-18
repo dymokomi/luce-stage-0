@@ -222,7 +222,7 @@ test "the bit set: compound forms write back like every other operator" {
 test "the bit set: every integer width computes in place" {
     try agreeOk(
         \\func main():
-        \\    var cells = new array[u8](2)
+        \\    var cells = array[u8](2)
         \\    cells[0] = 0xF0
         \\    cells[1] = 0x0F
         \\    assert(cells[0] | cells[1] == 0xFF)
@@ -279,7 +279,7 @@ test "str(x) prints every scalar, and builder.build() takes a snapshot" {
         \\    assert(str(true) == "true")
         \\    assert(str(false) == "false")
         \\    assert(str("already") == "already")
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -851,14 +851,14 @@ test "types: the language's own names are lowercase" {
         \\    let r: f64 = 2.5
         \\    let s: str = "hi"
         \\    let b: bool = true
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(n)
         \\    xs.append(3)
-        \\    var grid = new array[f64](2, 2)
+        \\    var grid = array[f64](2, 2)
         \\    grid[0, 0] = 1.5
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts["a"] = 1
-        \\    var text = new builder
+        \\    var text = builder()
         \\    text.append(s)
         \\    let p = Point(x = 1, y = r)
         \\    assert(total(xs) == 10)
@@ -1135,11 +1135,11 @@ test "compound assignment on struct fields and container elements" {
         \\    var xs = [1, 2, 3]
         \\    xs[1] += 10
         \\    assert(xs[1] == 12)
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    grid[1, 1] += 7
         \\    grid[1, 1] -= 2
         \\    assert(grid[1, 1] == 5)
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["k"] = 5
         \\    m["k"] *= 4
         \\    assert(m["k"] == 20)
@@ -1191,7 +1191,7 @@ test "a let binding freezes the name, never the object it reached" {
         \\    numbers.append(4)
         \\    assert(numbers[0] == 9 and len(numbers) == 4)
         \\
-        \\    let grid = new array[Cell](2)
+        \\    let grid = array[Cell](2)
         \\    grid[1].value = 5
         \\    assert(grid[1].value == 5)
         \\
@@ -1209,28 +1209,28 @@ test "a compound store into a missing map key begins from the value type's zero"
     // is the *value* — not an identity element chosen per operator.
     try agreeOk(
         \\func main():
-        \\    var ints = new map[str, i32]
+        \\    var ints = map[str, i32]()
         \\    ints["k"] += 1
         \\    assert(ints["k"] == 1)
-        \\    var longs = new map[str, i64]
+        \\    var longs = map[str, i64]()
         \\    longs["k"] += 2
         \\    assert(longs["k"] == 2)
-        \\    var floats = new map[str, f32]
+        \\    var floats = map[str, f32]()
         \\    floats["k"] += 0.5
         \\    assert(floats["k"] == 0.5)
-        \\    var doubles = new map[str, f64]
+        \\    var doubles = map[str, f64]()
         \\    doubles["k"] += 0.25
         \\    assert(doubles["k"] == 0.25)
-        \\    var words = new map[str, str]
+        \\    var words = map[str, str]()
         \\    words["k"] += "text"
         \\    assert(words["k"] == "text")
-        \\    var octets = new map[str, u8]
+        \\    var octets = map[str, u8]()
         \\    octets["k"] += 7
         \\    assert(octets["k"] == 7)
-        \\    var shorts = new map[str, i16]
+        \\    var shorts = map[str, i16]()
         \\    shorts["k"] += 300
         \\    assert(shorts["k"] == 300)
-        \\    var halves = new map[str, f16]
+        \\    var halves = map[str, f16]()
         \\    halves["k"] += 1.5
         \\    assert(halves["k"] == 1.5)
         \\
@@ -1244,7 +1244,7 @@ test "the zero a missing key begins from is the value, not an identity element" 
     // wearing the same syntax.
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["times"] *= 2
         \\    assert(m["times"] == 0)
         \\    m["minus"] -= 5
@@ -1262,7 +1262,7 @@ test "a compound store defines exactly one entry and evaluates its key once" {
     try agreeOk(
         \\func main():
         \\    var calls: list[i64] = [0]
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m[bump(calls)] += 5
         \\    assert(calls[0] == 1)
         \\    assert(len(m) == 1)
@@ -1286,7 +1286,7 @@ test "a defined str value is owned: it grows from empty and frees once" {
     // rather than a rounding error.
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, str]
+        \\    var m = map[str, str]()
         \\    var at = 0
         \\    while at < 200:
         \\        m["a-key-far-past-the-small-string-bound-so-it-allocates"] += "chunk-"
@@ -1303,7 +1303,7 @@ test "the counter idiom, and the map it leaves behind" {
         \\
         \\func main():
         \\    let text = "the cat sat on the mat the end"
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    for word in text.split(" "):
         \\        counts[word] += 1
         \\    assert(counts["the"] == 3)
@@ -1321,7 +1321,7 @@ test "a compound store through a nested place defines its leaf too" {
         \\    counts: map[str, i64]
         \\
         \\func main():
-        \\    var t = Tally(counts = new map[str, i64])
+        \\    var t = Tally(counts = map[str, i64]())
         \\    t.counts["w"] += 1
         \\    t.counts["w"] += 1
         \\    assert(t.counts["w"] == 2)
@@ -1337,7 +1337,7 @@ test "trap: a plain read of a missing key is untouched by the compound rule" {
     // and it must, or every typo in a key would answer zero.
     try agreeTrap(
         \\func main():
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts["word"] = counts["word"] + 1
         \\    assert(counts["word"] == 1)
         \\
@@ -1352,7 +1352,7 @@ test "trap: a compound store that defines an entry and then traps frees cleanly"
     // that map, and on giving it back.
     try agreeTrap(
         \\func main():
-        \\    var m = new map[str, u8]
+        \\    var m = map[str, u8]()
         \\    m["a"] = 1
         \\    m["b"] -= 1
         \\    assert(len(m) == 2)
@@ -1373,7 +1373,7 @@ test "trap: descending through a map key to reach a field is still a read" {
         \\    value: i64
         \\
         \\func main():
-        \\    var m = new map[str, Cell]
+        \\    var m = map[str, Cell]()
         \\    m["a"] = Cell(value = 1)
         \\    m["b"].value += 5
         \\    assert(m["b"].value == 5)
@@ -1387,7 +1387,7 @@ test "trap: a compound store into a list index keeps its bounds trap" {
     // is the verb that grows a list.
     try agreeTrap(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs[0] += 1
         \\    assert(xs[0] == 1)
         \\
@@ -1397,7 +1397,7 @@ test "trap: a compound store into a list index keeps its bounds trap" {
 test "trap: a compound store into an array cell keeps its bounds trap" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array[i64](2)
+        \\    var cells = array[i64](2)
         \\    cells[5] += 1
         \\    assert(cells[5] == 1)
         \\
@@ -1424,10 +1424,10 @@ test "compound assignment computes at the place's explicit width" {
         \\    var p = Pixel(level = 100)
         \\    p.level += 55
         \\    assert(p.level == 155)
-        \\    var shades = new array[u8](2)
+        \\    var shades = array[u8](2)
         \\    shades[0] += 200
         \\    assert(shades[0] == 200)
-        \\    var counts = new map[str, u8]
+        \\    var counts = map[str, u8]()
         \\    counts["k"] = 12
         \\    counts["k"] *= 20
         \\    assert(counts["k"] == 240)
@@ -1923,7 +1923,7 @@ test "returns: T? is an ordinary element of a shape" {
         \\    return none, false
         \\
         \\func main():
-        \\    var ages = new map[str, i64]
+        \\    var ages = map[str, i64]()
         \\    ages["ada"] = 36
         \\    let found, present = lookup(ages, "ada")
         \\    assert(present and (found else 0) == 36)
@@ -2267,7 +2267,7 @@ test "named arguments: evaluation stays in written order, binding lands by name"
         \\    return a * 10 + b
         \\
         \\func main():
-        \\    var log = new list[i64]
+        \\    var log = list[i64]()
         \\    let got = pair(b = logged(log, 7), a = logged(log, 3))
         \\    assert(got == 37)
         \\    assert(log[0] == 7 and log[1] == 3)
@@ -2672,7 +2672,7 @@ test "chained assignment into struct elements of lists and arrays" {
         \\    assert(cells[0].value == 10)
         \\    cells[0].value += 5
         \\    assert(cells[0].value == 15)
-        \\    var grid = new array[Cell](2, 2)
+        \\    var grid = array[Cell](2, 2)
         \\    grid[1, 1].value = 7
         \\    assert(grid[1, 1].value == 7)
         \\    assert(grid[0, 0].value == 0)
@@ -2739,10 +2739,10 @@ test "lists: the inline path answers what the call answered, at every width" {
     // another name also holds.
     try agreeOk(
         \\func main():
-        \\    var small = new list[u8]
-        \\    var wide = new list[i64]
-        \\    var real = new list[f64]
-        \\    var flags = new list[bool]
+        \\    var small = list[u8]()
+        \\    var wide = list[i64]()
+        \\    var real = list[f64]()
+        \\    var flags = list[bool]()
         \\    for i in range(0, 500):
         \\        small.append(u8(i % 251))
         \\        wide.append(i * 7)
@@ -2774,7 +2774,7 @@ test "lists: an append through one name is seen through the other" {
         \\        target.append(i)
         \\
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    let same = xs
         \\    xs.append(1)
         \\    same.append(2)
@@ -2806,7 +2806,7 @@ test "trap: an inline append refuses a list that was never made" {
 test "maps: upsert, lookup, membership, keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["a"] = 3
@@ -2814,7 +2814,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
         \\    assert(m["a"] == 3)
         \\    assert(m.has("b"))
         \\    assert(not m.has("z"))
-        \\    var order = new builder
+        \\    var order = builder()
         \\    for k in m.keys():
         \\        order.append(k)
         \\    assert(order.build() == "ab")
@@ -2827,11 +2827,11 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
 test "maps: for key, value iteration, values(), and get with default" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["c"] = 3
-        \\    var keys = new builder
+        \\    var keys = builder()
         \\    var total: i64 = 0
         \\    for k, v in m:
         \\        keys.append(k)
@@ -2860,7 +2860,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
         \\        sum_value += x
         \\    assert(sum_index == 0 + 1 + 2)
         \\    assert(sum_value == 60)
-        \\    var row = new array[i64](4)
+        \\    var row = array[i64](4)
         \\    row.fill(5)
         \\    var seen: i64 = 0
         \\    for i, v in row:
@@ -2874,7 +2874,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
 test "single-name for still binds keys for maps and elements for sequences" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[i64, i64]
+        \\    var m = map[i64, i64]()
         \\    m[7] = 70
         \\    m[8] = 80
         \\    var key_sum: i64 = 0
@@ -2893,12 +2893,12 @@ test "single-name for still binds keys for maps and elements for sequences" {
 test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
     try agreeOk(
         \\func main():
-        \\    var grid = new array[i64](3, 4)
+        \\    var grid = array[i64](3, 4)
         \\    assert(grid.dim(0) == 3 and grid.dim(1) == 4)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(grid[2, 3] == 7)
-        \\    var row = new array[i64](5)
+        \\    var row = array[i64](5)
         \\    row.fill(9)
         \\    assert(row[0] == 9 and row[4] == 9)
         \\    assert(len(row) == 5)
@@ -2909,7 +2909,7 @@ test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
 test "builders accumulate text" {
     try agreeOk(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -3127,7 +3127,7 @@ test "for-each over a list sums its elements in order" {
     try agreeOk(
         \\func main():
         \\    let xs = [4, 5, 6]
-        \\    var out = new builder
+        \\    var out = builder()
         \\    for x in xs:
         \\        out.append(str(x))
         \\    assert(out.build() == "456")
@@ -3138,7 +3138,7 @@ test "for-each over a list sums its elements in order" {
 test "for-each over a rank-1 array visits every slot" {
     try agreeOk(
         \\func main():
-        \\    var row = new array[i64](4)
+        \\    var row = array[i64](4)
         \\    row[0] = 1
         \\    row[1] = 2
         \\    row[2] = 3
@@ -3154,11 +3154,11 @@ test "for-each over a rank-1 array visits every slot" {
 test "for-each over map keys walks insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["x"] = 1
         \\    m["y"] = 2
         \\    m["z"] = 3
-        \\    var joined = new builder
+        \\    var joined = builder()
         \\    for k in m.keys():
         \\        joined.append(k)
         \\    assert(joined.build() == "xyz")
@@ -3414,7 +3414,7 @@ test "str renders every scalar, and a builder hands over its own" {
         \\    assert(str(3.0) == "3")
         \\    assert(str(true) == "true")
         \\    assert(str("already") == "already")
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append("bld")
         \\    assert(b.build() == "bld")
         \\
@@ -3553,7 +3553,7 @@ test "lists: value structs stored by copy are independent" {
         \\    v: i64
         \\
         \\func main():
-        \\    var cells = new list[Cell]
+        \\    var cells = list[Cell]()
         \\    var c = Cell(v = 1)
         \\    cells.append(c)
         \\    cells.append(c)
@@ -3573,7 +3573,7 @@ test "lists: value structs stored by copy are independent" {
 test "maps: i64 keys, lookup, has, and len" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[i64, str]
+        \\    var m = map[i64, str]()
         \\    m[1] = "one"
         \\    m[2] = "two"
         \\    m[10] = "ten"
@@ -3591,7 +3591,7 @@ test "maps: i64 keys, lookup, has, and len" {
 test "maps: removing an absent key is a no-op; clear empties" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m.remove("ghost")
@@ -3614,7 +3614,7 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
     // keys()), and it has to survive all of that.
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    var i = 0
         \\    while i < 300:
         \\        m["k" + str(i)] = i
@@ -3650,7 +3650,7 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
 test "maps: i64 keys survive growth, negatives, and the extremes" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[i64, i64]
+        \\    var m = map[i64, i64]()
         \\    var i = 0 - 200
         \\    while i < 200:
         \\        m[i * 3] = i
@@ -3676,16 +3676,16 @@ test "maps: i64 keys survive growth, negatives, and the extremes" {
 test "arrays: ranks one through four report their dims and zero-init" {
     try agreeOk(
         \\func main():
-        \\    var a1 = new array[i64](5)
+        \\    var a1 = array[i64](5)
         \\    assert(a1.dim(0) == 5 and a1[4] == 0)
-        \\    var a2 = new array[i64](2, 3)
+        \\    var a2 = array[i64](2, 3)
         \\    assert(a2.dim(0) == 2 and a2.dim(1) == 3)
         \\    assert(a2[1, 2] == 0)
-        \\    var a3 = new array[i64](2, 2, 2)
+        \\    var a3 = array[i64](2, 2, 2)
         \\    assert(a3.dim(2) == 2 and a3[1, 1, 1] == 0)
         \\    a3[1, 1, 1] = 7
         \\    assert(a3[1, 1, 1] == 7 and a3[0, 0, 0] == 0)
-        \\    var a4 = new array[i64](2, 2, 2, 2)
+        \\    var a4 = array[i64](2, 2, 2, 2)
         \\    assert(a4.dim(3) == 2 and a4[1, 1, 1, 1] == 0)
         \\    a4[1, 1, 1, 1] = 9
         \\    assert(a4[1, 1, 1, 1] == 9)
@@ -3696,11 +3696,11 @@ test "arrays: ranks one through four report their dims and zero-init" {
 test "arrays: fill sets every slot; len is the first dimension" {
     try agreeOk(
         \\func main():
-        \\    var row = new array[f64](4)
+        \\    var row = array[f64](4)
         \\    row.fill(1.5)
         \\    assert(row[0] == 1.5 and row[3] == 1.5)
         \\    assert(len(row) == 4)
-        \\    var grid = new array[i64](3, 5)
+        \\    var grid = array[i64](3, 5)
         \\    assert(len(grid) == 3)
         \\
     );
@@ -3709,7 +3709,7 @@ test "arrays: fill sets every slot; len is the first dimension" {
 test "arrays: rank-1 sort, reverse, find, contains" {
     try agreeOk(
         \\func main():
-        \\    var row = new array[i64](4)
+        \\    var row = array[i64](4)
         \\    row[0] = 3
         \\    row[1] = 1
         \\    row[2] = 4
@@ -3808,9 +3808,9 @@ test "ownership: give transfers an object into a new owner" {
 test "ownership: reassigning an owning var frees the old object with no leak" {
     try agreeOk(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append("first")
-        \\    b = new builder
+        \\    b = builder()
         \\    b.append("second")
         \\    assert(b.build() == "second")
         \\
@@ -3832,7 +3832,7 @@ test "ownership: a late-declared object slot can be filled and used" {
 test "ownership: return moves an object out of a function" {
     try agreeOk(
         \\func make() -> list[i64]:
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return xs
@@ -4067,7 +4067,7 @@ test "narrowing: an assignment of a plain value proves the name present" {
         \\    n = 3
         \\    assert(n * 2 == 6)
         \\    var xs: list[i64]? = none
-        \\    xs = new list[i64]
+        \\    xs = list[i64]()
         \\    xs.append(4)
         \\    assert(len(xs) == 1)
         \\
@@ -4112,7 +4112,7 @@ test "else runs its fallback only when the value is absent" {
         \\    return 0
         \\
         \\func main():
-        \\    let log = new builder
+        \\    let log = builder()
         \\    assert((parse_i64("1") else note(log, "a")) == 1)
         \\    assert((parse_i64("x") else note(log, "b")) == 0)
         \\    assert(log.build() == "b")
@@ -4529,7 +4529,7 @@ test "bounds: pop empties a list before it has nothing to answer" {
 test "bounds: every axis of an array is checked on its own" {
     try agreeOk(
         \\func main():
-        \\    var grid = new array[i64](2, 3)
+        \\    var grid = array[i64](2, 3)
         \\    var row = 1
         \\    var column = 2
         \\    grid[row, column] = 7
@@ -4538,21 +4538,21 @@ test "bounds: every axis of an array is checked on its own" {
     );
     try agreeTrap(
         \\func main():
-        \\    var grid = new array[i64](2, 3)
+        \\    var grid = array[i64](2, 3)
         \\    var row = 2
         \\    let bad = grid[row, 0]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new array[i64](2, 3)
+        \\    var grid = array[i64](2, 3)
         \\    var column = 3
         \\    let bad = grid[0, column]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new array[i64](2, 3)
+        \\    var grid = array[i64](2, 3)
         \\    var below = -1
         \\    let bad = grid[0, below]
         \\
@@ -4562,7 +4562,7 @@ test "bounds: every axis of an array is checked on its own" {
 test "bounds: a map answers for a key it holds and traps for one it does not" {
     try agreeOk(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["a"] = 1
         \\    assert(m["a"] == 1)
         \\    assert(m.has("a"))
@@ -4574,7 +4574,7 @@ test "bounds: a map answers for a key it holds and traps for one it does not" {
     );
     try agreeTrap(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["a"] = 1
         \\    var wanted = "b"
         \\    let bad = m[wanted]
@@ -4618,7 +4618,7 @@ test "bounds: str slices use scalar length and byte_at uses byte length" {
 test "trap: array index out of bounds" {
     try agreeTrap(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    grid[2, 0] = 1
         \\
     , .index_bounds);
@@ -4627,7 +4627,7 @@ test "trap: array index out of bounds" {
 test "trap: missing map key" {
     try agreeTrap(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m["present"] = 1
         \\    let bad = m["absent"]
         \\
@@ -4637,7 +4637,7 @@ test "trap: missing map key" {
 test "trap: popping an empty list" {
     try agreeTrap(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    let bad = xs.pop()
         \\
     , .empty_collection);
@@ -4682,7 +4682,7 @@ test "trap: using an unfilled late object slot" {
 test "trap: unfilled object slot inside an array of objects" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array[list[i64]](2)
+        \\    var cells = array[list[i64]](2)
         \\    cells[0].append(1)
         \\
     , .null_object);
@@ -4691,11 +4691,11 @@ test "trap: unfilled object slot inside an array of objects" {
 test "arrays: fill retains one shared object for every cell" {
     try agree.prints(
         \\func main():
-        \\    var seed = new list[i64]
+        \\    var seed = list[i64]()
         \\    seed.append(1)
-        \\    var cells = new array[list[i64]](3)
+        \\    var cells = array[list[i64]](3)
         \\    cells.fill(seed)
-        \\    seed = new list[i64]
+        \\    seed = list[i64]()
         \\    cells[0].append(2)
         \\    print(str(len(cells[1])))
         \\    print(str(len(cells[2])))
@@ -4898,14 +4898,14 @@ test "lists grow, index, slice, iterate, and free explicitly" {
 test "maps upsert, look up, and iterate keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var ages = new map[str, i64]
+        \\    var ages = map[str, i64]()
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    ages["ada"] = 37
         \\    assert(len(ages) == 2)
         \\    assert(ages["ada"] == 37)
         \\    assert(ages.has("alan"))
-        \\    var joined = new builder
+        \\    var joined = builder()
         \\    for key in ages:
         \\        joined.append(key)
         \\    assert(joined.build() == "adaalan")
@@ -4923,14 +4923,14 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
         \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
-        \\    var grid = new array[i64](3, 4)
+        \\    var grid = array[i64](3, 4)
         \\    assert(grid.dim(0) == 3)
         \\    assert(grid.dim(1) == 4)
         \\    assert(len(grid) == 3)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(corner(grid) == 7)
-        \\    var row = new array[f64](4)
+        \\    var row = array[f64](4)
         \\    row[0] = 2.5
         \\    var total: f64 = 0.0
         \\    for value in row:
@@ -4975,13 +4975,13 @@ test "collection misuse traps with stable codes" {
         , .code = .empty_collection },
         .{ .source =
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let bad = m["ghost"]
         \\
         , .code = .key_missing },
         .{ .source =
         \\func main():
-        \\    var cells = new array[list[i64]](2)
+        \\    var cells = array[list[i64]](2)
         \\    cells[0].append(1)
         \\
         , .code = .null_object },
@@ -4992,7 +4992,7 @@ test "collection misuse traps with stable codes" {
         , .code = .bad_codepoint },
         .{ .source =
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    grid[2, 0] = 1
         \\
         , .code = .index_bounds },
@@ -5005,7 +5005,7 @@ test "S33: ARC leaves no live objects after a clean run" {
         \\func main():
         \\    let kept = [1, 2, 3]
         \\    let copied = kept[0:2]
-        \\    var released = new builder
+        \\    var released = builder()
         \\    assert(len(copied) == 2)
         \\
     );
@@ -5030,14 +5030,14 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    names.sort()
         \\    assert(names[0] == "amber")
         \\    assert(names[1] == "cyan")
-        \\    var row = new array[i64](4)
+        \\    var row = array[i64](4)
         \\    row.fill(7)
         \\    assert(row[3] == 7)
         \\    assert(row.contains(7))
         \\    row[1] = 2
         \\    row.sort()
         \\    assert(row[0] == 2)
-        \\    var ages = new map[str, i64]
+        \\    var ages = map[str, i64]()
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    var listed = ages.keys()
@@ -5064,7 +5064,7 @@ test "short-circuit operands survive block splits everywhere" {
         \\func main():
         \\    let a = true
         \\    let b = false
-        \\    var cells = new array[bool](2, 2)
+        \\    var cells = array[bool](2, 2)
         \\    cells[0, 1] = a == b or a
         \\    let chosen = pick(a and b, a or b)
         \\    let pair = Flags(left = a or b, right = a and b)
@@ -5301,14 +5301,14 @@ test "explicit widths: every integer range and operator survives both engines" {
 test "explicit widths: every integer width is a distinct map key" {
     try agreeOk(
         \\func main():
-        \\    var u8s = new map[u8, str]
-        \\    var u16s = new map[u16, str]
-        \\    var u32s = new map[u32, str]
-        \\    var u64s = new map[u64, str]
-        \\    var i8s = new map[i8, str]
-        \\    var i16s = new map[i16, str]
-        \\    var i32s = new map[i32, str]
-        \\    var i64s = new map[i64, str]
+        \\    var u8s = map[u8, str]()
+        \\    var u16s = map[u16, str]()
+        \\    var u32s = map[u32, str]()
+        \\    var u64s = map[u64, str]()
+        \\    var i8s = map[i8, str]()
+        \\    var i16s = map[i16, str]()
+        \\    var i32s = map[i32, str]()
+        \\    var i64s = map[i64, str]()
         \\    u8s[u8(255)] = "u8"
         \\    u16s[u16(65535)] = "u16"
         \\    u32s[u32(4294967295)] = "u32"
@@ -5637,7 +5637,7 @@ test "f16: a non-finite value converted to an integer traps" {
 test "explicit widths: an array[u8] stores and reads every value 0..255" {
     try agreeOk(
         \\func main():
-        \\    var cells = new array[u8](256)
+        \\    var cells = array[u8](256)
         \\    var at = 0
         \\    while at < 256:
         \\        cells[at] = u8(at)
@@ -5658,13 +5658,13 @@ test "explicit widths: an array[u8] stores and reads every value 0..255" {
 test "explicit widths: arrays of i16 and f16 retain their widths" {
     try agreeOk(
         \\func main():
-        \\    var shorts = new array[i16](4)
+        \\    var shorts = array[i16](4)
         \\    shorts[0] = -32768
         \\    shorts[3] = 32767
         \\    assert(shorts[0] == -32768)
         \\    assert(shorts[3] == 32767)
         \\    assert(shorts[1] == 0)
-        \\    var halves = new array[f16](3)
+        \\    var halves = array[f16](3)
         \\    halves[0] = 0.5
         \\    halves[1] = 65504.0
         \\    assert(f64(halves[0]) == 0.5)
@@ -5677,7 +5677,7 @@ test "explicit widths: arrays of i16 and f16 retain their widths" {
 test "explicit widths: an array store past a u8 element's range traps" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new array[u8](4)
+        \\    var cells = array[u8](4)
         \\    var over: i64 = 300
         \\    cells[0] = u8(over)
         \\    print(str(cells[0]))
@@ -5688,7 +5688,7 @@ test "explicit widths: an array store past a u8 element's range traps" {
 test "explicit widths: list[u8] round-trips through the boxed path" {
     try agreeOk(
         \\func main():
-        \\    var xs = new list[u8]
+        \\    var xs = list[u8]()
         \\    xs.append(0)
         \\    xs.append(255)
         \\    xs.append(128)

@@ -19,7 +19,7 @@ member grammar as a structure. Construction always writes `new`: the keyword
 marks every expression that creates a reference identity, containers and
 classes alike, while value types construct with a plain call. A bare
 `Counter(...)` is a compile error—a class makes a new identity: write
-`new Counter(...)`. Without an `init` body, the construction surface is
+`Counter(...)`. Without an `init` body, the construction surface is
 memberwise:
 
 ```luce
@@ -31,7 +31,7 @@ class Counter:
         return self.count
 
 func main():
-    let first = new Counter(count = 1)
+    let first = Counter(count = 1)
     let second = first
     assert(second.add(41) == 42)
     assert(first.count == 42)
@@ -63,14 +63,14 @@ class Rectangle:
         self.area = self.width * self.height
 
 func main():
-    let rectangle = new Rectangle(6, height = 7)
+    let rectangle = Rectangle(6, height = 7)
     assert(rectangle.label == "rectangle")
     assert(rectangle.area == 42)
 ```
 
 Initializer parameters use the ordinary argument rules: their types are
 explicit, defaults are trailing, and a call may be positional or switch once
-to names. Construct with `new Rectangle(...)`, not `Rectangle.init(...)`.
+to names. Construct with `Rectangle(...)`, not `Rectangle.init(...)`.
 The initializer's visibility
 controls whether another module may construct the class. A private initializer
 can therefore expose construction through a public static function.
@@ -103,7 +103,7 @@ class Port:
         self.number = number
 
 func open() -> Port!:
-    return try new Port(8080)
+    return try Port(8080)
 ```
 
 `init` answers the finished class implicitly. A written early return is bare
@@ -120,9 +120,9 @@ class Token:
     value: i64
 
 func main():
-    let first = new Token(value = 7)
+    let first = Token(value = 7)
     let same = first
-    let separate = new Token(value = 7)
+    let separate = Token(value = 7)
     assert(first is same)
     assert(not (first is separate))
 ```
@@ -160,7 +160,7 @@ class Scene:
     point: Point
 
 func main():
-    let scene = new Scene(point = Point(x = 1, y = 2))
+    let scene = Scene(point = Point(x = 1, y = 2))
     scene.point.x = 40
     assert(scene.point.x + scene.point.y == 42)
 ```
@@ -189,7 +189,7 @@ func apply(item: Incrementing) -> i64:
     return item.add(1)
 
 func main():
-    let counter = new Counter(count = 41)
+    let counter = Counter(count = 41)
     assert(apply(counter) == 42)
     assert(counter.count == 42)
 ```
@@ -213,8 +213,8 @@ class Node:
 func main():
     weak var observed: Node?
     if true:
-        let parent = new Node(value = 41)
-        let child = new Node(value = 1, parent = parent)
+        let parent = Node(value = 41)
+        let child = Node(value = 1, parent = parent)
         observed = parent
         let live = child.parent else child
         assert(live.value + child.value == 42)
@@ -241,7 +241,7 @@ class Resource:
 
 func main():
     if true:
-        let resource = new Resource(name = "cache")
+        let resource = Resource(name = "cache")
         let same = resource
         assert(resource is same)
     print("after")

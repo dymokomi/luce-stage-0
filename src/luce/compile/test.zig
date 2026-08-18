@@ -281,7 +281,7 @@ test "the previously-unasserted diagnostic codes fire" {
         // stage 2's mistake, and stage 3 no longer says it again.
         .{ .source = "func main():\n    let a = 1 +\n", .code = "luce.parse.expression" },
         .{ .source = "func main():\n    let a: list = []\n", .code = "luce.sema.container.type" },
-        .{ .source = "func main():\n    let a = new array[i64]\n", .code = "luce.sema.container.type" },
+        .{ .source = "func main():\n    let a = array[i64]\n", .code = "luce.sema.container.type" },
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
     };
     for (cases) |case| {
@@ -312,7 +312,7 @@ test "the pipeline survives every allocation failure" {
         \\func main():
         \\    var xs = [3, 1, 2]
         \\    xs.sort()
-        \\    var ages = new map[str, i64]
+        \\    var ages = map[str, i64]()
         \\    ages["ada"] = total(xs)
         \\    print(str(ages["ada"]))
         \\
@@ -963,7 +963,7 @@ test "collections type-check and reject misuse at compile time" {
         \\    return total
         \\
         \\func label(counts: map[str, i64], grid: array[i64, _, _]) -> str:
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append(str(len(counts) + grid[0, 0]))
         \\    let made = b.build()
         \\    return made
@@ -989,18 +989,18 @@ test "collections type-check and reject misuse at compile time" {
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new map[f64, i64]
+        \\    var m = map[f64, i64]()
         \\
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    let bad = grid[0]
         \\
     , script, "luce.sema.index");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let bad = m[7]
         \\
     , script, "luce.sema.index");
@@ -1910,7 +1910,7 @@ test "a union's refusals land where UNION.md puts them" {
         \\    circle(radius: f64)
         \\
         \\func main():
-        \\    var m = new map[Shape, i64]
+        \\    var m = map[Shape, i64]()
         \\
     , "luce.sema.type");
     // D16: `==` on unions is refused naming match.
@@ -2824,7 +2824,7 @@ test "a plain map store reads nothing; only the compound one defines" {
     // once" guarantee in instruction form.
     var program = try expectCompilesOptions(
         \\func main():
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts["a"] = 7
         \\    counts["b"] += 1
         \\
@@ -2869,7 +2869,7 @@ test "a plain store through a nested place reads nothing either" {
         \\    counts: map[str, i64]
         \\
         \\func main():
-        \\    var t = Tally(counts = new map[str, i64])
+        \\    var t = Tally(counts = map[str, i64]())
         \\    t.counts["a"] = 7
         \\    t.counts["b"] += 1
         \\
@@ -2896,7 +2896,7 @@ test "a compound store into a list or an array still reads through index_get" {
         \\func main():
         \\    var xs = [1, 2]
         \\    xs[0] += 1
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    grid[1, 1] += 1
         \\
     , .{});

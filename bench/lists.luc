@@ -22,7 +22,7 @@ func main():
     let stride = 4099
 
     # 1. The growth path: n appends into a list that starts empty.
-    var data = new list[u8]
+    var data = list[u8]()
     for i in range(0, n):
         data.append(u8((i * 7 + 11) % 251))
 
@@ -45,7 +45,7 @@ func main():
         data[i] = u8((data[i] * 3 + 1) & 0xFF)
 
     # 5. Histogram: 256 counters in a list[i64], indexed by a u8.
-    var counts = new list[i64]
+    var counts = list[i64]()
     for slot in range(0, 256):
         counts.append(0)
     for value in data:
@@ -59,7 +59,7 @@ func main():
 
     # 6. The same shapes at eight bytes an element.
     let m = n // 8
-    var marks = new list[i64]
+    var marks = list[i64]()
     for i in range(0, m):
         marks.append(i64(data[i * 8]) * 65537 + i)
     var mark_walk: i64 = 0

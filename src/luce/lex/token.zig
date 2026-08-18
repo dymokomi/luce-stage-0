@@ -88,7 +88,6 @@ pub const Kind = enum {
     keyword_is,
     keyword_true,
     keyword_false,
-    keyword_new,
     keyword_import,
     /// `spawn f(args)` — run `f` on a worker with its own runtime and
     /// answer the `task` that owns it (docs/THREADS.md D2, D3).  A
@@ -237,7 +236,6 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "is", .kind = .keyword_is },
     .{ .word = "true", .kind = .keyword_true },
     .{ .word = "false", .kind = .keyword_false },
-    .{ .word = "new", .kind = .keyword_new },
     .{ .word = "import", .kind = .keyword_import },
     .{ .word = "spawn", .kind = .keyword_spawn },
     .{ .word = "none", .kind = .keyword_none },

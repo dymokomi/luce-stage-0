@@ -77,14 +77,14 @@ with `else`:
 import std.math
 
 func main():
-    var xs = new array[f64](4)
+    var xs = array[f64](4)
     for i in range(0, 4):
         xs[i] = f64(i + 1)
     print(str(math.sum(xs)))
     print(str(math.mean(xs) else 0.0))
     print(str(math.vmin(xs) else 0.0))
 
-    var empty = new array[f64](0)
+    var empty = array[f64](0)
     print(str(math.mean(empty) else -1.0))
 ```
 
@@ -97,7 +97,7 @@ func main():
 
 ## `Rng`
 
-`new math.Rng(seed: i64)` creates a deterministic Lehmer/MINSTD
+`math.Rng(seed: i64)` creates a deterministic Lehmer/MINSTD
 generator. A generator is stateful identity — a class — so handing it to a
 helper hands the same sequence rather than a silent copy; the state stays
 private and every draw advances it.
@@ -116,9 +116,9 @@ sampling, and shuffles—not secrets.
 import std.math
 
 func main():
-    var rng = new math.Rng(2026)
+    var rng = math.Rng(2026)
     print(str(rng.in_range(1, 7)))
-    var same = new math.Rng(2026)
+    var same = math.Rng(2026)
     print(str(same.in_range(1, 7)))
 ```
 

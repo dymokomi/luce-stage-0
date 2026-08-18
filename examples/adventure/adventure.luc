@@ -171,7 +171,7 @@ private func counted(count: i64, one: str, many: str) -> str:
     return f"{count} {many}"
 
 func help() -> str:
-    var lines = new builder
+    var lines = builder()
     lines.append("look                  what is here\n")
     lines.append("north south east      or n s e w, up, down — walking\n")
     lines.append("west up down          a bare direction is a step\n")

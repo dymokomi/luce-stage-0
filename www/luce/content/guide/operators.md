@@ -214,7 +214,7 @@ func main():
     var total = 4
     total *= 3
 
-    var counts = new map[str, i64]
+    var counts = map[str, i64]()
     counts["pear"] = 1
     counts["pear"] += 1
     print(f"{total} {counts["pear"]}")

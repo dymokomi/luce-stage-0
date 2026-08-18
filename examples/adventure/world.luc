@@ -151,9 +151,9 @@ struct Realm:
 
     static func empty() -> Realm:
         return Realm(
-            rooms = new list[Room],
-            ways = new list[Way],
-            things = new list[Thing],
+            rooms = list[Room](),
+            ways = list[Way](),
+            things = list[Thing](),
         )
 
     # -- building, which is story.luc's f16 ---------------------------
@@ -212,7 +212,7 @@ struct Realm:
     # Everything a player sees on looking: the room, what is lying in
     # it, and the ways out.  `brief` is the second visit's version.
     func look(at: i64, brief: bool = false) -> str:
-        var said = new builder
+        var said = builder()
         said.append(self.rooms[at].told(brief = brief))
         let lying = self.things_in(at)
         for thing in lying:
@@ -242,7 +242,7 @@ struct Realm:
     # Everything lying in one room, as a list of the caller's own —
     # the things table stays this realm's (OWNERSHIP.md S28).
     func things_in(at: i64) -> list[Thing]:
-        var found = new list[Thing]
+        var found = list[Thing]()
         for thing in self.things:
             if thing.lying_in(at):
                 found.append(thing)

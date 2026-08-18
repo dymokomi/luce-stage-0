@@ -308,7 +308,7 @@ test "str(m): the name is a borrow, and a binding that keeps it copies" {
         \\    deflated
         \\
         \\func main():
-        \\    var names = new list[str]
+        \\    var names = list[str]()
         \\    var m = Method.stored
         \\    names.append(str(m))
         \\    m = Method.deflated
@@ -438,11 +438,11 @@ test "match: it frees what its arms own, on the arm that runs and the ones that 
         \\    var s = Shape.grid
         \\    match s:
         \\        line:
-        \\            var xs = new list[i64]
+        \\            var xs = list[i64]()
         \\            xs.append(1)
         \\            assert(len(xs) == 1)
         \\        grid:
-        \\            var rows = new list[i64]
+        \\            var rows = list[i64]()
         \\            rows.append(2)
         \\            rows.append(3)
         \\            assert(len(rows) == 2)
@@ -570,19 +570,19 @@ test "containers: a list, a map, an array and a struct field all hold members" {
         \\    method: Method
         \\
         \\func main():
-        \\    var methods = new list[Method]
+        \\    var methods = list[Method]()
         \\    methods.append(Method.stored)
         \\    methods.append(Method.deflated)
         \\    assert(len(methods) == 2)
         \\    assert(methods[0] == Method.stored)
         \\    assert(methods[1] == Method.deflated)
         \\
-        \\    var counts = new map[str, Method]
+        \\    var counts = map[str, Method]()
         \\    counts["a"] = Method.deflated
         \\    assert(counts.has("a"))
         \\    assert(counts["a"] == Method.deflated)
         \\
-        \\    var grid = new array[Method](3)
+        \\    var grid = array[Method](3)
         \\    assert(grid[0] == Method.stored)
         \\    grid[2] = Method.shrunk
         \\    assert(grid[2] == Method.shrunk)
@@ -621,7 +621,7 @@ test "a map keys by an enum: put, get, has, remove, and absence" {
         \\    down
         \\
         \\func main():
-        \\    var counts = new map[Key, i64]
+        \\    var counts = map[Key, i64]()
         \\    counts[Key.left] = 3
         \\    counts[Key.right] = 4
         \\    counts[Key.left] = counts[Key.left] + 1
@@ -668,7 +668,7 @@ test "a key comes back out as the enum it went in as" {
         \\            return "up"
         \\
         \\func main():
-        \\    var counts = new map[Key, i64]
+        \\    var counts = map[Key, i64]()
         \\    counts[Key.up] = 1
         \\    counts[Key.left] = 2
         \\    counts[Key.right] = 3
@@ -717,14 +717,14 @@ test "a key round trip survives every backing width, negative members included" 
         \\    near = 1
         \\
         \\func main():
-        \\    var small = new map[Small, i64]
+        \\    var small = map[Small, i64]()
         \\    small[Small.high] = 1
         \\    assert(small.has(Small.high))
         \\    assert(not small.has(Small.zero))
         \\    for k in small:
         \\        assert(k == Small.high)
         \\
-        \\    var signed = new map[Signed, str]
+        \\    var signed = map[Signed, str]()
         \\    signed[Signed.low] = "low"
         \\    signed[Signed.minus] = "minus"
         \\    signed[Signed.top] = "top"
@@ -733,7 +733,7 @@ test "a key round trip survives every backing width, negative members included" 
         \\    for k in signed.keys():
         \\        assert(signed.has(k))
         \\
-        \\    var wide = new map[Wide, i64]
+        \\    var wide = map[Wide, i64]()
         \\    wide[Wide.far] = 7
         \\    assert(wide[Wide.far] == 7)
         \\    assert(not wide.has(Wide.near))
@@ -753,7 +753,7 @@ test "a map keyed by one enum holds another" {
         \\    nothing
         \\
         \\func main():
-        \\    var bound = new map[Key, Intent]
+        \\    var bound = map[Key, Intent]()
         \\    bound[Key.left] = Intent.move_left
         \\    bound[Key.right] = Intent.move_right
         \\    for k in bound:
@@ -871,11 +871,11 @@ test "an enum-keyed map of lists is built and read" {
         \\    up
         \\
         \\func main():
-        \\    var runs = new map[Key, list[i64]]
-        \\    runs[Key.left] = new list[i64]
+        \\    var runs = map[Key, list[i64]]()
+        \\    runs[Key.left] = list[i64]()
         \\    runs[Key.left].append(1)
         \\    runs[Key.left].append(2)
-        \\    runs[Key.up] = new list[i64]
+        \\    runs[Key.up] = list[i64]()
         \\    runs[Key.up].append(3)
         \\    assert(len(runs[Key.left]) == 2)
         \\    assert(runs[Key.left][1] == 2)
@@ -897,7 +897,7 @@ test "containers: an array of enums fills with the first member" {
         \\    wall = 1
         \\
         \\func main():
-        \\    var grid = new array[Cell](2, 2)
+        \\    var grid = array[Cell](2, 2)
         \\    assert(grid[0, 0] == Cell.empty)
         \\    assert(grid[1, 1] == Cell.empty)
         \\    grid[1, 0] = Cell.wall

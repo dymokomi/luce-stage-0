@@ -1373,11 +1373,11 @@ test "a compiled program round-trips through the module format" {
         \\            total = total + index
         \\    print("length ready")
         \\    let text = "π = " + "3.14159"[0:4]
-        \\    var points = new list[f64]
+        \\    var points = list[f64]()
         \\    points.append(length(point))
-        \\    var counts = new map[str, i64]
+        \\    var counts = map[str, i64]()
         \\    counts[text] = len(points)
-        \\    var grid = new array[i64](2, 3)
+        \\    var grid = array[i64](2, 3)
         \\    grid[1, 2] = total
         \\    for value in points:
         \\        total = total + i64(value)
@@ -1543,7 +1543,7 @@ test "a class heap descriptor and hidden deinitializer round-trip together" {
         \\        self.value += 1
         \\
         \\func main():
-        \\    let resource = new Resource(value = 1)
+        \\    let resource = Resource(value = 1)
         \\
     );
     defer program.deinit();
@@ -1804,7 +1804,7 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
         \\    var slot = Slot(held = none)
         \\    slot.held = "there"
         \\    var listed: list[i64]? = none
-        \\    listed = new list[i64]
+        \\    listed = list[i64]()
         \\    listed.append(1)
         \\    assert((counted else 0) == 3)
         \\    assert(slot.held != none)
@@ -1989,7 +1989,7 @@ const mutation_source =
     \\func main():
     \\    var xs: list[i64] = [3, 1, 2]
     \\    xs.sort()
-    \\    var ages = new map[str, i64]
+    \\    var ages = map[str, i64]()
     \\    ages["ada"] = total(xs)
     \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
     \\    assert(seeds[0] == 3)
@@ -2272,7 +2272,7 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\func main():
         \\    var m = Method.stored
         \\    m = Method.deflated
-        \\    var seen = new list[Method]
+        \\    var seen = list[Method]()
         \\    seen.append(m)
         \\    assert(seen[0] == Method.deflated)
         \\    assert(str(m) == "deflated")

@@ -418,7 +418,7 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // A map's **key** publishes as its value does, now that a key can
     // be a declared type (docs/ENUMS.md, As built 2026-08-12).
     try expectSaying(
-        "private enum Key:\n    left\n\nfunc table() -> map[Key, i64]:\n    return new map[Key, i64]\n\nfunc main():\n    return\n",
+        "private enum Key:\n    left\n\nfunc table() -> map[Key, i64]:\n    return map[Key, i64]()\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "table is public and answers Key, which is marked private",
     );
@@ -463,7 +463,7 @@ test "the bare underscore declares nothing, and the wildcard keeps its one home"
         \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    print(str(corner(grid)))
         \\
     );
@@ -1278,7 +1278,7 @@ test "luce.sema.method: searching a container of function values is equality too
         \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list[(func(i64) -> str)?]
+        \\    var xs = list[(func(i64) -> str)?]()
         \\    xs.append(twice)
         \\    assert(xs.contains(twice))
         \\
@@ -1291,7 +1291,7 @@ test "luce.sema.method: searching a container of function values is equality too
         \\    return str(n * 2)
         \\
         \\func main():
-        \\    var cells = new array[(func(i64) -> str)?](2)
+        \\    var cells = array[(func(i64) -> str)?](2)
         \\    cells.fill(twice)
         \\    let at = cells.find(twice)
         \\
@@ -1435,7 +1435,7 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    on_click: (func(i64) -> i64)?
         \\
         \\func main():
-        \\    var xs = new list[Button]
+        \\    var xs = list[Button]()
         \\    xs.append(Button(label = "ok", on_click = twice))
         \\    assert(xs.contains(Button(label = "ok", on_click = twice)))
         \\
@@ -1454,7 +1454,7 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    b: Button
         \\
         \\func main():
-        \\    var rows = new list[Row]
+        \\    var rows = list[Row]()
         \\    rows.append(Row(b = Button(on_click = twice)))
         \\    let at = rows.find(Row(b = Button(on_click = twice)))
         \\
@@ -1471,7 +1471,7 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    square(side: f64)
         \\
         \\func main():
-        \\    var xs = new list[Shape]
+        \\    var xs = list[Shape]()
         \\    xs.append(Shape.circle(radius = 1.0))
         \\    assert(xs.contains(Shape.square(side = 2.0)))
         \\
@@ -1488,7 +1488,7 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    s: Shape
         \\
         \\func main():
-        \\    var xs = new list[Box]
+        \\    var xs = list[Box]()
         \\    xs.append(Box(s = Shape.circle(radius = 1.0)))
         \\    assert(xs.contains(Box(s = Shape.square(side = 2.0))))
         \\
@@ -1521,7 +1521,7 @@ test "luce.sema.type: len measures a container, and a resource is not one" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    let f = try new files.File("/tmp/luce-len-of-a-file", files.Mode.create)
+        \\    let f = try files.File("/tmp/luce-len-of-a-file", files.Mode.create)
         \\    assert(len(f) == 0)
         \\
     ,
@@ -1542,7 +1542,7 @@ test "luce.sema.type: values() of a map of function values is refused (BINDING.m
         \\    return n * 2
         \\
         \\func main():
-        \\    var m = new map[str, func(i64) -> i64]
+        \\    var m = map[str, func(i64) -> i64]()
         \\    m["a"] = twice
         \\    let vs = m.values()
         \\    assert(len(vs) == 1)
@@ -1888,7 +1888,7 @@ test "closure: deinit cannot capture its dying self" {
         \\            return self.value
         \\
         \\func main():
-        \\    let resource = new Resource(value = 42)
+        \\    let resource = Resource(value = 42)
         \\
     , "luce.sema.class.lifecycle", "deinit cannot capture self in a closure");
 }
@@ -1903,7 +1903,7 @@ test "closure: storing a strong self capture diagnoses the direct ARC cycle" {
         \\            return self.value
         \\
         \\func main():
-        \\    let node = new Node(value = 42, callback = none)
+        \\    let node = Node(value = 42, callback = none)
         \\    node.install()
         \\
     , "luce.sema.closure.cycle", "strongly captures self creates an ARC cycle");
@@ -2667,7 +2667,7 @@ test "luce.sema.convert: str() names its value domain and build() for a builder"
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).
     try expectOnlySayingAt(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append("x")
         \\    let text = str(b)
         \\
@@ -2740,7 +2740,7 @@ test "luce.sema.method: map get takes exactly its key" {
     // a second argument is a count mistake and says both counts.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let x = m.get("k", 0)
         \\
     , "luce.sema.method", "get takes 1 argument, got 2", 3, 13);
@@ -2748,7 +2748,7 @@ test "luce.sema.method: map get takes exactly its key" {
     // at the argument rather than at the call.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let x = m.get(7)
         \\
     , "luce.sema.type", "argument 1 of get is str, got i64", 3, 19);
@@ -2758,7 +2758,7 @@ test "luce.sema.loop: two-name for needs a map or a sequence" {
     // A builder is not iterable at all.
     try expectRejected(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    for a, c in b:
         \\        b.append("x")
         \\
@@ -2768,7 +2768,7 @@ test "luce.sema.loop: two-name for needs a map or a sequence" {
 test "luce.sema.duplicate: the two for-loop names must differ" {
     try expectRejected(
         \\func main():
-        \\    var m = new map[i64, i64]
+        \\    var m = map[i64, i64]()
         \\    m[1] = 1
         \\    for k, k in m:
         \\        let unused = k
@@ -2857,7 +2857,7 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
 }
 
 test "luce.sema.container.type: an array construction needs its extents" {
-    try expectRejected("func main():\n    let a = new array[i64]\n", "luce.sema.container.type");
+    try expectRejected("func main():\n    let a = array[i64]\n", "luce.sema.container.type");
 }
 
 test "luce.sema.loop: break and continue need a loop" {
@@ -3013,7 +3013,7 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
 }
 
 test "luce.sema.const: a top-level const is not a computation" {
-    try expectRejected("const bad = new list[i64]\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad = list[i64]()\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.host: host builtins are gated off by default" {
@@ -3320,69 +3320,25 @@ test "luce.sema.field: a nested place checks each field on the way down" {
     , "luce.sema.field");
 }
 
-test "luce.sema.new: new builds only the reference constructors" {
-    try expectSaying(
-        "struct Point:\n    x: i64\n\nfunc main():\n    let a = new Point()\n",
-        "luce.sema.new",
-        "Point is a value type",
-    );
-    // An enum is a value; the sentence names the family the way the
-    // struct refusal does.
-    try expectSaying(
-        "enum Mode:\n    fast\n    slow\n\nfunc main():\n    let m = new Mode\n",
-        "luce.sema.new",
-        "is a value type",
-    );
-    // A transparent alias of a value type is refused as the value it
-    // names, spelled the way the reader wrote it.
-    try expectSaying(
-        "struct Point:\n    x: i64\n\nalias Spot = Point\n\nfunc main():\n    let a = new Spot(x = 1)\n",
-        "luce.sema.new",
-        "is a value type",
-    );
-}
-
-test "luce.sema.new: a class is constructed with new, and only with new" {
-    try expectSaying(
-        \\class Counter:
-        \\    count: i64
-        \\
-        \\func main():
-        \\    let a = Counter(count = 1)
-        \\
-    , "luce.sema.new", "a class makes a new identity: write new Counter(...)");
-    // The alias spelling is refused with the alias's own name.
-    try expectSaying(
-        \\class Action:
-        \\    value: i64
-        \\
-        \\alias Operation = Action
-        \\
-        \\func main():
-        \\    let a = Operation(value = 3)
-        \\
-    , "luce.sema.new", "write new Operation(...)");
-}
-
-test "luce.sema.interface: new cannot construct an interface" {
+test "luce.sema.interface: an interface cannot be constructed" {
     try expectSaying(
         \\interface Speaker:
         \\    func speak() -> str
         \\
         \\func main():
-        \\    let s = new Speaker
+        \\    let s = Speaker()
         \\
     , "luce.sema.interface", "interfaces cannot be constructed");
 }
 
-test "luce.sema.union: new cannot construct a union" {
+test "luce.sema.union: a union constructs through a member, never whole" {
     try expectSaying(
         \\union Shape:
         \\    circle(radius: f64)
         \\    dot
         \\
         \\func main():
-        \\    let s = new Shape
+        \\    let s = Shape()
         \\
     , "luce.sema.union", "a member is the only way in");
 }
@@ -3394,14 +3350,14 @@ test "luce.sema.construct: a fieldless class needs an init, not memberwise new" 
         \\        return 7
         \\
         \\func main():
-        \\    let a = new Nothing
+        \\    let a = Nothing()
         \\
     , "luce.sema.construct", "give it an init to make instances");
 }
 
 test "luce.sema.container.type: array dimensions after new are positional" {
     try expectSaying(
-        "func main():\n    var xs = new array[i64](rows = 2)\n",
+        "func main():\n    var xs = array[i64](rows = 2)\n",
         "luce.sema.container.type",
         "array sizes are positional",
     );
@@ -3488,11 +3444,11 @@ test "luce.sema.private: a public alias cannot expose a private nominal type" {
     );
 }
 
-test "luce.sema.call: an alias is callable only when its target has constructor syntax" {
-    try expectSaying(
-        "alias Names = list[i64]\n\nfunc main():\n    let values = Names()\n",
-        "luce.sema.call",
-        "construct it with new Names",
+test "luce.sema.call: an alias is callable only when its target constructs" {
+    // A container alias constructs by call now; what stays refused is
+    // an alias of a type with no constructor syntax at all.
+    try expectCompiles(
+        "alias Names = list[i64]\n\nfunc main():\n    var values = Names()\n    values.append(4)\n    assert(values[0] == 4)\n",
     );
     try expectSaying(
         "alias Flag = bool\n\nfunc main():\n    let value = Flag(true)\n",
@@ -3822,7 +3778,7 @@ test "luce.sema.const: a call is not a default" {
 
 test "luce.sema.const: a runtime-created object is not a default" {
     try expectSaying(
-        \\func f(xs: list[i64] = new list[i64]):
+        \\func f(xs: list[i64] = list[i64]()):
         \\    return
         \\
         \\func main():
@@ -3997,7 +3953,7 @@ test "luce.sema.call: a builtin's argument names come from its table" {
 
 test "luce.sema.method: a standard method's wrong parameter name offers the closest slot" {
     try expectSaying(
-        "import std.math\n\nfunc main():\n    var rng = new math.Rng(1)\n    let roll = rng.in_range(1, hgh = 7)\n",
+        "import std.math\n\nfunc main():\n    var rng = math.Rng(1)\n    let roll = rng.in_range(1, hgh = 7)\n",
         "luce.sema.method",
         "in_range has no parameter hgh; did you mean high?",
     );
@@ -4029,7 +3985,7 @@ test "luce.sema.method: a method the receiver does not have answers before its a
         \\    return str(n * 2)
         \\
         \\func main():
-        \\    var m = new map[str, func(i64) -> str]
+        \\    var m = map[str, func(i64) -> str]()
         \\    m.put("a", twice)
         \\
     , "luce.sema.method", "map has no method put (has get remove keys values clear)", 6, 5);
@@ -4038,7 +3994,7 @@ test "luce.sema.method: a method the receiver does not have answers before its a
         \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list[(func(i64) -> str)?]
+        \\    var xs = list[(func(i64) -> str)?]()
         \\    xs.push(twice)
         \\
     ,
@@ -4071,7 +4027,7 @@ test "luce.sema.method: one argument too many is a count, not a question about t
         \\    return str(n * 2)
         \\
         \\func main():
-        \\    var xs = new list[(func(i64) -> str)?]
+        \\    var xs = list[(func(i64) -> str)?]()
         \\    xs.append(twice, twice)
         \\
     , "luce.sema.method", "append takes 1 argument, got 2", 6, 5);
@@ -4161,7 +4117,7 @@ test "luce.sema.type: a routed strings call checks argument types" {
 test "luce.sema.method: map has no such method" {
     try expectRejected(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    m.frobnicate()
         \\
     , "luce.sema.method");
@@ -4186,7 +4142,7 @@ test "luce.sema.index: a list indexes with i64, not bool" {
 test "luce.sema.index: an array wants one index per dimension" {
     try expectRejected(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    let a = grid[0]
         \\
     , "luce.sema.index");
@@ -4195,7 +4151,7 @@ test "luce.sema.index: an array wants one index per dimension" {
 test "luce.sema.index: a map cannot be sliced" {
     try expectRejected(
         \\func main():
-        \\    var m = new map[i64, i64]
+        \\    var m = map[i64, i64]()
         \\    let a = m[0:1]
         \\
     , "luce.sema.index");
@@ -4260,8 +4216,8 @@ test "luce.sema.construct: a function-namespace struct has no value fields" {
 // the ordinary unknown-type and unknown-method answers, which is the
 // point — the raw currency never enters a program's vocabulary, so
 // there is nothing special left to refuse.
-test "luce.sema.type: file is not a language type; the library owns the descriptor" {
-    try expectRejected("func main():\n    var f = new file\n", "luce.sema.type");
+test "luce.sema.call: file is not a language type; the library owns the descriptor" {
+    try expectRejected("func main():\n    var f = file()\n", "luce.sema.call");
 }
 
 test "luce.sema.method: files.File has no close; ARC's last release is the close" {
@@ -4274,7 +4230,7 @@ test "luce.sema.method: files.File has no close; ARC's last release is the close
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try new files.File("notes.txt")
+        \\    var f = try files.File("notes.txt")
         \\    f.close()
         \\
     , "luce.sema.method", "files.File has no method close");
@@ -4310,42 +4266,42 @@ test "luce.sema.fallible: a handle's read is fallible like every file service" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try new files.File("notes.txt")
-        \\    var buffer = new array[u8](4)
+        \\    var f = try files.File("notes.txt")
+        \\    var buffer = array[u8](4)
         \\    let got = f.read(buffer)
         \\
     , "luce.sema.fallible");
 }
 
-test "luce.sema.container.type: new array takes one to four dimension sizes" {
-    try expectRejected("func main():\n    var a = new array[i64](1, 2, 3, 4, 5)\n", "luce.sema.container.type");
+test "luce.sema.container.type: an array takes one to four dimension sizes" {
+    try expectRejected("func main():\n    var a = array[i64](1, 2, 3, 4, 5)\n", "luce.sema.container.type");
 }
 
 test "luce.sema.container.type: array dimensions are i64" {
-    try expectRejected("func main():\n    var a = new array[i64](true)\n", "luce.sema.container.type");
+    try expectRejected("func main():\n    var a = array[i64](true)\n", "luce.sema.container.type");
 }
 
 test "luce.sema.container.type: construction values belong only to arrays" {
     try expectSaying(
-        "func main():\n    var xs = new list[i64](4)\n",
+        "func main():\n    var xs = list[i64](4)\n",
         "luce.sema.container.type",
-        "new list[i64] takes no construction values",
+        "list[i64] takes no construction values; write list[i64]()",
     );
 }
 
 test "luce.sema.container.type: an array alias keeps and checks its rank" {
     try expectSaying(
-        "alias Grid = array[i64, _, _]\n\nfunc main():\n    var grid = new Grid(4)\n",
+        "alias Grid = array[i64, _, _]\n\nfunc main():\n    var grid = Grid(4)\n",
         "luce.sema.container.type",
-        "new Grid needs 2 dimension sizes, got 1",
+        "Grid needs 2 dimension sizes, got 1",
     );
 }
 
-test "luce.sema.container.type: direct new array takes no rank wildcards" {
+test "luce.sema.container.type: direct array construction takes no rank wildcards" {
     try expectSaying(
-        "func main():\n    var grid = new array[i64, _, _](4, 4)\n",
+        "func main():\n    var grid = array[i64, _, _](4, 4)\n",
         "luce.sema.container.type",
-        "new array writes one element type, then its sizes",
+        "array construction writes one element type, then its sizes",
     );
 }
 
@@ -4776,17 +4732,17 @@ test "luce.parse.type: T?? is refused where it is written" {
 test "luce.sema.type: a container element may not be optional" {
     try expectMessage(
         \\func main():
-        \\    var xs = new list[i64?]
+        \\    var xs = list[i64?]()
         \\
     , "a list element cannot be optional");
     try expectRejected(
         \\func main():
-        \\    var m = new map[str, i64?]
+        \\    var m = map[str, i64?]()
         \\
     , "luce.sema.type");
     try expectRejected(
         \\func main():
-        \\    var grid = new array[i64?](2)
+        \\    var grid = array[i64?](2)
         \\
     , "luce.sema.type");
 }
@@ -5242,7 +5198,7 @@ test "a slice whose start falls back to a name is still a slice" {
         \\    return xs[0]
         \\
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    xs.append(1)
         \\    xs.append(2)
         \\    xs.append(3)
@@ -5574,7 +5530,7 @@ test "luce.sema.host: files.read is gated" {
 }
 
 test "luce.sema.host: opening a files.File is gated" {
-    try expectRejected("import std.files\n\nfunc main():\n    let f = new files.File(\"x\")\n", "luce.sema.host");
+    try expectRejected("import std.files\n\nfunc main():\n    let f = files.File(\"x\")\n", "luce.sema.host");
 }
 
 test "luce.sema.host: files.kind is gated" {
@@ -5720,7 +5676,7 @@ test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing 
     // failure wins and it is the *only* thing reported.
     try expectOnlySayingAt(
         \\func maybe() -> list[i64]?:
-        \\    return new list[i64]
+        \\    return list[i64]()
         \\
         \\func main():
         \\    let xs = maybe() else Nope.empty
@@ -5729,7 +5685,7 @@ test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing 
 
     try expectOnlySayingAt(
         \\func attempt() -> list[i64]!:
-        \\    return new list[i64]
+        \\    return list[i64]()
         \\
         \\func main():
         \\    let xs = attempt() catch Nope.empty
@@ -5988,19 +5944,19 @@ test "luce.sema.type: an empty bracket literal needs a container annotation" {
 test "luce.sema.index: every shape of index says what it will accept" {
     try expectSaying(
         \\func main():
-        \\    var grid = new array[i64](2, 2, 2, 2)
+        \\    var grid = array[i64](2, 2, 2, 2)
         \\    let bad = grid[0, 0, 0, 0, 0]
         \\
     , "luce.sema.index", "at most 4 index dimensions");
     try expectSaying(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    let bad = grid[0, 1.5]
         \\
     , "luce.sema.index", "array indices are i64");
     try expectSaying(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    let bad = b[0]
         \\
     , "luce.sema.index", "builder has no index");
@@ -6014,7 +5970,7 @@ test "luce.sema.index: every shape of index says what it will accept" {
     , "luce.sema.type", "slice bounds are i64");
     try expectSaying(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    let bad = b[0:1]
         \\
     , "luce.sema.index", "cannot be sliced");
@@ -6023,7 +5979,7 @@ test "luce.sema.index: every shape of index says what it will accept" {
 test "luce.sema.loop: for takes a rank-1 array and nothing wider" {
     try expectSaying(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    for cell in grid:
         \\        let unused = cell
         \\
@@ -6045,25 +6001,25 @@ test "luce.sema.method: each receiver kind names the methods it has" {
     , "luce.sema.type", "argument 1 of find_byte is u8, got str", 3, 27);
     try expectSaying(
         \\func main():
-        \\    var grid = new array[i64](2, 2)
+        \\    var grid = array[i64](2, 2)
         \\    grid.sort()
         \\
     , "luce.sema.method", "only rank-1 arrays have sort");
     try expectSaying(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let bad = m.hass("a")
         \\
     , "luce.sema.method", "did you mean has?");
     try expectSaying(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.appen("x")
         \\
     , "luce.sema.method", "did you mean append?");
     try expectSaying(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.zzzzzz()
         \\
     , "luce.sema.method", "(append append_ascii build clear)");
@@ -6096,14 +6052,14 @@ test "luce.sema.method: each receiver kind names the methods it has" {
 test "luce.sema.method: a count mistake names the method and both counts" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append(1, 2)
         \\
     , "luce.sema.method", "append takes 1 argument, got 2", 3, 5);
     // Zero is a count like any other, and reads differently from two.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append()
         \\
     , "luce.sema.method", "append takes 1 argument, got 0", 3, 5);
@@ -6111,7 +6067,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // one sentence for every arity is one sentence to keep true.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.sort(1)
         \\
     , "luce.sema.method", "sort takes 0 arguments, got 1", 3, 5);
@@ -6121,7 +6077,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // per-method count check had always been able to answer it.
     try expectSayingAt(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let x = m.get("a", 1, 2)
         \\
     , "luce.sema.method", "get takes 1 argument, got 3", 3, 13);
@@ -6130,7 +6086,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
 test "luce.sema.type: a wrong argument type names the position, both types, and underlines the argument" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.append("hello")
         \\
     , "luce.sema.type", "argument 1 of append is i64, got str", 3, 15);
@@ -6138,13 +6094,13 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
     // moves to it rather than staying on the receiver.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[str]
+        \\    var xs = list[str]()
         \\    xs.insert("zero", 0)
         \\
     , "luce.sema.type", "argument 1 of insert is i64, got str", 3, 15);
     try expectSayingAt(
         \\func main():
-        \\    var b = new builder
+        \\    var b = builder()
         \\    b.append(65)
         \\
     , "luce.sema.type", "argument 1 of append is str, got i64", 3, 14);
@@ -6152,7 +6108,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
     // calling them "the map's key and value types".
     try expectSayingAt(
         \\func main():
-        \\    var m = new map[str, i64]
+        \\    var m = map[str, i64]()
         \\    let x = m.get(1)
         \\
     , "luce.sema.type", "argument 1 of get is str, got i64", 3, 19);
@@ -6168,7 +6124,7 @@ test "luce.sema.type: a T? argument to a method earns the same advice it earns a
         \\    return none
         \\
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    let m = maybe()
         \\    xs.append(m)
         \\
@@ -6211,13 +6167,13 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
     // said "no method sortt here", where "here" named nothing.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.sortt()
         \\
     , "luce.sema.method", "list has no method sortt; did you mean sort?", 3, 5);
     try expectSayingAt(
         \\func main():
-        \\    var xs = new list[i64]
+        \\    var xs = list[i64]()
         \\    xs.zzzzzz()
         \\
     ,
@@ -6229,7 +6185,7 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
     // An array is offered the methods an array has, not a list's.
     try expectSayingAt(
         \\func main():
-        \\    var grid = new array[i64](4)
+        \\    var grid = array[i64](4)
         \\    grid.zzzzzz()
         \\
     , "luce.sema.method", "array has no method zzzzzz (has dim fill sort reverse find contains)", 3, 5);
@@ -6273,17 +6229,17 @@ test "luce.sema.type: a written type is checked against the arguments it may tak
     , "luce.parse.type", "type arguments use brackets: write i64[...]");
     try expectSaying(
         \\func main():
-        \\    var m: map[i64] = new map[i64, i64]
+        \\    var m: map[i64] = map[i64, i64]()
         \\
     , "luce.sema.container.type", "map takes key and value types");
     try expectSaying(
         \\func main():
-        \\    var a: array[i64] = new array[i64](2)
+        \\    var a: array[i64] = array[i64](2)
         \\
     , "luce.sema.type", "array spells element and rank");
     try expectSaying(
         \\func main():
-        \\    var b: builder[i64] = new builder
+        \\    var b: builder[i64] = builder()
         \\
     , "luce.sema.type", "builder takes no type arguments");
     try expectSaying(
@@ -7020,7 +6976,7 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
         \\    deflated
         \\
         \\func main():
-        \\    var counts = new map[Method, i64]
+        \\    var counts = map[Method, i64]()
         \\    counts[Method.deflated] = 1
         \\    assert(counts.has(Method.deflated))
         \\
@@ -7031,21 +6987,21 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
         \\    deflated
         \\
         \\func main():
-        \\    var chosen = new map[str, Method]
+        \\    var chosen = map[str, Method]()
         \\    chosen["a"] = Method.deflated
         \\    assert(chosen["a"] == Method.deflated)
         \\
     );
     try expectCompiles(
         \\func main():
-        \\    var counts = new map[i32, i64]
+        \\    var counts = map[i32, i64]()
         \\    counts[i32(1)] = 2
         \\    assert(counts[i32(1)] == 2)
         \\
     );
     try expectSaying(
         \\func main():
-        \\    var counts = new map[f64, i64]
+        \\    var counts = map[f64, i64]()
         \\
     ,
         "luce.sema.type",
@@ -7056,7 +7012,7 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
         \\    x: i64
         \\
         \\func main():
-        \\    var counts = new map[Point, i64]
+        \\    var counts = map[Point, i64]()
         \\
     ,
         "luce.sema.type",
@@ -7064,7 +7020,7 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
     );
     try expectSaying(
         \\func main():
-        \\    var counts = new map[list[i64], i64]
+        \\    var counts = map[list[i64], i64]()
         \\
     ,
         "luce.sema.type",
@@ -7083,7 +7039,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    right
         \\
         \\func main():
-        \\    var counts = new map[Key, i64]
+        \\    var counts = map[Key, i64]()
         \\    counts[0] = 1
         \\
     ,
@@ -7098,7 +7054,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    first
         \\
         \\func main():
-        \\    var counts = new map[Key, i64]
+        \\    var counts = map[Key, i64]()
         \\    counts[Other.first] = 1
         \\
     ,
@@ -7110,7 +7066,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    left
         \\
         \\func main():
-        \\    var counts = new map[i64, i64]
+        \\    var counts = map[i64, i64]()
         \\    counts[Key.left] = 1
         \\
     ,
@@ -7122,7 +7078,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    left
         \\
         \\func main():
-        \\    var counts = new map[Key, i64]
+        \\    var counts = map[Key, i64]()
         \\    assert(counts.has(0))
         \\
     ,
@@ -7136,7 +7092,7 @@ test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
         \\    square(side: f64)
         \\
         \\func main():
-        \\    var counts = new map[Shape, i64]
+        \\    var counts = map[Shape, i64]()
         \\
     ,
         "luce.sema.type",
@@ -7177,7 +7133,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\    return
         \\
         \\func main():
-        \\    var running = new list[task[i64]]
+        \\    var running = list[task[i64]]()
         \\    consume(running)
         \\
     ,
@@ -7193,7 +7149,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\
         \\func main():
         \\    let chosen: func(list[i64]) -> i64 = count
-        \\    var running = new list[task[i64]]
+        \\    var running = list[task[i64]]()
         \\    let result = chosen(running)
         \\
     ,
@@ -7212,7 +7168,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\
         \\func main():
         \\    let sink = Sink(marker = 0)
-        \\    var running = new list[task[i64]]
+        \\    var running = list[task[i64]]()
         \\    let result = sink.consume(running)
         \\
     ,
@@ -7229,7 +7185,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\    return
         \\
         \\func main():
-        \\    var numbers = new list[i64]
+        \\    var numbers = list[i64]()
         \\    keep(numbers)
         \\
     , "luce.sema.type", "argument 1 of keep is list[task[i64]], got list[i64]");
@@ -7237,19 +7193,21 @@ test "luce.sema.type: call arguments fit before ownership advice" {
     // Indexed stores obey the same precedence.
     try expectSaying(
         \\func main():
-        \\    var tasks = new list[task[i64]]
-        \\    var numbers = new list[i64]
+        \\    var tasks = list[task[i64]]()
+        \\    var numbers = list[i64]()
         \\    tasks[0] = numbers
         \\
     , "luce.sema.type", "this place holds task[i64] but the value is list[i64]");
 }
 
-test "luce.sema.new: a task is spawned, not made" {
+test "luce.sema.call: a task is spawned, not constructed" {
     try expectSaying(
-        \\func main():
-        \\    var t = new task[i64]
+        \\alias Job = task[i64]
         \\
-    , "luce.sema.new", "a task is spawned, not made");
+        \\func main():
+        \\    let t = Job()
+        \\
+    , "luce.sema.call", "spawn a function to create a task");
 }
 
 test "luce.sema.self: a method cannot be spawned" {
@@ -7547,7 +7505,7 @@ test "luce.sema.method: sort_by's routed method spelling is positional and list-
         \\
         \\func main():
         \\    let comparator: func(i64, i64) -> bool = before
-        \\    var values = new array[i64](3)
+        \\    var values = array[i64](3)
         \\    values.sort_by(comparator)
         \\
     , "luce.sema.method", "array has no method sort_by");
@@ -7637,7 +7595,7 @@ test "luce.sema.type: a slot holds the optional form of a function value" {
     // union payload field are the five slots there are.
     try expectHostSaying(
         \\func main():
-        \\    var fs = new list[func(i64) -> i64]
+        \\    var fs = list[func(i64) -> i64]()
         \\    print(str(len(fs)))
         \\
     , "luce.sema.type", "a list element starts before anything fills it and a function value has no zero: write (func(i64) -> i64)?");
@@ -7647,7 +7605,7 @@ test "luce.sema.type: a slot holds the optional form of a function value" {
     // `?` would be a `V??`.
     try expectHostSaying(
         \\func main():
-        \\    var fs = new map[str, (func(i64) -> i64)?]
+        \\    var fs = map[str, (func(i64) -> i64)?]()
         \\    print(str(len(fs)))
         \\
     , "luce.sema.type", "a map value is written bare: get already answers (func(i64) -> i64)?, and a second '?' would be a V??");
@@ -7769,7 +7727,7 @@ test "luce.sema.call: an element that may hold none is not called in place" {
         \\    return str(index)
         \\
         \\func main():
-        \\    var steps = new list[(func(i64) -> str)?]
+        \\    var steps = list[(func(i64) -> str)?]()
         \\    steps.append(label)
         \\    print(steps[0](1))
         \\
@@ -7794,7 +7752,7 @@ test "luce.sema.call: a field read through a grouping is refused the same way" {
 test "luce.sema.call: a callee that is not a function says so" {
     try expectHostSaying(
         \\func main():
-        \\    var counts = new list[i64]
+        \\    var counts = list[i64]()
         \\    counts.append(1)
         \\    print(str(counts[0](2)))
         \\
@@ -8054,7 +8012,7 @@ test "luce.sema.interface: a mutating value witness cannot use a temporary or pr
             \\
             \\func main():
             \\    var holder = Holder(item = Box(value = 0))
-            \\    var items = new list[Counter]
+            \\    var items = list[Counter]()
             \\    items.append(Box(value = 0))
             \\    {s}
             \\
@@ -8602,8 +8560,8 @@ test "class: value equality points to identity syntax" {
         \\    value: i64
         \\
         \\func main():
-        \\    let left = new Box(value = 1)
-        \\    let right = new Box(value = 1)
+        \\    let left = Box(value = 1)
+        \\    let right = Box(value = 1)
         \\    assert(left == right)
         \\
     , "luce.sema.class.equality", "write 'left is right'");
@@ -8625,7 +8583,7 @@ test "class: is rejects value types and names the offending side" {
         \\    value: i64
         \\
         \\func main():
-        \\    let box = new Box(value = 1)
+        \\    let box = Box(value = 1)
         \\    assert(box is 1)
         \\
     , "luce.sema.class.identity", "right side of 'is' is i64, not a class reference");
@@ -8640,8 +8598,8 @@ test "class: is rejects references of different nominal classes" {
         \\    value: i64
         \\
         \\func main():
-        \\    let left = new Left(value = 1)
-        \\    let right = new Right(value = 1)
+        \\    let left = Left(value = 1)
+        \\    let right = Right(value = 1)
         \\    assert(left is right)
         \\
     , "luce.sema.class.identity", "same class, got Left and Right");
@@ -8895,7 +8853,7 @@ test "class: self cannot escape before init has made the class" {
         \\class Box:
         \\    value: i64
         \\    init(value: i64):
-        \\        self = new Box(value)
+        \\        self = Box(value)
         \\func main():
         \\    return
         \\
@@ -8916,7 +8874,7 @@ test "class: a custom init is the class constructor surface" {
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
-        \\    let box = new Box()
+        \\    let box = Box()
         \\
     , "luce.sema.call", "Box is missing number");
     try expectSaying(
@@ -8925,7 +8883,7 @@ test "class: a custom init is the class constructor surface" {
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
-        \\    let box = new Box(value = 42)
+        \\    let box = Box(value = 42)
         \\
     , "luce.sema.call", "has no parameter value");
     try expectSaying(
@@ -8936,16 +8894,16 @@ test "class: a custom init is the class constructor surface" {
         \\func main():
         \\    let box = Box.init(42)
         \\
-    , "luce.sema.class.lifecycle", "write new ClassName(...)");
+    , "luce.sema.class.lifecycle", "write ClassName(...)");
     try expectSaying(
         \\class Box:
         \\    value: i64
         \\    init(value: i64) -> !:
         \\        self.value = value
         \\func main():
-        \\    let box = new Box(42)
+        \\    let box = Box(42)
         \\
-    , "luce.sema.fallible", "write 'try new Box(…)'");
+    , "luce.sema.fallible", "write 'try Box(…)'");
     try expectSaying(
         \\class Box:
         \\    value: i64
@@ -9041,7 +8999,7 @@ test "class: deinit is not a method static member or callable value" {
         \\    deinit:
         \\        return
         \\func main():
-        \\    let resource = new Resource()
+        \\    let resource = Resource()
         \\    resource.deinit()
         \\
     , "luce.sema.class.lifecycle", "called only by ARC");
@@ -9053,7 +9011,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        let copy = self
         \\func main():
-        \\    let resource = new Resource()
+        \\    let resource = Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -9063,7 +9021,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        keep(self)
         \\func main():
-        \\    let resource = new Resource()
+        \\    let resource = Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -9072,7 +9030,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        self.next = self
         \\func main():
-        \\    let resource = new Resource()
+        \\    let resource = Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -9081,7 +9039,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        self.items.append(self)
         \\func main():
-        \\    let resource = new Resource(items = new list[Resource])
+        \\    let resource = Resource(items = list[Resource]())
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
@@ -9089,7 +9047,7 @@ test "class: deinit cannot create a new strong self reference" {
         \\    deinit:
         \\        return self
         \\func main():
-        \\    let resource = new Resource()
+        \\    let resource = Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
 }

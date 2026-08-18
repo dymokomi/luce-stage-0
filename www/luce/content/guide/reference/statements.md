@@ -124,7 +124,7 @@ Without `init`, it also takes the same memberwise arguments. One
 surface. It answers the class implicitly and must establish every stored field
 on every successful path before `self` can exist. During the body, `self` may
 only read or assign stored fields; it cannot escape or receive an instance
-method call. Construction writes `new Name(...)`; a bare `Name(...)` call on
+method call. Construction writes `Name(...)`; a bare `Name(...)` call on
 a class is a compile error.
 
 Class values are ARC references: successful `new` makes a new identity,
@@ -188,7 +188,7 @@ is a constant integer expression, folded like every other constant.
   may not — an enum's members are what the type is.
 - The zero value of an enum-typed slot is its **first declared
   member**, which is what `var m: Method` starts at and what
-  `new array[Method](n)` fills with.
+  `array[Method](n)` fills with.
 
 ## union {#union}
 
@@ -490,7 +490,7 @@ and then applied to; a list or array index out of range still traps.
 
 ```luce run
 func main():
-    var counts = new map[str, i64]
+    var counts = map[str, i64]()
     counts["a"] += 5
     var text = "x"
     text += "y"
@@ -636,7 +636,7 @@ const ORDER: array[i64, _] = [16, 17, 18, 0]
 - Constant containers are flat: no nested container, builder,
   reference-carrying struct, or multidimensional array.
 - A constant map rejects duplicate folded keys and names both sites.
-  Empty `{}` is not a literal; use `new map[K, V]`.
+  Empty `{}` is not a literal; use `map[K, V]()`.
 - One written construction is one identity. Aliases, imports and
   parameter defaults share it; separately written equal
   constructions do not.

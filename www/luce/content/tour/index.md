@@ -279,7 +279,7 @@ class Counter:
             return self.next()
 
 func main():
-    let counter = new Counter(start = 40)
+    let counter = Counter(start = 40)
     let same = counter
     let next: func() -> i64 = counter.reader()
     assert(counter is same)
@@ -323,9 +323,9 @@ class User: Named:
         return self.label
 
 func main():
-    var values = new list[Named]
+    var values = list[Named]()
     values.append(FileName(path = "notes.luc"))
-    values.append(new User(label = "Ada"))
+    values.append(User(label = "Ada"))
     for value in values:
         print(value.name())
 ```

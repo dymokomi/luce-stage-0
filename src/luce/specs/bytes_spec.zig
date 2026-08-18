@@ -56,11 +56,11 @@ test "bytes that are not UTF-8 answer absent rather than a broken string" {
         \\import std.strings
         \\
         \\func main():
-        \\    var xs = new list[u8]
+        \\    var xs = list[u8]()
         \\    xs.append(u8(0xFF))
         \\    xs.append(u8(0xFE))
         \\    print(strings.from_bytes(xs) else "(not text)")
-        \\    var truncated = new list[u8]
+        \\    var truncated = list[u8]()
         \\    truncated.append(u8(0xE2))
         \\    print(strings.from_bytes(truncated) else "(not text)")
         \\
@@ -73,7 +73,7 @@ test "a list[u8] holds every value a u8 can, packed" {
     // way reads the cell as signed.
     try agree.prints(
         \\func main():
-        \\    var xs = new list[u8]
+        \\    var xs = list[u8]()
         \\    var at = 0
         \\    while at < 256:
         \\        xs.append(u8(at))
@@ -92,7 +92,7 @@ test "a packed list still slices, sorts, finds and pops" {
     // can see.
     try agree.prints(
         \\func main():
-        \\    var xs = new list[u8]
+        \\    var xs = list[u8]()
         \\    xs.append(u8(3))
         \\    xs.append(u8(1))
         \\    xs.append(u8(2))
@@ -124,8 +124,8 @@ test "a handle opens, reads a count, and its last reference closes it" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try new files.File("notes.txt")
-        \\    var buffer = new array[u8](4)
+        \\    var f = try files.File("notes.txt")
+        \\    var buffer = array[u8](4)
         \\    print(str(try f.read(buffer)))
         \\    print(str(i32(buffer[0])))
         \\    print(str(try f.read(buffer)))
@@ -157,7 +157,7 @@ test "file and handle are a program's own words, not the language's" {
         \\
         \\func main():
         \\    let a = file(x = 40)
-        \\    let b = new handle(n = 2)
+        \\    let b = handle(n = 2)
         \\    print(str(a.x + b.n))
         \\
     , "42\n");
@@ -173,11 +173,11 @@ test "a handle returns out of the function that opened it" {
         \\import std.files
         \\
         \\func opened() -> files.File!:
-        \\    return try new files.File("notes.txt")
+        \\    return try files.File("notes.txt")
         \\
         \\func main() -> !:
         \\    var f = try opened()
-        \\    var buffer = new array[u8](6)
+        \\    var buffer = array[u8](6)
         \\    print(str(try f.read(buffer)))
         \\
     , .{ .world = world });
@@ -202,14 +202,14 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\    let handle = packet.handle
         \\    if handle == none:
         \\        return 0
-        \\    var buffer = new array[u8](8)
+        \\    var buffer = array[u8](8)
         \\    let count = try handle.read(buffer)
         \\    let chosen = packet.callback else scale
         \\    return chosen(count)
         \\
         \\func main() -> !:
         \\    let packet = Packet(
-        \\        handle = try new files.File("notes.txt"),
+        \\        handle = try files.File("notes.txt"),
         \\        callback = scale,
         \\    )
         \\    print(str(try read(packet)))
@@ -226,7 +226,7 @@ test "opening a file that is not there is an error, not a trap" {
         \\
         \\func main():
         \\    var note = ""
-        \\    new files.File("missing.txt") catch reason:
+        \\    files.File("missing.txt") catch reason:
         \\        note = reason
         \\    print("no: " + note)
         \\
@@ -251,7 +251,7 @@ test "read_bytes and write_bytes carry bytes that are not text" {
         \\import std.strings
         \\
         \\func main() -> !:
-        \\    var data = new list[u8]
+        \\    var data = list[u8]()
         \\    data.append(u8(0x89))
         \\    data.append(u8(0x50))
         \\    data.append(u8(0x4E))
@@ -345,7 +345,7 @@ test "a host with no file services at all fails closed" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try new files.File("notes.txt")
+        \\    var f = try files.File("notes.txt")
         \\
     , .nothing, .host_unavailable);
 }

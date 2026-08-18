@@ -21,8 +21,8 @@ class Meter: view.View:
         return model.Response.ignored
 
 func test_a_user_component_draws_through_the_same_contract():
-    var stack = new components.VStack()
-    stack.add(new Meter(3))
+    var stack = components.VStack()
+    stack.add(Meter(3))
     let frame = view.snapshot(stack, 1, 5)
     assert(frame.line(0) == "###  ")
 
@@ -40,7 +40,7 @@ class Tally: view.View:
         return model.Response.handled
 
 func test_route_screens_lifecycle_events_before_any_dispatch():
-    let tally = new Tally()
+    let tally = Tally()
     let area = model.Rect(rows = 2, columns = 4)
     assert(view.route(tally, input.Event.closed, area) == model.Response.ignored)
     assert(view.route(tally, input.Event.resize, area) == model.Response.ignored)
@@ -49,7 +49,7 @@ func test_route_screens_lifecycle_events_before_any_dispatch():
     assert(tally.seen == 1)
 
 func test_route_contains_pointer_events_to_the_child_rectangle():
-    let tally = new Tally()
+    let tally = Tally()
     let area = model.Rect(row = 1, column = 1, rows = 2, columns = 2)
     let outside = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 0))
     assert(view.route(tally, outside, area) == model.Response.ignored)
@@ -59,7 +59,7 @@ func test_route_contains_pointer_events_to_the_child_rectangle():
     assert(tally.seen == 1)
 
 func test_snapshot_carries_the_cursor_a_component_requests():
-    let placed = new components.CursorHost(new Meter(1), locate_end)
+    let placed = components.CursorHost(Meter(1), locate_end)
     let frame = view.snapshot(placed, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)

@@ -152,11 +152,11 @@ class Model:
 
 func make_reader(model: Model) -> func() -> i64:
     return [weak model] func():
-        let live = model else new Model(value = 0)
+        let live = model else Model(value = 0)
         return live.value
 
 func main():
-    let model = new Model(value = 42)
+    let model = Model(value = 42)
     let read: func() -> i64 = make_reader(model)
     assert(read() == 42)
 ```
@@ -183,11 +183,11 @@ class Node:
 
     func install():
         self.callback = [weak self] func():
-            let live = self else new Node(value = 0, callback = none)
+            let live = self else Node(value = 0, callback = none)
             return live.value
 
 func main():
-    let node = new Node(value = 42, callback = none)
+    let node = Node(value = 42, callback = none)
     node.install()
     let callback = node.callback else () -> 0
     assert(callback() == 42)

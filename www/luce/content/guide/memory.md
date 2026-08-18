@@ -64,7 +64,7 @@ class Counter:
     value: i64
 
 func main():
-    let first = new Counter(value = 1)
+    let first = Counter(value = 1)
     let second = first
     second.value = 42
     assert(first is second)
@@ -126,8 +126,8 @@ class Node:
 func main():
     weak var observed: Node?
     if true:
-        let parent = new Node(value = 42)
-        let child = new Node(value = 1, parent = parent)
+        let parent = Node(value = 42)
+        let child = Node(value = 1, parent = parent)
         observed = parent
         assert((child.parent else child) is parent)
     print(str(observed == none))

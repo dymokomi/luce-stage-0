@@ -75,7 +75,6 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_false,
         .keyword_none,
         .keyword_self,
-        .keyword_new,
         .keyword_not,
         .keyword_spawn,
         .keyword_try,
@@ -460,7 +459,7 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
                 try self.report(
                     "luce.sema.class.lifecycle",
                     lifecycle.span,
-                    "init runs only through class construction; write new ClassName(...)",
+                    "init runs only through class construction; write ClassName(...)",
                     .{},
                 );
                 return null;
@@ -641,6 +640,20 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             return make(self, .{ .name = .{ .text = "self", .span = item.span } });
         },
         .identifier => {
+            // The container types construct by call — `list[i64]()`,
+            // `map[str, i64]()`, `array[i64](5)`, `builder()` — and
+            // their heads are reserved builtin names, so the reading
+            // is decided here, before the word could name a value.
+            const head = self.text(self.peek());
+            if (self.peekAhead(1) == .left_bracket and
+                (std.mem.eql(u8, head, "list") or std.mem.eql(u8, head, "map") or
+                    std.mem.eql(u8, head, "array")))
+            {
+                return containerConstruction(self);
+            }
+            if (std.mem.eql(u8, head, "builder") and self.peekAhead(1) == .left_paren) {
+                return containerConstruction(self);
+            }
             const item = self.advance();
             if (self.peekKind() == .left_paren) {
                 return namedCallExpression(self, self.text(item), item.span.start);
@@ -677,7 +690,6 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             return listLiteral(self);
         },
         .left_brace => return mapLiteral(self),
-        .keyword_new => return newObject(self),
         .keyword_func => return blockClosure(self, false),
         // `!` is the fallibility mark on a return type and nothing
         // else.  It used to be refused by the lexer, which is where
@@ -987,7 +999,7 @@ fn mapLiteral(self: *Parser) Error!?*ast.Expression {
         try self.report(
             "luce.parse.expression",
             .{ .start = opener.span.start, .end = closing.span.end },
-            "an empty map has no literal; write 'new map[K, V]' so its key and value types are explicit",
+            "an empty map has no literal; write 'map[K, V]()' so its key and value types are explicit",
             .{},
         );
         return null;
@@ -1021,12 +1033,11 @@ fn mapLiteral(self: *Parser) Error!?*ast.Expression {
 /// construction values — an array's dimensions, or a class's fields or
 /// init arguments. The analyzer decides which resolved shape accepts
 /// which, so the parser records one shared argument list.
-fn newObject(self: *Parser) Error!?*ast.Expression {
-    const start = self.advance(); // new
-    if (self.peekKind() != .identifier) {
-        _ = try self.expect(.identifier, "a class, list, map, array, or builder after new");
-        return null;
-    }
+/// A container construction: `list[i64]()`, `map[str, i64]()`,
+/// `array[i64](5, 5)`, `builder()` — a builtin container head, its
+/// type arguments, and the call that makes one.
+fn containerConstruction(self: *Parser) Error!?*ast.Expression {
+    const start = self.peek().span.start;
     const written = (try self.constructionTypeName()) orelse return null;
     var arguments: []ast.Argument = &.{};
     var closing_end = written.span.end;
@@ -1039,7 +1050,7 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
     return make(self, .{ .new_object = .{
         .type_name = written,
         .arguments = arguments,
-        .span = .{ .start = start.span.start, .end = closing_end },
+        .span = .{ .start = start, .end = closing_end },
     } });
 }
 

@@ -3510,7 +3510,6 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_self => "the keyword 'self'",
         .keyword_true => "'true'",
         .keyword_false => "'false'",
-        .keyword_new => "the keyword 'new'",
         .keyword_import => "the keyword 'import'",
         .keyword_spawn => "the keyword 'spawn'",
         .keyword_none => "'none'",

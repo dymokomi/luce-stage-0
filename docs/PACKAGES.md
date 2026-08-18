@@ -192,7 +192,7 @@ against its own name/version identity before any registry exists.
 
 Two local commands own this workflow:
 
-- `luce package new NAME [VERSION]` creates the source folder, its
+- `luce package NAME() [VERSION]` creates the source folder, its
   `luce.yaml`, its entry module, and the root `path:` want (bootstrapping a
   root manifest if the tree is still rootless).
 - `luce package version NAME VERSION` updates the package manifest and the

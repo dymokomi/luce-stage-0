@@ -29,10 +29,10 @@ func interpret(code: str, cells: i64) -> str:
     # A Brainfuck cell *is* a u8, so the tape says so: one u8 an
     # element instead of eight, and the type now carries the range the
     # `% 256` below used to be the only evidence of.
-    var tape = new array[u8](cells)
+    var tape = array[u8](cells)
     var pointer = 0
     var pc: i64 = 0
-    var out = new builder
+    var out = builder()
     while pc < len(code):
         # `here` is this instruction; `pc` already points past it, so
         # a bracket arm lands after the match it jumped to and every

@@ -137,7 +137,7 @@ function field because its memberwise storage retains the ordinary zero rule.
 |---|---|---|
 | struct or memberwise class field | `(func(...) -> R)?` | zero construction must have an empty value |
 | custom-initialized class field | `func(...) -> R` | the class is published only after every field is supplied |
-| array cell | `(func(...) -> R)?` | `new array[T](n)` creates it filled |
+| array cell | `(func(...) -> R)?` | `array[T](n)` creates it filled |
 | list element | `(func(...) -> R)?` | uniform with the two above |
 | union payload field | `(func(...) -> R)?` | a union's zero is its first member, fields at their own zeros |
 | **map value** | `func(...) -> R` | see below |

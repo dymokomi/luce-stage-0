@@ -54,19 +54,19 @@ struct Response:
         return try json.parse(spoken)
 
 func get(url: str) -> Response!:
-    return try exchange("GET", url, new list[u8], "", new map[str, str])
+    return try exchange("GET", url, list[u8](), "", map[str, str]())
 
 # Send `body` and say what it is.  The content type travels because a
 # POST without one is a question servers answer badly.
 func post(url: str, body: list[u8], content_type: str) -> Response!:
-    return try exchange("POST", url, body, content_type, new map[str, str])
+    return try exchange("POST", url, body, content_type, map[str, str]())
 
 # A client carries what every request repeats: the base every path is
 # joined onto, and the headers sent with each exchange.  Each request
 # still dials its own connection and closes it — `Client` adds no
 # keep-alive pool, and says so rather than pretending.
 #
-#     var api = new http.Client("http://127.0.0.1:8080")
+#     var api = http.Client("http://127.0.0.1:8080")
 #     api.header("authorization", "Bearer " + token)
 #     let answer = try api.get("/status")
 #
@@ -79,7 +79,7 @@ class Client:
 
     init(base: str = ""):
         self.base = base
-        self.defaults = new map[str, str]
+        self.defaults = map[str, str]()
 
     # Send `value` with every request, replacing an earlier value of
     # the same name.  Names are sent as given; servers read them
@@ -88,7 +88,7 @@ class Client:
         self.defaults[name] = value
 
     func get(path: str) -> Response!:
-        return try exchange("GET", self.base + path, new list[u8], "", self.defaults)
+        return try exchange("GET", self.base + path, list[u8](), "", self.defaults)
 
     func post(path: str, body: list[u8], content_type: str) -> Response!:
         return try exchange("POST", self.base + path, body, content_type, self.defaults)
@@ -168,7 +168,7 @@ private func parse_response(raw: list[u8]) -> Response!:
     let split_at = find_head_end(raw)
     if split_at == none:
         error("the reply never finished its headers")
-    var head_bytes = new list[u8]
+    var head_bytes = list[u8]()
     var at: i64 = 0
     while at < split_at:
         head_bytes.append(raw[at])
@@ -179,7 +179,7 @@ private func parse_response(raw: list[u8]) -> Response!:
 
     let lines = strings.split(head, line_end())
     let status = try read_status(lines[0])
-    var headers = new map[str, str]
+    var headers = map[str, str]()
     var row: i64 = 1
     while row < len(lines):
         let line = lines[row]
@@ -190,7 +190,7 @@ private func parse_response(raw: list[u8]) -> Response!:
             headers[name] = value
         row += 1
 
-    var body = new list[u8]
+    var body = list[u8]()
     at = split_at + 4
     while at < len(raw):
         body.append(raw[at])
@@ -230,7 +230,7 @@ private func read_status(line: str) -> i64!:
 # ignored — this module reads bodies, and a trailer is a header that
 # arrived too late to matter to one.
 private func unchunk(framed: list[u8]) -> list[u8]!:
-    var out = new list[u8]
+    var out = list[u8]()
     var at: i64 = 0
     while true:
         var size: i64 = 0

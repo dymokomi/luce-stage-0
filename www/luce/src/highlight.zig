@@ -43,7 +43,7 @@ pub const keywords = [_][]const u8{
 /// The words that make a reference — a heap object, or a worker holding
 /// one.  They keep a class of their own because a reader scanning a page
 /// wants to see where allocation and concurrency enter.
-pub const verbs = [_][]const u8{ "new", "spawn" };
+pub const verbs = [_][]const u8{"spawn"};
 
 /// Type names the language itself spells.  Any other capitalised
 /// identifier is highlighted as a type too — that is the convention
@@ -292,12 +292,12 @@ fn highlighted(gpa: std.mem.Allocator, source: []const u8) ![]u8 {
 
 test "keywords, verbs, types, builtins and declared names each get their class" {
     const gpa = std.testing.allocator;
-    const html = try highlighted(gpa, "static func total() -> i32:\n    let xs = new list[i32]\n    return len(xs)");
+    const html = try highlighted(gpa, "static func total(w: worker) -> i32:\n    var xs = list[i32]()\n    let t = spawn heavy()\n    return len(xs)");
     defer gpa.free(html);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">static</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">func</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"d\">total</span>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">new</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">spawn</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"t\">list</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"b\">len</span>") != null);
 }

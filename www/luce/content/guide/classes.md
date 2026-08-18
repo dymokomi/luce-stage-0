@@ -26,7 +26,7 @@ class Counter:
         return self.value
 
 func main():
-    let counter = new Counter()
+    let counter = Counter()
     print(str(counter.add(2)))
     print(str(counter.add(3)))
 ```
@@ -57,7 +57,7 @@ func change(counter: Counter):
     counter.value = 42
 
 func main():
-    let first = new Counter(value = 1)
+    let first = Counter(value = 1)
     let second = first
     change(second)
     print(str(first.value))
@@ -86,11 +86,11 @@ class Box:
     value: i64
 
 func main():
-    let stable = new Box(value = 1)
+    let stable = Box(value = 1)
     stable.value = 2
 
-    var replaceable = new Box(value = 10)
-    replaceable = new Box(value = 20)
+    var replaceable = Box(value = 10)
+    replaceable = Box(value = 20)
     print(f"{stable.value} {replaceable.value}")
 ```
 
@@ -111,9 +111,9 @@ class Token:
     value: i64
 
 func main():
-    let first = new Token(value = 7)
+    let first = Token(value = 7)
     let same = first
-    let separate = new Token(value = 7)
+    let separate = Token(value = 7)
     print(str(first is same))
     print(str(first is separate))
 ```
@@ -156,7 +156,7 @@ class Scene:
     origin: Point
 
 func main():
-    let scene = new Scene(origin = Point(x = 1, y = 2))
+    let scene = Scene(origin = Point(x = 1, y = 2))
     scene.origin.x = 40
     print(str(scene.origin.x + scene.origin.y))
 ```
@@ -186,9 +186,9 @@ func find(items: list[Item], name: str) -> Item?:
     return none
 
 func main():
-    let apples = new Item(name = "apple", count = 1)
+    let apples = Item(name = "apple", count = 1)
     let items: list[Item] = [apples]
-    let found = find(items, "apple") else new Item(name = "missing", count = 0)
+    let found = find(items, "apple") else Item(name = "missing", count = 0)
     found.count += 2
     print(str(apples.count))
 ```
@@ -213,8 +213,8 @@ class Node:
 func main():
     weak var observed: Node?
     if true:
-        let parent = new Node(value = 41)
-        let child = new Node(value = 1, parent = parent)
+        let parent = Node(value = 41)
+        let child = Node(value = 1, parent = parent)
         observed = parent
         let live = child.parent else child
         print(str(live.value + child.value))
@@ -255,7 +255,7 @@ func apply(item: Adjustable, amount: i64) -> i64:
     return item.adjust(amount)
 
 func main():
-    let counter = new Counter(value = 1)
+    let counter = Counter(value = 1)
     print(str(apply(counter, 41)))
     print(str(counter.value))
 ```

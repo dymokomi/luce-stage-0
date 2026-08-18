@@ -12,14 +12,14 @@ import std.os
 import std.strings
 
 func test_listen_dial_accept_carry_bytes_both_ways() -> !:
-    let door = try new network.Listener(0)
+    let door = try network.Listener(0)
     let port = try door.port()
     assert(port > 0)
 
     let client = try network.Connection.dial("127.0.0.1", port)
     let served = try door.accept()
 
-    var word = new array[u8](3)
+    var word = array[u8](3)
     word[0] = 104
     word[1] = 105
     word[2] = 33
@@ -27,7 +27,7 @@ func test_listen_dial_accept_carry_bytes_both_ways() -> !:
     assert(sent > 0)
     try client.flush()
 
-    var heard = new array[u8](3)
+    var heard = array[u8](3)
     var got: i64 = 0
     while got < 3:
         let landed = try served.read(heard)
@@ -35,19 +35,19 @@ func test_listen_dial_accept_carry_bytes_both_ways() -> !:
         got += landed
     assert(heard[0] == 104 and heard[2] == 33)
 
-    var reply = new array[u8](1)
+    var reply = array[u8](1)
     reply[0] = 111
     let answered = try served.write(reply, 1)
     assert(answered == 1)
     try served.flush()
-    var back = new array[u8](1)
+    var back = array[u8](1)
     assert(try client.read(back) == 1)
     assert(back[0] == 111)
 
 func test_a_dropped_peer_reads_as_end_of_stream() -> !:
-    let door = try new network.Listener(0)
+    let door = try network.Listener(0)
     let served = try dial_send_and_hang_up(door)
-    var buffer = new array[u8](8)
+    var buffer = array[u8](8)
     var drained: i64 = 0
     while true:
         let landed = try served.read(buffer)
@@ -59,7 +59,7 @@ func test_a_dropped_peer_reads_as_end_of_stream() -> !:
 func dial_send_and_hang_up(door: network.Listener) -> network.Connection!:
     let client = try network.Connection.dial("127.0.0.1", try door.port())
     let served = try door.accept()
-    var one = new array[u8](1)
+    var one = array[u8](1)
     one[0] = 42
     assert(try client.write(one, 1) == 1)
     try client.flush()
@@ -82,16 +82,16 @@ func test_a_worker_blocks_in_accept_until_a_peer_arrives() -> !:
     try server.wait()
 
 func serve_one_byte(port: i64) -> !:
-    let door = try new network.Listener(port)
+    let door = try network.Listener(port)
     let guest = try door.accept()
-    var one = new array[u8](1)
+    var one = array[u8](1)
     one[0] = 7
     assert(try guest.write(one, 1) == 1)
     try guest.flush()
 
 func knock(port: i64) -> bool!:
     let conn = try network.Connection.dial("127.0.0.1", port)
-    var one = new array[u8](1)
+    var one = array[u8](1)
     assert(try conn.read(one) == 1)
     assert(one[0] == 7)
     return true
@@ -101,7 +101,7 @@ func test_a_connection_travels_as_io_reader_and_writer() -> !:
     # client side as a bare io.Writer, and once the client's last
     # reference dies with its helper frame, io.drain empties the
     # served side as a bare io.Reader to the end of the stream.
-    let door = try new network.Listener(0)
+    let door = try network.Listener(0)
     let served = try connect_push_and_hang_up(door)
     let all = try io.drain(served)
     assert(len(all) == 3)

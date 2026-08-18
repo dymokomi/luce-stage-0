@@ -77,7 +77,7 @@ class Feed: io.Reader:
         return filled
 
 func main() -> !:
-    let all = try io.drain(new Feed("a stream is a loop"))
+    let all = try io.drain(Feed("a stream is a loop"))
     print(str(len(all)))
     print(strings.from_bytes(all) else "(not text)")
 ```

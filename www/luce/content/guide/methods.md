@@ -92,7 +92,7 @@ class Counter:
         return self.value
 
 func main():
-    let first = new Counter(value = 1)
+    let first = Counter(value = 1)
     let second = first
     print(str(second.add(41)))
     print(str(first.value))
@@ -164,7 +164,7 @@ func main():
     let double: func(i64) -> i64 = scale.apply
     scale.factor = 100
 
-    let counter = new Counter(value = 1)
+    let counter = Counter(value = 1)
     let read: func() -> i64 = counter.current
     counter.value = 42
 

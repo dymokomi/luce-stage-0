@@ -8,9 +8,9 @@
 
 func main():
     let n = 400
-    var a = new array[f64](n * n)
-    var b = new array[f64](n * n)
-    var c = new array[f64](n * n)
+    var a = array[f64](n * n)
+    var b = array[f64](n * n)
+    var c = array[f64](n * n)
     for i in range(0, n * n):
         a[i] = f64((i * 7) % 16) * 0.25
         b[i] = f64((i * 13) % 16) * 0.25

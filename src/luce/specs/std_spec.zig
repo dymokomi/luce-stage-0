@@ -64,7 +64,7 @@ test "gpu and ui: an unavailable native host fails closed" {
         \\import std.ui
         \\
         \\func main() -> !:
-        \\    let window = try new ui.Window("test", 320, 240)
+        \\    let window = try ui.Window("test", 320, 240)
         \\    let surface = try window.surface()
         \\    try surface.present()
         \\
@@ -247,14 +247,14 @@ test "math: vector operations compute exactly on exact inputs" {
         \\import std.math
         \\
         \\func main():
-        \\    var xs = new array[f64](5)
+        \\    var xs = array[f64](5)
         \\    for i in range(0, 5):
         \\        xs[i] = f64(i) * 0.5
         \\    assert(math.sum(xs) == 5.0)
         \\    assert((math.mean(xs) else -1.0) == 1.0)
         \\    assert((math.vmin(xs) else -1.0) == 0.0)
         \\    assert((math.vmax(xs) else -1.0) == 2.0)
-        \\    var ys = new array[f64](5)
+        \\    var ys = array[f64](5)
         \\    math.fill(ys, 2.0)
         \\    assert(math.sum(ys) == 10.0)
         \\    assert(math.dot(xs, ys) == 10.0)
@@ -279,7 +279,7 @@ test "math: a reduction over an empty array is absent, not a trap" {
         \\import std.math
         \\
         \\func main():
-        \\    var empty = new array[f64](0)
+        \\    var empty = array[f64](0)
         \\    assert(math.mean(empty) == none)
         \\    assert(math.vmin(empty) == none)
         \\    assert(math.vmax(empty) == none)
@@ -294,8 +294,8 @@ test "math: a shape mismatch is still a trap, because the caller could have chec
         \\import std.math
         \\
         \\func main():
-        \\    var a = new array[f64](2)
-        \\    var b = new array[f64](3)
+        \\    var a = array[f64](2)
+        \\    var b = array[f64](3)
         \\    let d = math.dot(a, b)
         \\
     , .explicit_trap);
@@ -306,20 +306,20 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = new math.Rng(42)
-        \\    var again = new math.Rng(42)
+        \\    var rng = math.Rng(42)
+        \\    var again = math.Rng(42)
         \\    for i in range(0, 10):
         \\        assert(rng.next() == again.next())
-        \\    var negative_seed = new math.Rng(-7)
+        \\    var negative_seed = math.Rng(-7)
         \\    assert(negative_seed.next() >= 1)
-        \\    var die = new math.Rng(2026)
-        \\    var seen = new map[i64, bool]
+        \\    var die = math.Rng(2026)
+        \\    var seen = map[i64, bool]()
         \\    for i in range(0, 200):
         \\        let roll = die.in_range(1, 7)
         \\        assert(roll >= 1 and roll <= 6)
         \\        seen[roll] = true
         \\    assert(len(seen) == 6)
-        \\    var floats = new math.Rng(9)
+        \\    var floats = math.Rng(9)
         \\    for i in range(0, 100):
         \\        let f = floats.real()
         \\        assert(f > 0.0 and f < 1.0)
@@ -329,7 +329,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = new math.Rng(1)
+        \\    var rng = math.Rng(1)
         \\    let bad = rng.in_range(5, 5)
         \\
     , .explicit_trap);
@@ -354,7 +354,7 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\    return a.score < b.score
         \\
         \\func main():
-        \\    var empty = new list[Player]
+        \\    var empty = list[Player]()
         \\    empty.sort_by(by_score)
         \\    assert(len(empty) == 0)
         \\    var one = [Player(score = 7, order = 9)]
@@ -397,7 +397,7 @@ test "lists: sort_by moves object elements without copying them" {
         \\    return a[0] < b[0]
         \\
         \\func main():
-        \\    var rows = new list[list[i64]]
+        \\    var rows = list[list[i64]]()
         \\    rows.append([3])
         \\    rows.append([1])
         \\    rows.append([2])
@@ -420,7 +420,7 @@ test "lists: sort_by moves task resources and keeps equivalent elements stable" 
         \\    return false
         \\
         \\func main():
-        \\    var tasks = new list[task[i64]]
+        \\    var tasks = list[task[i64]]()
         \\    tasks.append(spawn answer(1))
         \\    tasks.append(spawn answer(2))
         \\    tasks.sort_by(equivalent)
@@ -807,7 +807,7 @@ test "paths: joined folds join, and an empty list answers the empty path" {
         \\import std.paths
         \\
         \\func main():
-        \\    print("[" + paths.joined(new list[str]) + "]")
+        \\    print("[" + paths.joined(list[str]()) + "]")
         \\    print(paths.joined(["only"]))
         \\    print(paths.joined(["a", "b", "c.luc"]))
         \\    # An absolute part starts again, exactly as join does.
@@ -897,7 +897,7 @@ test "io: a program's own reader and writer feed drain and send" {
         \\    private got: list[u8]
         \\
         \\    init():
-        \\        self.got = new list[u8]
+        \\        self.got = list[u8]()
         \\
         \\    func write(buffer: array[u8, _], count: i64) -> i64!:
         \\        var at: i64 = 0
@@ -913,15 +913,15 @@ test "io: a program's own reader and writer feed drain and send" {
         \\        return len(self.got)
         \\
         \\func main() -> !:
-        \\    var data = new list[u8]
+        \\    var data = list[u8]()
         \\    var fill: i64 = 0
         \\    while fill < 300:
         \\        data.append(u8(fill % 251))
         \\        fill += 1
-        \\    let drained = try io.drain(new Feed(data))
+        \\    let drained = try io.drain(Feed(data))
         \\    assert(len(drained) == 300)
         \\    assert(drained[0] == 0 and drained[299] == 48)
-        \\    var sink = new Sink()
+        \\    var sink = Sink()
         \\    try io.send(sink, drained)
         \\    assert(sink.held() == 300)
         \\
@@ -946,7 +946,7 @@ test "io: a source that stops writing is an error, not a spin" {
         \\
         \\func main():
         \\    var refused = false
-        \\    io.send(new Stuck(), [1, 2, 3]) catch reason:
+        \\    io.send(Stuck(), [1, 2, 3]) catch reason:
         \\        refused = len(reason) > 0
         \\    assert(refused)
         \\
@@ -979,7 +979,7 @@ test "files: a File opens through its init and travels as an io.Reader" {
         \\    return try io.drain(source)
         \\
         \\func main() -> !:
-        \\    var f = try new files.File("notes.txt")
+        \\    var f = try files.File("notes.txt")
         \\    let all = try gulp(f)
         \\    print(str(len(all)))
         \\
@@ -998,11 +998,11 @@ test "files: the three Mode doors open, empty, and extend" {
         \\import std.io
         \\
         \\func start(path: str) -> !:
-        \\    var made = try new files.File(path, files.Mode.create)
+        \\    var made = try files.File(path, files.Mode.create)
         \\    try io.send(made, [104, 105])
         \\
         \\func extend(path: str) -> !:
-        \\    var more = try new files.File(path, files.Mode.append)
+        \\    var more = try files.File(path, files.Mode.append)
         \\    try io.send(more, [33])
         \\
         \\func main() -> !:
@@ -1050,7 +1050,7 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\func main() -> !:
         \\    try files.append("log.txt", "one line\n")
         \\    try files.append_lines("log.txt", ["two", "three"])
-        \\    try files.append_lines("log.txt", new list[str])
+        \\    try files.append_lines("log.txt", list[str]())
         \\    print(try files.read("log.txt"))
         \\    try files.rename("log.txt", "kept.txt")
         \\    assert((try files.exists("kept.txt")) and not try files.exists("log.txt"))

@@ -87,7 +87,7 @@ test "traps keep their code, their message, and their place" {
         \\
         ,
         \\func main():
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\    print("before")
         \\    print(str(xs[3]))
         \\
@@ -104,7 +104,7 @@ test "traps keep their code, their message, and their place" {
         \\
         ,
         \\func main():
-        \\    let m = new map[str, i64]
+        \\    let m = map[str, i64]()
         \\    print("before")
         \\    print(str(m["missing"]))
         \\
@@ -126,7 +126,7 @@ fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {
         \\func main():
         \\    var a: i64 = 3
         \\    var b: i64 = 7
-        \\    let xs = new list[i64]
+        \\    let xs = list[i64]()
         \\
     );
     const statements = random.intRangeAtMost(usize, 1, 6);
@@ -202,7 +202,7 @@ fn statement(text: *std.ArrayList(u8), random: std.Random, depth: usize) Allocat
             fresh_name += 1;
             const name = fresh_name;
             try indent(text, depth + 1);
-            try add(text, "let row{d} = new list[i64]\n", .{name});
+            try add(text, "let row{d} = list[i64]()\n", .{name});
             try indent(text, depth + 1);
             try add(text, "row{d}.append(a)\n", .{name});
             try statement(text, random, depth + 1);

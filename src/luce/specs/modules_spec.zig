@@ -77,7 +77,7 @@ test "a member import binds every declaration kind bare" {
         \\func main():
         \\    let p = Point(x = 2, y = 3)
         \\    let s: Spot = Point(x = 1, y = 1)
-        \\    let w = new Widget(width = 4)
+        \\    let w = Widget(width = 4)
         \\    let c = Color.red
         \\    let figure = Figure.dot
         \\    var total = span(p) + origin + w.width + s.x
@@ -251,14 +251,14 @@ test "class: a private initializer is usable only inside its module" {
         \\            self.value = value
         \\    public:
         \\        static func make(value: i64) -> Token:
-        \\            return new Token(value)
+        \\            return Token(value)
         \\
     };
     try expectProjectPrivate(
         \\import models
         \\
         \\func main():
-        \\    let token = new models.Token(42)
+        \\    let token = models.Token(42)
         \\
     , &.{models}, "init is private to models");
 }

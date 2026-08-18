@@ -90,9 +90,9 @@ test "every ARC object family can be observed weakly" {
         \\    weak var built: builder? = none
         \\    if true:
         \\        let xs = [1]
-        \\        let table = new map[str, i64]
-        \\        let cells = new array[i64](1)
-        \\        let text = new builder
+        \\        let table = map[str, i64]()
+        \\        let cells = array[i64](1)
+        \\        let text = builder()
         \\        listed = xs
         \\        mapped = table
         \\        arrayed = cells
@@ -194,13 +194,13 @@ test "a weak files.File observes the descriptor's lifetime without extending it"
         \\func main() -> !:
         \\    weak var observed: files.File?
         \\    if true:
-        \\        var f = try new files.File("notes.txt")
+        \\        var f = try files.File("notes.txt")
         \\        observed = f
         \\        let live = observed
         \\        if live == none:
         \\            print("dead")
         \\            return
-        \\        var buffer = new array[u8](6)
+        \\        var buffer = array[u8](6)
         \\        print(str(try live.read(buffer)))
         \\    if observed == none:
         \\        print("closed")
