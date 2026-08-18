@@ -6218,6 +6218,14 @@ extern fn luce_rt_function_make(
     count: i64,
     out: [*c]Value,
 ) callconv(.c) i32;
+extern fn luce_rt_class_make(
+    runtime: *Runtime,
+    layout: i64,
+    deinitializer: i64,
+    fields: [*c]const Value,
+    count: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
 extern fn luce_rt_own_storage(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_export_storage(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_copy(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
@@ -7043,6 +7051,35 @@ test "C Value output pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_parse_f64(runtime, &text_value, null_out));
 
     try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "C make doors never read an empty run's pointer" {
+    // A fieldless class or struct and a capture-free function pass a
+    // zero-length run whose pointer is whatever a zero-size alloca
+    // answered.  The pointer is valid exactly when `count` is zero and
+    // must not be read — the representation spot-check included, which
+    // is what turned this into a nondeterministic `not_owned` trap in
+    // built artifacts before the doors learned the rule.  Null is the
+    // hostile spelling of "arbitrary".
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const null_values: [*c]const Value = null;
+    var out = Value.ofI64(99);
+
+    try testing.expectEqual(@as(i32, 0), luce_rt_struct_make(runtime, null_values, 0, &out));
+    _ = bench.made(out);
+    // A function value's run is always two slots, so an empty one is
+    // refused — but refused by the length rule, without the pointer
+    // ever being read.
+    try testing.expectEqual(@as(i32, 1), luce_rt_function_make(runtime, null_values, 0, &out));
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    runtime.pending = null;
+    try testing.expectEqual(@as(i32, 0), luce_rt_class_make(runtime, 7, -1, null_values, 0, &out));
+    _ = bench.made(out);
+    // A non-empty run still has to arrive through a real pointer.
+    try expectCNullValueTrap(runtime, luce_rt_class_make(runtime, 7, -1, null_values, 1, &out));
 }
 
 test "C status output pointers reject null before host file work" {

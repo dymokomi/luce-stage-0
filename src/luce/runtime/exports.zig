@@ -1427,10 +1427,15 @@ pub export fn luce_rt_struct_make(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, fields)) return raised_trap;
     const field_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.makeStruct(fields[0..field_count]) catch |mistake|
+    // A fieldless shape passes a zero-length run whose pointer may be
+    // anything (a zero-size alloca); it is valid exactly when `count`
+    // is zero and must not be read, spot-checked included.
+    if (field_count != 0 and !requireValueInput(runtime, fields)) return raised_trap;
+    const empty: [0]Value = .{};
+    const passed: []const Value = if (field_count == 0) &empty else fields[0..field_count];
+    out.* = runtime.makeStruct(passed) catch |mistake|
         return failed(runtime, mistake);
     return completed(runtime);
 }
@@ -1447,10 +1452,14 @@ pub export fn luce_rt_function_make(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, slots)) return raised_trap;
     const slot_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.makeFunction(slots[0..slot_count]) catch |mistake|
+    // A capture-free function passes a zero-length run; the pointer is
+    // valid exactly when `count` is zero and must not be read.
+    if (slot_count != 0 and !requireValueInput(runtime, slots)) return raised_trap;
+    const empty: [0]Value = .{};
+    const passed: []const Value = if (slot_count == 0) &empty else slots[0..slot_count];
+    out.* = runtime.makeFunction(passed) catch |mistake|
         return failed(runtime, mistake);
     return completed(runtime);
 }
@@ -1487,7 +1496,6 @@ pub export fn luce_rt_class_make(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, fields)) return raised_trap;
     const layout_index = std.math.cast(u32, layout) orelse return rejected(runtime, .not_owned);
     const finalizer_index: ?u32 = if (deinitializer == -1)
         null
@@ -1495,7 +1503,13 @@ pub export fn luce_rt_class_make(
         std.math.cast(u32, deinitializer) orelse return rejected(runtime, .not_owned);
     const field_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
-    out.* = runtime.newClass(layout_index, finalizer_index, fields[0..field_count]) catch |mistake|
+    // A fieldless class passes a zero-length run whose pointer may be
+    // anything (a zero-size alloca); it is valid exactly when `count`
+    // is zero and must not be read, spot-checked included.
+    if (field_count != 0 and !requireValueInput(runtime, fields)) return raised_trap;
+    const empty: [0]Value = .{};
+    const passed: []const Value = if (field_count == 0) &empty else fields[0..field_count];
+    out.* = runtime.newClass(layout_index, finalizer_index, passed) catch |mistake|
         return failed(runtime, mistake);
     return completed(runtime);
 }
