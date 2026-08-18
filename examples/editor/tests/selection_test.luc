@@ -1,0 +1,127 @@
+# Selection: shift extends, plain motion collapses, edits replace, and
+# the clipboard round-trips through copy, cut, and paste.
+
+from model import Model, Intent
+from document import Document, previous_word, next_word
+
+func editing(content: str) -> Model:
+    var documents = list[Document]()
+    documents.append(Document(path = "f.luc", content = content))
+    return Model(documents)
+
+func test_shift_arrows_grow_a_selection_and_arrows_collapse_it():
+    var ed = editing("hello world")
+    ed.key(Intent.extend_right, "", 10)
+    ed.key(Intent.extend_right, "", 10)
+    let doc = ed.document()
+    assert(doc.has_selection())
+    assert(doc.selected_text() == "he")
+    # A plain arrow collapses to the selection's edge without moving past it.
+    ed.key(Intent.move_left, "", 10)
+    assert(not doc.has_selection())
+    assert(doc.cursor == 0)
+
+    ed.key(Intent.extend_right, "", 10)
+    ed.key(Intent.move_right, "", 10)
+    assert(not doc.has_selection())
+    assert(doc.cursor == 1)
+
+func test_extend_line_edges_select_the_line_around_the_cursor():
+    var ed = editing("first line\nsecond")
+    let doc = ed.document()
+    doc.cursor = 5
+    ed.key(Intent.extend_line_end, "", 10)
+    assert(doc.selected_text() == " line")
+    ed.key(Intent.extend_line_start, "", 10)
+    assert(doc.selected_text() == "first")
+
+func test_select_all_takes_everything():
+    var ed = editing("alpha\nbeta")
+    ed.key(Intent.select_all, "", 10)
+    assert(ed.document().selected_text() == "alpha\nbeta")
+
+func test_typing_replaces_the_selection_in_one_undo_step():
+    var ed = editing("hello world")
+    let doc = ed.document()
+    doc.cursor = 0
+    for step in range(0, 5):
+        ed.key(Intent.extend_right, "", 10)
+    ed.key(Intent.insert_text, "goodbye", 10)
+    assert(doc.content == "goodbye world")
+    ed.key(Intent.undo, "", 10)
+    assert(doc.content == "hello world")
+
+func test_backspace_erases_exactly_the_selection():
+    var ed = editing("hello world")
+    let doc = ed.document()
+    doc.cursor = 5
+    for step in range(0, 6):
+        ed.key(Intent.extend_right, "", 10)
+    ed.key(Intent.erase_left, "", 10)
+    assert(doc.content == "hello")
+    assert(doc.cursor == 5)
+
+func test_copy_cut_and_paste_round_trip():
+    var ed = editing("hello world")
+    let doc = ed.document()
+    for step in range(0, 5):
+        ed.key(Intent.extend_right, "", 10)
+    ed.key(Intent.copy, "", 10)
+    assert(ed.clipboard == "hello")
+    assert(doc.content == "hello world")
+    # Cut removes what copy only read.
+    ed.key(Intent.cut, "", 10)
+    assert(doc.content == " world")
+    # Paste puts it back where the cursor stands.
+    doc.cursor = len(doc.content)
+    ed.key(Intent.paste, "", 10)
+    assert(doc.content == " worldhello")
+
+func test_copy_without_a_selection_takes_the_line():
+    var ed = editing("first\nsecond\nthird")
+    let doc = ed.document()
+    doc.cursor = 8
+    ed.key(Intent.copy, "", 10)
+    assert(ed.clipboard == "second\n")
+    ed.key(Intent.cut, "", 10)
+    assert(doc.content == "first\nthird")
+    assert(doc.cursor == 6)
+
+func test_word_motion_jumps_boundaries_and_extends():
+    var ed = editing("one two three")
+    let doc = ed.document()
+    ed.key(Intent.word_right, "", 10)
+    assert(doc.cursor == 3)
+    ed.key(Intent.word_right, "", 10)
+    assert(doc.cursor == 7)
+    ed.key(Intent.extend_word_right, "", 10)
+    assert(doc.selected_text() == " three")
+    ed.key(Intent.word_left, "", 10)
+    assert(not doc.has_selection())
+
+func test_erase_word_left_eats_one_word():
+    var ed = editing("one two three")
+    let doc = ed.document()
+    doc.cursor = len(doc.content)
+    ed.key(Intent.erase_word_left, "", 10)
+    assert(doc.content == "one two ")
+    ed.key(Intent.erase_word_left, "", 10)
+    assert(doc.content == "one ")
+    ed.key(Intent.undo, "", 10)
+    assert(doc.content == "one two ")
+
+func test_escape_drops_the_selection():
+    var ed = editing("hello")
+    ed.key(Intent.extend_right, "", 10)
+    assert(ed.document().has_selection())
+    ed.key(Intent.escape, "", 10)
+    assert(not ed.document().has_selection())
+
+func test_word_boundaries_handle_separators_and_edges():
+    let text = "alpha,  beta_2"
+    assert(next_word(text, 0) == 5)
+    assert(next_word(text, 5) == 14)
+    assert(next_word(text, 14) == 14)
+    assert(previous_word(text, 14) == 8)
+    assert(previous_word(text, 8) == 0)
+    assert(previous_word(text, 0) == 0)

@@ -25,6 +25,11 @@ class Document:
     scroll: i64
     dirty: bool
     history: History
+    # Where a selection began, or `none` when nothing is selected.  The
+    # selection is everything between the anchor and the cursor, in
+    # whichever order the two sit; extending a selection moves only the
+    # cursor, so shift+arrow and a mouse drag are the same gesture.
+    anchor: i64?
 
     init(
         path: str = "",
@@ -41,6 +46,7 @@ class Document:
         self.scroll = scroll
         self.dirty = dirty
         self.history = History()
+        self.anchor = none
 
     # The status line's message.  A setter because the model often
     # says one thing about the active document in passing —
@@ -48,6 +54,54 @@ class Document:
     # through a binding, not through a call's result.
     func set_message(text: str):
         self.message = text
+
+    # --- the selection -------------------------------------------------
+
+    func has_selection() -> bool:
+        let anchor = self.anchor
+        if anchor == none:
+            return false
+        return anchor != self.cursor
+
+    func selection_start() -> i64:
+        let anchor = self.anchor
+        if anchor == none:
+            return self.cursor
+        return min(anchor, self.cursor)
+
+    func selection_end() -> i64:
+        let anchor = self.anchor
+        if anchor == none:
+            return self.cursor
+        return max(anchor, self.cursor)
+
+    func selected_text() -> str:
+        return self.content[self.selection_start():self.selection_end()]
+
+    func select_all():
+        self.anchor = 0
+        self.cursor = len(self.content)
+
+    func drop_selection():
+        self.anchor = none
+
+    # Pin the anchor before an extending motion.  The first extension
+    # anchors where the cursor stands; later ones keep the anchor and
+    # move only the cursor.
+    func extend():
+        if self.anchor == none:
+            self.anchor = self.cursor
+
+    # Erase the selected range, landing the cursor where it began.
+    func erase_selection():
+        if not self.has_selection():
+            return
+        let start = self.selection_start()
+        let finish = self.selection_end()
+        self.content = self.content[0:start] + self.content[finish:len(self.content)]
+        self.cursor = start
+        self.anchor = none
+        self.dirty = true
 
     # --- questions about this text -----------------------------------
 
@@ -95,9 +149,20 @@ class Document:
         let start = line_at(self.content, landing)
         self.cursor = at_column(self.content, start, wanted)
 
+    func to_word_left():
+        self.cursor = previous_word(self.content, self.cursor)
+
+    func to_word_right():
+        self.cursor = next_word(self.content, self.cursor)
+
     # --- editing ------------------------------------------------------
+    #
+    # Every edit is selection-aware here, so no caller can splice text
+    # while a selection silently survives: typing replaces the
+    # selection, and an erase with a selection erases exactly it.
 
     func insert(extra: str):
+        self.erase_selection()
         self.content = splice(self.content, self.cursor, extra)
         self.cursor = self.cursor + len(extra)
         self.dirty = true
@@ -105,6 +170,7 @@ class Document:
     # Open a new line, carrying the current line's indentation and one
     # more unit after a code colon.
     func break_line(unit: str):
+        self.erase_selection()
         let current_indent = indentation(self.content, self.cursor)
         var line_break = "\n" + current_indent
         if opens_block(self.content, self.cursor):
@@ -119,6 +185,9 @@ class Document:
     # followed, and measuring against it lands wrong in exactly one
     # multi-byte shape the differential suite pins.
     func erase_left():
+        if self.has_selection():
+            self.erase_selection()
+            return
         if self.cursor <= 0:
             return
         let before = self.content
@@ -127,9 +196,25 @@ class Document:
         self.dirty = true
 
     func erase_right():
+        if self.has_selection():
+            self.erase_selection()
+            return
         if self.cursor >= len(self.content):
             return
         self.content = erase_at(self.content, self.cursor)
+        self.dirty = true
+
+    # Erase from the previous word boundary to the cursor — one word,
+    # or the separators behind the cursor when it sits between words.
+    func erase_word_left():
+        if self.has_selection():
+            self.erase_selection()
+            return
+        let start = previous_word(self.content, self.cursor)
+        if start >= self.cursor:
+            return
+        self.content = self.content[0:start] + self.content[self.cursor:len(self.content)]
+        self.cursor = start
         self.dirty = true
 
 # --- cursor motion over Unicode scalars ------------------------------
@@ -143,6 +228,39 @@ func next_boundary(value: str, cursor: i64) -> i64:
     if cursor >= len(value):
         return len(value)
     return cursor + 1
+
+# --- words -----------------------------------------------------------
+
+# A word scalar the way the highlighter counts one: letters, digits,
+# underscore, and everything beyond ASCII.
+func is_word_scalar(code: char) -> bool:
+    if code >= '0' and code <= '9':
+        return true
+    if code >= 'A' and code <= 'Z':
+        return true
+    if code >= 'a' and code <= 'z':
+        return true
+    return code == '_' or u32(code) >= 128
+
+# The start of the word behind `at`: separators first, then the word
+# they end.  Behind the first word this is position zero.
+func previous_word(value: str, at: i64) -> i64:
+    var here = at
+    while here > 0 and not is_word_scalar(value[here - 1]):
+        here = here - 1
+    while here > 0 and is_word_scalar(value[here - 1]):
+        here = here - 1
+    return here
+
+# The end of the word ahead of `at`, skipping separators to reach it.
+func next_word(value: str, at: i64) -> i64:
+    var here = at
+    let finish = len(value)
+    while here < finish and not is_word_scalar(value[here]):
+        here = here + 1
+    while here < finish and is_word_scalar(value[here]):
+        here = here + 1
+    return here
 
 # --- lines and columns -----------------------------------------------
 

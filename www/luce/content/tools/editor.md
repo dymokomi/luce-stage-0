@@ -31,15 +31,23 @@ The main keys are:
 | Ctrl-B | save, build a native executable, and run it |
 | Ctrl-F | open search; Enter advances and Escape closes it |
 | Ctrl-Z / Ctrl-Y | undo / redo |
+| Ctrl-A | select all |
+| Ctrl-C / Ctrl-X / Ctrl-V | copy / cut / paste; without a selection, copy and cut take the whole line |
+| Shift + movement | extend the selection (arrows, Home, End, Page Up/Down) |
+| Alt/Ctrl + Left/Right | jump by word; with Shift, extend by word |
+| Alt/Ctrl + Backspace | erase the word behind the cursor |
 | Ctrl-E | show or hide the file pane |
 | Ctrl-O | show or hide the output pane |
 | Ctrl-W | move focus to the next visible pane |
-| Escape | return focus to the source pane |
+| Escape | drop the selection and return focus to the source pane |
 | Ctrl-Q | quit; press again to discard unsaved work |
 
 Arrow keys, Home, End, Page Up, Page Down, Backspace, Delete, Enter, and Tab
 perform their ordinary source-editing actions. Enter preserves the current
 indent and adds one four-space level after a line that opens a block.
+Typing over a selection replaces it. A copy lands on the system
+clipboard through the terminal (OSC 52), and a paste from the system
+clipboard arrives as one edit and one undo step (bracketed paste).
 
 ## Build and run inside the editor
 

@@ -3,8 +3,10 @@
 # termui ships no keymap, deliberately: a keymap maps a key to *the
 # app's* intent, and no library can name that type.  So the app writes
 # the table, and an enum keys a map, so it is written the way it reads.
-# The host's key names never reach the editor — termui answers a `Key`, and
-# the table below is the whole translation.
+# The host's key names never reach the editor — termui answers a
+# `KeyPress`, and the tables below are the whole translation: the
+# modifier rules first (shift extends, alt/ctrl jump words), then the
+# plain table.
 
 from termui import Key, KeyPress
 from model import Intent
@@ -22,6 +24,10 @@ const INTENTS = {
     Key.delete: Intent.erase_right,
     Key.enter: Intent.newline,
     Key.tab: Intent.indent,
+    Key.ctrl_a: Intent.select_all,
+    Key.ctrl_c: Intent.copy,
+    Key.ctrl_x: Intent.cut,
+    Key.ctrl_v: Intent.paste,
     Key.ctrl_s: Intent.save,
     Key.ctrl_b: Intent.build,
     Key.ctrl_e: Intent.toggle_files,
@@ -34,14 +40,38 @@ const INTENTS = {
     Key.ctrl_q: Intent.quit,
 }
 
-# How far a movement intent scrolls a list: one row, or a page of eight.
-# A key that moves nothing is not in the table, read as zero.
-# What a key means.  A key the editor does not bind is `ignored`.
+# Shift held: the same motions, extending the selection.
+const EXTENDS = {
+    Key.left: Intent.extend_left,
+    Key.right: Intent.extend_right,
+    Key.up: Intent.extend_up,
+    Key.down: Intent.extend_down,
+    Key.page_up: Intent.extend_page_up,
+    Key.page_down: Intent.extend_page_down,
+    Key.home: Intent.extend_line_start,
+    Key.end: Intent.extend_line_end,
+}
+
+# What a key means with what was held.  An unbound combination falls
+# back to the bare key, and a key the editor does not bind at all is
+# `ignored`, never dropped.
 func intent_of(press: KeyPress) -> Intent:
+    if press.alt or press.control:
+        if press.key == Key.left:
+            if press.shift:
+                return Intent.extend_word_left
+            return Intent.word_left
+        if press.key == Key.right:
+            if press.shift:
+                return Intent.extend_word_right
+            return Intent.word_right
+        if press.key == Key.backspace:
+            return Intent.erase_word_left
+    if press.shift:
+        let extended = EXTENDS.get(press.key)
+        if extended != none:
+            return extended
     let found = INTENTS.get(press.key)
     if found == none:
         return Intent.ignored
     return found
-
-# How far this intent scrolls a list of rows; zero for every intent
-# that is not a movement.

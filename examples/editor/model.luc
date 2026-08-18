@@ -15,6 +15,7 @@
 
 import std.files
 import std.strings
+import std.term
 from document import Document, count_lines, previous_boundary
 import listing
 import session
@@ -74,8 +75,25 @@ enum Intent:
     page_down
     line_start
     line_end
+    word_left
+    word_right
+    extend_left
+    extend_right
+    extend_up
+    extend_down
+    extend_page_up
+    extend_page_down
+    extend_line_start
+    extend_line_end
+    extend_word_left
+    extend_word_right
+    select_all
+    copy
+    cut
+    paste
     erase_left
     erase_right
+    erase_word_left
     newline
     indent
     # `insert_text` rather than `insert`: `insert` is a list method, and
@@ -150,6 +168,7 @@ class Model:
     directory: str = "."
     output: str = ""
     search_query: str = ""
+    clipboard: str = ""
     active: i64 = 0
     output_scroll: i64 = 0
     search_current: i64 = -1
@@ -284,6 +303,7 @@ class Model:
             return
         doc.content = prior.content
         doc.cursor = prior.cursor
+        doc.drop_selection()
         doc.dirty = true
         self.coalescing = false
 
@@ -295,6 +315,7 @@ class Model:
             return
         doc.content = ahead.content
         doc.cursor = ahead.cursor
+        doc.drop_selection()
         doc.dirty = true
         self.coalescing = false
 
@@ -317,6 +338,7 @@ class Model:
 
     func rescan():
         let doc = self.document()
+        doc.drop_selection()
         scan(self.search_matches, doc.content, self.search_query)
         if len(self.search_matches) > 0:
             self.search_current = 0
@@ -330,6 +352,7 @@ class Model:
             return
         self.search_current = next
         let doc = self.document()
+        doc.drop_selection()
         doc.cursor = self.search_matches[next]
 
     func search_key(intent: Intent, inserted: str):
@@ -440,6 +463,49 @@ class Model:
         self.last_draft_ms = now
         session.save_draft(doc.path, doc.content)
 
+    # --- the clipboard -----------------------------------------------
+
+    # Copy answers what was copied.  Without a selection the current
+    # line is copied whole — the everyday "grab this line" gesture —
+    # and the system clipboard receives the same text through the
+    # terminal (OSC 52), so a copy here pastes anywhere.
+    private func copied() -> str:
+        let doc = self.document()
+        if doc.has_selection():
+            return doc.selected_text()
+        let start = doc.line_start(doc.cursor)
+        var finish = doc.line_end(doc.cursor)
+        if finish < len(doc.content):
+            finish = finish + 1
+        return doc.content[start:finish]
+
+    private func copy():
+        self.clipboard = self.copied()
+        term.copy(self.clipboard)
+
+    private func cut():
+        let doc = self.document()
+        self.clipboard = self.copied()
+        term.copy(self.clipboard)
+        self.begin_edit(false)
+        if doc.has_selection():
+            doc.erase_selection()
+            return
+        # Cutting a line removes it whole, cursor to the line start.
+        let start = doc.line_start(doc.cursor)
+        var finish = doc.line_end(doc.cursor)
+        if finish < len(doc.content):
+            finish = finish + 1
+        doc.content = doc.content[0:start] + doc.content[finish:len(doc.content)]
+        doc.cursor = start
+        doc.dirty = true
+
+    private func paste():
+        if self.clipboard == "":
+            return
+        self.begin_edit(false)
+        self.document().insert(self.clipboard)
+
     # --- the keystroke router ----------------------------------------
 
     func key(intent: Intent, inserted: str, visible: i64):
@@ -487,6 +553,7 @@ class Model:
             if self.focus == Focus.search:
                 self.close_search()
             else:
+                self.document().drop_selection()
                 self.focus = Focus.editor
             return
         if self.focus == Focus.search:
@@ -512,37 +579,115 @@ class Model:
             doc.message = ""
         match intent:
             move_left:
-                doc.move_left()
+                # An arrow with a selection collapses to its edge, the
+                # way every editor answers "get me out of the selection".
+                if doc.has_selection():
+                    doc.cursor = doc.selection_start()
+                    doc.drop_selection()
+                else:
+                    doc.move_left()
                 self.coalescing = false
             move_right:
-                doc.move_right()
+                if doc.has_selection():
+                    doc.cursor = doc.selection_end()
+                    doc.drop_selection()
+                else:
+                    doc.move_right()
                 self.coalescing = false
             move_up:
+                doc.drop_selection()
                 doc.vertical(line - 1)
                 self.coalescing = false
             move_down:
+                doc.drop_selection()
                 doc.vertical(line + 1)
                 self.coalescing = false
             page_up:
+                doc.drop_selection()
                 doc.vertical(line - visible)
                 self.coalescing = false
             page_down:
+                doc.drop_selection()
                 doc.vertical(line + visible)
                 self.coalescing = false
             line_start:
+                doc.drop_selection()
                 doc.to_line_start()
                 self.coalescing = false
             line_end:
+                doc.drop_selection()
                 doc.to_line_end()
                 self.coalescing = false
+            word_left:
+                doc.drop_selection()
+                doc.to_word_left()
+                self.coalescing = false
+            word_right:
+                doc.drop_selection()
+                doc.to_word_right()
+                self.coalescing = false
+            extend_left:
+                doc.extend()
+                doc.move_left()
+                self.coalescing = false
+            extend_right:
+                doc.extend()
+                doc.move_right()
+                self.coalescing = false
+            extend_up:
+                doc.extend()
+                doc.vertical(line - 1)
+                self.coalescing = false
+            extend_down:
+                doc.extend()
+                doc.vertical(line + 1)
+                self.coalescing = false
+            extend_page_up:
+                doc.extend()
+                doc.vertical(line - visible)
+                self.coalescing = false
+            extend_page_down:
+                doc.extend()
+                doc.vertical(line + visible)
+                self.coalescing = false
+            extend_line_start:
+                doc.extend()
+                doc.to_line_start()
+                self.coalescing = false
+            extend_line_end:
+                doc.extend()
+                doc.to_line_end()
+                self.coalescing = false
+            extend_word_left:
+                doc.extend()
+                doc.to_word_left()
+                self.coalescing = false
+            extend_word_right:
+                doc.extend()
+                doc.to_word_right()
+                self.coalescing = false
+            select_all:
+                doc.select_all()
+                self.coalescing = false
+            copy:
+                self.copy()
+                self.coalescing = false
+            cut:
+                self.cut()
+            paste:
+                self.paste()
             erase_left:
-                if doc.cursor > 0:
+                if doc.cursor > 0 or doc.has_selection():
                     self.begin_edit(false)
                     doc.erase_left()
             erase_right:
-                if doc.cursor < len(doc.content):
+                if doc.cursor < len(doc.content) or doc.has_selection():
                     self.begin_edit(false)
                     doc.erase_right()
+            erase_word_left:
+                if doc.cursor > 0 or doc.has_selection():
+                    self.begin_edit(false)
+                    doc.erase_word_left()
             newline:
                 self.begin_edit(false)
                 doc.break_line(indent_unit)
@@ -569,6 +714,7 @@ class Model:
             redo:
                 return
             escape:
+                doc.drop_selection()
                 self.focus = Focus.editor
             quit:
                 return

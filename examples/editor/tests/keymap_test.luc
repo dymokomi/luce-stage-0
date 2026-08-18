@@ -12,8 +12,28 @@ func test_bound_keys_map_to_their_intent():
     assert(intent_of(KeyPress(key = Key.ctrl_y)) == Intent.redo)
 
 func test_an_unbound_key_is_ignored():
-    assert(intent_of(KeyPress(key = Key.ctrl_a)) == Intent.ignored)
+    assert(intent_of(KeyPress(key = Key.ctrl_g)) == Intent.ignored)
     assert(intent_of(KeyPress(key = Key.unknown)) == Intent.ignored)
+
+func test_shift_extends_the_same_motions():
+    assert(intent_of(KeyPress(key = Key.left, shift = true)) == Intent.extend_left)
+    assert(intent_of(KeyPress(key = Key.end, shift = true)) == Intent.extend_line_end)
+    assert(intent_of(KeyPress(key = Key.page_down, shift = true)) == Intent.extend_page_down)
+    # Shift with a key that has no extending meaning falls back to the
+    # bare binding rather than dying.
+    assert(intent_of(KeyPress(key = Key.enter, shift = true)) == Intent.newline)
+
+func test_alt_or_ctrl_jumps_words():
+    assert(intent_of(KeyPress(key = Key.left, alt = true)) == Intent.word_left)
+    assert(intent_of(KeyPress(key = Key.right, control = true)) == Intent.word_right)
+    assert(intent_of(KeyPress(key = Key.left, alt = true, shift = true)) == Intent.extend_word_left)
+    assert(intent_of(KeyPress(key = Key.backspace, alt = true)) == Intent.erase_word_left)
+
+func test_the_clipboard_keys_are_bound():
+    assert(intent_of(KeyPress(key = Key.ctrl_a)) == Intent.select_all)
+    assert(intent_of(KeyPress(key = Key.ctrl_c)) == Intent.copy)
+    assert(intent_of(KeyPress(key = Key.ctrl_x)) == Intent.cut)
+    assert(intent_of(KeyPress(key = Key.ctrl_v)) == Intent.paste)
 
 func test_steps_scroll_a_list_and_are_zero_otherwise():
     assert(steps_of(Intent.move_up) == -1)

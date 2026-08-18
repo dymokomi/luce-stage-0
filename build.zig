@@ -12,7 +12,7 @@ const termui_modules = [_][]const u8{ "termui", "model", "input", "constraints",
 /// compile the editor from these, and both its compile and its test run
 /// name them as inputs so editing one re-runs what depends on it.
 const editor_modules = [_][]const u8{ "editor", "model", "document", "history", "highlight", "listing", "session", "ui/workbench", "ui/source", "ui/filelist", "ui/console", "ui/statusbar", "ui/keymap", "ui/theme" };
-const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "model", "workbench" };
+const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "selection", "highlight", "model", "workbench" };
 
 // LuciaOS v2 builds two executables from one language module:
 //
