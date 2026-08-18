@@ -3,59 +3,50 @@
 
 import model
 import keymap
-import history
 import document
 import focus
 
 func fresh() -> model.Model:
-    var buffers = new list[document.Buffer]
-    buffers.append(document.Buffer(path = "f.luc"))
-    var histories = new list[history.Stacks]
-    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-    return new model.Model(
-        buffers = buffers,
-        histories = histories,
-        names = new list[str],
-        search_matches = new list[i64],
-        path = "f.luc",
-    )
+    var documents = new list[document.Document]
+    documents.append(new document.Document(path = "f.luc"))
+    return new model.Model(documents)
 
 func test_typing_then_undo_and_redo():
     var ed = fresh()
     ed.key(keymap.Intent.insert_text, "hello", 10)
-    assert(ed.content == "hello")
-    assert(ed.dirty)
+    assert(ed.document().content == "hello")
+    assert(ed.document().dirty)
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "")
+    assert(ed.document().content == "")
     ed.key(keymap.Intent.redo, "", 10)
-    assert(ed.content == "hello")
+    assert(ed.document().content == "hello")
 
 func test_a_run_of_insertions_is_one_undo():
     var ed = fresh()
     ed.key(keymap.Intent.insert_text, "a", 10)
     ed.key(keymap.Intent.insert_text, "b", 10)
     ed.key(keymap.Intent.insert_text, "c", 10)
-    assert(ed.content == "abc")
+    assert(ed.document().content == "abc")
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "")
+    assert(ed.document().content == "")
 
 func test_a_movement_breaks_the_undo_run():
     var ed = fresh()
     ed.key(keymap.Intent.insert_text, "ab", 10)
     ed.key(keymap.Intent.move_left, "", 10)
     ed.key(keymap.Intent.insert_text, "X", 10)
-    assert(ed.content == "aXb")
+    assert(ed.document().content == "aXb")
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "ab")
+    assert(ed.document().content == "ab")
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "")
+    assert(ed.document().content == "")
 
 func test_newline_reindents_inside_a_block():
     var ed = fresh()
     ed.key(keymap.Intent.insert_text, "if x:", 10)
     ed.key(keymap.Intent.newline, "", 10)
     # The new line keeps the block's indent plus one level.
-    assert(ed.content == "if x:\n    ")
+    assert(ed.document().content == "if x:\n    ")
 
 func test_search_steps_through_matches():
     var ed = fresh()
@@ -63,9 +54,9 @@ func test_search_steps_through_matches():
     ed.key(keymap.Intent.find, "", 10)
     assert(ed.focus == focus.Focus.search)
     ed.key(keymap.Intent.insert_text, "two", 10)
-    assert(ed.cursor == 4)
+    assert(ed.document().cursor == 4)
     ed.key(keymap.Intent.newline, "", 10)
-    assert(ed.cursor == 8)
+    assert(ed.document().cursor == 8)
     ed.key(keymap.Intent.escape, "", 10)
     assert(ed.focus == focus.Focus.editor)
 
@@ -77,11 +68,11 @@ func test_search_starts_a_fresh_undo_group():
     ed.key(keymap.Intent.find, "", 10)
     ed.key(keymap.Intent.escape, "", 10)
     ed.key(keymap.Intent.insert_text, "c", 10)
-    assert(ed.content == "abc")
+    assert(ed.document().content == "abc")
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "ab")
+    assert(ed.document().content == "ab")
     ed.key(keymap.Intent.undo, "", 10)
-    assert(ed.content == "")
+    assert(ed.document().content == "")
 
 # The file pane's scroll window is persisted on `self.files`, so a mouse
 # click and the frame read the same `top` — it is not recomputed on a

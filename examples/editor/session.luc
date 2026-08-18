@@ -1,6 +1,6 @@
 # Opening files, and the drafts that survive a crash.
 #
-# `load` reads a file for a buffer, recovering a draft if one is on disk
+# `load` opens a file as a Document, recovering a draft if one is on disk
 # (UX_UI_DESIGN.md §56).  `save_draft` writes that draft atomically as
 # the editor edits, and `discard_draft` deletes it on a clean save.  The
 # editor owns the buffer list and the timing; these are the file
@@ -18,7 +18,7 @@ func draft_path(path: str) -> str:
 # exactly what is on disk, which is the safety net for a draft that is
 # offered but not wanted.
 struct Loaded:
-    buffer: document.Buffer
+    opened: document.Document
     base: str
     recovered: bool
 
@@ -51,8 +51,8 @@ func load(path: str) -> Loaded:
             content = draft_content
             message = "recovered unsaved changes — Ctrl-Z to discard, Ctrl-S to keep"
             recovered = true
-    let buffer = document.Buffer(path = path, content = content, message = message, dirty = recovered)
-    return Loaded(buffer = buffer, base = base, recovered = recovered)
+    let opened = new document.Document(path = path, content = content, message = message, dirty = recovered)
+    return Loaded(opened = opened, base = base, recovered = recovered)
 
 # Write the working content to a draft beside the file, so a crash loses
 # at most the edits since the last write.  Written to a temporary and

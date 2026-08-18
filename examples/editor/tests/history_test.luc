@@ -3,19 +3,18 @@
 import history
 
 func test_undo_returns_the_prior_revision():
-    var past = new list[history.Revision]
-    var future = new list[history.Revision]
+    let stack = new history.History()
     # Record the state before typing " world".
-    history.record(past, future, "hello", 5)
+    stack.record("hello", 5)
     # Now the live state is the edited one; undo hands back the prior.
-    let prior = history.undo(past, future, "hello world", 11)
+    let prior = stack.undo("hello world", 11)
     if prior == none:
         assert(false)
         return
     assert(prior.content == "hello")
     assert(prior.cursor == 5)
     # Redo hands back the state undo moved onto the future stack.
-    let ahead = history.redo(past, future, "hello", 5)
+    let ahead = stack.redo("hello", 5)
     if ahead == none:
         assert(false)
         return
@@ -23,27 +22,38 @@ func test_undo_returns_the_prior_revision():
     assert(ahead.cursor == 11)
 
 func test_undo_on_an_empty_stack_answers_none():
-    var past = new list[history.Revision]
-    var future = new list[history.Revision]
-    assert(history.undo(past, future, "x", 1) == none)
-    assert(history.redo(past, future, "x", 1) == none)
+    let stack = new history.History()
+    assert(stack.undo("x", 1) == none)
+    assert(stack.redo("x", 1) == none)
 
 func test_a_new_edit_invalidates_redo():
-    var past = new list[history.Revision]
-    var future = new list[history.Revision]
-    history.record(past, future, "a", 1)
-    let undone = history.undo(past, future, "ab", 2)
+    let stack = new history.History()
+    stack.record("a", 1)
+    let undone = stack.undo("ab", 2)
     assert(undone != none)
-    assert(len(future) == 1)
-    # A fresh edit records over the top and drops the redo history.
-    history.record(past, future, "a", 1)
-    assert(len(future) == 0)
+    # A fresh edit records over the top and drops the redo history:
+    # after it, there is nothing ahead to redo.
+    stack.record("a", 1)
+    assert(stack.redo("a", 1) == none)
 
 func test_the_stack_is_bounded():
-    var past = new list[history.Revision]
-    var future = new list[history.Revision]
+    let stack = new history.History()
     for i in range(0, history.depth + 50):
-        history.record(past, future, "s" + str(i), i)
-    assert(len(past) == history.depth)
-    # The oldest went first, so the bottom is revision 50, not 0.
-    assert(past[0].cursor == 50)
+        stack.record("s" + str(i), i)
+    # Undo everything the stack kept: exactly `depth` revisions come
+    # back, and the oldest one standing is revision 50 — the bottom
+    # fell out first.
+    var count = 0
+    var oldest = -1
+    var content = "live"
+    var cursor = history.depth + 50
+    while true:
+        let prior = stack.undo(content, cursor)
+        if prior == none:
+            break
+        count += 1
+        oldest = prior.cursor
+        content = prior.content
+        cursor = prior.cursor
+    assert(count == history.depth)
+    assert(oldest == 50)

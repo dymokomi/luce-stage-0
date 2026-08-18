@@ -6,6 +6,14 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The editor's domain is classes: `Document` owns a file's text,
+  cursor, scroll, dirty flag, message, and its own `History` (undo and
+  redo as methods on one owned stack), so the model holds a list of
+  documents and an active index - the remember/restore park-dance and
+  its six cached fields are gone, and switching files is switching a
+  reference. `Selection` is a class, which ends the copy-out/copy-back
+  window dance. The pure line and boundary arithmetic stays free: it
+  answers questions about any text, the output transcript included.
 - termui 0.5.0: the tree is retained. `Application` is a class -
   `new Application()`, `set_layout(root)`, `start()` - and the
   `body()` interface with its rebuild-each-frame protocol is gone.

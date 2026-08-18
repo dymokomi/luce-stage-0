@@ -8,14 +8,13 @@
 # `browser`, build is `shell`, drafts are `session`.  Each method here
 # is thin — it calls one of those and stores the answer.
 #
-# The active buffer's fields are cached here for editing; the parked
-# buffers live in `buffers`, kept in step by `remember`/`restore`.  Undo
-# stacks live per buffer in `histories`, parallel to `buffers`, reached
-# by index (a carrying element cannot be cached, S22).
+# The open files are Documents — classes, so the model and every pane
+# share the one reference `document()` answers, switching files is
+# switching the active index, and each Document carries its own text,
+# cursor, scroll, and undo History.
 
 import std.files
 import document
-import history
 import search
 import browser
 import shell
@@ -30,10 +29,15 @@ const indent_unit = "    "
 # The file pane's ordinary domain state. Geometry belongs to the declarative
 # view; this value only remembers which result is selected and where its
 # visible window begins.
-struct Selection:
-    count: i64 = 0
-    top: i64 = 0
-    selected: i64 = 0
+class Selection:
+    count: i64
+    top: i64
+    selected: i64
+
+    init():
+        self.count = 0
+        self.top = 0
+        self.selected = 0
 
     func adjust(height: i64):
         if self.count <= 0:
@@ -60,26 +64,19 @@ enum Drag:
     output
 
 class Model:
-    buffers: list[document.Buffer]
-    histories: list[history.Stacks]
+    documents: list[document.Document]
     names: list[str]
     search_matches: list[i64]
-    files: Selection = Selection()
-    path: str = ""
-    content: str = ""
-    message: str = ""
+    files: Selection
     directory: str = "."
     output: str = ""
     search_query: str = ""
     active: i64 = 0
-    cursor: i64 = 0
-    scroll: i64 = 0
     output_scroll: i64 = 0
     search_current: i64 = -1
     last_draft_ms: i64 = 0
     file_pane: bool = false
     output_pane: bool = false
-    dirty: bool = false
     quit_pending: bool = false
     coalescing: bool = false
     quit: bool = false
@@ -89,29 +86,18 @@ class Model:
     output_height: i64 = 0
     private watchers: list[(func())?]
 
-    init(
-        buffers: list[document.Buffer],
-        histories: list[history.Stacks],
-        names: list[str],
-        search_matches: list[i64],
-        path: str = "",
-        content: str = "",
-        message: str = "",
-        cursor: i64 = 0,
-        scroll: i64 = 0,
-        dirty: bool = false,
-    ):
+    init(documents: list[document.Document]):
+        self.documents = documents
+        self.names = new list[str]
+        self.search_matches = new list[i64]
+        self.files = new Selection()
         self.watchers = new list[(func())?]
-        self.buffers = buffers
-        self.histories = histories
-        self.names = names
-        self.search_matches = search_matches
-        self.path = path
-        self.content = content
-        self.message = message
-        self.cursor = cursor
-        self.scroll = scroll
-        self.dirty = dirty
+
+    # The active file.  A Document is a reference, so panes and model
+    # read and mutate the same one; switching files is switching which
+    # reference this answers.
+    func document() -> document.Document:
+        return self.documents[self.active]
 
     # --- subscriptions ------------------------------------------------
 
@@ -129,31 +115,16 @@ class Model:
             if watcher != none:
                 watcher()
 
-    # --- switching between buffers -----------------------------------
+    # --- switching between files ---------------------------------------
 
-    # Park the active view before changing files, so two unsaved files
-    # live in one session without the terminal knowing editor state.
-    func remember():
-        self.buffers[self.active].path = self.path
-        self.buffers[self.active].content = self.content
-        self.buffers[self.active].message = self.message
-        self.buffers[self.active].cursor = self.cursor
-        self.buffers[self.active].scroll = self.scroll
-        self.buffers[self.active].dirty = self.dirty
-
-    func restore():
-        let buffer = self.buffers[self.active]
-        self.path = buffer.path
-        self.content = buffer.content
-        self.message = buffer.message
-        self.cursor = buffer.cursor
-        self.scroll = buffer.scroll
-        self.dirty = buffer.dirty
+    # What every switch resets: a Document keeps its own text, cursor
+    # and scroll (it is the same reference it always was), and the
+    # model's cross-file state starts fresh — the autosave debounce is
+    # per working file, so the next edit to the file just entered
+    # writes its own draft without waiting on the one before it.
+    private func switched():
         self.quit_pending = false
         self.coalescing = false
-        # The autosave debounce is per this working buffer, so a switch
-        # clears it: the next edit to the buffer just restored writes its
-        # own draft without waiting on the one before it.
         self.last_draft_ms = 0
 
     # The provider the file pane reads its labels through.
@@ -165,21 +136,20 @@ class Model:
     # --- the file pane -----------------------------------------------
 
     func refresh_files():
-        let failure = browser.refresh(self.names, self.directory, self.path)
+        let doc = self.document()
+        let failure = browser.refresh(self.names, self.directory, doc.path)
         if failure != none:
-            self.message = failure
+            doc.message = failure
             return
         self.files.count = len(self.names)
-        self.files.selected = browser.select_index(self.names, self.directory, self.path)
+        self.files.selected = browser.select_index(self.names, self.directory, doc.path)
 
-    # Keep the file pane's scroll window on its selection, and persist it
-    # on `self.files` — the frame and a mouse click both read `top` from
-    # there, so it cannot be recomputed on a throwaway copy each frame.
+    # Keep the file pane's scroll window on its selection.  `files` is
+    # a class, so the frame and a mouse click read the same window this
+    # writes — no copy-out, no copy-back.
     func adjust_files(height: i64):
-        var pane = self.files
-        pane.count = len(self.names)
-        pane.adjust(height)
-        self.files = pane
+        self.files.count = len(self.names)
+        self.files.adjust(height)
 
     func open_row(index: i64):
         if index < 0 or index >= len(self.names):
@@ -188,20 +158,20 @@ class Model:
             entered(directory):
                 self.directory = directory
                 self.refresh_files()
-                self.message = "in " + self.directory
+                let doc = self.document()
+                doc.message = "in " + self.directory
             file(path):
                 self.open_file(path)
         self.notify()
 
     func open_file(path: str):
-        if path == self.path:
+        if path == self.document().path:
             self.focus = focus.Focus.editor
             return
-        self.remember()
-        for other in range(0, len(self.buffers)):
-            if self.buffers[other].path == path:
+        for other in range(0, len(self.documents)):
+            if self.documents[other].path == path:
                 self.active = other
-                self.restore()
+                self.switched()
                 self.focus = focus.Focus.editor
                 return
         # `session.load` rather than a bare read, so a file opened from
@@ -209,12 +179,11 @@ class Model:
         # line does; a recovered draft seeds undo with the on-disk file
         # so Ctrl-Z discards the recovery.
         let loaded = session.load(path)
-        self.buffers.append(loaded.buffer)
-        self.histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
         if loaded.recovered:
-            self.histories[len(self.histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
-        self.active = len(self.buffers) - 1
-        self.restore()
+            loaded.opened.history.record(loaded.base, 0)
+        self.documents.append(loaded.opened)
+        self.active = len(self.documents) - 1
+        self.switched()
         self.focus = focus.Focus.editor
 
     # --- undo and redo -----------------------------------------------
@@ -225,27 +194,30 @@ class Model:
     func begin_edit(coalesce: bool):
         if coalesce and self.coalescing:
             return
-        history.record(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        let doc = self.document()
+        doc.history.record(doc.content, doc.cursor)
         self.coalescing = coalesce
 
     func undo():
-        let prior = history.undo(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        let doc = self.document()
+        let prior = doc.history.undo(doc.content, doc.cursor)
         if prior == none:
-            self.message = "nothing to undo"
+            doc.message = "nothing to undo"
             return
-        self.content = prior.content
-        self.cursor = prior.cursor
-        self.dirty = true
+        doc.content = prior.content
+        doc.cursor = prior.cursor
+        doc.dirty = true
         self.coalescing = false
 
     func redo():
-        let ahead = history.redo(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        let doc = self.document()
+        let ahead = doc.history.redo(doc.content, doc.cursor)
         if ahead == none:
-            self.message = "nothing to redo"
+            doc.message = "nothing to redo"
             return
-        self.content = ahead.content
-        self.cursor = ahead.cursor
-        self.dirty = true
+        doc.content = ahead.content
+        doc.cursor = ahead.cursor
+        doc.dirty = true
         self.coalescing = false
 
     # --- search ------------------------------------------------------
@@ -255,21 +227,24 @@ class Model:
         self.search_query = ""
         self.search_matches.clear()
         self.search_current = -1
-        self.message = ""
+        let doc = self.document()
+        doc.message = ""
         # A search jumps the cursor, so the next typed run is its own undo
         # group rather than coalescing with text typed before the search.
         self.coalescing = false
 
     func close_search():
         self.focus = focus.Focus.editor
-        self.message = ""
+        let doc = self.document()
+        doc.message = ""
         self.coalescing = false
 
     func rescan():
-        search.scan(self.search_matches, self.content, self.search_query)
+        let doc = self.document()
+        search.scan(self.search_matches, doc.content, self.search_query)
         if len(self.search_matches) > 0:
             self.search_current = 0
-            self.cursor = self.search_matches[0]
+            doc.cursor = self.search_matches[0]
         else:
             self.search_current = -1
 
@@ -278,7 +253,8 @@ class Model:
         if next < 0:
             return
         self.search_current = next
-        self.cursor = self.search_matches[next]
+        let doc = self.document()
+        doc.cursor = self.search_matches[next]
 
     func search_key(intent: keymap.Intent, inserted: str):
         if intent == keymap.Intent.escape:
@@ -310,10 +286,8 @@ class Model:
         let steps = keymap.steps_of(intent)
         if steps == 0:
             return
-        var pane = self.files
-        pane.count = len(self.names)
-        pane.move_by(steps)
-        self.files = pane
+        self.files.count = len(self.names)
+        self.files.move_by(steps)
 
     func output_key(intent: keymap.Intent):
         let steps = keymap.steps_of(intent)
@@ -357,43 +331,38 @@ class Model:
 
     func build():
         self.save()
-        if self.dirty:
-            self.output = "build skipped: " + self.message + "\n"
+        let doc = self.document()
+        if doc.dirty:
+            self.output = "build skipped: " + doc.message + "\n"
         else:
-            self.output = shell.run(shell.build_command(self.path))
-            self.message = "build/run finished"
+            self.output = shell.run(shell.build_command(doc.path))
+            doc.message = "build/run finished"
         self.output_scroll = 0
         self.output_pane = true
         self.focus = focus.Focus.output
 
     func save():
-        files.write(self.path, self.content) catch reason:
-            self.message = reason
+        let doc = self.document()
+        files.write(doc.path, doc.content) catch reason:
+            doc.message = reason
             return
-        self.dirty = false
-        self.message = f"saved {self.path}"
-        session.discard_draft(self.path)
-        self.remember()
+        doc.dirty = false
+        doc.message = f"saved {doc.path}"
+        session.discard_draft(doc.path)
         # A save closes the current undo group, so edits after it start a
         # fresh one rather than coalescing across the saved boundary.
         self.coalescing = false
 
-    # Write a draft when the buffer has been dirty past a i16 idle, so
+    # Write a draft when the file has been dirty past a short idle, so
     # a crash loses at most a second or two of edits.
     func autosave(now: i64):
-        if not self.dirty:
+        let doc = self.document()
+        if not doc.dirty:
             return
         if now - self.last_draft_ms < 1500:
             return
         self.last_draft_ms = now
-        session.save_draft(self.path, self.content)
-
-    func vertical(target_line: i64):
-        let total = document.count_lines(self.content)
-        let wanted = document.column_of(self.content, self.cursor)
-        let landing = clamp(target_line, 0, total - 1)
-        let start = document.line_at(self.content, landing)
-        self.cursor = document.at_column(self.content, start, wanted)
+        session.save_draft(doc.path, doc.content)
 
     # --- the keystroke router ----------------------------------------
 
@@ -403,9 +372,10 @@ class Model:
 
     private func routed(intent: keymap.Intent, inserted: str, visible: i64):
         if intent == keymap.Intent.quit:
-            if self.dirty and not self.quit_pending:
+            let doc = self.document()
+            if doc.dirty and not self.quit_pending:
                 self.quit_pending = true
-                self.message = "unsaved changes; Ctrl-Q again to discard"
+                doc.message = "unsaved changes; Ctrl-Q again to discard"
             else:
                 self.quit = true
             return
@@ -455,68 +425,57 @@ class Model:
         self.edit(intent, inserted, visible)
 
     # The editor pane's own keys.  Movement breaks an insert run; each
-    # text change records undo first.
+    # text change records undo first.  The undo-grouping policy stays
+    # here — the model knows the sequence of keys — and the Document
+    # owns the text arithmetic each arm asks for.
     func edit(intent: keymap.Intent, inserted: str, visible: i64):
-        let line = document.line_of(self.content, self.cursor)
+        let doc = self.document()
+        let line = doc.line_of(doc.cursor)
         self.quit_pending = false
-        if len(self.message) > 0:
-            self.message = ""
+        if len(doc.message) > 0:
+            doc.message = ""
         match intent:
             move_left:
-                self.cursor = document.previous_boundary(self.content, self.cursor)
+                doc.move_left()
                 self.coalescing = false
             move_right:
-                self.cursor = document.next_boundary(self.content, self.cursor)
+                doc.move_right()
                 self.coalescing = false
             move_up:
-                self.vertical(line - 1)
+                doc.vertical(line - 1)
                 self.coalescing = false
             move_down:
-                self.vertical(line + 1)
+                doc.vertical(line + 1)
                 self.coalescing = false
             page_up:
-                self.vertical(line - visible)
+                doc.vertical(line - visible)
                 self.coalescing = false
             page_down:
-                self.vertical(line + visible)
+                doc.vertical(line + visible)
                 self.coalescing = false
             line_start:
-                self.cursor = document.line_start(self.content, self.cursor)
+                doc.to_line_start()
                 self.coalescing = false
             line_end:
-                self.cursor = document.line_end(self.content, self.cursor)
+                doc.to_line_end()
                 self.coalescing = false
             erase_left:
-                if self.cursor > 0:
+                if doc.cursor > 0:
                     self.begin_edit(false)
-                    let before = self.content
-                    self.content = document.erase_before(self.content, self.cursor)
-                    self.cursor = document.previous_boundary(before, self.cursor)
-                    self.dirty = true
+                    doc.erase_left()
             erase_right:
-                if self.cursor < len(self.content):
+                if doc.cursor < len(doc.content):
                     self.begin_edit(false)
-                    self.content = document.erase_at(self.content, self.cursor)
-                    self.dirty = true
+                    doc.erase_right()
             newline:
                 self.begin_edit(false)
-                let current_indent = document.indentation(self.content, self.cursor)
-                var line_break = "\n" + current_indent
-                if document.opens_block(self.content, self.cursor):
-                    line_break = line_break + indent_unit
-                self.content = document.splice(self.content, self.cursor, line_break)
-                self.cursor = self.cursor + len(line_break)
-                self.dirty = true
+                doc.break_line(indent_unit)
             indent:
                 self.begin_edit(false)
-                self.content = document.splice(self.content, self.cursor, indent_unit)
-                self.cursor = self.cursor + len(indent_unit)
-                self.dirty = true
+                doc.insert(indent_unit)
             insert_text:
                 self.begin_edit(true)
-                self.content = document.splice(self.content, self.cursor, inserted)
-                self.cursor = self.cursor + len(inserted)
-                self.dirty = true
+                doc.insert(inserted)
             save:
                 return
             build:
@@ -543,24 +502,10 @@ class Model:
 # Build a model from command-line paths.  File and draft loading
 # belongs at this boundary; the components receive the finished model.
 func open(paths: list[str]) -> Model:
-    var buffers = new list[document.Buffer]
-    var histories = new list[history.Stacks]
+    var documents = new list[document.Document]
     for path in paths:
         let loaded = session.load(path)
-        buffers.append(loaded.buffer)
-        histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
         if loaded.recovered:
-            histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
-    let first = buffers[0]
-    return new Model(
-        buffers = buffers,
-        histories = histories,
-        names = new list[str],
-        search_matches = new list[i64],
-        path = first.path,
-        content = first.content,
-        message = first.message,
-        cursor = first.cursor,
-        scroll = first.scroll,
-        dirty = first.dirty,
-    )
+            loaded.opened.history.record(loaded.base, 0)
+        documents.append(loaded.opened)
+    return new Model(documents)

@@ -8,19 +8,122 @@
 # columns, and splice or erase text, each answering a value the caller
 # stores.
 
-# The editor's durable per-file state.  A view may switch away from a
-# file, but a buffer keeps its text, cursor and scroll so returning to
-# it does not lose work that is not on disk yet.  Plain data: it carries
-# no container, so the session can hold a list of them and the active
-# one's fields can be cached and restored (OWNERSHIP.md S22 forbids
-# editing a carrying element through its index).
-struct Buffer:
-    path: str = ""
-    content: str = ""
-    message: str = ""
-    cursor: i64 = 0
-    scroll: i64 = 0
-    dirty: bool = false
+import history
+
+# One open file: the text, the editing position, and the undo stack
+# that belongs to them.  A Document is a class — a reference the model
+# and every pane share — so switching files is switching which
+# reference is active, and the park-and-restore dance a value buffer
+# forced is simply gone.  The pure str arithmetic below stays free:
+# it answers questions about any text (the output pane's transcript
+# included), while a Document owns one text and moves it.
+class Document:
+    path: str
+    content: str
+    message: str
+    cursor: i64
+    scroll: i64
+    dirty: bool
+    history: history.History
+
+    init(
+        path: str = "",
+        content: str = "",
+        message: str = "",
+        cursor: i64 = 0,
+        scroll: i64 = 0,
+        dirty: bool = false,
+    ):
+        self.path = path
+        self.content = content
+        self.message = message
+        self.cursor = cursor
+        self.scroll = scroll
+        self.dirty = dirty
+        self.history = new history.History()
+
+    # --- questions about this text -----------------------------------
+
+    func line_of(at: i64) -> i64:
+        return line_of(self.content, at)
+
+    func line_start(at: i64) -> i64:
+        return line_start(self.content, at)
+
+    func line_end(at: i64) -> i64:
+        return line_end(self.content, at)
+
+    func line_at(index: i64) -> i64:
+        return line_at(self.content, index)
+
+    func at_column(start: i64, column: i64) -> i64:
+        return at_column(self.content, start, column)
+
+    func column_of(at: i64) -> i64:
+        return column_of(self.content, at)
+
+    func count_lines() -> i64:
+        return count_lines(self.content)
+
+    # --- cursor motion ------------------------------------------------
+
+    func move_left():
+        self.cursor = previous_boundary(self.content, self.cursor)
+
+    func move_right():
+        self.cursor = next_boundary(self.content, self.cursor)
+
+    func to_line_start():
+        self.cursor = line_start(self.content, self.cursor)
+
+    func to_line_end():
+        self.cursor = line_end(self.content, self.cursor)
+
+    # Land on `target_line`, keeping the column the cursor had where
+    # the landing line is long enough to offer it.
+    func vertical(target_line: i64):
+        let total = count_lines(self.content)
+        let wanted = column_of(self.content, self.cursor)
+        let landing = clamp(target_line, 0, total - 1)
+        let start = line_at(self.content, landing)
+        self.cursor = at_column(self.content, start, wanted)
+
+    # --- editing ------------------------------------------------------
+
+    func insert(extra: str):
+        self.content = splice(self.content, self.cursor, extra)
+        self.cursor = self.cursor + len(extra)
+        self.dirty = true
+
+    # Open a new line, carrying the current line's indentation and one
+    # more unit after a code colon.
+    func break_line(unit: str):
+        let current_indent = indentation(self.content, self.cursor)
+        var line_break = "\n" + current_indent
+        if opens_block(self.content, self.cursor):
+            line_break = line_break + unit
+        self.content = splice(self.content, self.cursor, line_break)
+        self.cursor = self.cursor + len(line_break)
+        self.dirty = true
+
+    # Erase the character before the cursor.  **The cursor moves by
+    # the content as it was before the erase** (docs/SELF.md): after
+    # the erase, the byte at the old cursor's left belongs to what
+    # followed, and measuring against it lands wrong in exactly one
+    # multi-byte shape the differential suite pins.
+    func erase_left():
+        if self.cursor <= 0:
+            return
+        let before = self.content
+        self.content = erase_before(self.content, self.cursor)
+        self.cursor = previous_boundary(before, self.cursor)
+        self.dirty = true
+
+    func erase_right():
+        if self.cursor >= len(self.content):
+            return
+        self.content = erase_at(self.content, self.cursor)
+        self.dirty = true
 
 # --- cursor motion over Unicode scalars ------------------------------
 

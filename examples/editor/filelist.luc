@@ -60,9 +60,7 @@ class FileList: termui.View:
             mouse(pointer):
                 if pointer.kind == termui.Pointer.wheel:
                     self.model.focus = focus.Focus.files
-                    var files = self.model.files
-                    files.move_by(-pointer.wheel)
-                    self.model.files = files
+                    self.model.files.move_by(-pointer.wheel)
                     self.model.adjust_files(area.rows)
                     return termui.Response.handled
                 if pointer.kind != termui.Pointer.press or pointer.button != 0:

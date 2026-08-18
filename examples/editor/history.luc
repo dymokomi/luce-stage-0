@@ -1,47 +1,48 @@
-# Undo and redo — a bounded revision stack per buffer.
+# Undo and redo — a bounded revision stack with identity.
 #
 # A revision is the minimum that restores a valid prior state: the
-# content and where the cursor was.  The stacks are `list[Revision]`
-# the app owns per buffer; these functions push and pop them, so the
-# logic is pure and testable while the state stays with the buffer it
-# belongs to (Luce scalar state cannot be mutated through a param, but a
-# container can — docs/OWNERSHIP.md).
+# content and where the cursor was.  A `History` is a class because a
+# stack is an accumulator with identity — every holder must see the
+# one stack, not a silently shared copy — and each Document owns its
+# own.  The coalescing rule that decides when to `record` lives in the
+# editor, which knows the sequence of keys.
 
 struct Revision:
     content: str
     cursor: i64
 
-# The undo and redo stacks for one buffer.  The session holds a list of
-# these parallel to its buffers; the coalescing rule that decides when
-# to `record` lives in the editor, which knows the sequence of keys.
-struct Stacks:
-    past: list[Revision]
-    future: list[Revision]
-
-# Keep undo bounded so a i64 session over a large file does not grow
+# Keep undo bounded so a long session over a large file does not grow
 # without limit; the oldest revision is the first to go.
 const depth = 200
 
-# Record the state *before* an edit.  A new edit invalidates redo, so
-# the future stack is cleared.  Call this once per undo group — the app
-# coalesces a run of plain insertions into one group.
-func record(past: list[Revision], future: list[Revision], content: str, cursor: i64):
-    past.append(Revision(content = content, cursor = cursor))
-    future.clear()
-    while len(past) > depth:
-        past.remove(0)
+class History:
+    private past: list[Revision]
+    private future: list[Revision]
 
-# Undo: move the current state onto the redo stack and answer the prior
-# revision to apply, or `none` when there is nothing to undo.
-func undo(past: list[Revision], future: list[Revision], content: str, cursor: i64) -> Revision?:
-    if len(past) == 0:
-        return none
-    future.append(Revision(content = content, cursor = cursor))
-    return past.pop()
+    init():
+        self.past = new list[Revision]
+        self.future = new list[Revision]
 
-# Redo: the mirror of undo.
-func redo(past: list[Revision], future: list[Revision], content: str, cursor: i64) -> Revision?:
-    if len(future) == 0:
-        return none
-    past.append(Revision(content = content, cursor = cursor))
-    return future.pop()
+    # Record the state *before* an edit.  A new edit invalidates redo,
+    # so the future stack is cleared.  Call this once per undo group —
+    # the editor coalesces a run of plain insertions into one group.
+    func record(content: str, cursor: i64):
+        self.past.append(Revision(content = content, cursor = cursor))
+        self.future.clear()
+        while len(self.past) > depth:
+            self.past.remove(0)
+
+    # Undo: move the current state onto the redo stack and answer the
+    # prior revision to apply, or `none` when there is nothing to undo.
+    func undo(content: str, cursor: i64) -> Revision?:
+        if len(self.past) == 0:
+            return none
+        self.future.append(Revision(content = content, cursor = cursor))
+        return self.past.pop()
+
+    # Redo: the mirror of undo.
+    func redo(content: str, cursor: i64) -> Revision?:
+        if len(self.future) == 0:
+            return none
+        self.past.append(Revision(content = content, cursor = cursor))
+        return self.future.pop()

@@ -33,14 +33,15 @@ class StatusBar: termui.View:
             elif self.model.search_query != "":
                 prompt += "    no matches"
             return prompt + "    Enter next   Esc close"
-        let line = document.line_of(self.model.content, self.model.cursor)
-        let column = document.column_of(self.model.content, self.model.cursor)
+        let doc = self.model.document()
+        let line = doc.line_of(doc.cursor)
+        let column = doc.column_of(doc.cursor)
         var flag = ""
-        if self.model.dirty:
+        if doc.dirty:
             flag = " +"
-        var left = f" {self.model.path}{flag}  {line + 1}:{column + 1}"
-        if len(self.model.message) > 0:
-            left += f"  — {self.model.message}"
+        var left = f" {doc.path}{flag}  {line + 1}:{column + 1}"
+        if len(doc.message) > 0:
+            left += f"  — {doc.message}"
         return left + focus_label(self.model.focus)
 
     func status_cursor(area: termui.Rect) -> termui.Cursor?:

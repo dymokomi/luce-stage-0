@@ -5,7 +5,6 @@ import termui
 from termui import VStack, HStack
 import document
 import focus
-import history
 import model
 from filelist import FileList
 from source import Editor, gutter_width
@@ -14,18 +13,13 @@ from statusbar import StatusBar
 from workbench import Workbench
 
 func model_of() -> model.Model:
-    var buffers = new list[document.Buffer]
-    buffers.append(document.Buffer(path = "sample.luc"))
-    var histories = new list[history.Stacks]
-    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-    let shared = new model.Model(
-        buffers = buffers,
-        histories = histories,
-        names = ["a.luc", "b.luc"],
-        search_matches = new list[i64],
+    var documents = new list[document.Document]
+    documents.append(new document.Document(
         path = "sample.luc",
         content = "func main():\n    let x = 42",
-    )
+    ))
+    let shared = new model.Model(documents)
+    shared.names = ["a.luc", "b.luc"]
     shared.files.count = len(shared.names)
     shared.output = "build ok"
     return shared
@@ -69,13 +63,14 @@ func test_hidden_panes_are_zero_slots_the_subscription_reopens():
 func test_source_events_update_the_model_and_the_next_frame():
     let shared = model_of()
     let bench, pane, files = built(shared)
-    shared.cursor = len(shared.content)
+    let doc = shared.document()
+    doc.cursor = len(doc.content)
     let response = pane.source_event(
         termui.Event.text(typed = "!"),
         termui.Rect(rows = 10, columns = 60),
     )
     assert(response == termui.Response.handled)
-    assert(strings.ends_with(shared.content, "!"))
+    assert(strings.ends_with(shared.document().content, "!"))
     let screen = termui.snapshot(bench, 12, 60)
     assert(strings.contains(screen.line(1), "let x = 42!"))
 

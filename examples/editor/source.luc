@@ -23,18 +23,19 @@ class Editor: termui.View:
     # --- data provider ----------------------------------------------
 
     func source_line(index: i64) -> termui.Line:
+        let doc = self.model.document()
         var spans = new list[termui.Span]
         var gutter_style = theme.palette.gutter
-        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        let cursor_line = doc.line_of(doc.cursor)
         if index == cursor_line and self.model.focus == focus.Focus.editor:
             gutter_style = theme.palette.gutter_current
         spans.append(termui.Span(
             text = strings.pad_left(str(index + 1), gutter_width - 1) + " ",
             style = gutter_style,
         ))
-        let start = document.line_at(self.model.content, index)
-        let finish = document.line_end(self.model.content, start)
-        for token in highlight.tokens(self.model.content, start, finish):
+        let start = doc.line_at(index)
+        let finish = doc.line_end(start)
+        for token in highlight.tokens(doc.content, start, finish):
             spans.append(termui.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
         return termui.Line(spans = spans)
 
@@ -43,10 +44,11 @@ class Editor: termui.View:
     func source_cursor(area: termui.Rect) -> termui.Cursor?:
         if self.model.focus != focus.Focus.editor or area.is_empty():
             return none
-        let line = document.line_of(self.model.content, self.model.cursor)
-        let total = document.count_lines(self.model.content)
-        let top = termui.visible_top(self.model.scroll, total, line, area.rows)
-        let column = document.column_of(self.model.content, self.model.cursor)
+        let doc = self.model.document()
+        let line = doc.line_of(doc.cursor)
+        let total = doc.count_lines()
+        let top = termui.visible_top(doc.scroll, total, line, area.rows)
+        let column = doc.column_of(doc.cursor)
         return termui.Cursor(
             row = area.row + clamp(line - top, 0, max(area.rows - 1, 0)),
             column = clamp(area.column + gutter_width + column, area.column, max(area.column + area.columns - 1, area.column)),
@@ -70,21 +72,22 @@ class Editor: termui.View:
                 self.model.key(keymap.Intent.insert_text, typed, area.rows)
                 return termui.Response.handled
             mouse(pointer):
+                let doc = self.model.document()
                 if pointer.kind == termui.Pointer.wheel:
                     self.model.focus = focus.Focus.editor
-                    self.model.scroll = max(self.model.scroll - pointer.wheel, 0)
+                    doc.scroll = max(doc.scroll - pointer.wheel, 0)
                     return termui.Response.handled
                 if pointer.kind != termui.Pointer.press or pointer.button != 0:
                     return termui.Response.ignored
                 self.model.focus = focus.Focus.editor
-                let total = document.count_lines(self.model.content)
-                let cursor_line = document.line_of(self.model.content, self.model.cursor)
-                let top = termui.visible_top(self.model.scroll, total, cursor_line, area.rows)
+                let total = doc.count_lines()
+                let cursor_line = doc.line_of(doc.cursor)
+                let top = termui.visible_top(doc.scroll, total, cursor_line, area.rows)
                 let line = top + pointer.row - area.row
                 if line < total:
-                    let start = document.line_at(self.model.content, line)
+                    let start = doc.line_at(line)
                     let wanted = max(pointer.column - area.column - gutter_width, 0)
-                    self.model.cursor = document.at_column(self.model.content, start, wanted)
+                    doc.cursor = doc.at_column(start, wanted)
                     self.model.coalescing = false
                 return termui.Response.handled
             else:
@@ -96,12 +99,12 @@ class Editor: termui.View:
     # draws or routes through them; the composition is per call, the
     # component and its state are retained.
     private func composed() -> termui.View:
-        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        let doc = self.model.document()
         let rows = new termui.Rows(
-            document.count_lines(self.model.content),
+            doc.count_lines(),
             self.source_line,
-            top = self.model.scroll,
-            anchor = cursor_line,
+            top = doc.scroll,
+            anchor = doc.line_of(doc.cursor),
         )
         return new termui.CursorHost(
             new termui.EventHost(rows, self.source_event),
