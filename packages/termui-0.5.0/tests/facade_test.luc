@@ -1,0 +1,43 @@
+import termui
+from termui import VStack, Fill, EventHost
+
+# A retained component: constructed once, drawing its current state
+# each frame and updating that state in place when routed an event.
+class Ticker: termui.View:
+    value: i64
+
+    init(value: i64):
+        self.value = value
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        surface.write(area, 0, 0, "count " + str(self.value), termui.Style())
+        return none
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if pressed == termui.Key.enter:
+                    self.value += 1
+                    return termui.Response.handled
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+func test_a_retained_layout_updates_in_place():
+    var stack = new VStack()
+    stack.add(new Fill("."))
+    stack.add(new Ticker(41), size = termui.Length.fixed(cells = 1))
+
+    var app = new termui.Application()
+    app.set_layout(stack)
+
+    let first = termui.snapshot(stack, 3, 10)
+    assert(first.line(2) == "count 41  ")
+    let response = termui.route(
+        stack,
+        termui.Event.key(pressed = termui.Key.enter),
+        termui.Rect(rows = 3, columns = 10),
+    )
+    assert(response == termui.Response.handled)
+    let second = termui.snapshot(stack, 3, 10)
+    assert(second.line(2) == "count 42  ")

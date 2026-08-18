@@ -1,0 +1,121 @@
+# The editor's complete retained screen, rendered without a terminal.
+
+import std.strings
+import termui
+from termui import VStack, HStack
+import document
+import focus
+import history
+import model
+from filelist import FileList
+from source import Editor, gutter_width
+from console import Console
+from statusbar import StatusBar
+from workbench import Workbench
+
+func model_of() -> model.Model:
+    var buffers = new list[document.Buffer]
+    buffers.append(document.Buffer(path = "sample.luc"))
+    var histories = new list[history.Stacks]
+    histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
+    let shared = new model.Model(
+        buffers = buffers,
+        histories = histories,
+        names = ["a.luc", "b.luc"],
+        search_matches = new list[i64],
+        path = "sample.luc",
+        content = "func main():\n    let x = 42",
+    )
+    shared.files.count = len(shared.names)
+    shared.output = "build ok"
+    return shared
+
+# The entry's composition, handed back with the parts a test drives.
+func built(shared: model.Model) -> (Workbench, Editor, FileList):
+    var across = new HStack()
+    let files = new FileList(shared)
+    let pane = new Editor(shared)
+    across.add(files, size = termui.Length.fixed(cells = 0))
+    across.add(pane, size = termui.Length.grow(weight = 1, minimum = gutter_width + 1))
+    var screen = new VStack()
+    screen.add(across, size = termui.Length.grow(weight = 1, minimum = 1))
+    screen.add(new Console(shared), size = termui.Length.fixed(cells = 0))
+    screen.add(new StatusBar(shared), size = termui.Length.fixed(cells = 1))
+    return new Workbench(shared, across, screen), pane, files
+
+func test_the_retained_tree_describes_source_status_and_cursor():
+    let bench, pane, files = built(model_of())
+    let screen = termui.snapshot(bench, 12, 60)
+    assert(strings.contains(screen.line(0), "1 func main():"))
+    assert(strings.contains(screen.line(1), "2     let x = 42"))
+    assert(strings.contains(screen.line(11), "sample.luc"))
+    assert(strings.contains(screen.line(11), "[editor]"))
+    let cursor = screen.cursor else termui.Cursor()
+    assert(cursor.row == 0)
+    assert(cursor.column == 5)
+
+func test_hidden_panes_are_zero_slots_the_subscription_reopens():
+    let shared = model_of()
+    let bench, pane, files = built(shared)
+    shared.file_pane = true
+    shared.output_pane = true
+    let screen = termui.snapshot(bench, 18, 78)
+    assert(strings.contains(screen.line(0), "files"))
+    assert(strings.contains(screen.line(0), "func main():"))
+    assert(strings.contains(screen.line(12), "output"))
+    assert(strings.contains(screen.line(13), "build ok"))
+    assert(strings.contains(screen.line(17), "sample.luc"))
+
+func test_source_events_update_the_model_and_the_next_frame():
+    let shared = model_of()
+    let bench, pane, files = built(shared)
+    shared.cursor = len(shared.content)
+    let response = pane.source_event(
+        termui.Event.text(typed = "!"),
+        termui.Rect(rows = 10, columns = 60),
+    )
+    assert(response == termui.Response.handled)
+    assert(strings.ends_with(shared.content, "!"))
+    let screen = termui.snapshot(bench, 12, 60)
+    assert(strings.contains(screen.line(1), "let x = 42!"))
+
+func test_global_commands_and_search_are_reflected_in_the_frame():
+    let shared = model_of()
+    let bench, pane, files = built(shared)
+    assert(bench.dispatch(
+        termui.Event.key(pressed = termui.Key.ctrl_f),
+        termui.Rect(rows = 12, columns = 60),
+    ) == termui.Response.handled)
+    assert(shared.focus == focus.Focus.search)
+    pane.source_event(
+        termui.Event.text(typed = "let"),
+        termui.Rect(rows = 11, columns = 60),
+    )
+    let screen = termui.snapshot(bench, 12, 60)
+    assert(strings.contains(screen.line(11), "find: let"))
+    assert(strings.contains(screen.line(11), "1 of 1"))
+
+func test_divider_drag_crosses_panes_through_the_model():
+    let shared = model_of()
+    let bench, pane, files = built(shared)
+    shared.file_pane = true
+    let pane_area = termui.Rect(rows = 11, columns = 20)
+    assert(files.frame_event(
+        termui.Event.mouse(pointer = termui.Mouse(
+            kind = termui.Pointer.press,
+            row = 3,
+            column = 19,
+            button = 0,
+        )),
+        pane_area,
+    ) == termui.Response.handled)
+    bench.dispatch(
+        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.drag, row = 3, column = 13)),
+        termui.Rect(rows = 12, columns = 60),
+    )
+    assert(shared.files_width == 14)
+    bench.dispatch(
+        termui.Event.mouse(pointer = termui.Mouse(kind = termui.Pointer.release, row = 3, column = 13)),
+        termui.Rect(rows = 12, columns = 60),
+    )
+    assert(shared.dragging == model.Drag.idle)

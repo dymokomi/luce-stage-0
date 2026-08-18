@@ -1,0 +1,60 @@
+# The application: a retained layout and the sole terminal lifecycle
+# loop that drives it.
+#
+# Build the tree once, hand it to `set_layout`, and `start()` owns the
+# terminal until input closes or a component answers `quit`.  The loop
+# redraws the retained tree after every event — the cell diff makes an
+# unchanged frame cheap — so components read current state in `draw`
+# and update their own state in `dispatch` or through their model
+# subscriptions; nothing is rebuilt.
+
+import std.term
+import model
+import input
+import canvas
+import view
+
+class Application:
+    private root: view.View?
+
+    init():
+        self.root = none
+
+    # The retained tree.  Calling it again replaces the layout whole,
+    # which is the retained model's one honest reshape.
+    func set_layout(child: view.View):
+        self.root = child
+
+    # Run until input closes or a routed event answers `quit`.  The
+    # same tree is drawn and then receives the event, so pointer
+    # geometry can never be newer or older than what the person saw.
+    func start():
+        let root = self.root
+        if root == none:
+            return
+        let screen = new canvas.Screen(term.rows(), term.cols())
+        let events = new input.Stream()
+        while true:
+            screen.resize(term.rows(), term.cols())
+            let surface = screen.surface
+            surface.clear()
+            let requested = root.draw(surface, surface.area())
+            screen.present()
+            var cursor = model.Cursor()
+            if requested != none:
+                cursor = requested
+            term.move(
+                clamp(cursor.row, 0, max(surface.rows - 1, 0)),
+                clamp(cursor.column, 0, max(surface.columns - 1, 0)),
+            )
+            term.flush()
+
+            let event = events.next()
+            match event:
+                closed:
+                    return
+                resize:
+                    continue
+                else:
+                    if view.route(root, event, surface.area()) == model.Response.quit:
+                        return

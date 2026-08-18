@@ -193,8 +193,9 @@ func main(args: list[str]):
 entirely in Luce: movement, editing, scrolling, line numbers, panes, a
 status bar, and per-line Luce syntax highlighting.  It is the first
 Luce program to carry a **dependency** — it draws through the `termui`
-package (`packages/termui-0.4.0`, docs/TERMUI.md). The editor describes its
-screen with `Panel`, `HStack`, `VStack`, `ZStack`, `Rows`, and `Label`;
+package (`packages/termui-0.5.0`, docs/TERMUI.md). The editor is a
+retained tree of components — `FileList`, `Editor`, `Console`,
+`StatusBar`, and a layout-reshaping `Workbench` — sharing one model;
 termui owns the loop, terminal lifecycle, layout, input routing, cursor, and
 cell diff. `./build.sh` installs it
 twice: `build/examples/editor/editor.lc`, which `loom run` starts like

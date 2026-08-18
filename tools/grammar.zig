@@ -1491,10 +1491,11 @@ fn inList(list: []const []const u8, word: []const u8) bool {
 /// declarative application and the file browser. Reached by names `build.zig` binds,
 /// because they sit above this module's root and `@embedFile` does not
 /// leave a module.
-const corpus = @embedFile("state.luc") ++ "\n" ++
+const corpus = @embedFile("model.luc") ++ "\n" ++
     @embedFile("highlight.luc") ++ "\n" ++
     @embedFile("document.luc") ++ "\n" ++
-    @embedFile("application.luc") ++ "\n" ++
+    @embedFile("workbench.luc") ++ "\n" ++
+    @embedFile("source.luc") ++ "\n" ++
     @embedFile("browser.luc");
 
 test "every language word the editor uses is coloured" {

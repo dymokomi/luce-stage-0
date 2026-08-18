@@ -1,0 +1,83 @@
+# The status line: path, position, messages, the search prompt, and
+# the hint strip.  It answers a cursor only while the find bar is open.
+
+import std.strings
+import termui
+import document
+import focus
+import model
+import theme
+
+func focus_label(where: focus.Focus) -> str:
+    match where:
+        editor:
+            return "  [editor]"
+        files:
+            return "  [files]"
+        output:
+            return "  [output]"
+        search:
+            return "  [search]"
+
+class StatusBar: termui.View:
+    private model: model.Model
+
+    init(shared: model.Model):
+        self.model = shared
+
+    func status_text() -> str:
+        if self.model.focus == focus.Focus.search:
+            var prompt = f" find: {self.model.search_query}"
+            if len(self.model.search_matches) > 0:
+                prompt += f"    {self.model.search_current + 1} of {len(self.model.search_matches)}"
+            elif self.model.search_query != "":
+                prompt += "    no matches"
+            return prompt + "    Enter next   Esc close"
+        let line = document.line_of(self.model.content, self.model.cursor)
+        let column = document.column_of(self.model.content, self.model.cursor)
+        var flag = ""
+        if self.model.dirty:
+            flag = " +"
+        var left = f" {self.model.path}{flag}  {line + 1}:{column + 1}"
+        if len(self.model.message) > 0:
+            left += f"  — {self.model.message}"
+        return left + focus_label(self.model.focus)
+
+    func status_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.search or area.is_empty():
+            return none
+        return termui.Cursor(
+            row = area.row,
+            column = min(area.column + 7 + self.model.search_query.width(), area.column + area.columns - 1),
+        )
+
+    # --- the View contract ------------------------------------------
+
+    private func composed() -> termui.View:
+        let line = self.status_text()
+        let background = new termui.Fill(" ", theme.palette.status)
+        if self.model.focus == focus.Focus.search:
+            var prompt = new termui.ZStack()
+            prompt.add(background)
+            prompt.add(new termui.Label(line, theme.palette.status))
+            return new termui.CursorHost(prompt, self.status_cursor)
+        let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
+        var pieces = new termui.HStack()
+        pieces.add(
+            new termui.Label(line, theme.palette.status),
+            size = termui.Length.grow(weight = 1, minimum = line.width()),
+        )
+        pieces.add(
+            new termui.Label(hint, theme.palette.status),
+            size = termui.Length.preferred(low = 0, ideal = hint.width(), high = hint.width()),
+        )
+        var layered = new termui.ZStack()
+        layered.add(background)
+        layered.add(pieces)
+        return new termui.CursorHost(layered, self.status_cursor)
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        return self.composed().draw(surface, area)
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        return termui.Response.ignored

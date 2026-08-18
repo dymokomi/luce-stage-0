@@ -1,0 +1,108 @@
+# The workbench: the one component above the panes.  It owns the
+# global keys, the divider drags, and — through its model
+# subscription — the retained layout: when a toggle or a drag changes
+# what should be visible, the workbench resizes the stacks' slots and
+# the next frame draws the new arrangement.
+
+import std.os
+import termui
+import keymap
+import model
+
+func is_global(intent: keymap.Intent) -> bool:
+    match intent:
+        save:
+            return true
+        build:
+            return true
+        toggle_files:
+            return true
+        toggle_output:
+            return true
+        next_pane:
+            return true
+        find:
+            return true
+        undo:
+            return true
+        redo:
+            return true
+        escape:
+            return true
+        quit:
+            return true
+        else:
+            return false
+
+class Workbench: termui.View:
+    private model: model.Model
+    private across: termui.HStack
+    private screen: termui.VStack
+    private subscribed: bool
+
+    init(shared: model.Model, across: termui.HStack, screen: termui.VStack):
+        self.model = shared
+        self.across = across
+        self.screen = screen
+        self.subscribed = false
+
+    # A component may not capture itself while it is being built, so
+    # the subscription lands on first use instead of in init.
+    private func attach():
+        if self.subscribed:
+            return
+        self.subscribed = true
+        let watcher: func() = [weak self] func():
+            let live = self
+            if live != none:
+                live.apply_layout()
+        self.model.subscribe(watcher)
+        self.apply_layout()
+
+    # The retained tree's shape, derived from the model: a hidden pane
+    # is a zero-cell slot, a dragged divider is a preferred size.
+    func apply_layout():
+        var files_size = termui.Length.fixed(cells = 0)
+        if self.model.file_pane:
+            files_size = termui.Length.ratio(low = 8, high = 24, percent = 25)
+            if self.model.files_width > 0:
+                files_size = termui.Length.preferred(low = 8, ideal = self.model.files_width, high = 240)
+        self.across.resize(0, files_size)
+        var output_size = termui.Length.fixed(cells = 0)
+        if self.model.output_pane:
+            output_size = termui.Length.ratio(low = 3, high = 8, percent = 33)
+            if self.model.output_height > 0:
+                output_size = termui.Length.preferred(low = 3, ideal = self.model.output_height, high = 80)
+        self.screen.resize(1, output_size)
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        self.attach()
+        return self.screen.draw(surface, area)
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        self.attach()
+        self.model.autosave(os.clock_ms())
+        match event:
+            key(pressed):
+                let intent = keymap.intent_of(pressed)
+                if is_global(intent):
+                    self.model.key(intent, "", max(area.rows - 1, 0))
+                    if self.model.quit:
+                        return termui.Response.quit
+                    return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.release and self.model.dragging != model.Drag.idle:
+                    self.model.dragging = model.Drag.idle
+                    return termui.Response.handled
+                if pointer.kind == termui.Pointer.drag:
+                    if self.model.dragging == model.Drag.files:
+                        self.model.files_width = max(pointer.column - area.column + 1, 0)
+                        self.apply_layout()
+                        return termui.Response.handled
+                    if self.model.dragging == model.Drag.output:
+                        self.model.output_height = max(area.row + area.rows - 1 - pointer.row, 0)
+                        self.apply_layout()
+                        return termui.Response.handled
+            else:
+                return termui.route(self.screen, event, area)
+        return termui.route(self.screen, event, area)

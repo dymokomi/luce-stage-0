@@ -112,7 +112,7 @@ expect_failure shell-sensitive-prefix 'contains shell-sensitive characters' "$fu
 archive_base="$work/archive"
 archive_tree="$archive_base/luce-$version"
 archive_name="luce-${version}-linux-x86_64.tar.gz"
-mkdir -p "$archive_tree/bin" "$archive_tree/lib/termui-0.4.0" \
+mkdir -p "$archive_tree/bin" "$archive_tree/lib/termui-0.5.0" \
     "$archive_tree/share/licenses/third-party" \
     "$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0/syntaxes" \
     "$archive_tree/share/luce"
@@ -138,7 +138,7 @@ for notice in THIRD_PARTY_NOTICES.md LLVM-LICENSE.txt ZIG-LICENSE.txt \
 done
 for package_file in luce.yaml termui.luc model.luc input.luc layout.luc \
     canvas.luc view.luc components.luc runtime.luc; do
-    printf '%s\n' fixture >"$archive_tree/lib/termui-0.4.0/$package_file"
+    printf '%s\n' fixture >"$archive_tree/lib/termui-0.5.0/$package_file"
 done
 extension_tree="$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0"
 printf '%s\n' '{}' >"$extension_tree/package.json"

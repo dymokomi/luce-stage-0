@@ -5,7 +5,7 @@ owns its state and describes the screen it wants. The library owns terminal
 sizing, the application loop, layout, drawing, input routing, cursor placement,
 cell diffing, flushing, resize handling, and shutdown.
 
-The current package is `termui` 0.4.0 in `packages/termui-0.4.0/`. Applications
+The current package is `termui` 0.5.0 in `packages/termui-0.5.0/`. Applications
 normally import only its facade:
 
 ```text
@@ -13,30 +13,36 @@ import termui
 ```
 
 There is no renderer protocol for an application to coordinate and no public
-screen to clear or present. The entry point is one call:
+screen to clear or present. The entry point is three calls:
 
 ```text
-termui.run(app)
+var app = new termui.Application()
+app.set_layout(root)
+app.start()
 ```
 
 ## A complete application
 
-An application is a class conforming to `termui.Application`. Its `body`
-method returns a new view tree for the current state. Components are classes;
-`new` builds one, `add` composes children, and hosts wrap behavior around
-content.
+The tree is retained: components are constructed once — typically with
+the model they observe — composed with `add`, and handed to
+`Application.set_layout`. `start()` owns the terminal until input
+closes or a routed event answers `quit`.
 
 ```text
 import termui
-from termui import VStack, Label, EventHost
+from termui import VStack, Label
 
-class Counter: termui.Application:
+class Counter: termui.View:
     count: i64
 
     init():
         self.count = 0
 
-    func pressed(event: termui.Event, area: termui.Rect) -> termui.Response:
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        surface.write(area, 0, 0, "Count: " + str(self.count), termui.Style())
+        return none
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
         match event:
             key(pressed):
                 if pressed == termui.Key.enter:
@@ -48,22 +54,23 @@ class Counter: termui.Application:
                 return termui.Response.ignored
         return termui.Response.ignored
 
-    func body() -> termui.View:
-        var stack = new VStack
-        stack.add(new Label("Count: " + str(self.count)))
-        stack.add(
-            new Label("Enter adds one · Ctrl-Q quits"),
-            size = termui.Length.fixed(cells = 1),
-        )
-        return new termui.Panel("counter", new EventHost(stack, self.pressed))
-
 func main():
-    termui.run(new Counter())
+    var stack = new VStack
+    stack.add(new Counter())
+    stack.add(
+        new Label("Enter adds one · Ctrl-Q quits"),
+        size = termui.Length.fixed(cells = 1),
+    )
+    var app = new termui.Application()
+    app.set_layout(new termui.Panel("counter", stack))
+    app.start()
 ```
 
-The program contains no loop. `run` asks for `body`, draws it, reads one event,
-routes that event through the tree that was just drawn, and asks for the next
-body after state changes.
+The program contains no loop and rebuilds nothing. `start` draws the
+retained tree, reads one event, routes it through the same tree the
+person saw, and draws again: components read current state in `draw`
+and update it in `dispatch`, and the cell diff keeps an unchanged
+frame cheap.
 
 ## The public model
 
@@ -73,7 +80,7 @@ operations.
 
 | Name | Purpose |
 |---|---|
-| `Application` | one requirement: `body() -> View` |
+| `Application` | the retained root: `set_layout(child)` and `start()` |
 | `View` | the component contract: `draw(surface, area) -> Cursor?` and `dispatch(event, area) -> Response` |
 | `Surface` | the cell canvas `draw` receives: `write`, `fill`, `put`, `stroke`, `cell_at`, `snapshot` |
 | `Label`, `StyledText` | plain or span-styled text |
@@ -87,7 +94,6 @@ operations.
 | `Response` | `ignored`, `handled`, or `quit` |
 | `Style`, `Color`, `Span`, `Line`, `Edges` | presentation values |
 | `Rect`, `Cursor` | assigned geometry and cursor requests |
-| `run` | the complete terminal lifecycle |
 | `route` | the one door a container dispatches a child through |
 | `snapshot` | host-free rendering for tests and previews |
 | `visible_top` | the exact scroll window `Rows` renders, for callbacks |
@@ -95,28 +101,43 @@ operations.
 Component names are capitalized because they describe UI nodes. Operations and
 small helpers remain lowercase.
 
-## Values and identity
+## Values, identity, and the model
 
 The distinction is deliberate:
 
-- an application is a class because its callbacks share mutable identity;
-- components are classes because a tree node built in `body()` is handed
-  around by reference while it is composed — `add` mutates the stack it was
-  called on;
-- the internal `Surface` and `Screen` are classes because they own changing
-  runtime state; and
+- components are classes because they are constructed once and live for
+  the run: their fields are the pane-local state a rebuild used to
+  destroy;
+- the shared model a program hands its components is a class the
+  components hold strongly — app to layout to components to model is
+  the one ownership line;
+- the internal `Surface` and `Screen` are classes because they own
+  changing runtime state; and
 - `Rect`, `Style`, `Line`, `Length`, `Event`, and `Snapshot` are values
   because they describe or observe one frame.
 
-`body` should be cheap and effect-free. Read current state and build the tree
-there. Saving, opening files, starting work, and other effects belong in event
-callbacks. A host holds a bound class method; ARC retains that receiver for
-the life of the frame.
+**The model never holds a component strongly.** ARC collects no cycles,
+and component → model → component is one. A component that wants to
+hear about model changes subscribes with a `[weak self]` closure — the
+zeroing capture is the non-owning back edge — and it does so on first
+use, never in `init`: a class cannot capture itself before its
+initialization finishes.
 
-**Build components inside `body()`; do not store components in application
-fields.** A stored `EventHost` holding a bound method of the same application
-is a strong cycle ARC will not collect. The rebuild-each-frame protocol makes
-storing pointless anyway: the tree the user sees is always this frame's.
+```text
+private func attach():
+    if self.subscribed:
+        return
+    self.subscribed = true
+    let watcher: func() = [weak self] func():
+        let live = self
+        if live != none:
+            live.react()
+    self.model.subscribe(watcher)
+```
+
+The model's side is a `list[(func())?]` of watchers and a `notify()`
+its compound mutations call. Watchers update component-internal state;
+the frame that follows reads the result.
 
 ## Writing a component
 
@@ -159,7 +180,10 @@ knowing the other exists.
 
 `HStack` lays children left to right, `VStack` top to bottom. `ZStack` draws
 in list order, so the last child is visually on top. A child enters with
-`add(child, size = length)`; omitting the size means grow.
+`add(child, size = length)`; omitting the size means grow. A retained
+layout reshapes with `resize(index, size)` — a drag hands a pane its
+new `Length`, and a hidden pane is `fixed(cells = 0)`: zero cells draw
+nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
 var across = new termui.HStack(spacing = 1)
@@ -244,7 +268,7 @@ func respond(event: termui.Event, area: termui.Rect) -> termui.Response
 Responses mean:
 
 - `ignored`: continue routing;
-- `handled`: stop routing and rebuild from updated state; and
+- `handled`: stop routing; the next frame draws the updated state; and
 - `quit`: end the application cleanly.
 
 Routing is deterministic. A host sees an event before its content. Pointer
@@ -275,7 +299,7 @@ layout arithmetic.
 It performs no host IO:
 
 ```text
-let frame = termui.snapshot(app.body(), 12, 60)
+let frame = termui.snapshot(root, 12, 60)
 assert(frame.line(0) == "┌ counter ─────────────────────────────────────────────────┐")
 let cursor = frame.cursor else termui.Cursor()
 assert(cursor.row == 1)
@@ -287,17 +311,15 @@ frames cannot change an earlier assertion.
 
 ## The hidden lifecycle
 
-For each event, `run` performs one fixed protocol:
+For each event, `start` performs one fixed protocol:
 
 1. read and normalize terminal dimensions;
 2. resize and clear the next cell buffer;
-3. ask `Application.body()` for a tree;
-4. draw the tree through its own `draw`, collecting its cursor;
-5. diff against the last committed cells, write changed style runs, move the
+3. draw the retained tree through its own `draw`, collecting its cursor;
+4. diff against the last committed cells, write changed style runs, move the
    cursor, and flush once;
-6. snapshot one host event;
-7. route it through the same tree and rectangles the user saw; and
-8. release the tree before rebuilding from current state.
+5. snapshot one host event; and
+6. route it through the same tree and rectangles the user saw.
 
 Keeping the visible tree for dispatch prevents pointer events from using newer
 geometry than the screen. Keeping the entire protocol private prevents partial
@@ -321,17 +343,20 @@ runtime.luc     Application and the sole loop
 These are implementation knowledge boundaries, not eight APIs for an
 application to orchestrate. Normal application code imports `termui` only.
 
-The example editor is the end-to-end consumer. Its `App.body()` composes
-`Panel`, `HStack`, `VStack`, `ZStack`, `Rows`, and `Label` behind `EventHost`
-and `CursorHost` wrappers; its entry point is argument validation followed by
-`termui.run`. Snapshot tests cover its screen, and eight scripted sessions run
-the complete hidden loop on both Luce engines with leak checking.
+The example editor is the end-to-end consumer. It composes retained
+`FileList`, `Editor`, `Console`, and `StatusBar` components over one
+shared model, with a `Workbench` reshaping the stacks through its
+model subscription; its entry point is argument validation followed by
+`set_layout` and `start`. Snapshot tests cover its screen, and eight
+scripted sessions run the complete hidden loop on both Luce engines
+with leak checking.
 
 ## Current limits
 
-The package deliberately has no retained mutable widget tree, result-builder
-syntax, global environment, global theme, focus registry, scrollbar, or
-grapheme/East-Asian-width engine. Applications keep focus and domain policy in
+The package deliberately has no invalidation or damage tracking (every
+event redraws the retained tree and the cell diff pays for it), no
+result-builder syntax, global environment, global theme, focus
+registry, scrollbar, or grapheme/East-Asian-width engine. Applications keep focus and domain policy in
 their own state. The `View` interface is the extension point: a new need is a
 new conformer in the application first, and a shipped component only when a
 real consumer proves the shape.

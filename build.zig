@@ -5,14 +5,14 @@ const test_suites = @import("tools/test_suites.zig");
 /// termui's modules, entry module first (docs/TERMUI.md).
 /// The public facade is small; model, input, layout, canvas and view form the
 /// hidden declarative engine, and runtime owns the terminal loop.
-const termui_version = "0.4.0";
+const termui_version = "0.5.0";
 const termui_modules = [_][]const u8{ "termui", "model", "input", "layout", "canvas", "view", "components", "runtime" };
 
 /// The editor's own modules, its root (`editor`) first.  The specs
 /// compile the editor from these, and both its compile and its test run
 /// name them as inputs so editing one re-runs what depends on it.
-const editor_modules = [_][]const u8{ "editor", "application", "focus", "keymap", "document", "history", "search", "highlight", "theme", "browser", "console", "session", "state" };
-const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "state", "application" };
+const editor_modules = [_][]const u8{ "editor", "workbench", "filelist", "source", "console", "statusbar", "model", "focus", "keymap", "document", "history", "search", "highlight", "theme", "browser", "shell", "session" };
+const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "model", "workbench" };
 
 // LuciaOS v2 builds two executables from one language module:
 //

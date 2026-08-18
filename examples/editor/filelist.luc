@@ -1,0 +1,113 @@
+# The file pane: the retained component that lists the directory,
+# opens rows, and starts the divider drag on its own right border.
+
+import termui
+import focus
+import keymap
+import model
+import theme
+
+class FileList: termui.View:
+    private model: model.Model
+
+    init(shared: model.Model):
+        self.model = shared
+
+    # --- data provider ----------------------------------------------
+
+    func file_line(index: i64) -> termui.Line:
+        return termui.plain(self.model.name_at(index), theme.palette.plain)
+
+    # --- cursor projection ------------------------------------------
+
+    func file_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.files or area.is_empty():
+            return none
+        let top = termui.visible_top(
+            self.model.files.top,
+            len(self.model.names),
+            self.model.files.selected,
+            area.rows,
+        )
+        return termui.Cursor(
+            row = area.row + clamp(self.model.files.selected - top, 0, max(area.rows - 1, 0)),
+            column = area.column,
+        )
+
+    # --- events ------------------------------------------------------
+
+    func frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.column == area.column + area.columns - 1:
+                    self.model.dragging = model.Drag.files
+                    return termui.Response.handled
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+    func file_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.files:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                self.model.adjust_files(area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.files
+                    var files = self.model.files
+                    files.move_by(-pointer.wheel)
+                    self.model.files = files
+                    self.model.adjust_files(area.rows)
+                    return termui.Response.handled
+                if pointer.kind != termui.Pointer.press or pointer.button != 0:
+                    return termui.Response.ignored
+                self.model.focus = focus.Focus.files
+                let top = termui.visible_top(
+                    self.model.files.top,
+                    len(self.model.names),
+                    self.model.files.selected,
+                    area.rows,
+                )
+                let index = top + pointer.row - area.row
+                if index >= 0 and index < len(self.model.names):
+                    self.model.files.selected = index
+                    self.model.open_row(index)
+                    self.model.focus = focus.Focus.files
+                return termui.Response.handled
+            else:
+                return termui.Response.ignored
+
+    # --- the View contract ------------------------------------------
+
+    private func composed() -> termui.View:
+        let rows = new termui.Rows(
+            len(self.model.names),
+            self.file_line,
+            top = self.model.files.top,
+            anchor = self.model.files.selected,
+            selected = self.model.files.selected,
+            selected_style = theme.palette.selected,
+        )
+        let listing = new termui.CursorHost(
+            new termui.EventHost(rows, self.file_event),
+            self.file_cursor,
+        )
+        let framed = new termui.Panel(
+            "files",
+            listing,
+            style = theme.pane_style(self.model.focus == focus.Focus.files),
+            edges = termui.Edges(bottom = false),
+        )
+        return new termui.EventHost(framed, self.frame_event)
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        return self.composed().draw(surface, area)
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        return termui.route(self.composed(), event, area)

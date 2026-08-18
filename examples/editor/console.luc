@@ -1,26 +1,90 @@
-# Build and run the current file, and hold the output.
-#
-# The command is built here so the quoting rule lives in one place; the
-# run is a single shell call whose whole output — success or failure —
-# is the text the output pane shows.
+# The output pane: the retained component that shows build output and
+# starts the divider drag on its own top border.
 
-import std.os
-import std.strings
+import termui
+import document
+import focus
+import keymap
+import model
+import theme
 
-# One shell word, including paths with spaces or shell punctuation.
-func shell_quote(value: str) -> str:
-    return "'" + strings.replace(value, "'", "'\\''") + "'"
+class Console: termui.View:
+    private model: model.Model
 
-# Compile `path` to a sibling executable and run it, so a person sees
-# both the compiler's diagnostics and the program's output in one pass.
-func build_command(path: str) -> str:
-    let output = path + ".run"
-    return "luce build " + shell_quote(path) + " --emit=exe -o " + shell_quote(output) + " && " + shell_quote(output)
+    init(shared: model.Model):
+        self.model = shared
 
-# Run a command and answer its combined output, or the failure message
-# if the shell service itself refused.
-func run(command: str) -> str:
-    var output = ""
-    output = os.run(command) catch reason:
-        return reason
-    return output
+    # --- data provider ----------------------------------------------
+
+    func output_line(index: i64) -> termui.Line:
+        let start = document.line_at(self.model.output, index)
+        let finish = document.line_end(self.model.output, start)
+        return termui.plain(self.model.output[start:finish], theme.palette.plain)
+
+    # --- cursor projection ------------------------------------------
+
+    func output_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.output or area.is_empty():
+            return none
+        return termui.Cursor(row = area.row, column = area.column)
+
+    # --- events ------------------------------------------------------
+
+    func frame_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.press and pointer.button == 0 and pointer.row == area.row:
+                    self.model.dragging = model.Drag.output
+                    return termui.Response.handled
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+    func output_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.output:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.output
+                    self.model.output_scroll = max(self.model.output_scroll - pointer.wheel, 0)
+                    return termui.Response.handled
+                if pointer.kind == termui.Pointer.press and pointer.button == 0:
+                    self.model.focus = focus.Focus.output
+                    self.model.output_scroll = max(self.model.output_scroll + pointer.row - area.row, 0)
+                    return termui.Response.handled
+                return termui.Response.ignored
+            else:
+                return termui.Response.ignored
+
+    # --- the View contract ------------------------------------------
+
+    private func composed() -> termui.View:
+        let rows = new termui.Rows(
+            document.count_lines(self.model.output),
+            self.output_line,
+            top = self.model.output_scroll,
+        )
+        let pane = new termui.CursorHost(
+            new termui.EventHost(rows, self.output_event),
+            self.output_cursor,
+        )
+        let framed = new termui.Panel(
+            "output",
+            pane,
+            style = theme.pane_style(self.model.focus == focus.Focus.output),
+            edges = termui.Edges(bottom = false),
+        )
+        return new termui.EventHost(framed, self.frame_event)
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        return self.composed().draw(surface, area)
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        return termui.route(self.composed(), event, area)

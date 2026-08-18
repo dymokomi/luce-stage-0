@@ -5,7 +5,7 @@
 # only through a method's `self` (a free function cannot, docs/
 # OWNERSHIP.md).  What it does *not* own is logic: text arithmetic is
 # `document`, undo is `history`, search is `search`, file listing is
-# `browser`, build is `console`, drafts are `session`.  Each method here
+# `browser`, build is `shell`, drafts are `session`.  Each method here
 # is thin — it calls one of those and stores the answer.
 #
 # The active buffer's fields are cached here for editing; the parked
@@ -18,7 +18,7 @@ import document
 import history
 import search
 import browser
-import console
+import shell
 import session
 import keymap
 import focus
@@ -50,7 +50,16 @@ struct Selection:
     func move_by(steps: i64):
         self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
 
-class Editor:
+# Which divider a pointer is dragging.  Model state rather than a
+# pane's, because the pane that starts a drag (a border press) and the
+# component that applies it (the workbench resizing slots) are
+# different objects sharing only this model.
+enum Drag:
+    idle
+    files
+    output
+
+class Model:
     buffers: list[document.Buffer]
     histories: list[history.Stacks]
     names: list[str]
@@ -75,6 +84,10 @@ class Editor:
     coalescing: bool = false
     quit: bool = false
     focus: focus.Focus = focus.Focus.editor
+    dragging: Drag = Drag.idle
+    files_width: i64 = 0
+    output_height: i64 = 0
+    private watchers: list[(func())?]
 
     init(
         buffers: list[document.Buffer],
@@ -88,6 +101,7 @@ class Editor:
         scroll: i64 = 0,
         dirty: bool = false,
     ):
+        self.watchers = new list[(func())?]
         self.buffers = buffers
         self.histories = histories
         self.names = names
@@ -98,6 +112,22 @@ class Editor:
         self.cursor = cursor
         self.scroll = scroll
         self.dirty = dirty
+
+    # --- subscriptions ------------------------------------------------
+
+    # A component subscribes with a `[weak self]` closure — the model
+    # must never own its watchers, because they own the model — and is
+    # told after every compound change: a routed keystroke, an opened
+    # row, a finished build.  Watchers update their own derived state;
+    # the frame that follows reads the result.
+    func subscribe(watcher: func()):
+        self.watchers.append(watcher)
+
+    private func notify():
+        for held in self.watchers:
+            let watcher = held
+            if watcher != none:
+                watcher()
 
     # --- switching between buffers -----------------------------------
 
@@ -161,6 +191,7 @@ class Editor:
                 self.message = "in " + self.directory
             file(path):
                 self.open_file(path)
+        self.notify()
 
     func open_file(path: str):
         if path == self.path:
@@ -329,7 +360,7 @@ class Editor:
         if self.dirty:
             self.output = "build skipped: " + self.message + "\n"
         else:
-            self.output = console.run(console.build_command(self.path))
+            self.output = shell.run(shell.build_command(self.path))
             self.message = "build/run finished"
         self.output_scroll = 0
         self.output_pane = true
@@ -367,6 +398,10 @@ class Editor:
     # --- the keystroke router ----------------------------------------
 
     func key(intent: keymap.Intent, inserted: str, visible: i64):
+        self.routed(intent, inserted, visible)
+        self.notify()
+
+    private func routed(intent: keymap.Intent, inserted: str, visible: i64):
         if intent == keymap.Intent.quit:
             if self.dirty and not self.quit_pending:
                 self.quit_pending = true
@@ -504,3 +539,28 @@ class Editor:
                 return
             ignored:
                 return
+
+# Build a model from command-line paths.  File and draft loading
+# belongs at this boundary; the components receive the finished model.
+func open(paths: list[str]) -> Model:
+    var buffers = new list[document.Buffer]
+    var histories = new list[history.Stacks]
+    for path in paths:
+        let loaded = session.load(path)
+        buffers.append(loaded.buffer)
+        histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
+        if loaded.recovered:
+            histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
+    let first = buffers[0]
+    return new Model(
+        buffers = buffers,
+        histories = histories,
+        names = new list[str],
+        search_matches = new list[i64],
+        path = first.path,
+        content = first.content,
+        message = first.message,
+        cursor = first.cursor,
+        scroll = first.scroll,
+        dirty = first.dirty,
+    )

@@ -1,0 +1,115 @@
+# The source pane: the retained component that draws the active
+# buffer and routes its keys, text, and pointer to the model.
+
+import std.strings
+import termui
+import document
+import focus
+import highlight
+import keymap
+import model
+import theme
+
+# Luce's lexer steps four columns; the gutter holds a line number and
+# one space inside five cells.
+const gutter_width: i64 = 5
+
+class Editor: termui.View:
+    private model: model.Model
+
+    init(shared: model.Model):
+        self.model = shared
+
+    # --- data provider ----------------------------------------------
+
+    func source_line(index: i64) -> termui.Line:
+        var spans = new list[termui.Span]
+        var gutter_style = theme.palette.gutter
+        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        if index == cursor_line and self.model.focus == focus.Focus.editor:
+            gutter_style = theme.palette.gutter_current
+        spans.append(termui.Span(
+            text = strings.pad_left(str(index + 1), gutter_width - 1) + " ",
+            style = gutter_style,
+        ))
+        let start = document.line_at(self.model.content, index)
+        let finish = document.line_end(self.model.content, start)
+        for token in highlight.tokens(self.model.content, start, finish):
+            spans.append(termui.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
+        return termui.Line(spans = spans)
+
+    # --- cursor projection ------------------------------------------
+
+    func source_cursor(area: termui.Rect) -> termui.Cursor?:
+        if self.model.focus != focus.Focus.editor or area.is_empty():
+            return none
+        let line = document.line_of(self.model.content, self.model.cursor)
+        let total = document.count_lines(self.model.content)
+        let top = termui.visible_top(self.model.scroll, total, line, area.rows)
+        let column = document.column_of(self.model.content, self.model.cursor)
+        return termui.Cursor(
+            row = area.row + clamp(line - top, 0, max(area.rows - 1, 0)),
+            column = clamp(area.column + gutter_width + column, area.column, max(area.column + area.columns - 1, area.column)),
+        )
+
+    # --- events ------------------------------------------------------
+
+    func source_event(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if self.model.focus != focus.Focus.editor and self.model.focus != focus.Focus.search:
+                    return termui.Response.ignored
+                let intent = keymap.intent_of(pressed)
+                if intent == keymap.Intent.ignored:
+                    return termui.Response.ignored
+                self.model.key(intent, "", area.rows)
+                return termui.Response.handled
+            text(typed):
+                if self.model.focus != focus.Focus.editor and self.model.focus != focus.Focus.search:
+                    return termui.Response.ignored
+                self.model.key(keymap.Intent.insert_text, typed, area.rows)
+                return termui.Response.handled
+            mouse(pointer):
+                if pointer.kind == termui.Pointer.wheel:
+                    self.model.focus = focus.Focus.editor
+                    self.model.scroll = max(self.model.scroll - pointer.wheel, 0)
+                    return termui.Response.handled
+                if pointer.kind != termui.Pointer.press or pointer.button != 0:
+                    return termui.Response.ignored
+                self.model.focus = focus.Focus.editor
+                let total = document.count_lines(self.model.content)
+                let cursor_line = document.line_of(self.model.content, self.model.cursor)
+                let top = termui.visible_top(self.model.scroll, total, cursor_line, area.rows)
+                let line = top + pointer.row - area.row
+                if line < total:
+                    let start = document.line_at(self.model.content, line)
+                    let wanted = max(pointer.column - area.column - gutter_width, 0)
+                    self.model.cursor = document.at_column(self.model.content, start, wanted)
+                    self.model.coalescing = false
+                return termui.Response.handled
+            else:
+                return termui.Response.ignored
+
+    # --- the View contract ------------------------------------------
+
+    # The pane composes shipped pieces around its current state and
+    # draws or routes through them; the composition is per call, the
+    # component and its state are retained.
+    private func composed() -> termui.View:
+        let cursor_line = document.line_of(self.model.content, self.model.cursor)
+        let rows = new termui.Rows(
+            document.count_lines(self.model.content),
+            self.source_line,
+            top = self.model.scroll,
+            anchor = cursor_line,
+        )
+        return new termui.CursorHost(
+            new termui.EventHost(rows, self.source_event),
+            self.source_cursor,
+        )
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        return self.composed().draw(surface, area)
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        return termui.route(self.composed(), event, area)

@@ -66,3 +66,11 @@ func style_for(theme: Theme, kind: highlight.TokenKind) -> termui.Style:
             return theme.number
         punct:
             return theme.punct
+
+# The pane-border style for a pane that does or does not hold focus.
+# Here rather than in each component, because every framed pane asks
+# the same question of the same palette.
+func pane_style(active: bool) -> termui.Style:
+    if active:
+        return palette.pane_active
+    return palette.pane_border

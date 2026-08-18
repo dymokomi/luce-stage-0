@@ -1,9 +1,11 @@
 # Declarative terminal applications through one public module.
 #
-# An application supplies `body`; `run` owns terminal sizing, frame buffering,
-# layout, drawing, cursor placement, flushing, input and shutdown.  Components
-# are classes conforming to `View`; a program's own conformers compose with
-# the shipped ones through the same two-method contract.
+# An application builds its layout once — components constructed with
+# whatever model they observe — hands it to `Application.set_layout`,
+# and `start()` owns terminal sizing, frame buffering, drawing, cursor
+# placement, flushing, input and shutdown.  Components are classes
+# conforming to `View`; a program's own conformers compose with the
+# shipped ones through the same two-method contract.
 
 import model
 import input
@@ -57,5 +59,3 @@ func route(child: View, event: Event, area: Rect) -> Response:
 func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
     return view.snapshot(content, rows, columns)
 
-func run(application: Application):
-    app_runtime.run(application)

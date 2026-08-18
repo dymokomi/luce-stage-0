@@ -1,18 +1,18 @@
 # The coordinator, driven through its key router: editing, undo
 # coalescing, and search all exercised end to end without a terminal.
 
-import state
+import model
 import keymap
 import history
 import document
 import focus
 
-func fresh() -> state.Editor:
+func fresh() -> model.Model:
     var buffers = new list[document.Buffer]
     buffers.append(document.Buffer(path = "f.luc"))
     var histories = new list[history.Stacks]
     histories.append(history.Stacks(past = new list[history.Revision], future = new list[history.Revision]))
-    return new state.Editor(
+    return new model.Model(
         buffers = buffers,
         histories = histories,
         names = new list[str],

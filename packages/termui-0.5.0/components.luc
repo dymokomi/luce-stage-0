@@ -63,6 +63,15 @@ class VStack: view.View:
     func add(child: view.View, size: layout.Length? = none):
         self.slots.append(Slot(size = slot_length(size), content = child))
 
+    # Retained layouts reshape by slot: a drag hands a pane its new
+    # Length, and a hidden pane is `fixed(cells = 0)` — zero cells
+    # draw nothing and contain no pointer, so hiding needs no tree
+    # surgery.
+    func resize(index: i64, size: layout.Length):
+        if index < 0 or index >= len(self.slots):
+            return
+        self.slots[index] = Slot(size = size, content = self.slots[index].content)
+
     func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
         let rectangles = layout.column(area, self.spacing, lengths(self.slots))
         var cursor: model.Cursor? = none
@@ -90,6 +99,15 @@ class HStack: view.View:
 
     func add(child: view.View, size: layout.Length? = none):
         self.slots.append(Slot(size = slot_length(size), content = child))
+
+    # Retained layouts reshape by slot: a drag hands a pane its new
+    # Length, and a hidden pane is `fixed(cells = 0)` — zero cells
+    # draw nothing and contain no pointer, so hiding needs no tree
+    # surgery.
+    func resize(index: i64, size: layout.Length):
+        if index < 0 or index >= len(self.slots):
+            return
+        self.slots[index] = Slot(size = size, content = self.slots[index].content)
 
     func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
         let rectangles = layout.row(area, self.spacing, lengths(self.slots))

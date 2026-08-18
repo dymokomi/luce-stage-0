@@ -12,8 +12,8 @@
 //!
 //! The scripts here drive the editor through every key it handles and compare
 //! the whole terminal transcript byte for byte on **both engines**
-//! (`specs/agree.zig`). The program now supplies a declarative `App.body`;
-//! termui owns the loop and routes each event through the tree just drawn.
+//! (`specs/agree.zig`). The program is a retained component tree over one
+//! shared model; termui owns the loop and routes each event through it.
 //!
 //! The first script is deliberately one long one rather than several
 //! short ones: what is under test is a state machine, and the
@@ -36,7 +36,12 @@ const editor = @embedFile("editor.luc");
 /// bare and qualified names because their own imports are bare while the
 /// editor imports only the `termui` facade.
 const editor_files = [_]agree.File{
-    .{ .name = "application", .source = @embedFile("application.luc") },
+    .{ .name = "workbench", .source = @embedFile("workbench.luc") },
+    .{ .name = "filelist", .source = @embedFile("filelist.luc") },
+    .{ .name = "source", .source = @embedFile("source.luc") },
+    .{ .name = "console", .source = @embedFile("console.luc") },
+    .{ .name = "statusbar", .source = @embedFile("statusbar.luc") },
+    .{ .name = "model", .source = @embedFile("model.luc") },
     .{ .name = "focus", .source = @embedFile("focus.luc") },
     .{ .name = "keymap", .source = @embedFile("keymap.luc") },
     .{ .name = "document", .source = @embedFile("document.luc") },
@@ -45,12 +50,11 @@ const editor_files = [_]agree.File{
     .{ .name = "highlight", .source = @embedFile("highlight.luc") },
     .{ .name = "theme", .source = @embedFile("theme.luc") },
     .{ .name = "browser", .source = @embedFile("browser.luc") },
-    .{ .name = "console", .source = @embedFile("console.luc") },
+    .{ .name = "shell", .source = @embedFile("shell.luc") },
     .{ .name = "session", .source = @embedFile("session.luc") },
-    .{ .name = "state", .source = @embedFile("state.luc") },
 } ++ termui_files;
 
-const termui_root = "termui-0.4.0";
+const termui_root = "termui-0.5.0";
 const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
     package("model", @embedFile("termui/model.luc")) ++
     package("input", @embedFile("termui/input.luc")) ++

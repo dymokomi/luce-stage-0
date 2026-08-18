@@ -4,14 +4,36 @@
 #   ^S save   ^B build/run   ^F find   ^Z undo   ^Y redo   ^Q quit
 #   ^E files  ^O output      ^W focus next pane
 #
-# `application.App` describes the screen. TermUI owns the application loop,
-# terminal lifecycle, layout, drawing, input routing and shutdown.
+# The screen is a retained tree: each component is constructed once
+# with the shared model, owns its pane's drawing and behavior, and the
+# workbench reshapes the stacks through its model subscription.
+# termui owns the application loop, terminal lifecycle, layout,
+# drawing, input routing and shutdown.
 
-import application
 import termui
+from termui import VStack, HStack
+import model
+from filelist import FileList
+from source import Editor, gutter_width
+from console import Console
+from statusbar import StatusBar
+from workbench import Workbench
 
 func main(args: list[str]):
     if len(args) == 0:
         print("usage: editor FILE [FILE ...]")
         return
-    termui.run(application.open(args))
+    let shared = model.open(args)
+
+    var across = new HStack()
+    across.add(new FileList(shared), size = termui.Length.fixed(cells = 0))
+    across.add(new Editor(shared), size = termui.Length.grow(weight = 1, minimum = gutter_width + 1))
+
+    var screen = new VStack()
+    screen.add(across, size = termui.Length.grow(weight = 1, minimum = 1))
+    screen.add(new Console(shared), size = termui.Length.fixed(cells = 0))
+    screen.add(new StatusBar(shared), size = termui.Length.fixed(cells = 1))
+
+    var app = new termui.Application()
+    app.set_layout(new Workbench(shared, across, screen))
+    app.start()

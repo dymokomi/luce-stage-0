@@ -6,6 +6,20 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- termui 0.5.0: the tree is retained. `Application` is a class -
+  `new Application()`, `set_layout(root)`, `start()` - and the
+  `body()` interface with its rebuild-each-frame protocol is gone.
+  Components are constructed once (typically with the model they
+  observe), keep their own pane state for the life of the run, and the
+  loop redraws the retained tree after every event; stacks reshape
+  with `resize(index, size)`, and a hidden pane is a zero-cell slot.
+  A component reacts to model changes by subscribing with a
+  `[weak self]` closure - the model holds `list[(func())?]` watchers
+  and never owns its components, which is the cycle discipline ARC
+  demands. The editor decomposes accordingly: a shared `Model` plus
+  retained `FileList`, `Editor`, `Console`, and `StatusBar`
+  components and a `Workbench` that reshapes the layout through its
+  subscription - and its differential sessions replay cell-identical.
 - `match` takes value scrutinees: an integer, `char`, `str`, or `bool`
   dispatches by literal arms - exact values, several per arm behind
   commas (`1, 2:`), and inclusive `low .. high` ranges for the ordered
