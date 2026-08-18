@@ -6,6 +6,22 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- termui 0.4.0: `View` becomes a public interface -
+  `draw(surface, area) -> Cursor?` and `dispatch(event, area) ->
+  Response` - and the shipped components become classes conforming to
+  it, so a program's own component participates in layout, drawing,
+  and routing exactly like a shipped one. Stacks compose with
+  `new VStack(spacing = 0)` and `add(child, size = none)` (absence
+  means grow); behavior and cursor placement wrap as
+  `new EventHost(content, respond)` and `new CursorHost(content,
+  locate)` in place of the `.sized/.on_event/.cursor` modifier chain;
+  `route(child, event, area)` is the one door a container dispatches
+  through, owning the lifecycle and pointer-containment pre-checks.
+  Border merging lives in `Surface.stroke`, so any component's
+  borders meet any other's with the right junction. The public `Item`
+  struct, the view union, and the constructor functions are gone; the
+  rebuild-each-frame protocol and `snapshot` testing are unchanged,
+  and the editor replays its differential sessions cell-identical.
 - The terminal moves into its own module: `std.term` is now the real
   terminal - frame drawing (`rows`/`cols`, `clear`/`move`/`style`/
   `write`/`flush`), typed input, and the border glyphs with

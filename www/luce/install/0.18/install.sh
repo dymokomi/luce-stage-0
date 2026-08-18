@@ -339,7 +339,7 @@ if [ "$system" = Linux ]; then
     done
 fi
 termui_source="$release/lib/termui-$termui_version"
-for package_file in luce.yaml termui.luc model.luc input.luc layout.luc canvas.luc view.luc runtime.luc; do
+for package_file in luce.yaml termui.luc model.luc input.luc layout.luc canvas.luc view.luc components.luc runtime.luc; do
     if [ ! -f "$termui_source/$package_file" ]; then
         echo "luce: release archive is missing termui $termui_version ($package_file)" >&2
         exit 1

@@ -19,10 +19,13 @@ packages:
   termui: 0.4.0
 ```
 
-Then define a class that conforms to `termui.Application`:
+Then define a class that conforms to `termui.Application`. Components are
+classes: `new` builds one, `add` composes children into a stack, and hosts
+wrap behavior around content.
 
 ```text
 import termui
+from termui import VStack, Label, EventHost
 
 class Counter: termui.Application:
     count: i64
@@ -43,15 +46,13 @@ class Counter: termui.Application:
         return termui.Response.ignored
 
     func body() -> termui.View:
-        let content = termui.VStack([
-            termui.Label("Count: " + str(self.count)).sized(
-                termui.Length.grow(weight = 1, minimum = 1),
-            ),
-            termui.Label("Enter adds one · Ctrl-Q quits").sized(
-                termui.Length.fixed(cells = 1),
-            ),
-        ])
-        return termui.Panel("counter", content).on_event(self.pressed)
+        var stack = new VStack
+        stack.add(new Label("Count: " + str(self.count)))
+        stack.add(
+            new Label("Enter adds one · Ctrl-Q quits"),
+            size = termui.Length.fixed(cells = 1),
+        )
+        return new termui.Panel("counter", new EventHost(stack, self.pressed))
 
 func main():
     termui.run(new Counter())
@@ -63,8 +64,8 @@ it starts and returns when input closes or a callback answers `quit`.
 ## How to think about it
 
 The application class is the source of truth. `body()` reads that state and
-returns a lightweight `View` value. When an event changes state, `termui`
-discards the old tree and asks for a new one.
+returns a fresh view tree. When an event changes state, `termui` discards the
+old tree and asks for a new one.
 
 Keep `body()` cheap and free of effects. Opening files, saving, launching work,
 and other effects belong in event callbacks. The view tree is a description,
@@ -72,47 +73,49 @@ not a second state store.
 
 This gives each kind of thing the right representation:
 
-- application and internal runtime owners are classes with identity;
-- views, geometry, styles, lines, lengths, events, and snapshots are values;
-- a bound callback retains the same application object for the current frame;
-  and
-- the application does not retain its view tree, so the ordinary shape has no
-  reference cycle.
+- the application is a class whose callbacks share its mutable identity;
+- components are classes built fresh in `body()` and composed by reference;
+- geometry, styles, lines, lengths, events, and snapshots are values; and
+- a bound callback retains the application object for the current frame.
+
+**Build components inside `body()`; do not store them in application
+fields.** A stored `EventHost` holding a bound method of the same application
+is a reference cycle ARC will not collect — and the rebuild-each-frame
+protocol makes storing pointless anyway.
 
 ## Components
 
-These constructors return `termui.View`:
+The shipped components are classes conforming to `termui.View`:
 
 | Component | Use it for |
 |---|---|
-| `Label(text, style)` | one line of text |
-| `StyledText(lines)` | one or more lines made from styled spans |
-| `HStack(items, spacing)` | children from left to right |
-| `VStack(items, spacing)` | children from top to bottom |
-| `ZStack(children)` | overlapping children; the last is on top |
-| `Panel(title, content, style, edges)` | titled, junction-aware border |
-| `Rows(total, top, anchor, selected, render, selected_style)` | a visible window over indexed content |
-| `Fill(glyph, style)` | fill an assigned rectangle |
-| `Empty()` | intentionally draw nothing |
+| `new Label(text, style)` | one line of text |
+| `new StyledText(lines)` | one or more lines made from styled spans |
+| `new HStack(spacing)` then `add` | children from left to right |
+| `new VStack(spacing)` then `add` | children from top to bottom |
+| `new ZStack()` then `add` | overlapping children; the last is on top |
+| `new Panel(title, content, style, edges)` | titled, junction-aware border |
+| `new Rows(total, render, top, anchor, selected, selected_style)` | a visible window over indexed content |
+| `new Fill(glyph, style)` | fill an assigned rectangle |
+| `new Empty()` | intentionally draw nothing |
+| `new EventHost(content, respond)` | behavior wrapped around content |
+| `new CursorHost(content, locate)` | cursor placement wrapped around content |
 
 The uppercase names are UI components. Lowercase names are operations or
 small helpers.
 
 ## Compose a screen
 
-Stacks receive sized children. Call `.sized(length)` on a view to make an
-`Item`:
+Stacks receive children through `add(child, size = length)`; omitting the
+size means grow, which is what the main content of a screen usually wants:
 
 ```text
-let files = termui.Panel("files", file_rows).sized(
-    termui.Length.ratio(low = 12, high = 28, percent = 25),
+var across = new termui.HStack(spacing = 1)
+across.add(
+    new termui.Panel("files", file_rows),
+    size = termui.Length.ratio(low = 12, high = 28, percent = 25),
 )
-
-let source = source_rows.sized(
-    termui.Length.grow(weight = 1, minimum = 8),
-)
-
-let body = termui.HStack([files, source], spacing = 1)
+across.add(source_rows)
 ```
 
 `HStack` divides columns. `VStack` divides rows. `ZStack` gives every child the
@@ -157,7 +160,7 @@ let warning = termui.Line(spans = [
     ),
 ])
 
-let message = termui.StyledText([warning])
+let message = new termui.StyledText([warning])
 ```
 
 `plain(text, style)` constructs a one-span `Line`. Drawing clips content to the
@@ -169,7 +172,7 @@ rectangle assigned by the parent.
 interior. All four edges are present by default:
 
 ```text
-termui.Panel(
+new termui.Panel(
     "output",
     output,
     style = active_border,
@@ -186,17 +189,17 @@ chooses junction characters.
 `Rows` calls a provider only for visible indexes:
 
 ```text
-termui.Rows(
+new termui.Rows(
     total,
-    top,
-    anchor,
-    selected,
     self.line_at,
-    selected_style,
+    top = top,
+    anchor = anchor,
+    selected = selected,
+    selected_style = selected_style,
 )
 ```
 
-The provider signature is `func(i64) -> Line`.
+The provider signature is `func(i64) -> Line` and it is required.
 
 - `total` is the number of available rows.
 - `top` is the requested first visible index.
@@ -215,13 +218,13 @@ back to indexes.
 
 ## Handle events
 
-Attach a callback with `.on_event`:
+Wrap content in an `EventHost`:
 
 ```text
 func respond(event: termui.Event, area: termui.Rect) -> termui.Response
 ```
 
-The callback receives the exact `Rect` assigned to the wrapped view. That is
+The responder receives the exact `Rect` assigned to the wrapped view. That is
 the rectangle to use for pointer hit testing; do not reproduce stack layout in
 the application.
 
@@ -233,11 +236,11 @@ the application.
 | `handled` | stop routing; the next frame reads updated state |
 | `quit` | release the current tree and leave the application |
 
-An outer modifier receives an event before its content, so a root handler can
-own global shortcuts. Pointer events enter only views whose rectangle contains
-the pointer. Stacks visit children in display order. `ZStack` checks the
-visually topmost child first. Keyboard and text events continue until the
-focused child accepts them.
+A host receives an event before its content, so a root host can own global
+shortcuts. Pointer events enter only views whose rectangle contains the
+pointer. Stacks visit children in display order. `ZStack` checks the visually
+topmost child first. Keyboard and text events continue until the focused
+child accepts them.
 
 `Event` is a closed union:
 
@@ -249,25 +252,63 @@ text(typed: str)
 mouse(pointer: Mouse)
 ```
 
-`Mouse` carries `kind`, `row`, `column`, `button`, `modifiers`, and `wheel`.
-`Pointer` is `press`, `release`, `drag`, `move`, or `wheel`. `Mouse.has_shift`,
-`has_alt`, and `has_control` inspect modifiers. An unrecognized host key is
-`Key.unknown`.
+`Key`, `Pointer`, and `Mouse` are [`std.term`](/library/term/)'s own types,
+re-exported as aliases, so termui events and plain terminal events carry the
+same values; termui adds only `closed`, which `term.read()` spells as
+absence. `Mouse` carries `kind`, `row`, `column`, `button`, `modifiers`, and
+`wheel`. `Pointer` is `press`, `release`, `drag`, `move`, or `wheel`.
+`Mouse.has_shift`, `has_alt`, and `has_control` inspect modifiers. An
+unrecognized host key is `Key.unknown`.
 
 `closed` and `resize` are owned by the application runtime. They are present in
 the event vocabulary but are not dispatched as ordinary commands.
 
 ## Place the terminal cursor
 
-Attach a cursor callback with `.cursor`:
+Wrap content in a `CursorHost`:
 
 ```text
 func cursor(area: termui.Rect) -> termui.Cursor?
 ```
 
-Return a cursor for the active view and `none` for inactive views. The callback
-receives the same assigned rectangle as drawing and events. If no view requests
-a cursor, the runtime uses a safe origin.
+Return a cursor for the active view and `none` for inactive views. The child's
+request is computed first and the host's `locate` overrides it when it answers
+one. The callback receives the same assigned rectangle as drawing and events.
+If no view requests a cursor, the runtime uses a safe origin.
+
+## Write your own component
+
+A component is any class conforming to `termui.View`: `draw` describes cells
+through the `Surface` it is given, `dispatch` answers one event, and both
+receive the exact rectangle the parent assigned.
+
+```text
+import termui
+
+class Meter: termui.View:
+    filled: i64
+
+    init(filled: i64):
+        self.filled = filled
+
+    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+        for at_column in range(0, min(self.filled, area.columns)):
+            surface.write(area, 0, at_column, "#", termui.Style())
+        return none
+
+    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+        return termui.Response.ignored
+```
+
+A `Meter` participates in stacks, panels, snapshots, and routing exactly like
+a shipped component. Two rules keep a custom component honest:
+
+- **the routing law** — a container never calls `child.dispatch` directly; it
+  calls `termui.route(child, event, child_area)`, which screens lifecycle
+  events and contains pointer events once, for every container; and
+- borders are laid with `Surface.stroke(area, row, column, up, right, down,
+  left, style)`, which merges with whatever border is already in the cell —
+  so a custom frame meets a `Panel` with a clean junction.
 
 ## Test a view without a terminal
 
@@ -295,7 +336,7 @@ Every iteration follows one invariant:
 1. read terminal dimensions and resize the cell buffers;
 2. clear the next frame;
 3. ask `Application.body()` for a view tree;
-4. lay out and draw it while discovering the cursor;
+4. draw it through its own `draw` while discovering the cursor;
 5. write only cells that differ from the last frame, place the cursor, and
    flush once;
 6. snapshot one terminal event;
@@ -311,22 +352,25 @@ partial frames, stale cursors, forgotten flushes, and resize-order bugs.
 The `termui` facade exports:
 
 - components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
-  `VStack`, `ZStack`, `Panel`;
-- layout: `Length`, `Item`, `Rect`, `Edges`;
+  `VStack`, `ZStack`, `Panel`, `EventHost`, `CursorHost`;
+- the contract: `View`, `Surface`, `route`;
+- layout: `Length`, `Rect`, `Edges`;
 - text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
 - input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
-- application: `Application`, `View`, `Cursor`, `run`; and
+- application: `Application`, `Cursor`, `run`; and
 - testing: `Snapshot`, `snapshot`, `visible_top`.
 
 Application code should import `termui`, not its implementation modules. The
-package source is split into model, input, layout, canvas, view, and runtime
-boundaries so each piece can hide its complexity and be tested independently.
+package source is split into model, input, layout, canvas, view, components,
+and runtime boundaries so each piece can hide its complexity and be tested
+independently.
 
 ## Current limits
 
 The package does not include a mutable retained widget tree, result-builder
 syntax, a global environment or theme, a focus registry, scrollbars, or a full
 grapheme/East-Asian-width engine. Applications keep focus and domain policy in
-their own model. The shipped editor is the larger reference application: it
-uses panels, all three stacks, lazy rows, styled source, pointer routing,
-resizable panes, cursors, and the hidden loop.
+their own model. The `View` interface is the extension point for anything
+else. The shipped editor is the larger reference application: it uses panels,
+all three stacks, lazy rows, styled source, pointer routing, resizable panes,
+cursors, and the hidden loop.

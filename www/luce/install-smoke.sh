@@ -81,7 +81,7 @@ printf '%s\n' 'name: smoke' 'version: 0.1.0' 'packages:' "  termui: $termui_vers
 printf '%s\n' \
     'import termui' \
     'func main():' \
-    '    let frame = termui.snapshot(termui.Panel("ok", termui.Label("ready")), 3, 10)' \
+    '    let frame = termui.snapshot(new termui.Panel("ok", new termui.Label("ready")), 3, 10)' \
     '    print(frame.line(1))' >"$smoke/package_app.luc"
 (cd "$smoke" && . "$smoke_profile" && "$smoke_install/bin/luce" build package_app.luc)
 test "$("$smoke/package_app")" = "│ready   │"
