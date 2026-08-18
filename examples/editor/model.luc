@@ -158,8 +158,7 @@ class Model:
             entered(directory):
                 self.directory = directory
                 self.refresh_files()
-                let doc = self.document()
-                doc.message = "in " + self.directory
+                self.document().set_message("in " + self.directory)
             file(path):
                 self.open_file(path)
         self.notify()
@@ -227,16 +226,14 @@ class Model:
         self.search_query = ""
         self.search_matches.clear()
         self.search_current = -1
-        let doc = self.document()
-        doc.message = ""
+        self.document().set_message("")
         # A search jumps the cursor, so the next typed run is its own undo
         # group rather than coalescing with text typed before the search.
         self.coalescing = false
 
     func close_search():
         self.focus = focus.Focus.editor
-        let doc = self.document()
-        doc.message = ""
+        self.document().set_message("")
         self.coalescing = false
 
     func rescan():

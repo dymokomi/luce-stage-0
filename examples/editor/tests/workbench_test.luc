@@ -2,7 +2,7 @@
 
 import std.strings
 import termui
-from termui import VStack, HStack
+from termui import VStack, HStack, fixed, grow
 import document
 import focus
 import model
@@ -29,12 +29,12 @@ func built(shared: model.Model) -> (Workbench, Editor, FileList):
     var across = new HStack()
     let files = new FileList(shared)
     let pane = new Editor(shared)
-    across.add(files, size = termui.Length.fixed(cells = 0))
-    across.add(pane, size = termui.Length.grow(weight = 1, minimum = gutter_width + 1))
+    across.add(files, fixed(0))
+    across.add(pane, grow(minimum = gutter_width + 1))
     var screen = new VStack()
-    screen.add(across, size = termui.Length.grow(weight = 1, minimum = 1))
-    screen.add(new Console(shared), size = termui.Length.fixed(cells = 0))
-    screen.add(new StatusBar(shared), size = termui.Length.fixed(cells = 1))
+    screen.add(across, grow(minimum = 1))
+    screen.add(new Console(shared), fixed(0))
+    screen.add(new StatusBar(shared), fixed(1))
     return new Workbench(shared, across, screen), pane, files
 
 func test_the_retained_tree_describes_source_status_and_cursor():

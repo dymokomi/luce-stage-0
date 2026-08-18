@@ -42,6 +42,13 @@ class Document:
         self.dirty = dirty
         self.history = new history.History()
 
+    # The status line's message.  A setter because the model often
+    # says one thing about the active document in passing —
+    # `self.document().set_message(...)` — and Luce assigns fields
+    # through a binding, not through a call's result.
+    func set_message(text: str):
+        self.message = text
+
     # --- questions about this text -----------------------------------
 
     func line_of(at: i64) -> i64:

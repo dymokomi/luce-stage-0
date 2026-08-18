@@ -8,7 +8,7 @@ import focus
 import model
 import theme
 
-func focus_label(where: focus.Focus) -> str:
+private func focus_label(where: focus.Focus) -> str:
     match where:
         editor:
             return "  [editor]"
@@ -64,14 +64,8 @@ class StatusBar: termui.View:
             return new termui.CursorHost(prompt, self.status_cursor)
         let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
         var pieces = new termui.HStack()
-        pieces.add(
-            new termui.Label(line, theme.palette.status),
-            size = termui.Length.grow(weight = 1, minimum = line.width()),
-        )
-        pieces.add(
-            new termui.Label(hint, theme.palette.status),
-            size = termui.Length.preferred(low = 0, ideal = hint.width(), high = hint.width()),
-        )
+        pieces.add(new termui.Label(line, theme.palette.status), termui.grow(minimum = line.width()))
+        pieces.add(new termui.Label(hint, theme.palette.status), termui.preferred(0, hint.width(), hint.width()))
         var layered = new termui.ZStack()
         layered.add(background)
         layered.add(pieces)

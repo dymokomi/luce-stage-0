@@ -57,10 +57,7 @@ class Counter: termui.View:
 func main():
     var stack = new VStack
     stack.add(new Counter())
-    stack.add(
-        new Label("Enter adds one · Ctrl-Q quits"),
-        size = termui.Length.fixed(cells = 1),
-    )
+    stack.add(new Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
     var app = new termui.Application()
     app.set_layout(new termui.Panel("counter", stack))
     app.start()
@@ -180,14 +177,17 @@ knowing the other exists.
 
 `HStack` lays children left to right, `VStack` top to bottom. `ZStack` draws
 in list order, so the last child is visually on top. A child enters with
-`add(child, size = length)`; omitting the size means grow. A retained
+`add(child, size)`; omitting the size means grow, and the facade's
+`fixed(cells)`, `grow(weight, minimum)`, `ratio(low, high, percent)`,
+and `preferred(low, ideal, high)` spell a size the way the layout
+reads: `add(bar, fixed(1))`. A retained
 layout reshapes with `resize(index, size)` — a drag hands a pane its
 new `Length`, and a hidden pane is `fixed(cells = 0)`: zero cells draw
 nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
 var across = new termui.HStack(spacing = 1)
-across.add(sidebar, size = termui.Length.ratio(low = 12, high = 28, percent = 25))
+across.add(sidebar, termui.ratio(low = 12, high = 28, percent = 25))
 across.add(source)
 ```
 

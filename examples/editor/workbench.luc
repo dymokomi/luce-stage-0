@@ -9,7 +9,7 @@ import termui
 import keymap
 import model
 
-func is_global(intent: keymap.Intent) -> bool:
+private func is_global(intent: keymap.Intent) -> bool:
     match intent:
         save:
             return true
@@ -62,17 +62,17 @@ class Workbench: termui.View:
     # The retained tree's shape, derived from the model: a hidden pane
     # is a zero-cell slot, a dragged divider is a preferred size.
     func apply_layout():
-        var files_size = termui.Length.fixed(cells = 0)
+        var files_size = termui.fixed(0)
         if self.model.file_pane:
-            files_size = termui.Length.ratio(low = 8, high = 24, percent = 25)
+            files_size = termui.ratio(8, 24, 25)
             if self.model.files_width > 0:
-                files_size = termui.Length.preferred(low = 8, ideal = self.model.files_width, high = 240)
+                files_size = termui.preferred(8, self.model.files_width, 240)
         self.across.resize(0, files_size)
-        var output_size = termui.Length.fixed(cells = 0)
+        var output_size = termui.fixed(0)
         if self.model.output_pane:
-            output_size = termui.Length.ratio(low = 3, high = 8, percent = 33)
+            output_size = termui.ratio(3, 8, 33)
             if self.model.output_height > 0:
-                output_size = termui.Length.preferred(low = 3, ideal = self.model.output_height, high = 80)
+                output_size = termui.preferred(3, self.model.output_height, 80)
         self.screen.resize(1, output_size)
 
     func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:

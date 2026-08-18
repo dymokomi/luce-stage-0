@@ -9,7 +9,7 @@
 import std.files
 import document
 
-func draft_path(path: str) -> str:
+private func draft_path(path: str) -> str:
     return path + ".draft"
 
 # What `load` answers: the buffer to open, the file's on-disk content,

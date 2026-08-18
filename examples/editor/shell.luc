@@ -8,7 +8,7 @@ import std.os
 import std.strings
 
 # One shell word, including paths with spaces or shell punctuation.
-func shell_quote(value: str) -> str:
+private func shell_quote(value: str) -> str:
     return "'" + strings.replace(value, "'", "'\\''") + "'"
 
 # Compile `path` to a sibling executable and run it, so a person sees

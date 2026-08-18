@@ -8,7 +8,23 @@ union Length:
     ratio(low: i64, high: i64, percent: i64)
     preferred(low: i64, ideal: i64, high: i64)
 
-func floor_div(numerator: i64, denominator: i64) -> i64:
+# The short spellings a screen is composed with — each answers the
+# Length member it names, with the defaults composition wants, so a
+# call site reads like the layout it makes: `add(bar, fixed(1))`,
+# `add(source, grow())`.
+func fixed(cells: i64) -> Length:
+    return Length.fixed(cells = cells)
+
+func grow(weight: i64 = 1, minimum: i64 = 0) -> Length:
+    return Length.grow(weight = weight, minimum = minimum)
+
+func ratio(low: i64, high: i64, percent: i64) -> Length:
+    return Length.ratio(low = low, high = high, percent = percent)
+
+func preferred(low: i64, ideal: i64, high: i64) -> Length:
+    return Length.preferred(low = low, ideal = ideal, high = high)
+
+private func floor_div(numerator: i64, denominator: i64) -> i64:
     return i64(floor(numerator / denominator))
 
 # Turn one Length per child into non-negative sizes. Optional pane lengths

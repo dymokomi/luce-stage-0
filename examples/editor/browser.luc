@@ -12,7 +12,7 @@ import std.strings
 
 # The directory one level up from `here`.  `..` rather than a lexical
 # parent, because a lexical one is wrong across a symbolic link.
-func parent_of(here: str) -> str:
+private func parent_of(here: str) -> str:
     if here == ".":
         return ".."
     if paths.base(here) == "..":
@@ -21,7 +21,7 @@ func parent_of(here: str) -> str:
 
 # `name`, as a path, from a pane showing `here`.  The bare name at the
 # start directory, so "./notes.txt" and "notes.txt" stay one file.
-func under(here: str, name: str) -> str:
+private func under(here: str, name: str) -> str:
     if here == ".":
         return name
     return paths.join(here, name)

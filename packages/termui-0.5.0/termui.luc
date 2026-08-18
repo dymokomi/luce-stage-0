@@ -50,6 +50,18 @@ alias CursorHost = components.CursorHost
 func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
 
+func fixed(cells: i64) -> Length:
+    return layout.fixed(cells)
+
+func grow(weight: i64 = 1, minimum: i64 = 0) -> Length:
+    return layout.grow(weight, minimum)
+
+func ratio(low: i64, high: i64, percent: i64) -> Length:
+    return layout.ratio(low, high, percent)
+
+func preferred(low: i64, ideal: i64, high: i64) -> Length:
+    return layout.preferred(low, ideal, high)
+
 func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
     return components.Rows.visible_top(top, total, selected, height)
 

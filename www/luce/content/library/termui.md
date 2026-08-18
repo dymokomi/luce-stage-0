@@ -53,10 +53,7 @@ class Counter: termui.View:
 func main():
     var stack = new VStack
     stack.add(new Counter())
-    stack.add(
-        new Label("Enter adds one · Ctrl-Q quits"),
-        size = termui.Length.fixed(cells = 1),
-    )
+    stack.add(new Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
     var app = new termui.Application()
     app.set_layout(new termui.Panel("counter", stack))
     app.start()
@@ -126,9 +123,11 @@ small helpers.
 
 ## Compose a screen
 
-Stacks receive children through `add(child, size = length)`; omitting the
-size means grow, which is what the main content of a screen usually
-wants. A retained layout reshapes with `resize(index, size)`; a hidden
+Stacks receive children through `add(child, size)`; omitting the size
+means grow, which is what the main content of a screen usually wants,
+and the facade's `fixed(cells)`, `grow(weight, minimum)`,
+`ratio(low, high, percent)`, and `preferred(low, ideal, high)` spell a
+size the way the layout reads: `add(bar, fixed(1))`. A retained layout reshapes with `resize(index, size)`; a hidden
 pane is `fixed(cells = 0)` — zero cells draw nothing and contain no
 pointer:
 
@@ -136,7 +135,7 @@ pointer:
 var across = new termui.HStack(spacing = 1)
 across.add(
     new termui.Panel("files", file_rows),
-    size = termui.Length.ratio(low = 12, high = 28, percent = 25),
+    termui.ratio(low = 12, high = 28, percent = 25),
 )
 across.add(source_rows)
 ```
@@ -375,7 +374,7 @@ The `termui` facade exports:
 - components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
   `VStack`, `ZStack`, `Panel`, `EventHost`, `CursorHost`;
 - the contract: `View`, `Surface`, `route`;
-- layout: `Length`, `Rect`, `Edges`;
+- layout: `Length` with its short spellings `fixed`, `grow`, `ratio`, `preferred`; `Rect`, `Edges`;
 - text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
 - input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
 - application: `Application` (`set_layout`, `start`), `Cursor`; and
