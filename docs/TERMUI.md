@@ -57,7 +57,7 @@ class Counter: termui.View:
 func main():
     var stack = VStack()
     stack.add(Counter())
-    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.Fixed(1))
     var app = termui.Application()
     app.set_layout(termui.Panel("counter", stack))
     app.start()
@@ -177,31 +177,30 @@ knowing the other exists.
 
 `HStack` lays children left to right, `VStack` top to bottom. `ZStack` draws
 in list order, so the last child is visually on top. A child enters with
-`add(child, size)`; omitting the size means grow, and the facade's
-`fixed(cells)`, `grow(weight, minimum)`, `ratio(low, high, percent)`,
-and `preferred(low, ideal, high)` spell a size the way the layout
-reads: `add(bar, fixed(1))`. A retained
+`add(child, size)`; omitting the size means grow, and the `Fixed`, `Grow`,
+`Ratio`, and `Preferred` classes spell a size the way the layout
+reads: `add(bar, Fixed(1))`. A retained
 layout reshapes with `resize(index, size)` — a drag hands a pane its
 new constraint, and a hidden pane is `fixed(cells = 0)`: zero cells draw
 nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
 var across = termui.HStack(spacing = 1)
-across.add(sidebar, termui.ratio(low = 12, high = 28, percent = 25))
+across.add(sidebar, termui.Ratio(12, 28, 25))
 across.add(source)
 ```
 
-A size is a `Constraint` — a value carrying `minimum`, an optional
-`maximum`, a `weight` for sharing surplus, and an optional preference
-(`ideal` cells, or a `share` of the axis in percent).  Four
-constructors spell the common shapes:
+A size is a `Constraint` — an interface with what the solver asks:
+`minimum()`, `maximum()`, `weight()`, and `preference(axis)`.  Four
+shipped classes conform, and a program's own constraint composes the
+same way:
 
-| Constructor | Meaning |
+| Class | Meaning |
 |---|---|
-| `fixed(cells)` | exactly this many cells (`minimum = maximum`) |
-| `grow(weight, minimum)` | keep the minimum, then share surplus by weight |
-| `ratio(low, high, percent)` | a clamped percentage of the axis |
-| `preferred(low, ideal, high)` | a remembered size within bounds |
+| `Fixed(cells)` | exactly this many cells |
+| `Grow(weight, minimum)` | keep the minimum, then share surplus by weight |
+| `Ratio(low, high, percent)` | a clamped percentage of the axis |
+| `Preferred(low, ideal, high)` | a remembered size within bounds |
 
 The solver is total. It includes spacing in the available axis, never returns a
 negative size, and never allocates beyond the axis. When space is short it

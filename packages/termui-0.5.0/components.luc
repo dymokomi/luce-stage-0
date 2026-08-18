@@ -47,7 +47,7 @@ private func draw_line(
 # most common intent, so it is the unstated one.
 private func slot_constraint(size: layout.Constraint?) -> layout.Constraint:
     if size == none:
-        return layout.grow()
+        return layout.Grow()
     return size
 
 # --- stacks ----------------------------------------------------------

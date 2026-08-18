@@ -6,6 +6,13 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `Constraint` is an interface - `minimum()`, `maximum()`, `weight()`,
+  `preference(axis)` - and the sizes are classes conforming to it:
+  `Fixed(cells)`, `Grow(weight, minimum)`, `Ratio(low, high, percent)`,
+  `Preferred(low, ideal, high)`. A layout reads
+  `layout.add(FileList(model), Fixed(0))`, and a program's own
+  constraint kind lays out exactly like a shipped one. The solver's
+  arithmetic is unchanged; the editor's sessions replay cell-identical.
 - The `new` keyword leaves the language: everything constructs by
   call. Classes construct as `Counter()`; containers as `list[i64]()`,
   `map[str, i64]()`, `array[i64](5, 5)`, and `builder()`; a container

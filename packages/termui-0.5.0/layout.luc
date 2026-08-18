@@ -2,53 +2,116 @@
 
 import model
 
-# What one child asks of its axis.  A constraint is a value: bounds,
-# an optional preference, and a weight for sharing surplus.  The four
-# constructors below spell the common shapes; the solver reads only
-# these fields, so any honest combination lays out.
-struct Constraint:
-    minimum: i64 = 0
-    # None is unbounded: the child takes whatever surplus its weight
-    # earns.
-    maximum: i64? = none
+# What one child asks of its axis.  Any conformer lays out: the
+# shipped Fixed, Grow, Ratio, and Preferred are the common shapes, and
+# a program's own constraint composes exactly the same way.
+interface Constraint:
+    # The floor this child never gives up until the axis itself runs
+    # out.
+    func minimum() -> i64
+    # The ceiling surplus never pushes past; none is unbounded.
+    func maximum() -> i64?
     # The share of surplus this child claims relative to the other
-    # growers.  Zero — the default — is a child that never grows past
-    # its preference or minimum.
-    weight: i64 = 0
-    # A preferred size in cells, wanted exactly when the axis allows.
-    ideal: i64? = none
-    # A preferred size as a percentage of the axis, for panes that
-    # scale with the terminal rather than with their content.
-    share: i64? = none
+    # growers.  Zero never grows past its preference or minimum.
+    func weight() -> i64
+    # The preferred size given the usable axis, or none.  A preference
+    # yields first when space runs short — it asked for comfort, not
+    # necessity.
+    func preference(axis: i64) -> i64?
 
-# Exactly `cells`, never more, never less — until the axis itself is
+# Exactly `cells` — never more, never less, until the axis itself is
 # smaller than everything's minimums.
-func fixed(cells: i64) -> Constraint:
-    return Constraint(minimum = cells, maximum = cells)
+class Fixed: Constraint:
+    private cells: i64
+
+    init(cells: i64):
+        self.cells = cells
+
+    func minimum() -> i64:
+        return max(self.cells, 0)
+
+    func maximum() -> i64?:
+        return max(self.cells, 0)
+
+    func weight() -> i64:
+        return 0
+
+    func preference(axis: i64) -> i64?:
+        return none
 
 # Keep at least `minimum`, then take surplus in proportion to
 # `weight`.  The default is the main content of a screen: everything
 # the siblings leave.
-func grow(weight: i64 = 1, minimum: i64 = 0) -> Constraint:
-    return Constraint(minimum = minimum, weight = weight)
+class Grow: Constraint:
+    private share: i64
+    private floor: i64
+
+    init(weight: i64 = 1, minimum: i64 = 0):
+        self.share = weight
+        self.floor = minimum
+
+    func minimum() -> i64:
+        return max(self.floor, 0)
+
+    func maximum() -> i64?:
+        return none
+
+    func weight() -> i64:
+        return max(self.share, 0)
+
+    func preference(axis: i64) -> i64?:
+        return none
 
 # A pane that scales with the terminal: `percent` of the axis, kept
 # between `low` and `high`.
-func ratio(low: i64, high: i64, percent: i64) -> Constraint:
-    return Constraint(minimum = low, maximum = high, share = percent)
+class Ratio: Constraint:
+    private low: i64
+    private high: i64
+    private percent: i64
+
+    init(low: i64, high: i64, percent: i64):
+        self.low = low
+        self.high = high
+        self.percent = percent
+
+    func minimum() -> i64:
+        return max(self.low, 0)
+
+    func maximum() -> i64?:
+        return max(self.high, max(self.low, 0))
+
+    func weight() -> i64:
+        return 0
+
+    func preference(axis: i64) -> i64?:
+        return floor_div(axis * clamp(self.percent, 0, 100), 100)
 
 # A pane with a remembered size — after a person drags a divider —
 # kept between `low` and `high`.
-func preferred(low: i64, ideal: i64, high: i64) -> Constraint:
-    return Constraint(minimum = low, maximum = high, ideal = ideal)
+class Preferred: Constraint:
+    private low: i64
+    private ideal: i64
+    private high: i64
+
+    init(low: i64, ideal: i64, high: i64):
+        self.low = low
+        self.ideal = ideal
+        self.high = high
+
+    func minimum() -> i64:
+        return max(self.low, 0)
+
+    func maximum() -> i64?:
+        return max(self.high, max(self.low, 0))
+
+    func weight() -> i64:
+        return 0
+
+    func preference(axis: i64) -> i64?:
+        return self.ideal
 
 private func floor_div(numerator: i64, denominator: i64) -> i64:
     return i64(floor(numerator / denominator))
-
-# A constraint with a preference gives its slack back first when the
-# axis runs short — it asked for comfort, not necessity.
-private func prefers(constraint: Constraint) -> bool:
-    return constraint.ideal != none or constraint.share != none
 
 # Turn one Constraint per child into non-negative sizes.  Preferences
 # compress before growers, growers before rigid children, and nothing
@@ -60,25 +123,24 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
         return sizes
     let gap = max(spacing, 0)
     let usable = max(total - gap * (count - 1), 0)
+    var prefers = list[bool]()
     var claimed: i64 = 0
     var total_weight: i64 = 0
 
     for constraint in constraints:
-        let floor_size = max(constraint.minimum, 0)
+        let floor_size = constraint.minimum()
         var size = floor_size
-        let wanted = constraint.share
+        let wanted = constraint.preference(usable)
         if wanted != none:
-            size = floor_div(usable * clamp(wanted, 0, 100), 100)
-        let exact = constraint.ideal
-        if exact != none:
-            size = exact
-        let ceiling = constraint.maximum
+            size = wanted
+        let ceiling = constraint.maximum()
         if ceiling != none:
             size = min(size, max(ceiling, floor_size))
         size = max(size, floor_size)
         sizes.append(size)
+        prefers.append(wanted != none)
         claimed += size
-        total_weight += max(constraint.weight, 0)
+        total_weight += constraint.weight()
 
     if claimed <= usable:
         let remaining = usable - claimed
@@ -86,10 +148,10 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
             var given: i64 = 0
             var first: i64 = -1
             for index in range(0, count):
-                let weight = max(constraints[index].weight, 0)
+                let weight = constraints[index].weight()
                 if weight > 0:
                     var share = floor_div(remaining * weight, total_weight)
-                    let ceiling = constraints[index].maximum
+                    let ceiling = constraints[index].maximum()
                     if ceiling != none:
                         share = min(share, max(ceiling - sizes[index], 0))
                     sizes[index] += share
@@ -98,7 +160,7 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
                         first = index
             if first >= 0:
                 var leftover = remaining - given
-                let ceiling = constraints[first].maximum
+                let ceiling = constraints[first].maximum()
                 if ceiling != none:
                     leftover = min(leftover, max(ceiling - sizes[first], 0))
                 sizes[first] += leftover
@@ -109,8 +171,8 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
     for index in range(0, count):
         if over <= 0:
             break
-        if prefers(constraints[index]):
-            let cut = min(max(sizes[index] - max(constraints[index].minimum, 0), 0), over)
+        if prefers[index]:
+            let cut = min(max(sizes[index] - constraints[index].minimum(), 0), over)
             sizes[index] -= cut
             over -= cut
     # On a truly tiny axis, preferring panes disappear before primary
@@ -118,14 +180,14 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
     for index in range(0, count):
         if over <= 0:
             break
-        if prefers(constraints[index]):
+        if prefers[index]:
             let cut = min(sizes[index], over)
             sizes[index] -= cut
             over -= cut
     for index in range(0, count):
         if over <= 0:
             break
-        if constraints[index].weight > 0:
+        if constraints[index].weight() > 0:
             let cut = min(sizes[index], over)
             sizes[index] -= cut
             over -= cut

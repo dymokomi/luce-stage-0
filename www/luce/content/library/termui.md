@@ -53,7 +53,7 @@ class Counter: termui.View:
 func main():
     var stack = VStack()
     stack.add(Counter())
-    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.fixed(1))
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.Fixed(1))
     var app = termui.Application()
     app.set_layout(termui.Panel("counter", stack))
     app.start()
@@ -125,9 +125,8 @@ small helpers.
 
 Stacks receive children through `add(child, size)`; omitting the size
 means grow, which is what the main content of a screen usually wants,
-and the facade's `fixed(cells)`, `grow(weight, minimum)`,
-`ratio(low, high, percent)`, and `preferred(low, ideal, high)` spell a
-size the way the layout reads: `add(bar, fixed(1))`. A retained layout reshapes with `resize(index, size)`; a hidden
+and the `Fixed`, `Grow`, `Ratio`, and `Preferred` classes spell a
+size the way the layout reads: `add(bar, Fixed(1))`. A retained layout reshapes with `resize(index, size)`; a hidden
 pane is `fixed(cells = 0)` — zero cells draw nothing and contain no
 pointer:
 
@@ -135,7 +134,7 @@ pointer:
 var across = termui.HStack(spacing = 1)
 across.add(
     termui.Panel("files", file_rows),
-    termui.ratio(low = 12, high = 28, percent = 25),
+    termui.Ratio(12, 28, 25),
 )
 across.add(source_rows)
 ```
@@ -146,17 +145,17 @@ foreground content.
 
 ### Constraint
 
-A size is a `Constraint` — a value carrying `minimum`, an optional
-`maximum`, a `weight` for sharing surplus, and an optional preference
-(`ideal` cells, or a `share` of the axis in percent). Four
-constructors spell the common shapes:
+A size is a `Constraint` — an interface with what the solver asks:
+`minimum()`, `maximum()`, `weight()`, and `preference(axis)`. Four
+shipped classes conform, and a program's own constraint composes the
+same way:
 
-| Constructor | Behavior |
+| Class | Behavior |
 |---|---|
-| `fixed(cells)` | exactly that many cells (`minimum = maximum`) |
-| `grow(weight, minimum)` | keeps its minimum and shares remaining space |
-| `ratio(low, high, percent)` | takes a clamped percentage of the axis |
-| `preferred(low, ideal, high)` | uses a remembered size within limits |
+| `Fixed(cells)` | exactly that many cells |
+| `Grow(weight, minimum)` | keeps its minimum and shares remaining space |
+| `Ratio(low, high, percent)` | takes a clamped percentage of the axis |
+| `Preferred(low, ideal, high)` | uses a remembered size within limits |
 
 The solver is total: spacing is included, no result is negative, and allocated
 sizes never exceed the available axis. Optional `ratio` and `preferred` panes
@@ -379,7 +378,7 @@ The `termui` facade exports:
 - components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
   `VStack`, `ZStack`, `Panel`, `EventHost`, `CursorHost`;
 - the contract: `View`, `Surface`, `route`;
-- layout: `Constraint` with its constructors `fixed`, `grow`, `ratio`, `preferred`; `Rect`, `Edges`;
+- layout: the `Constraint` interface and its `Fixed`, `Grow`, `Ratio`, `Preferred` classes; `Rect`, `Edges`;
 - text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
 - input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
 - application: `Application` (`set_layout`, `start`), `Cursor`; and

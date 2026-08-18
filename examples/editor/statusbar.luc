@@ -64,8 +64,8 @@ class StatusBar: termui.View:
             return termui.CursorHost(prompt, self.status_cursor)
         let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
         var pieces = termui.HStack()
-        pieces.add(termui.Label(line, theme.palette.status), termui.grow(minimum = line.width()))
-        pieces.add(termui.Label(hint, theme.palette.status), termui.preferred(0, hint.width(), hint.width()))
+        pieces.add(termui.Label(line, theme.palette.status), termui.Grow(minimum = line.width()))
+        pieces.add(termui.Label(hint, theme.palette.status), termui.Preferred(0, hint.width(), hint.width()))
         var layered = termui.ZStack()
         layered.add(background)
         layered.add(pieces)

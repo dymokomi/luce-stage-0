@@ -7,11 +7,11 @@ import components
 
 func test_rows_and_columns_describe_nested_geometry():
     var across = components.HStack()
-    across.add(components.Fill("L"), size = layout.fixed(3))
+    across.add(components.Fill("L"), size = layout.Fixed(3))
     across.add(components.Fill("R"))
     var down = components.VStack()
     down.add(across)
-    down.add(components.Label("status"), size = layout.fixed(1))
+    down.add(components.Label("status"), size = layout.Fixed(1))
     let frame = view.snapshot(down, 3, 8)
     assert(frame.line(0) == "LLLRRRRR")
     assert(frame.line(1) == "LLLRRRRR")
@@ -112,7 +112,7 @@ func test_event_hosts_capture_then_continue_when_ignored():
 func test_pointer_events_enter_only_the_allocated_child():
     let recorder = Recorder()
     var across = components.HStack()
-    across.add(components.EventHost(components.Label("left"), recorder.left_event), size = layout.fixed(4))
+    across.add(components.EventHost(components.Label("left"), recorder.left_event), size = layout.Fixed(4))
     across.add(components.EventHost(components.Label("right"), recorder.right_event))
     let event = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 6))
     assert(view.route(across, event, model.Rect(rows = 2, columns = 10)) == model.Response.handled)

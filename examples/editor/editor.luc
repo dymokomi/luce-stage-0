@@ -11,7 +11,7 @@
 # drawing, input routing and shutdown.
 
 import termui
-from termui import VStack, HStack, fixed, grow
+from termui import VStack, HStack, Fixed, Grow
 import model
 from filelist import FileList
 from source import Editor
@@ -26,13 +26,13 @@ func main(args: list[str]):
     let shared = model.open(args)
 
     var across = HStack()
-    across.add(FileList(shared), fixed(0))
-    across.add(Editor(shared), grow(minimum = Editor.minimum_columns()))
+    across.add(FileList(shared), Fixed(0))
+    across.add(Editor(shared), Grow(minimum = Editor.minimum_columns()))
 
     var screen = VStack()
-    screen.add(across, grow(minimum = 1))
-    screen.add(Console(shared), fixed(0))
-    screen.add(StatusBar(shared), fixed(1))
+    screen.add(across, Grow(minimum = 1))
+    screen.add(Console(shared), Fixed(0))
+    screen.add(StatusBar(shared), Fixed(1))
 
     var app = termui.Application()
     app.set_layout(Workbench(shared, across, screen))
