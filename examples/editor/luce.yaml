@@ -6,4 +6,4 @@ name: editor
 version: 2.0.0
 
 packages:
-  termui: 0.3.0
+  termui: 0.4.0

@@ -5,7 +5,7 @@ owns its state and describes the screen it wants. The library owns terminal
 sizing, the application loop, layout, drawing, input routing, cursor placement,
 cell diffing, flushing, resize handling, and shutdown.
 
-The current package is `termui` 0.3.0 in `packages/termui-0.3.0/`. Applications
+The current package is `termui` 0.4.0 in `packages/termui-0.4.0/`. Applications
 normally import only its facade:
 
 ```text

@@ -16,7 +16,7 @@ Add `termui` to the project's `luce.yaml`:
 name: counter
 version: 0.1.0
 packages:
-  termui: 0.3.0
+  termui: 0.4.0
 ```
 
 Then define a class that conforms to `termui.Application`:

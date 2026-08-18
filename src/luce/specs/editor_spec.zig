@@ -50,7 +50,7 @@ const editor_files = [_]agree.File{
     .{ .name = "state", .source = @embedFile("state.luc") },
 } ++ termui_files;
 
-const termui_root = "termui-0.3.0";
+const termui_root = "termui-0.4.0";
 const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
     package("model", @embedFile("termui/model.luc")) ++
     package("input", @embedFile("termui/input.luc")) ++
