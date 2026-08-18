@@ -34,30 +34,36 @@ func interpret(code: str, cells: i64) -> str:
     var pc: i64 = 0
     var out = new builder
     while pc < len(code):
-        let op = code[pc]
-        if op == '>':
-            pointer = pointer + 1
-        elif op == '<':
-            pointer = pointer - 1
-        elif op == '+':
-            if tape[pointer] == u8(255):
-                tape[pointer] = u8(0)
-            else:
-                tape[pointer] += u8(1)
-        elif op == '-':
-            if tape[pointer] == u8(0):
-                tape[pointer] = u8(255)
-            else:
-                tape[pointer] -= u8(1)
-        elif op == '.':
-            out.append(str(char(tape[pointer])))
-        elif op == '[':
-            if tape[pointer] == 0:
-                pc = matching_forward(code, pc)
-        elif op == ']':
-            if tape[pointer] != 0:
-                pc = matching_backward(code, pc)
+        # `here` is this instruction; `pc` already points past it, so
+        # a bracket arm lands after the match it jumped to and every
+        # other character — a comment, in Brainfuck — just moves on.
+        let here = pc
         pc = pc + 1
+        match code[here]:
+            '>':
+                pointer = pointer + 1
+            '<':
+                pointer = pointer - 1
+            '+':
+                if tape[pointer] == u8(255):
+                    tape[pointer] = u8(0)
+                else:
+                    tape[pointer] += u8(1)
+            '-':
+                if tape[pointer] == u8(0):
+                    tape[pointer] = u8(255)
+                else:
+                    tape[pointer] -= u8(1)
+            '.':
+                out.append(str(char(tape[pointer])))
+            '[':
+                if tape[pointer] == 0:
+                    pc = matching_forward(code, here) + 1
+            ']':
+                if tape[pointer] != 0:
+                    pc = matching_backward(code, here) + 1
+            else:
+                continue
     return out.build()
 
 func main():

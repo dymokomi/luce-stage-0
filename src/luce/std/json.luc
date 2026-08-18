@@ -348,86 +348,96 @@ private struct Parser:
         self.skip_blank()
         if self.at >= len(self.content):
             error(f"json: a value was expected at position {self.at}")
-        let head = self.content[self.at]
+        # RFC 8259 §3: a value's first character says which value it
+        # is — this match is the section list.
+        match self.content[self.at]:
+            # §5: values separated by commas, between brackets.
+            bracket_open:
+                if depth >= max_depth:
+                    error(f"json: values nested deeper than {max_depth}, at position {self.at}")
+                let opened = self.at
+                var items = new list[Json]
+                self.at += 1
+                self.skip_blank()
+                # The loop leaves with the head on the closing
+                # bracket, whichever way it got there, so the value is
+                # built once at the bottom, from the list assembled
+                # above.
+                if self.at >= len(self.content) or self.content[self.at] != bracket_close:
+                    var listed = false
+                    while not listed:
+                        let element = try self.read_value(depth + 1)
+                        items.append(element)
+                        self.skip_blank()
+                        if self.at >= len(self.content):
+                            error(f"json: the text ends inside the array opened at position {opened}")
+                        match self.content[self.at]:
+                            comma:
+                                self.at += 1
+                            bracket_close:
+                                listed = true
+                            else:
+                                error(f"json: a comma or a close was expected at position {self.at}")
+                self.at += 1
+                return Json.array(items = items)
 
-        # RFC 8259 §5: values separated by commas, between brackets.
-        if head == bracket_open:
-            if depth >= max_depth:
-                error(f"json: values nested deeper than {max_depth}, at position {self.at}")
-            let opened = self.at
-            var items = new list[Json]
-            self.at += 1
-            self.skip_blank()
-            # The loop leaves with the head on the closing bracket,
-            # whichever way it got there, so the value is built once at
-            # the bottom, from the list assembled above.
-            if self.at >= len(self.content) or self.content[self.at] != bracket_close:
-                var listed = false
-                while not listed:
-                    let element = try self.read_value(depth + 1)
-                    items.append(element)
-                    self.skip_blank()
-                    if self.at >= len(self.content):
-                        error(f"json: the text ends inside the array opened at position {opened}")
-                    let mark = self.content[self.at]
-                    if mark == comma:
+            # §4: names, colons, values, commas, between braces.
+            brace_open:
+                if depth >= max_depth:
+                    error(f"json: values nested deeper than {max_depth}, at position {self.at}")
+                let opened = self.at
+                var fields = new map[str, Json]
+                self.at += 1
+                self.skip_blank()
+                if self.at >= len(self.content) or self.content[self.at] != brace_close:
+                    var mapped = false
+                    while not mapped:
+                        self.skip_blank()
+                        if self.at >= len(self.content) or self.content[self.at] != quote_mark:
+                            error(f"json: a member name must be a string, at position {self.at}")
+                        let name = try self.read_string()
+                        self.skip_blank()
+                        if self.at >= len(self.content) or self.content[self.at] != colon:
+                            error(f"json: a member name must be followed by a colon, at position {self.at}")
                         self.at += 1
-                    elif mark == bracket_close:
-                        listed = true
-                    else:
-                        error(f"json: a comma or a close was expected at position {self.at}")
-            self.at += 1
-            return Json.array(items = items)
+                        let member = try self.read_value(depth + 1)
+                        # §4 leaves a repeated name to the parser; a
+                        # map is a mapping, so the last one written is
+                        # what the name means, in the place the first
+                        # one claimed.
+                        fields[name] = member
+                        self.skip_blank()
+                        if self.at >= len(self.content):
+                            error(f"json: the text ends inside the object opened at position {opened}")
+                        match self.content[self.at]:
+                            comma:
+                                self.at += 1
+                            brace_close:
+                                mapped = true
+                            else:
+                                error(f"json: a comma or a close was expected at position {self.at}")
+                self.at += 1
+                return Json.object(fields = fields)
 
-        # RFC 8259 §4: names, colons, values, commas, between braces.
-        if head == brace_open:
-            if depth >= max_depth:
-                error(f"json: values nested deeper than {max_depth}, at position {self.at}")
-            let opened = self.at
-            var fields = new map[str, Json]
-            self.at += 1
-            self.skip_blank()
-            if self.at >= len(self.content) or self.content[self.at] != brace_close:
-                var mapped = false
-                while not mapped:
-                    self.skip_blank()
-                    if self.at >= len(self.content) or self.content[self.at] != quote_mark:
-                        error(f"json: a member name must be a string, at position {self.at}")
-                    let name = try self.read_string()
-                    self.skip_blank()
-                    if self.at >= len(self.content) or self.content[self.at] != colon:
-                        error(f"json: a member name must be followed by a colon, at position {self.at}")
-                    self.at += 1
-                    let member = try self.read_value(depth + 1)
-                    # §4 leaves a repeated name to the parser; a map is
-                    # a mapping, so the last one written is what the
-                    # name means, in the place the first one claimed.
-                    fields[name] = member
-                    self.skip_blank()
-                    if self.at >= len(self.content):
-                        error(f"json: the text ends inside the object opened at position {opened}")
-                    let mark = self.content[self.at]
-                    if mark == comma:
-                        self.at += 1
-                    elif mark == brace_close:
-                        mapped = true
-                    else:
-                        error(f"json: a comma or a close was expected at position {self.at}")
-            self.at += 1
-            return Json.object(fields = fields)
+            # §7: a string.
+            quote_mark:
+                let spelled = try self.read_string()
+                return Json.text(value = spelled)
 
-        if head == quote_mark:
-            let spelled = try self.read_string()
-            return Json.text(value = spelled)
-        if head == minus or is_digit(head):
-            return try self.read_number()
-        if self.word("true"):
-            return Json.boolean(value = true)
-        if self.word("false"):
-            return Json.boolean(value = false)
-        if self.word("null"):
-            return Json.null
-        error(f"json: a value was expected at position {self.at}")
+            # §6: a number opens with a minus or a digit.
+            minus, digit_zero..digit_nine:
+                return try self.read_number()
+
+            # §3: the three literal names take the else, because a
+            # word is longer than the one character a match reads.
+            else:
+                if self.word("true"):
+                    return Json.boolean(value = true)
+                if self.word("false"):
+                    return Json.boolean(value = false)
+                if self.word("null"):
+                    return Json.null
+                error(f"json: a value was expected at position {self.at}")
 
     # RFC 8259 §2: whitespace is exactly these four bytes — space,
     # horizontal tab, line feed and carriage return.  Nothing else is
@@ -541,20 +551,21 @@ private struct Parser:
                 error(f"json: a low surrogate escape stands alone at position {slash}")
             out.append(str(char(code)))
             return
-        if c == quote_mark or c == backslash or c == '/':
-            out.append_ascii(i64(u32(c)))
-        elif c == 'b':
-            out.append_ascii(8)
-        elif c == 'f':
-            out.append_ascii(12)
-        elif c == 'n':
-            out.append_ascii(10)
-        elif c == 'r':
-            out.append_ascii(13)
-        elif c == 't':
-            out.append_ascii(9)
-        else:
-            error(f"json: unknown escape at position {slash}")
+        match c:
+            quote_mark, backslash, '/':
+                out.append_ascii(i64(u32(c)))
+            'b':
+                out.append_ascii(8)
+            'f':
+                out.append_ascii(12)
+            'n':
+                out.append_ascii(10)
+            'r':
+                out.append_ascii(13)
+            't':
+                out.append_ascii(9)
+            else:
+                error(f"json: unknown escape at position {slash}")
         self.at = slash + 2
 
     # Four hexadecimal digits at the read head, as the number they

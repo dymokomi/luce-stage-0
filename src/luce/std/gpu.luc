@@ -65,11 +65,12 @@ class Surface:
         try Builtin.gpu_surface_present(self.raw)
 
 func backend() -> Backend:
-    let code = Builtin.gpu_backend()
-    if code == 0:
-        return Backend.metal
-    if code == 1:
-        return Backend.vulkan
-    if code == 2:
-        return Backend.headless
-    trap("host returned an unknown GPU backend")
+    match Builtin.gpu_backend():
+        0:
+            return Backend.metal
+        1:
+            return Backend.vulkan
+        2:
+            return Backend.headless
+        else:
+            trap("host returned an unknown GPU backend")

@@ -140,34 +140,38 @@ func read() -> Event?:
     let name = Builtin.key_read()
     if name == none:
         return none
-    if name == "resize":
-        return Event.resize
-    if name == "text":
-        return Event.text(typed = Builtin.key_text())
-    let pointer = pointer_of(name)
-    if pointer != none:
-        return Event.mouse(pointer = Mouse(
-            kind = pointer,
-            row = Builtin.term_event_data(0),
-            column = Builtin.term_event_data(1),
-            button = Builtin.term_event_data(2),
-            modifiers = Builtin.term_event_data(3),
-            wheel = Builtin.term_event_data(4),
-        ))
-    return Event.key(pressed = key_of(name))
+    match name:
+        "resize":
+            return Event.resize
+        "text":
+            return Event.text(typed = Builtin.key_text())
+        else:
+            let pointer = pointer_of(name)
+            if pointer != none:
+                return Event.mouse(pointer = Mouse(
+                    kind = pointer,
+                    row = Builtin.term_event_data(0),
+                    column = Builtin.term_event_data(1),
+                    button = Builtin.term_event_data(2),
+                    modifiers = Builtin.term_event_data(3),
+                    wheel = Builtin.term_event_data(4),
+                ))
+            return Event.key(pressed = key_of(name))
 
 private func pointer_of(name: str) -> Pointer?:
-    if name == "mouse_press":
-        return Pointer.press
-    if name == "mouse_release":
-        return Pointer.release
-    if name == "mouse_drag":
-        return Pointer.drag
-    if name == "mouse_move":
-        return Pointer.move
-    if name == "mouse_wheel":
-        return Pointer.wheel
-    return none
+    match name:
+        "mouse_press":
+            return Pointer.press
+        "mouse_release":
+            return Pointer.release
+        "mouse_drag":
+            return Pointer.drag
+        "mouse_move":
+            return Pointer.move
+        "mouse_wheel":
+            return Pointer.wheel
+        else:
+            return none
 
 private func key_of(name: str) -> Key:
     let named = NAMES.get(name)

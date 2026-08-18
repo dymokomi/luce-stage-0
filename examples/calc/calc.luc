@@ -66,10 +66,11 @@ struct Parse:
         while here < len(text) and (text[here] == '+' or text[here] == '-'):
             let operator = text[here]
             let right_value, right_at = try Parse.term(text, here + 1)
-            if operator == '+':
-                value = value + right_value
-            else:
-                value = value - right_value
+            match operator:
+                '+':
+                    value = value + right_value
+                else:
+                    value = value - right_value
             stopped = right_at
             here = Scan.skip_spaces(text, stopped)
         return value, stopped
@@ -88,12 +89,13 @@ struct Parse:
         while here < len(text) and (text[here] == '*' or text[here] == '/' or text[here] == '%'):
             let operator = text[here]
             let right_value, right_at = try Parse.factor(text, here + 1)
-            if operator == '*':
-                value = value * right_value
-            elif operator == '/':
-                value = value / right_value
-            else:
-                value = value % right_value
+            match operator:
+                '*':
+                    value = value * right_value
+                '/':
+                    value = value / right_value
+                else:
+                    value = value % right_value
             stopped = right_at
             here = Scan.skip_spaces(text, stopped)
         return value, stopped
