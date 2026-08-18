@@ -302,6 +302,12 @@ pub fn settleConformances(self: *Analyzer) Error!void {
                     if (!valid) continue;
                     try implementations.append(self.arena, function);
                 }
+                // A zero-method contract here is not a satisfied
+                // interface: an empty interface is refused at its
+                // declaration, so this is one whose method signatures
+                // failed to settle — the diagnostic is already
+                // recorded, and there is no witness to derive.
+                if (contract.methods.len == 0) continue;
                 if (!valid or implementations.items.len != contract.methods.len) continue;
                 const witness: u32 = @intCast(self.conformances.items.len);
                 try self.conformances.append(self.temporary, .{

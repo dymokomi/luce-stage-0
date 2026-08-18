@@ -122,11 +122,25 @@ const Files = struct {
         from_root: []const u8,
     ) error{OutOfMemory}!luce.source.Found {
         const self: *Files = @ptrCast(@alignCast(context));
+        // A row gated to this exact root wins before any open row: a
+        // package's own sibling must shadow a project module of the
+        // same name for imports written inside the package, which is
+        // what the real store's root token does.  The project and the
+        // package may then both have a `model` without either seeing
+        // the other's.
         for (self.all) |file| {
             if (!std.mem.eql(u8, file.name, name)) continue;
-            if (file.from) |only| {
-                if (!std.mem.eql(u8, only, from_root)) continue;
-            }
+            const only = file.from orelse continue;
+            if (!std.mem.eql(u8, only, from_root)) continue;
+            return .{ .text = .{
+                .bytes = try arena.dupe(u8, file.source),
+                .path = file.path,
+                .root = file.root,
+            } };
+        }
+        for (self.all) |file| {
+            if (!std.mem.eql(u8, file.name, name)) continue;
+            if (file.from != null) continue;
             return .{ .text = .{
                 .bytes = try arena.dupe(u8, file.source),
                 .path = file.path,
