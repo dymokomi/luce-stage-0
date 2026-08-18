@@ -38,7 +38,7 @@ cost of changing the embedded library.
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |
 | `std.network` | TCP transport | `Connection` (static `dial`, read/write/flush, conforming to `io.Reader`/`io.Writer`), `Listener` (fallible `init(port)`, accept/port) |
-| `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Response` status/headers/body; status codes are data |
+| `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Client` (base URL + default headers), `Response` with `ok`/`text`/`json`; status codes are data |
 | `std.ui` | low-level native windows | fallible `open` and a window-owned GPU surface |
 
 `termui` is a maintained package, not an embedded `std` module. It appears in

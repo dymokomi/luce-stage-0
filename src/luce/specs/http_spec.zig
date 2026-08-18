@@ -131,6 +131,52 @@ test "a post carries its body, its type, and its length" {
     }
 }
 
+test "a client joins its base, sends its headers, and answers through the methods" {
+    var session = try hosted.compare(
+        \\import std.json
+        \\
+        \\func main() -> !:
+        \\    var api = new http.Client("http://example.test")
+        \\    api.header("authorization", "Bearer opensesame")
+        \\    let answer = try api.get("/status")
+        \\    print(str(answer.ok()))
+        \\    let words = answer.text()
+        \\    if words == none:
+        \\        print("not text")
+        \\        return
+        \\    print(str(len(words) > 0))
+        \\    let doc = try answer.json()
+        \\    let ready = doc.member("ready")
+        \\    if ready == none:
+        \\        print("missing")
+        \\        return
+        \\    print(str(ready.as_bool() else false))
+        \\
+    , served("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"ready\": true}"));
+    defer session.deinit();
+
+    try testing.expectEqualStrings("true\ntrue\ntrue\n", session.printed());
+    try testing.expectEqual(agree.End{ .finished = 0 }, session.end);
+    for ([_][]const u8{
+        requestOf(&session.reference.world),
+        requestOf(&session.capture.world),
+    }) |request| {
+        try testing.expect(std.mem.startsWith(u8, request, "GET /status HTTP/1.1\r\n"));
+        try testing.expect(std.mem.indexOf(u8, request, "\r\nauthorization: Bearer opensesame\r\n") != null);
+    }
+}
+
+test "the response predicates read a failure as data" {
+    try hosted.printsGiven(
+        \\func main() -> !:
+        \\    let page = try http.get("http://example.test/absent")
+        \\    print(str(page.ok()))
+        \\    let words = page.text()
+        \\    print(words else "empty text")
+        \\
+    , served("HTTP/1.1 404 Not Found\r\nContent-Length: 4\r\n\r\ngone"), "false\ngone\n");
+}
+
 test "https and non-http urls are refused with the reason" {
     try hosted.printsGiven(
         \\func fetch(url: str) -> !:

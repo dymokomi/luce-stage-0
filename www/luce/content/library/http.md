@@ -32,6 +32,29 @@ Each call is one exchange on one connection: the request goes out with
 stream. A `post` carries its body with the `Content-Type` it was
 handed and the `Content-Length` it measured.
 
+## A client
+
+```text
+new http.Client(base: str = "")
+client.header(name: str, value: str)
+client.get(path: str) -> http.Response!
+client.post(path: str, body: list[u8], content_type: str) -> http.Response!
+```
+
+A `Client` carries what every request repeats: the base each path is
+joined onto, and the headers sent with every exchange.
+
+```text
+var api = new http.Client("http://127.0.0.1:8080")
+api.header("authorization", "Bearer " + token)
+let answer = try api.get("/status")
+```
+
+A client with no base takes whole URLs, which makes it exactly the
+free functions plus default headers. Each request still dials its own
+connection and closes it — `Client` adds no keep-alive pool, and says
+so rather than pretending.
+
 ## The answer
 
 ```text
@@ -39,6 +62,10 @@ struct Response:
     status: i64
     headers: map[str, str]
     body: bytes
+
+    func ok() -> bool
+    func text() -> str?
+    func json() -> json.Json!
 ```
 
 `status` is the number the server said. `headers` holds each header
@@ -46,6 +73,12 @@ name lowercased, with the last value winning — the flat map a program
 actually asks, not a model of every duplicate-header corner. `body` is
 the decoded bytes: a chunked reply is de-chunked, so what the program
 reads is what the server meant.
+
+`ok()` is the one predicate almost every caller writes: 200 through
+299\. `text()` answers the body as UTF-8 text, or absent when it is
+not — the parse shape. `json()` answers the body as a
+[`json.Json`](/library/json/) document, and a body that is not text or
+not JSON is the error it says.
 
 ## A server and its client, in one program
 

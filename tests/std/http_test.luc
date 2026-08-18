@@ -34,6 +34,34 @@ func test_a_404_is_an_answer() -> !:
     assert(page.status == 404)
     assert(len(page.body) == 0)
 
+func test_a_client_carries_base_and_headers_over_loopback() -> !:
+    let server = spawn serve(18664, json_reply())
+    var api = new http.Client("http://127.0.0.1:18664")
+    api.header("x-luce-test", "loopback")
+    let answer = try fetch_with(api)
+    try server.wait()
+    assert(answer.ok())
+    let doc = try answer.json()
+    let ready = doc.member("ready")
+    if ready == none:
+        error("the reply named no ready member")
+    assert((ready.as_bool() else false) == true)
+    assert((answer.text() else "") == "{\"ready\": true}")
+
+func fetch_with(api: http.Client) -> http.Response!:
+    var tries = 0
+    while true:
+        let answer = try_client(api) catch none
+        if answer != none:
+            return answer
+        tries += 1
+        if tries > 100:
+            error("the server never came up")
+        os.sleep_ms(10)
+
+func try_client(api: http.Client) -> http.Response?!:
+    return try api.get("/status")
+
 func test_refusals_carry_their_reasons():
     var said = ""
     fetch_https() catch reason:
@@ -118,4 +146,12 @@ func missing_reply() -> str:
     let crlf = line_end()
     var reply = "HTTP/1.1 404 Not Found" + crlf
     reply = reply + "Content-Length: 0" + crlf + crlf
+    return reply
+
+func json_reply() -> str:
+    let crlf = line_end()
+    var reply = "HTTP/1.1 200 OK" + crlf
+    reply = reply + "Content-Type: application/json" + crlf
+    reply = reply + "Content-Length: 15" + crlf + crlf
+    reply = reply + "{\"ready\": true}"
     return reply

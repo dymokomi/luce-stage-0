@@ -6,6 +6,13 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `http.Client` and `Response` methods: a client carries a base URL and
+  default headers (`var api = new http.Client("http://host")`,
+  `api.header(name, value)`, `api.get("/path")`), and a `Response`
+  answers `ok()` (200-299), `text()` (UTF-8 or absent), and `json()`
+  (a `json.Json` document, or the error it says). Still one request
+  per connection - no keep-alive pool, honestly. http's internals now
+  ride `io.send`/`io.drain`.
 - `std.io` arrives: the pure byte-stream contract. `interface Reader`
   (`read(buffer) -> i64!`, zero is the end) and `interface Writer`
   (`write(buffer, count) -> i64!`, `flush() -> !`), plus the two loops
