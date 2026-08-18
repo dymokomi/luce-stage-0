@@ -77,10 +77,10 @@ test "a listener opens, says its port, and carries one round trip" {
         \\    return got
         \\
         \\func main() -> !:
-        \\    let door = try network.listen(0)
+        \\    let door = try new network.Listener(0)
         \\    print(str(try door.port()))
         \\
-        \\    let client = try network.connect("localhost", try door.port())
+        \\    let client = try network.Connection.dial("localhost", try door.port())
         \\    let served = try door.accept()
         \\
         \\    var hello = new array[u8](5)
@@ -109,7 +109,7 @@ test "dropping the dialing end is the served end's end of stream" {
     // sentence a file ends with, from a peer instead of a disk.
     try hosted.prints(
         \\func dial_and_send(door: network.Listener) -> network.Connection!:
-        \\    let client = try network.connect("localhost", 4000)
+        \\    let client = try network.Connection.dial("localhost", 4000)
         \\    let served = try door.accept()
         \\    var one = new array[u8](1)
         \\    one[0] = 42
@@ -119,7 +119,7 @@ test "dropping the dialing end is the served end's end of stream" {
         \\    return served
         \\
         \\func main() -> !:
-        \\    let door = try network.listen(4000)
+        \\    let door = try new network.Listener(4000)
         \\    let served = try dial_and_send(door)
         \\    var buffer = new array[u8](8)
         \\    let drained = try served.read(buffer)
@@ -135,10 +135,10 @@ test "a refused world answers io_failed naming the transport verb" {
     refused.world.refuse_network = true;
     try hosted.printsGiven(
         \\func dial() -> !:
-        \\    let held = try network.connect("localhost", 80)
+        \\    let held = try network.Connection.dial("localhost", 80)
         \\
         \\func open_door() -> !:
-        \\    let held = try network.listen(80)
+        \\    let held = try new network.Listener(80)
         \\
         \\func main():
         \\    dial() catch reason:
@@ -158,7 +158,7 @@ test "an accept with nobody dialing is the world refusing, not a hang" {
         \\    let held = try door.accept()
         \\
         \\func main() -> !:
-        \\    let door = try network.listen(5000)
+        \\    let door = try new network.Listener(5000)
         \\    wait_for_peer(door) catch reason:
         \\        print(reason)
         \\
@@ -173,7 +173,7 @@ test "a worker inherits the transport channel" {
     // while its parent dialed happily.
     try hosted.prints(
         \\func open_door() -> i64!:
-        \\    let door = try network.listen(0)
+        \\    let door = try new network.Listener(0)
         \\    return try door.port()
         \\
         \\func main() -> !:
@@ -189,7 +189,7 @@ test "a host without the transport channel fails closed" {
     // both engines, and no `catch` stands in a trap's way.
     try hosted.trapGiven(
         \\func main() -> !:
-        \\    let held = try network.listen(80)
+        \\    let held = try new network.Listener(80)
         \\
     , .{ .network = false }, .host_unavailable);
 }

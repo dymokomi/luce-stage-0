@@ -52,7 +52,7 @@ func fetch_elsewhere() -> !:
 # -- the server half, in ordinary Luce --------------------------------
 
 func serve(port: i64, reply: str) -> !:
-    let door = try network.listen(port)
+    let door = try new network.Listener(port)
     let guest = try door.accept()
     var request = new array[u8](2048)
     assert(try guest.read(request) > 0)

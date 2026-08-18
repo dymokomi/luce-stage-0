@@ -1,21 +1,21 @@
 # network — the TCP transport (docs/NETWORK.md).
 #
-# Two classes and two doors, and deliberately nothing else.  A
-# `Connection` is a byte stream to one peer; a `Listener` is a door
-# peers arrive through.  They are distinct nominal types — accepting a
-# listener where a connection belongs is a compile error, not a runtime
+# Two classes, and deliberately nothing else.  A `Connection` is a
+# byte stream to one peer; a `Listener` is a door peers arrive
+# through.  They are distinct nominal types — accepting a listener
+# where a connection belongs is a compile error, not a runtime
 # surprise — and each privately owns the host's descriptor, so no raw
-# handle enters a program.  Name resolution lives behind `connect`: a
-# program says where it wants to go, and the host owns how an address
-# is found.
+# handle enters a program.  Name resolution lives behind
+# `Connection.dial`: a program says where it wants to go, and the host
+# owns how an address is found.
 #
 # **There is no `close`.**  A connection or listener closes when its
 # last reference goes away, exactly as a `File` does, and using one
 # after that traps like any use after free.
 #
-# **Blocking is honest.**  `connect` waits for the dial, `accept`
-# waits for a peer, and `read` waits for bytes; each holds only its
-# own caller.  Other workers' printing and file I/O continue — the
+# **Blocking is honest.**  `dial` waits for the dial, `accept` waits
+# for a peer, and `read` waits for bytes; each holds only its own
+# caller.  Other workers' printing and file I/O continue — the
 # transport deliberately runs outside the host effect serialization.
 #
 # Every function that touches the world says `!`: a refused dial, a
@@ -23,13 +23,31 @@
 # carries what it said.  A read answering zero is not an error — it is
 # the end of the stream, the same sentence a file ends with.
 
-# A byte stream to one peer.  `read` fills a caller-owned buffer and
-# answers how many bytes landed — zero means the peer finished — and
-# `write` answers how many of `count` landed, which may be fewer; loop
-# on both, the way every byte channel is looped on.
-class Connection:
+import std.io
+
+# A byte stream to one peer, conforming to `io.Reader` and
+# `io.Writer`: `read` fills a caller-owned buffer and answers how many
+# bytes landed — zero means the peer finished — and `write` answers
+# how many of `count` landed, which may be fewer; loop on both, or
+# hand the connection to `io.drain` and `io.send`, the way every byte
+# channel is looped on.
+#
+# A connection has two doors — dialing out, and being accepted — and
+# both are functions rather than a public init, because neither is
+# "make me a connection from parts": each asks the world.
+class Connection: io.Reader, io.Writer:
     private:
         raw: handle
+
+    private init(raw: handle):
+        self.raw = raw
+
+    # Dial `host:port` and answer the connection.  The host resolves
+    # the name — "localhost", a DNS name, a literal address — and
+    # tries what it finds; a world that refuses every road answers the
+    # error with the reason it gave.
+    static func dial(host: str, port: i64) -> Connection!:
+        return new Connection(raw = try Builtin.socket_connect(host, port))
 
     func read(buffer: array[u8, _]) -> i64!:
         return try Builtin.handle_read(self.raw, buffer)
@@ -40,31 +58,23 @@ class Connection:
     func flush() -> !:
         try Builtin.handle_flush(self.raw)
 
-# A door peers arrive through.  `accept` waits for one connection and
-# answers it; several workers may accept on their own listeners at
-# once, and a server loops on `accept` for as long as it means to
-# serve.
+# A door peers arrive through.  `try new Listener(port)` opens it on
+# every interface — port 0 asks the host for any free port, and
+# `port()` says which one landed.  A port another program holds is the
+# world saying no.  `accept` waits for one connection and answers it;
+# several workers may accept on their own listeners at once, and a
+# server loops on `accept` for as long as it means to serve.
 class Listener:
     private:
         raw: handle
+
+    init(port: i64) -> !:
+        self.raw = try Builtin.socket_listen(port)
 
     func accept() -> Connection!:
         return new Connection(raw = try Builtin.socket_accept(self.raw))
 
     # The port this listener actually holds — the answer to
-    # `listen(0)`, which asks the host for any free port.
+    # `new Listener(0)`, which asks the host for any free port.
     func port() -> i64!:
         return try Builtin.socket_port(self.raw)
-
-# Dial `host:port` and answer the connection.  The host resolves the
-# name — "localhost", a DNS name, a literal address — and tries what
-# it finds; a world that refuses every road answers the error with the
-# reason it gave.
-func connect(host: str, port: i64) -> Connection!:
-    return new Connection(raw = try Builtin.socket_connect(host, port))
-
-# Open a door on `port`, on every interface.  Port 0 asks for any free
-# port; `listener.port()` says which one landed.  A port another
-# program holds is the world saying no.
-func listen(port: i64) -> Listener!:
-    return new Listener(raw = try Builtin.socket_listen(port))

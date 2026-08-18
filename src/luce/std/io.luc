@@ -1,0 +1,62 @@
+# io — the byte-stream contract, and the two loops every stream shares.
+#
+# A `Reader` fills a buffer you own and says how many bytes landed;
+# zero is the end.  A `Writer` takes a buffer and a count and says how
+# many landed, which may be fewer than asked — a short write is
+# ordinary, and the count coming back is what lets the next round
+# continue from where this one stopped.  The shape is C's on purpose,
+# for the reason Go kept it: everything else is a loop over these.
+#
+# `files.File` and `network.Connection` conform.  A program's own type
+# conforms by declaring the same functions, and `drain` and `send`
+# work on it unchanged — the loops are written once over the contract
+# instead of once per stream.
+#
+# The module is pure: nothing here touches the host.  What a stream's
+# read or write actually moves is the conformer's business.
+
+interface Reader:
+    # Fill the buffer from where the last read stopped and answer how
+    # many bytes landed.  Zero is the end of the stream, not an error.
+    func read(buffer: array[u8, _]) -> i64!
+
+interface Writer:
+    # Hand `count` bytes from the front of the buffer to the stream
+    # and answer how many landed.
+    func write(buffer: array[u8, _], count: i64) -> i64!
+
+    func flush() -> !
+
+# How much one round of the loops moves.  Large enough that an
+# ordinary stream is a handful of calls; small enough that the buffer
+# is not itself the memory question.
+private const chunk = 65536
+
+# Read the source to its end.
+func drain(source: Reader) -> list[u8]!:
+    var buffer = new array[u8](chunk)
+    var all = new list[u8]
+    var filled = try source.read(buffer)
+    while filled > 0:
+        var at: i64 = 0
+        while at < filled:
+            all.append(buffer[at])
+            at += 1
+        filled = try source.read(buffer)
+    return all
+
+# Write all of `data`, then flush.  A sink that accepts nothing at all
+# has stopped writing, and says so as an error instead of spinning.
+func send(sink: Writer, data: list[u8]) -> !:
+    var buffer = new array[u8](chunk)
+    var at: i64 = 0
+    while at < len(data):
+        var held: i64 = 0
+        while held < chunk and at + held < len(data):
+            buffer[held] = data[at + held]
+            held += 1
+        let sent = try sink.write(buffer, held)
+        if sent <= 0:
+            error("the write made no progress")
+        at += sent
+    try sink.flush()

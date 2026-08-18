@@ -24,6 +24,7 @@
 # cannot leak a file by forgetting a keyword, because there is no
 # keyword to forget.
 
+import std.io
 import std.strings
 import std.paths
 
@@ -173,27 +174,40 @@ func make_directory(path: str) -> !:
 # -- the u8 channel (docs/BYTES.md) ---------------------------------
 #
 # A file is bytes reached through an open handle, and text is a
-# validation the language performs on the bytes.  `open`, `create` and
-# `append_to` answer a `File`: an ordinary class holding the host's
-# descriptor, closed when its last reference goes away, and using one
-# after it is closed traps like any use after free, because it is the
-# same mistake.
+# validation the language performs on the bytes.  `new File(path)`
+# answers an ordinary class holding the host's descriptor, closed when
+# its last reference goes away; using one after it is closed traps
+# like any use after free, because it is the same mistake.
 #
-# The primitive is C-shaped on purpose: a read fills a buffer you own
-# and says how many bytes landed — zero means the file is finished —
-# and a write takes a buffer and a count and says how many landed,
-# which may be fewer than you asked for.  Everything below the three
-# doors is a loop over that, the way Go's `os.ReadFile` is a loop over
-# `Read`.
+# The primitive shape is `io`'s: a read fills a buffer you own and
+# says how many bytes landed, a write takes a buffer and a count and
+# says how many landed.  `File` conforms to `io.Reader` and
+# `io.Writer`, so the whole-file conveniences below are `io.drain` and
+# `io.send` behind a path.
+
+# How a file is opened: the three doors, named instead of numbered.
+enum Mode:
+    # From the start; the file must be there.
+    read
+    # Write from the start, creating the file and emptying it.
+    create
+    # Write at the end, creating the file if it is not there.
+    append
 
 # An open file.  The raw descriptor is private to this file — a
 # program holds a File, never a number — which is the boundary that
 # matters: the host's handle vocabulary stays behind the class that
 # owns it, the way a Swift descriptor stays behind the session object
 # wrapping it.
-class File:
+class File: io.Reader, io.Writer:
     private:
         raw: handle
+
+    # Open a file: `try new File(path)` to read,
+    # `try new File(path, files.Mode.append)` for a log.  The world
+    # decides whether the open lands, so construction is fallible.
+    init(path: str, mode: Mode = Mode.read) -> !:
+        self.raw = try Builtin.file_open(path, mode_code(mode))
 
     # Fill the buffer from where the last read stopped and answer how
     # many bytes landed.  Zero is the end of the file, not an error.
@@ -210,75 +224,33 @@ class File:
     func flush() -> !:
         try Builtin.handle_flush(self.raw)
 
-# How the three doors number themselves for the host.  Private: a
-# reader writes `files.open(path)`, never a number.
-private const mode_read = 0
-private const mode_write = 1
-private const mode_append = 2
-
-# How much one read of a whole-file convenience asks for.  Large
-# enough that an ordinary file is a handful of calls; small enough
-# that the buffer is not itself the memory question.
-private const chunk = 65536
-
-# Open a file to read from the start.  The file must be there.
-func open(path: str) -> File!:
-    return new File(raw = try Builtin.file_open(path, mode_read))
-
-# Open a file to write from the start, creating it and emptying it.
-func create(path: str) -> File!:
-    return new File(raw = try Builtin.file_open(path, mode_write))
-
-# Open a file to write at its end, creating it if it is not there.
-func append_to(path: str) -> File!:
-    return new File(raw = try Builtin.file_open(path, mode_append))
+# How the doors number themselves for the host.  Private: a reader
+# writes `Mode.append`, never a number.
+private func mode_code(mode: Mode) -> i64:
+    match mode:
+        read:
+            return 0
+        create:
+            return 1
+        append:
+            return 2
 
 # The whole file, as bytes.  Nothing here asks whether the bytes are
 # text — that is what `strings.from_bytes` is for — so this reads a
 # JPEG as happily as a note.
 func read_bytes(path: str) -> list[u8]!:
-    var f = try open(path)
-    var buffer = new array[u8](chunk)
-    var all = new list[u8]
-    var filled = try f.read(buffer)
-    while filled > 0:
-        var at: i64 = 0
-        while at < filled:
-            all.append(buffer[at])
-            at += 1
-        filled = try f.read(buffer)
-    return all
+    var f = try new File(path)
+    return try io.drain(f)
 
 # Write bytes, replacing whatever was there.
 func write_bytes(path: str, data: list[u8]) -> !:
-    var f = try create(path)
-    try send(f, data)
+    var f = try new File(path, Mode.create)
+    try io.send(f, data)
 
 # Add bytes to the end of a file, creating it if it is not there.
 func append_bytes(path: str, data: list[u8]) -> !:
-    var f = try append_to(path)
-    try send(f, data)
-
-# The loop both writers share: fill a buffer from where the last write
-# stopped, hand it over, and go round again.  A i16 write is
-# ordinary and not a failure — which is the whole reason `write`
-# answers a count — so the next round refills from `at + sent` rather
-# than re-sending bytes that already landed.  A host that accepts
-# nothing at all has stopped writing, and says so as an error instead
-# of spinning.
-private func send(f: File, data: list[u8]) -> !:
-    var buffer = new array[u8](chunk)
-    var at: i64 = 0
-    while at < len(data):
-        var held: i64 = 0
-        while held < chunk and at + held < len(data):
-            buffer[held] = data[at + held]
-            held += 1
-        let sent = try f.write(buffer, held)
-        if sent <= 0:
-            error("the write made no progress")
-        at += sent
-    try f.flush()
+    var f = try new File(path, Mode.append)
+    try io.send(f, data)
 
 # -- listing a directory ----------------------------------------------
 

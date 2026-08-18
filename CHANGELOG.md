@@ -6,6 +6,24 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `std.io` arrives: the pure byte-stream contract. `interface Reader`
+  (`read(buffer) -> i64!`, zero is the end) and `interface Writer`
+  (`write(buffer, count) -> i64!`, `flush() -> !`), plus the two loops
+  every stream shares — `io.drain(source)` reads a `Reader` to its end
+  and `io.send(sink, data)` writes everything and flushes, erroring
+  rather than spinning on a sink that accepts nothing. `files.File`
+  and `network.Connection` conform, and a program's own type conforms
+  by declaring the same functions. With the contract in place,
+  opening moved onto the classes themselves: `files.open`/`create`/
+  `append_to` became the `files.Mode` enum and a fallible
+  `File` init — `try new files.File(path)`,
+  `try new files.File(path, files.Mode.append)` — and
+  `network.connect`/`listen` became
+  `network.Connection.dial(host, port)` (a static function over a
+  private init, because both of a connection's doors ask the world)
+  and `try new network.Listener(0)`.
+  `std.http` dials through `Connection.dial`; its public surface is
+  unchanged.
 - Selective imports: `from geo import Point, length as span` binds the
   named public members bare — any declaration kind — so a file writes
   `Point`, not `geo.Point`. The module namespace stays unbound unless a
@@ -30,8 +48,9 @@ release is a complete toolchain rather than a compatibility promise.
   server-and-client conversation in one program.
 - `std.network` arrives: TCP transport as two library classes,
   `Connection` (read/write/flush — the byte channel files carry) and
-  `Listener` (accept/port), with `connect(host, port)` and
-  `listen(port)`; port 0 asks for any free port. No `close()` — ARC's
+  `Listener` (accept/port), dialed with `Connection.dial(host, port)`
+  and opened with `try new Listener(port)`; port 0 asks for any free
+  port. No `close()` — ARC's
   last release closes, and a dropped peer reads as end of stream.
   Refusals are `io_failed` with the world's reason; a host without the
   channel traps `host_unavailable`. The socket callbacks run outside

@@ -1,8 +1,8 @@
 # std.network
 
 `std.network` is the TCP transport: dial a host, open a listening door,
-and move bytes. It is deliberately small — two classes, two functions —
-and every operation that touches the world is fallible: a refused dial,
+and move bytes. It is deliberately small — two classes, and nothing
+else — and every operation that touches the world is fallible: a refused dial,
 a taken port, or a reset peer arrives as an ordinary error carrying the
 world's reason.
 
@@ -20,27 +20,34 @@ does, and using one after that traps like any use after free.
 ## Dial
 
 ```text
-network.connect(host: str, port: i64) -> network.Connection!
+network.Connection.dial(host: str, port: i64) -> network.Connection!
 ```
 
-`connect` resolves the name — `"localhost"`, a DNS name, or a literal
-address — and dials it. The host owns how an address is found and which
-family answers; no address vocabulary crosses into the program. A world
-that refuses every road answers the error with the reason it gave.
+`Connection.dial` resolves the name — `"localhost"`, a DNS name, or a
+literal address — and dials it. The host owns how an address is found
+and which family answers; no address vocabulary crosses into the
+program. A world that refuses every road answers the error with the
+reason it gave. A connection has two doors — dialing out, and being
+accepted — and both ask the world, which is why `dial` is a static
+function and `Connection` has no public `init`: there is no "make me a
+connection from parts".
 
 ## Listen and accept
 
 ```text
-network.listen(port: i64) -> network.Listener!
+try new network.Listener(port: i64) -> Listener!
 listener.accept() -> network.Connection!
 listener.port() -> i64!
 ```
 
-`listen` opens a door on every interface. Port `0` asks for any free
-port, and `port()` answers which one landed — which is how a program
-listens without claiming a number in advance. `accept` waits for one
-peer and answers the connection; a server loops on it for as long as it
-means to serve. A port another program holds is the world saying no.
+A `Listener` is constructed the way any class is — with `new` — and its
+`init` is fallible because opening the door asks the world.
+`try new network.Listener(0)` opens a door on every interface: port `0`
+asks for any free port, and `port()` answers which one landed — which
+is how a program listens without claiming a number in advance. `accept`
+waits for one peer and answers the connection; a server loops on it for
+as long as it means to serve. A port another program holds is the world
+saying no.
 
 ## Move bytes
 
@@ -50,7 +57,10 @@ conn.write(buffer: array[u8, _], count: i64) -> i64!
 conn.flush() -> !
 ```
 
-A `Connection` carries the same C-shaped byte channel a `File` does.
+A `Connection` carries the same C-shaped byte channel a `File` does,
+and conforms to [`io.Reader` and `io.Writer`](/library/io/), so
+`io.drain` and `io.send` loop over one the way they loop over any
+stream.
 `read` fills a caller-owned buffer and answers how many bytes landed;
 **zero is the end of the stream** — the peer released its last
 reference, and the sentence is the same one a file ends with. `write`
@@ -65,8 +75,8 @@ other workers keep printing and reading files while one waits.
 import std.network
 
 func main() -> !:
-    let door = try network.listen(0)
-    let client = try network.connect("127.0.0.1", try door.port())
+    let door = try new network.Listener(0)
+    let client = try network.Connection.dial("127.0.0.1", try door.port())
     let served = try door.accept()
 
     var word = new array[u8](2)

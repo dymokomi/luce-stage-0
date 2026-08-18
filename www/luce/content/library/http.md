@@ -62,7 +62,7 @@ import std.strings
 
 func serve_one() -> !:
     let crlf = str(char(13)) + "\n"
-    let door = try network.listen(18641)
+    let door = try new network.Listener(18641)
     let guest = try door.accept()
     var request = new array[u8](2048)
     let heard = try guest.read(request)

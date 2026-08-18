@@ -644,7 +644,7 @@ test "constants: file.read through a parameter traps before changing the world" 
         \\    return try file.read(into)
         \\
         \\func main() -> !:
-        \\    var file = try files.open("notes.txt")
+        \\    var file = try new files.File("notes.txt")
         \\    let count = try read(file, BUFFER)
         \\    print(str(count))
         \\

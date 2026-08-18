@@ -124,7 +124,7 @@ test "a handle opens, reads a count, and its last reference closes it" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
+        \\    var f = try new files.File("notes.txt")
         \\    var buffer = new array[u8](4)
         \\    print(str(try f.read(buffer)))
         \\    print(str(i32(buffer[0])))
@@ -173,7 +173,7 @@ test "a handle returns out of the function that opened it" {
         \\import std.files
         \\
         \\func opened() -> files.File!:
-        \\    return try files.open("notes.txt")
+        \\    return try new files.File("notes.txt")
         \\
         \\func main() -> !:
         \\    var f = try opened()
@@ -209,7 +209,7 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\
         \\func main() -> !:
         \\    let packet = Packet(
-        \\        handle = try files.open("notes.txt"),
+        \\        handle = try new files.File("notes.txt"),
         \\        callback = scale,
         \\    )
         \\    print(str(try read(packet)))
@@ -226,7 +226,7 @@ test "opening a file that is not there is an error, not a trap" {
         \\
         \\func main():
         \\    var note = ""
-        \\    files.open("missing.txt") catch reason:
+        \\    new files.File("missing.txt") catch reason:
         \\        note = reason
         \\    print("no: " + note)
         \\
@@ -345,7 +345,7 @@ test "a host with no file services at all fails closed" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
+        \\    var f = try new files.File("notes.txt")
         \\
     , .nothing, .host_unavailable);
 }

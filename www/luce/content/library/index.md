@@ -9,10 +9,10 @@ of that second kind.
 
 Each module follows the same language rules as application code. Containers
 are shared ARC references, arithmetic is checked, and a host-facing module is
-available only when the program has a host. `std.paths`, `std.math`,
-`std.strings`, `std.lists`, `std.json`, and the byte-only parts of `std.zip`
-are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`,
-`std.network`, and the file doors in `std.zip` use host services.
+available only when the program has a host. `std.io`, `std.paths`,
+`std.math`, `std.strings`, `std.lists`, `std.json`, and the byte-only parts
+of `std.zip` are pure; `std.files`, `std.os`, `std.term`, `std.ui`,
+`std.gpu`, `std.network`, and the file doors in `std.zip` use host services.
 
 The low-level `std.ui` and `std.gpu` modules are host boundaries. On macOS an
 installed runner may provide a Metal-backed implementation; a host without a
@@ -25,6 +25,7 @@ fact at their boundary rather than making every application know the OS API.
 |---|---|
 | [`std.math`](/library/math/) | scalar math, array reductions, and a seeded generator |
 | [`std.strings`](/library/strings/) | search, splitting, formatting, characters, and UTF-8 bytes |
+| [`std.io`](/library/io/) | the Reader/Writer byte-stream contract and its drain/send loops |
 | [`std.files`](/library/files/) | text, bytes, directories, and open files |
 | [`std.lists`](/library/lists/) | stable comparator sorting for lists |
 | [`std.paths`](/library/paths/) | joining and inspecting path text without touching the host |

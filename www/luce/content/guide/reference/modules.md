@@ -292,7 +292,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.term, std.zip, std.json, std.gpu, std.ui, std.network, std.http [luce.import.standard]
+main.luc:1:1: there is no standard module std.nope; the standard library is std.io, std.math, std.files, std.strings, std.lists, std.paths, std.os, std.term, std.zip, std.json, std.gpu, std.ui, std.network, std.http [luce.import.standard]
     import std.nope
     ^~~~~~~~~~~~~~~
 ```
@@ -302,10 +302,12 @@ They obey every language rule including the host gate: `import
 std.files` inside a program compiled without host access is a compile
 error, because file access genuinely does not exist there.
 
-The modules are [`math`](/library/math/), [`strings`](/library/strings/),
-[`files`](/library/files/), [`lists`](/library/lists/),
-[`paths`](/library/paths/), [`os`](/library/os/), [`zip`](/library/zip/),
-[`json`](/library/json/), [`gpu`](/library/gpu/) and [`ui`](/library/ui/).
+The modules are [`io`](/library/io/), [`math`](/library/math/),
+[`strings`](/library/strings/), [`files`](/library/files/),
+[`lists`](/library/lists/), [`paths`](/library/paths/),
+[`os`](/library/os/), [`term`](/library/term/), [`zip`](/library/zip/),
+[`json`](/library/json/), [`gpu`](/library/gpu/), [`ui`](/library/ui/),
+[`network`](/library/network/) and [`http`](/library/http/).
 `std.lists` currently contributes the routed
 `xs.sort_by(before)` method rather than a namespace function.
 

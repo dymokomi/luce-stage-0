@@ -26,17 +26,18 @@ cost of changing the embedded library.
 
 | Import | Purpose | Main public surface |
 |---|---|---|
+| `std.io` | the pure byte-stream contract | interfaces `Reader` (`read`) and `Writer` (`write`, `flush`); the `drain` and `send` loops over them |
 | `std.math` | scalar math, array reductions, deterministic random values | constants `pi`, `tau`, `e`; rounding, exp/log/power, trigonometry, vector reductions and transforms, `Rng` |
 | `std.strings` | operations built above core UTF-8 scalar primitives | find/count/prefix/suffix, character classes, trim/case/replace/repeat, split/join, width/take/pad, decimal formatting, byte conversion |
 | `std.lists` | element-type-specialized list algorithms | stable `list.sort_by(func(T, T) -> bool)` routed as a method after import |
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
-| `std.files` | fallible whole-file, directory, and handle APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `File` open/create/append, entries/list |
+| `std.files` | fallible whole-file, directory, and open-file APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `Mode` and the `File` class (fallible `init(path, mode)`, conforming to `io.Reader`/`io.Writer`), entries/list |
 | `std.os` | grouped console/time/environment/terminal/process services and machine facts | line input, standard error, clocks, environment, `os.term`, `os.shell.run`, memory and CPU facts |
 | `std.term` | short terminal compatibility surface | rows/columns, clear/move/style/write/flush |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |
-| `std.network` | TCP transport | `Connection` read/write/flush, `Listener` accept/port, `connect`, `listen` |
+| `std.network` | TCP transport | `Connection` (static `dial`, read/write/flush, conforming to `io.Reader`/`io.Writer`), `Listener` (fallible `init(port)`, accept/port) |
 | `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Response` status/headers/body; status codes are data |
 | `std.ui` | low-level native windows | fallible `open` and a window-owned GPU surface |
 
@@ -46,8 +47,8 @@ resolution and standard-module embedding as two honest mechanisms.
 
 ## Pure and hosted modules
 
-Most standard code is pure Luce. `math`, `strings`, `lists`, `paths`, `json`,
-and the codec portions of `zip` use language operations only. `files`, `os`,
+Most standard code is pure Luce. `io`, `math`, `strings`, `lists`, `paths`,
+`json`, and the codec portions of `zip` use language operations only. `files`, `os`,
 `ui`, `gpu`, and `network` reach host services through `Builtin.NAME`, a synthetic
 compiler namespace accepted only in embedded standard-library source.
 `std.term` delegates to `std.os`.

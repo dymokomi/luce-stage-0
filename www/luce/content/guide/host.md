@@ -160,17 +160,18 @@ func main() -> !:
 (not text as a string either)
 ```
 
-`files.open` returns a `File`, an ordinary `std.files` class that owns the
-open descriptor. ARC closes the descriptor after the last strong reference
-goes away. A file read fills a byte array and returns the number of bytes
-read:
+`try new files.File(path)` opens a `File`, an ordinary `std.files` class
+that owns the open descriptor; a second `files.Mode` argument chooses
+`Mode.read`, `Mode.create`, or `Mode.append`, and reading is the default.
+ARC closes the descriptor after the last strong reference goes away. A
+file read fills a byte array and returns the number of bytes read:
 
 ```luce run
 import std.files
 
 func main() -> !:
     try files.write("stock.txt", "fig\npear\nplum\n")
-    var f = try files.open("stock.txt")
+    var f = try new files.File("stock.txt")
     var buffer = new array[u8](4)
     print(str(try f.read(buffer)))
     print(str(try f.read(buffer)))

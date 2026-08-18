@@ -54,7 +54,7 @@ private func line_end() -> str:
 
 private func exchange(method: str, url: str, body: list[u8], content_type: str) -> Response!:
     let place = try split_url(url)
-    let conn = try network.connect(place.host, place.port)
+    let conn = try network.Connection.dial(place.host, place.port)
 
     let crlf = line_end()
     var head = method + " " + place.path + " HTTP/1.1" + crlf

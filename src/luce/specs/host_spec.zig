@@ -554,7 +554,7 @@ test "an uncaught error names its code, its words, and where it was raised" {
     // `try file_write` inside `save`, not the `try save` in `main`.
     // The public standard wrapper is the operation that raised. Its raw
     // `Builtin.file_write` implementation name remains hidden.
-    try testing.expectEqualStrings("files.write std/files.luc:116:5\n", session.trace());
+    try testing.expectEqualStrings("files.write std/files.luc:117:5\n", session.trace());
 }
 
 test "error() raises the program's own words, and catch discards them" {

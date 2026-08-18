@@ -293,13 +293,16 @@ func main(args: list[str]) -> !:
 ## Opening files
 
 For streaming — reading or writing a file a chunk at a time rather than
-whole — `std.files` opens a `File`:
+whole — a program constructs a `File` with `new`, and the fallible
+`init(path: str, mode: Mode = Mode.read) -> !` asks the world for the
+descriptor. `files.Mode` names the three doors instead of numbering
+them:
 
-| function | shape | opens |
-|---|---|---|
-| `open(path)` | `-> File!` | an existing file, to read from the start |
-| `create(path)` | `-> File!` | a file to write from the start, creating and emptying it |
-| `append_to(path)` | `-> File!` | a file to write at its end, creating it if absent |
+| construction | opens |
+|---|---|
+| `try new files.File(path)` | an existing file, to read from the start (`Mode.read`, the default) |
+| `try new files.File(path, files.Mode.create)` | a file to write from the start, creating and emptying it |
+| `try new files.File(path, files.Mode.append)` | a file to write at its end, creating it if absent |
 
 `files.File` is an ordinary ARC class with the byte methods `read`,
 `write`, and `flush`; the host descriptor it owns is private to the
@@ -324,8 +327,8 @@ f.close()
 
 | Python | Luce | why |
 |---|---|---|
-| `open(p, "w")` | opening modes are named doors (`files.create`, `files.append_to`) | a mode string is a magic value with no type and no completion |
-| `with open(p) as f:` | `var f = try files.open(p)` | ARC closes at the last strong release |
+| `open(p, "w")` | opening modes are a named enum (`files.Mode.create`, `files.Mode.append`) | a mode string is a magic value with no type and no completion |
+| `with open(p) as f:` | `var f = try new files.File(p)` | ARC closes at the last strong release |
 | `f.close()` | let the last reference go | a `close()` would be a second lifetime story |
 | `for line in f:` | `files.read_lines(p)`, or a loop over the byte handle | Luce has no generators |
 | `os.path.join(a, b, c)` | `paths.joined([a, b, c])` | no variadics, no `/` operator |

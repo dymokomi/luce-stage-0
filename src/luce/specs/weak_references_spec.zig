@@ -194,7 +194,7 @@ test "a weak files.File observes the descriptor's lifetime without extending it"
         \\func main() -> !:
         \\    weak var observed: files.File?
         \\    if true:
-        \\        var f = try files.open("notes.txt")
+        \\        var f = try new files.File("notes.txt")
         \\        observed = f
         \\        let live = observed
         \\        if live == none:

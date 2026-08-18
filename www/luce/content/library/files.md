@@ -76,20 +76,38 @@ Use the byte API when the file is not necessarily UTF-8. It treats a file as
 
 | Signature | Result |
 |---|---|
-| `files.open(path: str) -> File!` | opens from the beginning for reading |
-| `files.create(path: str) -> File!` | opens for writing, creating and truncating |
-| `files.append_to(path: str) -> File!` | opens for writing at the end, creating if needed |
 | `files.read_bytes(path: str) -> list[u8]!` | reads the complete file as bytes |
 | `files.write_bytes(path: str, data: list[u8]) -> !` | replaces the file with bytes |
 | `files.append_bytes(path: str, data: list[u8]) -> !` | appends bytes |
 
-`File` is an ordinary class. Assignment shares one ARC reference, `weak`
-storage works as it does for any class, and the descriptor it wraps is a
-private field no program reaches directly. There is no `close` method —
-`f.close()` is the ordinary class diagnostic `files.File has no method
-close` — because the last strong release already closes the descriptor.
+An open file is made the way any class instance is made — with `new` —
+and construction is fallible because the world decides whether the open
+lands:
 
-A `File` has three methods:
+```text
+try new files.File(path: str, mode: Mode = Mode.read) -> File!
+```
+
+`Mode` names the three doors, instead of numbering them or spelling
+them in a mode string:
+
+| Mode | Opens |
+|---|---|
+| `Mode.read` | from the start, to read; the file must be there |
+| `Mode.create` | to write from the start, creating the file and emptying it |
+| `Mode.append` | to write at the end, creating the file if it is not there |
+
+`mode` defaults to `Mode.read`, so `try new files.File(path)` opens a
+file to read and `try new files.File(path, files.Mode.append)` opens a
+log. `File` is an ordinary class. Assignment shares one ARC reference,
+`weak` storage works as it does for any class, and the descriptor it
+wraps is a private field no program reaches directly. There is no
+`close` method — `f.close()` is the ordinary class diagnostic
+`files.File has no method close` — because the last strong release
+already closes the descriptor.
+
+A `File` conforms to [`io.Reader` and `io.Writer`](/library/io/) and
+has three methods:
 
 | Method | Behavior |
 |---|---|

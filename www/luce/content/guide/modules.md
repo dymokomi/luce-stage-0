@@ -144,15 +144,18 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.term, std.zip, std.json, std.gpu, std.ui, std.network, std.http [luce.import.standard]
+main.luc:1:1: there is no standard module std.nope; the standard library is std.io, std.math, std.files, std.strings, std.lists, std.paths, std.os, std.term, std.zip, std.json, std.gpu, std.ui, std.network, std.http [luce.import.standard]
     import std.nope
     ^~~~~~~~~~~~~~~
 ```
 
-The current modules are [`math`](/library/math/), [`strings`](/library/strings/),
-[`files`](/library/files/), [`lists`](/library/lists/), [`paths`](/library/paths/),
-[`os`](/library/os/), [`term`](/library/term/), [`zip`](/library/zip/), and
-[`json`](/library/json/), plus [`gpu`](/library/gpu/) and [`ui`](/library/ui/).
+The current modules are [`io`](/library/io/), [`math`](/library/math/),
+[`strings`](/library/strings/), [`files`](/library/files/),
+[`lists`](/library/lists/), [`paths`](/library/paths/),
+[`os`](/library/os/), [`term`](/library/term/), [`zip`](/library/zip/),
+[`json`](/library/json/), [`network`](/library/network/), and
+[`http`](/library/http/), plus [`gpu`](/library/gpu/) and
+[`ui`](/library/ui/).
 
 ## Source files
 

@@ -188,6 +188,7 @@ pub const Loader = struct {
 pub const standard_namespace = "std";
 
 const standard_modules = [_]struct { name: []const u8, source: []const u8 }{
+    .{ .name = "io", .source = @embedFile("../std/io.luc") },
     .{ .name = "math", .source = @embedFile("../std/math.luc") },
     .{ .name = "files", .source = @embedFile("../std/files.luc") },
     .{ .name = "strings", .source = @embedFile("../std/strings.luc") },

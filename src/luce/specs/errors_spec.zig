@@ -1521,7 +1521,7 @@ test "luce.sema.type: len measures a container, and a resource is not one" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    let f = try files.create("/tmp/luce-len-of-a-file")
+        \\    let f = try new files.File("/tmp/luce-len-of-a-file", files.Mode.create)
         \\    assert(len(f) == 0)
         \\
     ,
@@ -4274,7 +4274,7 @@ test "luce.sema.method: files.File has no close; ARC's last release is the close
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
+        \\    var f = try new files.File("notes.txt")
         \\    f.close()
         \\
     , "luce.sema.method", "files.File has no method close");
@@ -4310,7 +4310,7 @@ test "luce.sema.fallible: a handle's read is fallible like every file service" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
+        \\    var f = try new files.File("notes.txt")
         \\    var buffer = new array[u8](4)
         \\    let got = f.read(buffer)
         \\
@@ -5573,8 +5573,8 @@ test "luce.sema.host: files.read is gated" {
     );
 }
 
-test "luce.sema.host: files.open is gated" {
-    try expectRejected("import std.files\n\nfunc main():\n    let f = files.open(\"x\")\n", "luce.sema.host");
+test "luce.sema.host: opening a files.File is gated" {
+    try expectRejected("import std.files\n\nfunc main():\n    let f = new files.File(\"x\")\n", "luce.sema.host");
 }
 
 test "luce.sema.host: files.kind is gated" {

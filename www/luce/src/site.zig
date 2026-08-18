@@ -115,6 +115,7 @@ pub const sections = [_]Section{
         .pages = &.{
             .{ .slug = "math", .title = "std.math", .part = "Standard Library", .blurb = "Transcendentals, integer powers, whole-array reductions, and a seeded generator." },
             .{ .slug = "strings", .title = "std.strings", .part = "Standard Library", .blurb = "Everything built on the String primitives: find, split, join, trim, case, padding." },
+            .{ .slug = "io", .title = "std.io", .part = "Standard Library", .blurb = "The byte-stream contract: Reader and Writer, and the two loops every stream shares." },
             .{ .slug = "files", .title = "std.files", .part = "Standard Library", .blurb = "A thin, fallible layer over the host's file services." },
             .{ .slug = "lists", .title = "std.lists", .part = "Standard Library", .blurb = "Stable comparator sorting for every list element type, with named functions or closures." },
             .{ .slug = "paths", .title = "std.paths", .part = "Standard Library", .blurb = "Pure text over path names: join, base, dir, extension, stem." },

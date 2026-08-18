@@ -14,23 +14,28 @@ Two nominal classes and two doors:
 import std.network
 
 func main() -> !:
-    let door = try network.listen(0)
-    let client = try network.connect("localhost", try door.port())
+    let door = try new network.Listener(0)
+    let client = try network.Connection.dial("localhost", try door.port())
     let served = try door.accept()
 ```
 
-- `network.connect(host, port) -> Connection!` dials. Name resolution
-  is the host's: a program says where it wants to go, and how an
-  address is found — literal, DNS, which family answers first — never
-  crosses the boundary.
-- `network.listen(port) -> Listener!` opens a door on every interface.
-  Port `0` asks for any free port; `listener.port()` answers which one
-  landed.
+- `network.Connection.dial(host, port) -> Connection!` dials. Name
+  resolution is the host's: a program says where it wants to go, and
+  how an address is found — literal, DNS, which family answers first —
+  never crosses the boundary. A connection's two doors — dialing out
+  and being accepted — both ask the world, so `Connection` keeps its
+  `init` private and `dial` is a static function rather than a
+  "make me a connection from parts" constructor.
+- `try new network.Listener(port)` opens a door on every interface
+  through the class's fallible `init(port: i64) -> !`. Port `0` asks
+  for any free port; `listener.port()` answers which one landed.
 - `listener.accept() -> Connection!` waits for one peer.
 - A `Connection` carries the byte channel files carry — `read(buffer)`,
   `write(buffer, count)`, `flush()` — with the same contract: reads and
   writes may be short, zero read is the end of the stream, and the
-  caller loops.
+  caller loops. The contract is `std.io`'s: `Connection` conforms to
+  `io.Reader` and `io.Writer`, so `io.drain` and `io.send` loop over a
+  socket the way they loop over a file.
 
 `Connection` and `Listener` are distinct classes, so handing a door
 where a stream belongs is a compile error. Each privately owns its

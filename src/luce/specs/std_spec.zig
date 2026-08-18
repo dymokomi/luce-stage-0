@@ -865,6 +865,95 @@ test "std modules obey the host gate: files needs a host" {
 }
 
 // ---------------------------------------------------------------------------
+// io
+// ---------------------------------------------------------------------------
+//
+// The byte-stream contract is pure: a program's own conformers feed
+// `drain` and `send` with no host in the room, which is exactly the
+// claim the interfaces make — the loops are written over the contract,
+// not over any particular stream.
+
+test "io: a program's own reader and writer feed drain and send" {
+    try agreeOk(
+        \\import std.io
+        \\
+        \\class Feed: io.Reader:
+        \\    private data: list[u8]
+        \\    private at: i64
+        \\
+        \\    init(data: list[u8]):
+        \\        self.data = data
+        \\        self.at = 0
+        \\
+        \\    func read(buffer: array[u8, _]) -> i64!:
+        \\        var filled: i64 = 0
+        \\        while filled < len(buffer) and self.at < len(self.data):
+        \\            buffer[filled] = self.data[self.at]
+        \\            filled += 1
+        \\            self.at += 1
+        \\        return filled
+        \\
+        \\class Sink: io.Writer:
+        \\    private got: list[u8]
+        \\
+        \\    init():
+        \\        self.got = new list[u8]
+        \\
+        \\    func write(buffer: array[u8, _], count: i64) -> i64!:
+        \\        var at: i64 = 0
+        \\        while at < count:
+        \\            self.got.append(buffer[at])
+        \\            at += 1
+        \\        return count
+        \\
+        \\    func flush() -> !:
+        \\        return
+        \\
+        \\    func held() -> i64:
+        \\        return len(self.got)
+        \\
+        \\func main() -> !:
+        \\    var data = new list[u8]
+        \\    var fill: i64 = 0
+        \\    while fill < 300:
+        \\        data.append(u8(fill % 251))
+        \\        fill += 1
+        \\    let drained = try io.drain(new Feed(data))
+        \\    assert(len(drained) == 300)
+        \\    assert(drained[0] == 0 and drained[299] == 48)
+        \\    var sink = new Sink()
+        \\    try io.send(sink, drained)
+        \\    assert(sink.held() == 300)
+        \\
+    );
+}
+
+test "io: a source that stops writing is an error, not a spin" {
+    try agreeOk(
+        \\import std.io
+        \\
+        \\class Stuck: io.Writer:
+        \\    marker: i64
+        \\
+        \\    init():
+        \\        self.marker = 0
+        \\
+        \\    func write(buffer: array[u8, _], count: i64) -> i64!:
+        \\        return 0
+        \\
+        \\    func flush() -> !:
+        \\        return
+        \\
+        \\func main():
+        \\    var refused = false
+        \\    io.send(new Stuck(), [1, 2, 3]) catch reason:
+        \\        refused = len(reason) > 0
+        \\    assert(refused)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // files
 // ---------------------------------------------------------------------------
 //
@@ -879,6 +968,52 @@ fn withNotes(content: []const u8) agree.Provided {
     var provided = budget;
     provided.world = .withFile("notes.txt", content);
     return provided;
+}
+
+test "files: a File opens through its init and travels as an io.Reader" {
+    try agree.printsGiven(
+        \\import std.files
+        \\import std.io
+        \\
+        \\func gulp(source: io.Reader) -> list[u8]!:
+        \\    return try io.drain(source)
+        \\
+        \\func main() -> !:
+        \\    var f = try new files.File("notes.txt")
+        \\    let all = try gulp(f)
+        \\    print(str(len(all)))
+        \\
+    , withNotes("alpha\n"),
+        \\6
+        \\
+    );
+}
+
+test "files: the three Mode doors open, empty, and extend" {
+    // Each door opens inside its own frame: the harness world holds
+    // one handle at a time, and ARC closing the file at frame exit is
+    // exactly the shape a real program has.
+    try agree.printsGiven(
+        \\import std.files
+        \\import std.io
+        \\
+        \\func start(path: str) -> !:
+        \\    var made = try new files.File(path, files.Mode.create)
+        \\    try io.send(made, [104, 105])
+        \\
+        \\func extend(path: str) -> !:
+        \\    var more = try new files.File(path, files.Mode.append)
+        \\    try io.send(more, [33])
+        \\
+        \\func main() -> !:
+        \\    try start("out.txt")
+        \\    try extend("out.txt")
+        \\    print(try files.read("out.txt"))
+        \\
+    , withNotes("alpha\n"),
+        \\hi!
+        \\
+    );
 }
 
 test "files: exists, read_lines, write_lines and write wrap the host builtins" {
