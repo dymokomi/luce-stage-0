@@ -35,12 +35,15 @@ pub const StatementFrame = struct { statements: std.ArrayList(nodes.Statement) }
 /// the recorded tree rather than a second source-expression folder.
 pub fn constantI64(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
     return switch (node.*) {
-        .const_integer => |literal| literal.value,
+        // A literal is carried wide (i128) so `u64`'s top half fits;
+        // a value outside i64 simply is not the i64 constant asked
+        // about.
+        .const_integer => |literal| std.math.cast(i64, literal.value),
         // A folded file-scope constant materializes as its value
         // does; an integer-family one is a `const_integer`.
         .constant_ref => |use| blk: {
             const info = self.analyzer.constant_infos.items[use.constant];
-            break :blk if (info.value == .i64) info.value.i64 else null;
+            break :blk if (info.value == .integer) std.math.cast(i64, info.value.integer) else null;
         },
         .convert => |conversion| constantI64(self, conversion.operand),
         .carried_get => |carried| constantI64(self, carried.origin),

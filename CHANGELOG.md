@@ -6,6 +6,17 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `match` takes value scrutinees: an integer, `char`, `str`, or `bool`
+  dispatches by literal arms - exact values, several per arm behind
+  commas (`1, 2:`), and inclusive `low .. high` ranges for the ordered
+  scalars (`0..9:`, `'a'..'z':`). The first arm that admits the value
+  wins, so overlapping ranges are a style question - but the same
+  exact literal twice is a dead arm and is refused. `else` is required
+  unless the arms provably cover everything, which only `bool`'s
+  `true` and `false` can. A float scrutinee is refused: floats never
+  match a literal exactly, and `if` with a tolerance says what is
+  meant. `..` is a new token, and a folded constant counts as a
+  literal the compiler can read.
 - termui 0.4.0: `View` becomes a public interface -
   `draw(surface, area) -> Cursor?` and `dispatch(event, area) ->
   Response` - and the shipped components become classes conforming to

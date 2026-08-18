@@ -241,6 +241,9 @@ const Role = enum {
     /// `!`: the fallible marker (docs/FAILURE.md), never a prefix
     /// negation — `not` is the negation.
     fallible,
+    /// `..`: the inclusive range between two literals in a match
+    /// arm's patterns, and nothing else yet.
+    range,
     group_begin,
     group_end,
     brackets_begin,
@@ -260,6 +263,7 @@ const Role = enum {
             .bitwise => "keyword.operator.bitwise.luce",
             .optional => "keyword.operator.optional.luce",
             .fallible => "keyword.operator.fallible.luce",
+            .range => "keyword.operator.range.luce",
             .group_begin => "punctuation.section.group.begin.luce",
             .group_end => "punctuation.section.group.end.luce",
             .brackets_begin => "punctuation.section.brackets.begin.luce",
@@ -354,6 +358,7 @@ const symbols = [_]Symbol{
     .{ .kind = .comma, .text = ",", .role = .separator_comma },
     .{ .kind = .colon, .text = ":", .role = .separator_colon },
     .{ .kind = .dot, .text = ".", .role = .accessor },
+    .{ .kind = .dot_dot, .text = "..", .role = .range },
 };
 
 /// True for the token kinds that are neither layout, nor a word, nor

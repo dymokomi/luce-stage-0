@@ -206,7 +206,8 @@ func main():
 
 ## match
 
-`match` dispatches over an enum. Arms are bare member names of the
+`match` dispatches over an enum (and over unions and scalar values; this
+page owns the enum half). Arms are bare member names of the
 scrutinee's type — `stored:`, not `Method.stored:` — because the type is
 known and the member namespace is closed.
 

@@ -466,13 +466,17 @@ const Lexer = struct {
             ':' => try self.single(.colon),
             '?' => try self.single(.question),
             '.' => {
-                // A `.` is followed by a name (member access) or by
-                // nothing in particular.  A digit after it is one of
-                // two mistakes, and which one depends on what came
-                // before: a number just emitted makes this a second
-                // decimal point, and anything else makes it the `.5`
-                // fraction with nothing in front of it.
-                if (!isDigit(self.peek(1))) {
+                // `..` is the range spelling in a match arm's
+                // patterns; a lone `.` is member access.  A digit
+                // after a lone `.` is one of two mistakes, and which
+                // one depends on what came before: a number just
+                // emitted makes this a second decimal point, and
+                // anything else makes it the `.5` fraction with
+                // nothing in front of it.
+                if (self.peek(1) == '.') {
+                    try self.emit(.dot_dot, .{ .start = self.offset, .end = self.offset + 2 });
+                    self.offset += 2;
+                } else if (!isDigit(self.peek(1))) {
                     try self.single(.dot);
                 } else if (self.afterNumberLiteral()) {
                     try self.extraDecimalPoint();
@@ -785,7 +789,7 @@ const Lexer = struct {
         // answer to that one, so it is left alone.
         var unfinished_point = false;
         if (!is_float and self.offset < self.source.len and self.source[self.offset] == '.' and
-            !isWordStart(self.peek(1)))
+            self.peek(1) != '.' and !isWordStart(self.peek(1)))
         {
             unfinished_point = true;
             is_float = true;

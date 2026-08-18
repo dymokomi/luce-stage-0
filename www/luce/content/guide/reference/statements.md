@@ -239,9 +239,22 @@ match expression:
         ...
 ```
 
-Dispatch over an enum or a [union](#union). The scrutinee must be
-one; every arm is a bare member name of that type, and each opens a
-block. `else` is optional and comes last.
+```
+match expression:
+    0:
+        ...
+    1, 2:
+        ...
+    10..19:
+        ...
+    else:
+        ...
+```
+
+Dispatch over an enum, a [union](#union), or a scalar value — an
+integer, `char`, `str`, or `bool`. Over an enum or union, every arm is
+a bare member name of that type; over a value, every arm lists
+literals. Each arm opens a block, and `else` comes last.
 
 - Without an `else`, **every member must have an arm**, and one that
   is missing is `luce.sema.match`, by name.
@@ -250,6 +263,16 @@ block. `else` is optional and comes last.
 - Arms are ordinary statement blocks: they declare, assign, loop,
   `break`, `continue` and `return`. A match all of whose arms return
   is a return.
+- Over a value, an arm's patterns are literals the compiler can read
+  (a folded constant counts), several per arm behind commas, matched
+  against the scrutinee's own type. Integers and `char` may write an
+  inclusive range, `low .. high`, refused when empty; `str` and `bool`
+  list each value. The first arm that admits the value wins, so
+  overlapping ranges are a style question — but the same exact literal
+  twice is a dead arm and is refused. `else` is **required** unless
+  the arms provably cover everything, which only `bool`'s `true` and
+  `false` can. A float is refused as a scrutinee: floats never match
+  a literal exactly, and `if` with a tolerance says what is meant.
 - Over a union, an arm may follow its member with a parenthesized
   list of that member's payload fields. Each binds a local in the
   arm's scope **by the field's own name**; an object payload binds as
@@ -493,8 +516,8 @@ else:
     ...
 ```
 
-The condition is `bool`. There is no ternary operator; dispatch over a
-value whose cases have names is [`match`](#match).
+The condition is `bool`. There is no ternary operator; dispatch over
+an enum's members or a scalar's literal cases is [`match`](#match).
 
 ## while
 

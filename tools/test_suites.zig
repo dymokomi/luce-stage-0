@@ -37,6 +37,7 @@ pub const definitions = [_]Definition{
             "specs.text_types_spec.",
             "specs.enums_spec.",
             "specs.union_spec.",
+            "specs.match_spec.",
             "specs.errors_spec.",
             "specs.functions_spec.",
             "specs.closures_spec.",

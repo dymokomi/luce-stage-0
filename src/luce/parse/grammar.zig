@@ -2955,6 +2955,20 @@ pub const Parser = struct {
     /// list — the union payload extension (docs/UNION.md D5), names
     /// only, no types — then the block its colon opens.
     fn matchArm(self: *Parser) Error!?ast.MatchArm {
+        // A literal opens a value arm; a name opens a member arm.
+        // The two vocabularies never collide, because a member is
+        // always a bare identifier.
+        switch (self.peekKind()) {
+            .int_literal,
+            .float_literal,
+            .char_literal,
+            .string_literal,
+            .keyword_true,
+            .keyword_false,
+            .minus,
+            => return self.valueMatchArm(),
+            else => {},
+        }
         // `case stored:` — Python's second keyword, carrying nothing
         // the colon does not (docs/ENUMS.md Q3).
         if (self.peekKind() == .identifier and
@@ -3030,6 +3044,42 @@ pub const Parser = struct {
             .bindings = try bindings.toOwnedSlice(self.arena),
             .body = body,
             .span = .{ .start = name.span.start, .end = written_end },
+        };
+    }
+
+    /// One value arm: literal patterns separated by commas, each a
+    /// literal or `low .. high` — an inclusive range — then the block
+    /// its colon opens.  The parser reads expressions and stage 4
+    /// requires literals, so a non-literal is refused with what it
+    /// found rather than with a parse error.
+    fn valueMatchArm(self: *Parser) Error!?ast.MatchArm {
+        var patterns: std.ArrayList(ast.ValuePattern) = .empty;
+        defer patterns.deinit(self.arena);
+        const start = self.peek().span.start;
+        var written_end = start;
+        while (true) {
+            const low = (try self.expression()) orelse return null;
+            var high: ?*ast.Expression = null;
+            written_end = low.span().end;
+            if (self.accept(.dot_dot) != null) {
+                const top = (try self.expression()) orelse return null;
+                high = top;
+                written_end = top.span().end;
+            }
+            try patterns.append(self.arena, .{
+                .low = low,
+                .high = high,
+                .span = .{ .start = low.span().start, .end = written_end },
+            });
+            if (self.accept(.comma) == null) break;
+        }
+        const body = (try self.block("match arm")) orelse return null;
+        return .{
+            .name = "",
+            .name_span = .{ .start = start, .end = written_end },
+            .values = try patterns.toOwnedSlice(self.arena),
+            .body = body,
+            .span = .{ .start = start, .end = written_end },
         };
     }
 
@@ -3477,6 +3527,7 @@ pub fn describe(kind: Kind) []const u8 {
         .comma => "','",
         .colon => "':'",
         .dot => "'.'",
+        .dot_dot => "'..'",
         .question => "'?'",
         .bang => "'!'",
         .assign => "'='",

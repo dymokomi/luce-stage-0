@@ -230,6 +230,12 @@ complete boundary and deliberate non-goals.
 
 `if`/`elif`/`else`, `while`, counted `for`, `for value in sequence`, `break`,
 `continue`, `return`, and `match` are statements. Conditions require `bool`.
+`match` dispatches over an enum or union by member name, and over a scalar
+value — an integer, `char`, `str`, or `bool` — by literal arms: exact
+values, several per arm behind commas, and inclusive `low .. high` ranges
+for the ordered scalars. The first arm that admits the value wins, and a
+value match requires `else` unless the arms provably cover everything,
+which only `bool` can. Floats are refused as scrutinees.
 Optional narrowing is flow-sensitive for stable locals and parameters and is
 joined conservatively at branches and loops. A weak read is a fresh snapshot,
 so testing the place does not permanently narrow a later read; bind the

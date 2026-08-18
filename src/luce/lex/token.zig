@@ -150,6 +150,7 @@ pub const Kind = enum {
     comma,
     colon,
     dot,
+    dot_dot,
     /// `?`, and only ever after a type name: `i64?`, `User?`.
     question,
     /// `!`, and only ever after a return type: `-> str!`, `-> !`.

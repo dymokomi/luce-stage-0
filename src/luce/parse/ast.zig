@@ -381,10 +381,24 @@ pub const Guarded = struct { attempt: *Statement, binding: ?Name, handler: Block
 /// binds, each by the field's own name.  Empty for a bare arm, which is
 /// the whole of what an enum's arms may be and is also legal on a
 /// payload-carrying union member — the arm that only cares which one.
+/// One pattern in a value arm: a literal, or `low .. high` — an
+/// inclusive range.  The parser accepts expressions here and stage 4
+/// requires literals, so the refusal can say what it found.
+pub const ValuePattern = struct {
+    low: *Expression,
+    /// Null for an exact literal; the range's inclusive top otherwise.
+    high: ?*Expression = null,
+    span: Span,
+};
+
 pub const MatchArm = struct {
     name: []const u8,
     name_span: Span,
     bindings: []Name = &.{},
+    /// Non-empty for a value arm (`0, 1:`, `'a'..'z':`), and then
+    /// `name` is empty: the arm dispatches on literal values rather
+    /// than a member name.
+    values: []ValuePattern = &.{},
     body: Block,
     span: Span,
 };

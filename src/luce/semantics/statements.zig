@@ -213,11 +213,25 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     if (scrutinee.value_type == .variant) {
         return lowerVariantMatch(self, matched, scrutinee, temps_floor);
     }
+    if (scrutinee.value_type.isInteger() or scrutinee.value_type == .char or
+        scrutinee.value_type == .str or scrutinee.value_type == .boolean)
+    {
+        return lowerValueMatch(self, matched, scrutinee, temps_floor);
+    }
+    if (scrutinee.value_type.isFloating()) {
+        try self.fail(
+            "luce.sema.match",
+            matched.scrutinee.span(),
+            "a float never matches a literal exactly; chain if and elif with the tolerance the comparison deserves",
+            .{},
+        );
+        return;
+    }
     if (scrutinee.value_type != .enumeration) {
         try self.fail(
             "luce.sema.match",
             matched.scrutinee.span(),
-            "match dispatches over an enum or a union, and {s} is neither; chain if and elif for a value whose cases have no names{s}",
+            "match dispatches over an enum, a union, or a scalar value — an integer, char, str, or bool — and {s} is none of these{s}",
             .{
                 try self.analyzer.typeName(scrutinee.value_type),
                 try refusals.absenceAdvice(self, scrutinee.value_type, matched.scrutinee),
@@ -239,6 +253,16 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     @memset(covered, false);
     var usable = true;
     for (matched.arms, chosen) |arm, *slot| {
+        if (arm.values.len != 0) {
+            try self.fail(
+                "luce.sema.match",
+                arm.span,
+                "{s} dispatches by member name; a literal arm belongs to a match over a value",
+                .{declared.name},
+            );
+            usable = false;
+            continue;
+        }
         const member = declared.findMember(arm.name) orelse {
             try failUnknownMember(self, declared, arm.name, arm.name_span);
             usable = false;
@@ -318,7 +342,7 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, member, *recorded_arm| {
         try flow.narrowRestore(self, entry);
         try lowerBlock(self, arm.body);
-        recorded_arm.* = .{ .member = member, .bindings = &.{}, .body = self.recorded_block.? };
+        recorded_arm.* = .{ .chooses = .{ .member = member }, .bindings = &.{}, .body = self.recorded_block.? };
     }
     try flow.narrowRestore(self, entry);
     if (matched.else_block) |otherwise| {
@@ -328,7 +352,7 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
         const last = matched.arms[matched.arms.len - 1].body;
         try lowerBlock(self, last);
         recorded_arms[matched.arms.len - 1] = .{
-            .member = chosen[matched.arms.len - 1],
+            .chooses = .{ .member = chosen[matched.arms.len - 1] },
             .bindings = &.{},
             .body = self.recorded_block.?,
         };
@@ -351,6 +375,253 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
         .else_body = else_recorded,
         .span = matched.span,
     } });
+}
+
+/// `match code:` over a value — the integers, `char`, `str`, and
+/// `bool` take literal arms (ENUMS R1's discipline without the
+/// names): each arm lists exact literals and, for integers and
+/// `char`, inclusive `low .. high` ranges, several per arm behind
+/// commas.  The first arm that admits the value wins, which is what
+/// makes an overlapping range a style question rather than an error —
+/// but the same exact literal twice is a dead arm, and that is
+/// refused.  `else` is required unless the arms provably cover
+/// everything, which only `bool` can say.
+fn lowerValueMatch(
+    self: *FunctionBuilder,
+    matched: ast.Match,
+    scrutinee: Typed,
+    temps_floor: usize,
+) Error!void {
+    const value_type = scrutinee.value_type;
+    const ranged = value_type.isInteger() or value_type == .char;
+    const type_name = try self.analyzer.typeName(value_type);
+
+    var usable = true;
+    var saw_true = false;
+    var saw_false = false;
+
+    // Exact literals already claimed, for the dead-arm diagnosis.
+    // Integers, chars, and bools compare as numbers; a str compares
+    // as its interned constant-pool slot.
+    var seen_numbers: std.ArrayList(i64) = .empty;
+    defer seen_numbers.deinit(self.temporary());
+    var seen_texts: std.ArrayList(u32) = .empty;
+    defer seen_texts.deinit(self.temporary());
+
+    const recorded_patterns = try self.arena().alloc(
+        []nodes.Statement.Match.Pattern,
+        matched.arms.len,
+    );
+    for (matched.arms, recorded_patterns) |arm, *slot| {
+        slot.* = &.{};
+        if (arm.values.len == 0) {
+            try self.fail(
+                "luce.sema.match",
+                arm.name_span,
+                "a match over {s} takes literal arms, and '{s}' is a name; write the values themselves",
+                .{ type_name, arm.name },
+            );
+            usable = false;
+            continue;
+        }
+        const patterns = try self.arena().alloc(nodes.Statement.Match.Pattern, arm.values.len);
+        for (arm.values, patterns) |pattern, *recorded| {
+            recorded.* = .{ .low = scrutinee.node, .high = null };
+            const low = (try lowerPatternLiteral(self, pattern.low, value_type)) orelse {
+                usable = false;
+                continue;
+            };
+            recorded.low = low.node;
+            if (pattern.high) |top_expression| {
+                if (!ranged) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "{s} has no ranges to match: list each value, separated by commas",
+                        .{type_name},
+                    );
+                    usable = false;
+                    continue;
+                }
+                const high = (try lowerPatternLiteral(self, top_expression, value_type)) orelse {
+                    usable = false;
+                    continue;
+                };
+                recorded.high = high.node;
+                const bottom = recorder.constantI64(self, low.node) orelse unreachable;
+                const top = recorder.constantI64(self, high.node) orelse unreachable;
+                if (bottom > top) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "this range is empty: its low end is above its high end, and a range is written low .. high",
+                        .{},
+                    );
+                    usable = false;
+                    continue;
+                }
+                continue;
+            }
+            // An exact literal: claim it, once.
+            switch (low.node.*) {
+                .const_str => |text| {
+                    if (std.mem.indexOfScalar(u32, seen_texts.items, text.constant) != null) {
+                        try self.fail(
+                            "luce.sema.match",
+                            pattern.span,
+                            "this value already has an arm in this match",
+                            .{},
+                        );
+                        usable = false;
+                        continue;
+                    }
+                    try seen_texts.append(self.temporary(), text.constant);
+                },
+                .const_boolean => |literal| {
+                    const claimed = if (literal.value) &saw_true else &saw_false;
+                    if (claimed.*) {
+                        try self.fail(
+                            "luce.sema.match",
+                            pattern.span,
+                            "this value already has an arm in this match",
+                            .{},
+                        );
+                        usable = false;
+                        continue;
+                    }
+                    claimed.* = true;
+                },
+                else => {
+                    const number = recorder.constantI64(self, low.node) orelse unreachable;
+                    if (std.mem.indexOfScalar(i64, seen_numbers.items, number) != null) {
+                        try self.fail(
+                            "luce.sema.match",
+                            pattern.span,
+                            "this value already has an arm in this match",
+                            .{},
+                        );
+                        usable = false;
+                        continue;
+                    }
+                    try seen_numbers.append(self.temporary(), number);
+                },
+            }
+        }
+        slot.* = patterns;
+    }
+    if (!usable) return;
+
+    // Only `bool` can prove its arms complete; everything else needs
+    // the arm for the values nobody named.
+    const covered = value_type == .boolean and saw_true and saw_false;
+    if (matched.else_span) |span| {
+        if (covered) {
+            try self.fail(
+                "luce.sema.match",
+                span,
+                "true and false both have arms, so this else can never run; drop it",
+                .{},
+            );
+            return;
+        }
+    } else if (!covered) {
+        try self.fail(
+            "luce.sema.match",
+            matched.span,
+            "a match over {s} needs an else: the arms name some values, and something must catch the rest",
+            .{type_name},
+        );
+        return;
+    }
+
+    const held = try recorder.recordLocal(self, null, value_type, false, matched.scrutinee.span());
+    const flag = try recorder.recordLocal(self, null, .boolean, false, matched.span);
+
+    const entry = try flow.narrowSave(self);
+    defer self.temporary().free(entry);
+
+    const fallthrough = matched.else_block == null;
+    const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
+
+    const recorded_arms = try self.arena().alloc(nodes.Statement.Match.Arm, matched.arms.len);
+    var else_recorded: ?nodes.Block = null;
+    for (matched.arms[0..tested], recorded_patterns[0..tested], recorded_arms[0..tested]) |arm, patterns, *recorded_arm| {
+        try flow.narrowRestore(self, entry);
+        try lowerBlock(self, arm.body);
+        recorded_arm.* = .{
+            .chooses = .{ .values = patterns },
+            .bindings = &.{},
+            .body = self.recorded_block.?,
+        };
+    }
+    try flow.narrowRestore(self, entry);
+    if (matched.else_block) |otherwise| {
+        try lowerBlock(self, otherwise);
+        else_recorded = self.recorded_block.?;
+    } else {
+        try lowerBlock(self, matched.arms[matched.arms.len - 1].body);
+        recorded_arms[matched.arms.len - 1] = .{
+            .chooses = .{ .values = recorded_patterns[matched.arms.len - 1] },
+            .bindings = &.{},
+            .body = self.recorded_block.?,
+        };
+    }
+
+    try flow.narrowRestore(self, entry);
+    for (matched.arms) |arm| flow.widenAssignedIn(self, arm.body);
+    if (matched.else_block) |otherwise| flow.widenAssignedIn(self, otherwise);
+
+    ledger.flushTemps(self, temps_floor);
+
+    try recorder.recordStatement(self, .{ .match = .{
+        .scrutinee = scrutinee.node,
+        .held = held,
+        .flag = flag,
+        .arms = recorded_arms,
+        .else_body = else_recorded,
+        .span = matched.span,
+    } });
+}
+
+/// One pattern literal, landed on the scrutinee's type.  The parser
+/// let any expression through so this refusal can say what it found:
+/// the pattern must be a literal the compiler can read — a folded
+/// constant is one — because a match dispatches on values the program
+/// text names, not on values a run computes.
+fn lowerPatternLiteral(
+    self: *FunctionBuilder,
+    expression: *ast.Expression,
+    wanted: Type,
+) Error!?Typed {
+    self.wantPlace(wanted);
+    const lowered = (try self.lowerExpression(expression, false)) orelse return null;
+    if (!lowered.value_type.eql(wanted)) {
+        try self.fail(
+            "luce.sema.match",
+            expression.span(),
+            "this match is over {s}, and this pattern is {s}",
+            .{
+                try self.analyzer.typeName(wanted),
+                try self.analyzer.typeName(lowered.value_type),
+            },
+        );
+        return null;
+    }
+    const folded = switch (wanted) {
+        .str => lowered.node.* == .const_str,
+        .boolean => lowered.node.* == .const_boolean,
+        else => recorder.constantI64(self, lowered.node) != null,
+    };
+    if (!folded) {
+        try self.fail(
+            "luce.sema.match",
+            expression.span(),
+            "an arm's pattern is a literal the compiler can read, and this value is computed at run time",
+            .{},
+        );
+        return null;
+    }
+    return lowered;
 }
 
 /// `match j:` over a union — ENUMS R1 extended, not forked
@@ -378,6 +649,16 @@ fn lowerVariantMatch(
     @memset(covered, false);
     var usable = true;
     for (matched.arms, chosen) |arm, *slot| {
+        if (arm.values.len != 0) {
+            try self.fail(
+                "luce.sema.match",
+                arm.span,
+                "{s} dispatches by member name; a literal arm belongs to a match over a value",
+                .{declared.name},
+            );
+            usable = false;
+            continue;
+        }
         const member_index = declared.findMember(arm.name) orelse {
             try failUnknownVariantMember(self, declared, arm.name, arm.name_span);
             usable = false;
@@ -570,7 +851,7 @@ fn lowerVariantArm(
 ) Error!?nodes.Statement.Match.Arm {
     if (arm.bindings.len == 0) {
         try lowerBlock(self, arm.body);
-        return .{ .member = member_index, .bindings = &.{}, .body = self.recorded_block.? };
+        return .{ .chooses = .{ .member = member_index }, .bindings = &.{}, .body = self.recorded_block.? };
     }
     const member = self.analyzer.variants.items[variant_index].members[member_index];
     const recorded_bindings = try self.arena().alloc(nodes.Statement.Match.Binding, member.fields.len);
@@ -618,7 +899,7 @@ fn lowerVariantArm(
     const body = self.recorded_block.?;
     self.popScope();
     if (!bindings_recorded) return null;
-    return .{ .member = member_index, .bindings = recorded_bindings, .body = body };
+    return .{ .chooses = .{ .member = member_index }, .bindings = recorded_bindings, .body = body };
 }
 
 /// The members a union match with no `else` left out, named — all

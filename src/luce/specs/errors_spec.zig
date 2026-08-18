@@ -6642,7 +6642,7 @@ test "luce.sema.match: an else that can never run is refused, like every dead ar
     );
 }
 
-test "luce.sema.match: the scrutinee is an enum and nothing else" {
+test "luce.sema.match: a value match takes literal arms, not names" {
     try expectSaying(
         \\func main():
         \\    let n = 3
@@ -6652,7 +6652,170 @@ test "luce.sema.match: the scrutinee is an enum and nothing else" {
         \\
     ,
         "luce.sema.match",
-        "match dispatches over an enum or a union, and i64 is neither",
+        "a match over i64 takes literal arms, and 'one' is a name",
+    );
+}
+
+test "luce.sema.match: a class is still nothing to match on" {
+    try expectSaying(
+        \\func main():
+        \\    let items: list[i64] = [1]
+        \\    match items:
+        \\        one:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "match dispatches over an enum, a union, or a scalar value",
+    );
+}
+
+test "luce.sema.match: a float never matches a literal exactly" {
+    try expectSaying(
+        \\func main():
+        \\    let ratio = 0.5
+        \\    match ratio:
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "a float never matches a literal exactly",
+    );
+}
+
+test "luce.sema.match: a value match needs an else" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        1:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "a match over i64 needs an else",
+    );
+}
+
+test "luce.sema.match: an empty range contains nothing" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        5..1:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "this range is empty",
+    );
+}
+
+test "luce.sema.match: text has no ranges" {
+    try expectSaying(
+        \\func main():
+        \\    let word = "a"
+        \\    match word:
+        \\        "a".."b":
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "str has no ranges to match",
+    );
+}
+
+test "luce.sema.match: a pattern lands on the scrutinee's type" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        "three":
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "this match is over i64, and this pattern is str",
+    );
+}
+
+test "luce.sema.match: a computed pattern is not a literal" {
+    try expectSaying(
+        \\func main():
+        \\    let x = 2
+        \\    let n = 3
+        \\    match n:
+        \\        1 + x:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "computed at run time",
+    );
+}
+
+test "luce.sema.match: the same literal twice is a dead arm" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        1:
+        \\            return
+        \\        1:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "this value already has an arm in this match",
+    );
+}
+
+test "luce.sema.match: an else after full bool coverage cannot run" {
+    try expectSaying(
+        \\func main():
+        \\    let flag = true
+        \\    match flag:
+        \\        true:
+        \\            return
+        \\        false:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "true and false both have arms, so this else can never run",
+    );
+}
+
+test "luce.sema.match: a literal arm on an enum names nothing" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m = Method.stored
+        \\    match m:
+        \\        0:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "Method dispatches by member name",
     );
 }
 

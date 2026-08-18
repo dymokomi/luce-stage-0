@@ -291,6 +291,10 @@
           "match": "//"
         },
         {
+          "name": "keyword.operator.range.luce",
+          "match": "\\.\\."
+        },
+        {
           "name": "keyword.operator.comparison.luce",
           "match": "<|>"
         },

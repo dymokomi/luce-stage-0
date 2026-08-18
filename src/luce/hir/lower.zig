@@ -2769,36 +2769,44 @@ const Replay = struct {
         const held = self.takeSlot(null, scrutinee_type, false);
         std.debug.assert(held == matched.held);
         try self.code.store(held, scrutinee);
+        const flag: ?LocalId = if (matched.flag) |recorded| taken: {
+            const slot = self.takeSlot(null, .boolean, false);
+            std.debug.assert(slot == recorded);
+            break :taken slot;
+        } else null;
 
         const fallthrough = matched.else_body == null;
         const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.scratch());
         for (matched.arms[0..tested]) |arm| {
-            const same = if (scrutinee_type == .variant) variant_test: {
-                const tag = try self.code.emit(
-                    .{ .variant_tag = .{ .target = try self.code.load(held) } },
-                    .i64,
-                );
-                const number = try self.code.emit(.{ .const_integer = @intCast(arm.member) }, .i64);
-                break :variant_test try self.code.emit(.{ .binary = .{
-                    .op = .equal,
-                    .operand_type = .i64,
-                    .left = tag,
-                    .right = number,
-                } }, .boolean);
-            } else enum_test: {
-                const declared = self.code.enums[scrutinee_type.enumeration.index];
-                const number = try self.code.emit(
-                    .{ .const_integer = declared.members[arm.member].value },
-                    scrutinee_type,
-                );
-                break :enum_test try self.code.emit(.{ .binary = .{
-                    .op = .equal,
-                    .operand_type = scrutinee_type,
-                    .left = try self.code.load(held),
-                    .right = number,
-                } }, .boolean);
+            const same = switch (arm.chooses) {
+                .member => |member| if (scrutinee_type == .variant) variant_test: {
+                    const tag = try self.code.emit(
+                        .{ .variant_tag = .{ .target = try self.code.load(held) } },
+                        .i64,
+                    );
+                    const number = try self.code.emit(.{ .const_integer = @intCast(member) }, .i64);
+                    break :variant_test try self.code.emit(.{ .binary = .{
+                        .op = .equal,
+                        .operand_type = .i64,
+                        .left = tag,
+                        .right = number,
+                    } }, .boolean);
+                } else enum_test: {
+                    const declared = self.code.enums[scrutinee_type.enumeration.index];
+                    const number = try self.code.emit(
+                        .{ .const_integer = declared.members[member].value },
+                        scrutinee_type,
+                    );
+                    break :enum_test try self.code.emit(.{ .binary = .{
+                        .op = .equal,
+                        .operand_type = scrutinee_type,
+                        .left = try self.code.load(held),
+                        .right = number,
+                    } }, .boolean);
+                },
+                .values => |patterns| try self.replayValueTest(flag.?, held, scrutinee_type, patterns),
             };
             const arms = try self.code.openIf(same, true);
             try self.replayMatchArm(arm);
@@ -2819,6 +2827,57 @@ const Replay = struct {
         // `return`, `break`, `continue` — releases it on its own way
         // out, from the floor its statement recorded.
         try self.flushTemps(floor);
+    }
+
+    /// One value arm's admission test: any of its patterns admits the
+    /// held scrutinee.  MIR has no boolean and/or instructions — the
+    /// words are control flow — so the test is a flag slot written by
+    /// nested ifs over effect-free comparisons: one body, no
+    /// duplication, and LLVM folds the chain the way it folds any
+    /// compare tree.
+    fn replayValueTest(
+        self: *Replay,
+        flag: LocalId,
+        held: LocalId,
+        scrutinee_type: Type,
+        patterns: []const nodes.Statement.Match.Pattern,
+    ) Error!mir.Register {
+        try self.code.store(flag, try self.code.emit(.{ .const_boolean = false }, .boolean));
+        for (patterns) |pattern| {
+            if (pattern.high) |top| {
+                const above = try self.code.emit(.{ .binary = .{
+                    .op = .greater_equal,
+                    .operand_type = scrutinee_type,
+                    .left = try self.code.load(held),
+                    .right = try self.replayValue(pattern.low),
+                } }, .boolean);
+                const low_arm = try self.code.openIf(above, true);
+                const below = try self.code.emit(.{ .binary = .{
+                    .op = .less_equal,
+                    .operand_type = scrutinee_type,
+                    .left = try self.code.load(held),
+                    .right = try self.replayValue(top),
+                } }, .boolean);
+                const high_arm = try self.code.openIf(below, true);
+                try self.code.store(flag, try self.code.emit(.{ .const_boolean = true }, .boolean));
+                try self.code.elseArm(high_arm);
+                try self.code.closeIf(high_arm);
+                try self.code.elseArm(low_arm);
+                try self.code.closeIf(low_arm);
+            } else {
+                const same = try self.code.emit(.{ .binary = .{
+                    .op = .equal,
+                    .operand_type = scrutinee_type,
+                    .left = try self.code.load(held),
+                    .right = try self.replayValue(pattern.low),
+                } }, .boolean);
+                const arm = try self.code.openIf(same, true);
+                try self.code.store(flag, try self.code.emit(.{ .const_boolean = true }, .boolean));
+                try self.code.elseArm(arm);
+                try self.code.closeIf(arm);
+            }
+        }
+        return self.code.load(flag);
     }
 
     fn replayMatchArm(self: *Replay, arm: nodes.Statement.Match.Arm) Error!void {

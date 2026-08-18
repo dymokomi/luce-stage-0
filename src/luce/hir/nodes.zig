@@ -1091,6 +1091,11 @@ pub const Statement = union(enum) {
         /// The hidden slot the scrutinee is spilled into — every arm's
         /// test reloads it, because a register never crosses a block.
         held: LocalId,
+        /// A value match's second hidden slot: the boolean an arm's
+        /// pattern tests write, because MIR spells `or` as control
+        /// flow.  Null for an enum or union match, which tests one
+        /// comparison per arm.
+        flag: ?LocalId = null,
         /// The arms in written order, each resolved to its member.
         arms: []const Arm,
         /// Null when the arms cover every member: the last arm is then
@@ -1098,13 +1103,28 @@ pub const Statement = union(enum) {
         else_body: ?Block,
         span: Span,
 
-        /// One arm: the member it names, its payload bindings (a union
-        /// arm's, in member-field order — empty for a bare-member
-        /// arm), and its body.
+        /// One arm: what sends the scrutinee into it, its payload
+        /// bindings (a union arm's, in member-field order — empty for
+        /// a bare-member or value arm), and its body.
         pub const Arm = struct {
-            member: u32,
+            chooses: Choice,
             bindings: []const Binding,
             body: Block,
+        };
+
+        /// How an arm claims the scrutinee: the member an enum or
+        /// union arm names, or a value arm's literal patterns.
+        pub const Choice = union(enum) {
+            member: u32,
+            values: []const Pattern,
+        };
+
+        /// One value pattern: an exact literal, or — when `high` is
+        /// present — an inclusive range.  Both refs are recorded
+        /// constants of the scrutinee's type; stage 4 proved that.
+        pub const Pattern = struct {
+            low: NodeRef,
+            high: ?NodeRef = null,
         };
 
         /// One payload binding: the arm-scoped local and the payload
@@ -1491,7 +1511,7 @@ test "nodes build, and the accessors answer every payload" {
     const bindings = try arena.alloc(Statement.Match.Binding, 1);
     bindings[0] = .{ .local = 6, .payload = narrowed };
     const arms = try arena.alloc(Statement.Match.Arm, 1);
-    arms[0] = .{ .member = 1, .bindings = bindings, .body = block.block };
+    arms[0] = .{ .chooses = .{ .member = 1 }, .bindings = bindings, .body = block.block };
     const matched: Statement = .{ .match = .{
         .scrutinee = narrowed,
         .held = 5,
@@ -1499,7 +1519,7 @@ test "nodes build, and the accessors answer every payload" {
         .else_body = null,
         .span = test_span,
     } };
-    try testing.expectEqual(@as(u32, 1), matched.match.arms[0].member);
+    try testing.expectEqual(@as(u32, 1), matched.match.arms[0].chooses.member);
     try testing.expectEqual(@as(LocalId, 6), matched.match.arms[0].bindings[0].local);
     try testing.expectEqual(test_span.start, matched.span().start);
 
