@@ -20,7 +20,7 @@ func run(app: Application):
         let surface = screen.surface
         surface.clear()
         let root = app.body()
-        let requested = view.draw(root, surface, surface.area())
+        let requested = root.draw(surface, surface.area())
         screen.present()
         var cursor = model.Cursor()
         if requested != none:
@@ -38,5 +38,5 @@ func run(app: Application):
             resize:
                 continue
             else:
-                if view.dispatch(root, event, surface.area()) == model.Response.quit:
+                if view.route(root, event, surface.area()) == model.Response.quit:
                     return

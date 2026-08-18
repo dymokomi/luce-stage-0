@@ -1,4 +1,5 @@
 import termui
+from termui import VStack, Label, EventHost
 
 class Counter: termui.Application:
     value: i64
@@ -17,18 +18,20 @@ class Counter: termui.Application:
         return termui.Response.ignored
 
     func body() -> termui.View:
-        let status = termui.Label("count " + str(self.value)).on_event(self.increment)
-        let items: list[termui.Item] = [
-            termui.Fill(".").sized(termui.Length.grow(weight = 1, minimum = 0)),
-            status.sized(termui.Length.fixed(cells = 1)),
-        ]
-        return termui.VStack(items)
+        var stack = new VStack
+        stack.add(new termui.Fill("."))
+        stack.add(
+            new EventHost(new Label("count " + str(self.value)), self.increment),
+            size = termui.Length.fixed(cells = 1),
+        )
+        return stack
 
 func test_the_public_facade_describes_and_updates_an_application():
     let app = new Counter(41)
     let first = termui.snapshot(app.body(), 3, 10)
     assert(first.line(2) == "count 41  ")
-    let response = app.increment(
+    let response = termui.route(
+        app.body(),
         termui.Event.key(pressed = termui.Key.enter),
         termui.Rect(rows = 3, columns = 10),
     )

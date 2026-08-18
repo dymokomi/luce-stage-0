@@ -57,6 +57,7 @@ const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
     package("layout", @embedFile("termui/layout.luc")) ++
     package("canvas", @embedFile("termui/canvas.luc")) ++
     package("view", @embedFile("termui/view.luc")) ++
+    package("components", @embedFile("termui/components.luc")) ++
     package("runtime", @embedFile("termui/runtime.luc"));
 
 /// One package module under both of its spellings.  Every bare spelling

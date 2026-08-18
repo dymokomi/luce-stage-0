@@ -1,0 +1,382 @@
+# The shipped components: classes conforming to view.View.
+#
+# Every component here draws through canvas.Surface and routes through
+# view.route, which is the whole of what a program's own component
+# does too — these are the first conformers, not a privileged set.
+# Values stay values (Style, Rect, Line, Length, Event); a component
+# is a class because a tree node built in `body()` is handed around by
+# reference while it is composed.
+
+import std.strings
+import model
+import input
+import layout
+import canvas
+import view
+
+# Pairing a child with its length makes a row/column mismatch
+# impossible.
+private struct Slot:
+    size: layout.Length
+    content: view.View
+
+private func lengths(slots: list[Slot]) -> list[layout.Length]:
+    var sizes = new list[layout.Length]
+    for slot in slots:
+        sizes.append(slot.size)
+    return sizes
+
+private func draw_line(
+    surface: canvas.Surface,
+    area: model.Rect,
+    row: i64,
+    line: model.Line,
+    override: model.Style?,
+):
+    var at_column: i64 = 0
+    for span in line.spans:
+        if at_column >= area.columns:
+            return
+        var style = span.style
+        if override != none:
+            style = override
+        surface.write(area, row, at_column, span.text, style)
+        at_column += span.text.width()
+
+# When absent, a child grows: filling what the siblings leave is the
+# most common intent, so it is the unstated one.
+private func slot_length(size: layout.Length?) -> layout.Length:
+    if size == none:
+        return layout.Length.grow(weight = 1, minimum = 0)
+    return size
+
+# --- stacks ----------------------------------------------------------
+
+class VStack: view.View:
+    private slots: list[Slot]
+    private spacing: i64
+
+    init(spacing: i64 = 0):
+        self.slots = new list[Slot]
+        self.spacing = spacing
+
+    func add(child: view.View, size: layout.Length? = none):
+        self.slots.append(Slot(size = slot_length(size), content = child))
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        let rectangles = layout.column(area, self.spacing, lengths(self.slots))
+        var cursor: model.Cursor? = none
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let found = self.slots[index].content.draw(surface, rectangles[index])
+            if cursor == none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        let rectangles = layout.column(area, self.spacing, lengths(self.slots))
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let response = view.route(self.slots[index].content, event, rectangles[index])
+            if response != model.Response.ignored:
+                return response
+        return model.Response.ignored
+
+class HStack: view.View:
+    private slots: list[Slot]
+    private spacing: i64
+
+    init(spacing: i64 = 0):
+        self.slots = new list[Slot]
+        self.spacing = spacing
+
+    func add(child: view.View, size: layout.Length? = none):
+        self.slots.append(Slot(size = slot_length(size), content = child))
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        let rectangles = layout.row(area, self.spacing, lengths(self.slots))
+        var cursor: model.Cursor? = none
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let found = self.slots[index].content.draw(surface, rectangles[index])
+            if cursor == none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        let rectangles = layout.row(area, self.spacing, lengths(self.slots))
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let response = view.route(self.slots[index].content, event, rectangles[index])
+            if response != model.Response.ignored:
+                return response
+        return model.Response.ignored
+
+# Children draw in list order, so the last is visually on top — and
+# events visit the visually topmost child first.
+class ZStack: view.View:
+    private children: list[view.View]
+
+    init():
+        self.children = new list[view.View]
+
+    func add(child: view.View):
+        self.children.append(child)
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        var cursor: model.Cursor? = none
+        for child in self.children:
+            let found = child.draw(surface, area)
+            if found != none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        var index = len(self.children) - 1
+        while index >= 0:
+            let response = view.route(self.children[index], event, area)
+            if response != model.Response.ignored:
+                return response
+            index -= 1
+        return model.Response.ignored
+
+# --- framed and leaf content ----------------------------------------
+
+private func frame_interior(area: model.Rect, edges: model.Edges) -> model.Rect:
+    var at_row = area.row
+    var at_column = area.column
+    var rows = area.rows
+    var columns = area.columns
+    if edges.top:
+        at_row += 1
+        rows -= 1
+    if edges.bottom:
+        rows -= 1
+    if edges.left:
+        at_column += 1
+        columns -= 1
+    if edges.right:
+        columns -= 1
+    return model.Rect(
+        row = at_row,
+        column = at_column,
+        rows = max(rows, 0),
+        columns = max(columns, 0),
+    )
+
+private func draw_frame(
+    surface: canvas.Surface,
+    area: model.Rect,
+    title: str,
+    style: model.Style,
+    edges: model.Edges,
+) -> model.Rect:
+    if area.is_empty():
+        return frame_interior(area, edges)
+    let last_row = area.rows - 1
+    let last_column = area.columns - 1
+    if edges.top:
+        for at_column in range(0, area.columns):
+            surface.stroke(area, 0, at_column, right = at_column < last_column, left = at_column > 0, style = style)
+    if edges.bottom:
+        for at_column in range(0, area.columns):
+            surface.stroke(area, last_row, at_column, right = at_column < last_column, left = at_column > 0, style = style)
+    if edges.left:
+        for at_row in range(0, area.rows):
+            surface.stroke(area, at_row, 0, up = at_row > 0, down = at_row < last_row, style = style)
+    if edges.right:
+        for at_row in range(0, area.rows):
+            surface.stroke(area, at_row, last_column, up = at_row > 0, down = at_row < last_row, style = style)
+    if edges.top and title != "" and last_column > 4:
+        let shown = title.take(last_column - 4)
+        surface.write(area, 0, 2, " " + shown + " ", style)
+    return frame_interior(area, edges)
+
+# A junction-aware border around one child.  Adjacent panels share
+# clean tees because strokes merge in the surface, not here.
+class Panel: view.View:
+    private title: str
+    private content: view.View
+    private style: model.Style
+    private edges: model.Edges
+
+    init(
+        title: str,
+        content: view.View,
+        style: model.Style = model.Style(),
+        edges: model.Edges = model.Edges(),
+    ):
+        self.title = title
+        self.content = content
+        self.style = style
+        self.edges = edges
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        let interior = draw_frame(surface, area, self.title, self.style, self.edges)
+        return self.content.draw(surface, interior)
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return view.route(self.content, event, frame_interior(area, self.edges))
+
+class Label: view.View:
+    private lines: list[model.Line]
+
+    init(text: str, style: model.Style = model.Style()):
+        let one: list[model.Line] = [model.plain(text, style)]
+        self.lines = one
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        for at_row, line in self.lines:
+            if at_row >= area.rows:
+                break
+            draw_line(surface, area, at_row, line, none)
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return model.Response.ignored
+
+class StyledText: view.View:
+    private lines: list[model.Line]
+
+    init(lines: list[model.Line]):
+        self.lines = lines
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        for at_row, line in self.lines:
+            if at_row >= area.rows:
+                break
+            draw_line(surface, area, at_row, line, none)
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return model.Response.ignored
+
+# A lazily rendered window over indexed lines.  The application owns
+# `top`, the selection, and the data; Rows owns no hidden collection.
+class Rows: view.View:
+    private total: i64
+    private render: func(i64) -> model.Line
+    private top: i64
+    private anchor: i64?
+    private selected: i64?
+    private selected_style: model.Style
+
+    init(
+        total: i64,
+        render: func(i64) -> model.Line,
+        top: i64 = 0,
+        anchor: i64? = none,
+        selected: i64? = none,
+        selected_style: model.Style = model.Style(),
+    ):
+        self.total = total
+        self.render = render
+        self.top = top
+        self.anchor = anchor
+        self.selected = selected
+        self.selected_style = selected_style
+
+    # The visible first row for a scrolling set. When a selection
+    # exists, keep it inside the window.  Public so pointer and cursor
+    # callbacks can interpret the exact same window the renderer used.
+    static func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
+        if total <= 0 or height <= 0:
+            return 0
+        var result = clamp(top, 0, max(total - height, 0))
+        if selected == none:
+            return result
+        let chosen = clamp(selected, 0, total - 1)
+        if chosen < result:
+            result = chosen
+        elif chosen >= result + height:
+            result = chosen - height + 1
+        return clamp(result, 0, max(total - height, 0))
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        let provider = self.render
+        let start = Rows.visible_top(self.top, self.total, self.anchor, area.rows)
+        let chosen = self.selected else -1
+        for at_row in range(0, area.rows):
+            let index = start + at_row
+            if index >= self.total:
+                break
+            let line = provider(index)
+            if index == chosen:
+                surface.fill(
+                    model.Rect(row = area.row + at_row, column = area.column, rows = 1, columns = area.columns),
+                    " ",
+                    self.selected_style,
+                )
+                draw_line(surface, area, at_row, line, self.selected_style)
+            else:
+                draw_line(surface, area, at_row, line, none)
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return model.Response.ignored
+
+class Fill: view.View:
+    private glyph: str
+    private style: model.Style
+
+    init(glyph: str = " ", style: model.Style = model.Style()):
+        self.glyph = glyph
+        self.style = style
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        surface.fill(area, self.glyph, self.style)
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return model.Response.ignored
+
+# Intentional absence: a slot that reserves space and does nothing.
+class Empty: view.View:
+    init():
+        return
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return model.Response.ignored
+
+# --- hosts -----------------------------------------------------------
+
+# Behavior wraps content.  The host's responder sees the event before
+# its child — outer before inner — so a root host can own global
+# commands.
+class EventHost: view.View:
+    private content: view.View
+    private respond: func(input.Event, model.Rect) -> model.Response
+
+    init(content: view.View, respond: func(input.Event, model.Rect) -> model.Response):
+        self.content = content
+        self.respond = respond
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        return self.content.draw(surface, area)
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        let responder = self.respond
+        let response = responder(event, area)
+        if response != model.Response.ignored:
+            return response
+        return view.route(self.content, event, area)
+
+# Cursor placement wraps content.  The child's request is computed
+# first and the host's `locate` overrides it when it answers one.
+class CursorHost: view.View:
+    private content: view.View
+    private locate: func(model.Rect) -> model.Cursor?
+
+    init(content: view.View, locate: func(model.Rect) -> model.Cursor?):
+        self.content = content
+        self.locate = locate
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        let child = self.content.draw(surface, area)
+        let provider = self.locate
+        let own = provider(area)
+        if own != none:
+            return own
+        return child
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        return view.route(self.content, event, area)

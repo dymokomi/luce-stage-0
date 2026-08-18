@@ -1,13 +1,16 @@
 # Declarative terminal applications through one public module.
 #
 # An application supplies `body`; `run` owns terminal sizing, frame buffering,
-# layout, drawing, cursor placement, flushing, input and shutdown.
+# layout, drawing, cursor placement, flushing, input and shutdown.  Components
+# are classes conforming to `View`; a program's own conformers compose with
+# the shipped ones through the same two-method contract.
 
 import model
 import input
 import layout
 import canvas
 import view
+import components
 import runtime as app_runtime
 
 alias Color = model.Color
@@ -25,64 +28,31 @@ alias Mouse = input.Mouse
 alias Event = input.Event
 
 alias Length = layout.Length
-alias Item = view.Item
 alias View = view.View
+alias Surface = canvas.Surface
 alias Snapshot = canvas.Snapshot
 alias Application = app_runtime.Application
+
+alias Label = components.Label
+alias StyledText = components.StyledText
+alias VStack = components.VStack
+alias HStack = components.HStack
+alias ZStack = components.ZStack
+alias Panel = components.Panel
+alias Rows = components.Rows
+alias Fill = components.Fill
+alias Empty = components.Empty
+alias EventHost = components.EventHost
+alias CursorHost = components.CursorHost
 
 func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
 
-func Empty() -> View:
-    return View.empty
-
-func Label(content: str, style: Style = Style()) -> View:
-    let one_line: list[Line] = [plain(content, style)]
-    return View.label(lines = one_line)
-
-func StyledText(content_lines: list[Line]) -> View:
-    return View.label(lines = content_lines)
-
-func Rows(
-    total: i64,
-    top: i64,
-    anchor: i64?,
-    selected: i64?,
-    render: func(i64) -> Line,
-    selected_style: Style = Style(),
-) -> View:
-    return View.lines(
-        total = total,
-        top = top,
-        anchor = anchor,
-        selected = selected,
-        render = render,
-        selected_style = selected_style,
-    )
-
-func Fill(glyph: str = " ", style: Style = Style()) -> View:
-    return View.fill(glyph = glyph, style = style)
-
-func HStack(items: list[Item], spacing: i64 = 0) -> View:
-    return View.hstack(items = items, spacing = spacing)
-
-func VStack(items: list[Item], spacing: i64 = 0) -> View:
-    return View.vstack(items = items, spacing = spacing)
-
-func ZStack(children: list[View]) -> View:
-    return View.zstack(children = children)
-
-func Panel(
-    title: str,
-    content: View,
-    style: Style = Style(),
-    edges: Edges = Edges(),
-) -> View:
-    let children: list[View] = [content]
-    return View.panel(panel_children = children, title = title, style = style, edges = edges)
-
 func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
-    return view.visible_top(top, total, selected, height)
+    return components.Rows.visible_top(top, total, selected, height)
+
+func route(child: View, event: Event, area: Rect) -> Response:
+    return view.route(child, event, area)
 
 func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
     return view.snapshot(content, rows, columns)

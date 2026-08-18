@@ -1,0 +1,137 @@
+import model
+import input
+import layout
+import canvas
+import view
+import components
+
+func test_rows_and_columns_describe_nested_geometry():
+    var across = new components.HStack()
+    across.add(new components.Fill("L"), size = layout.Length.fixed(cells = 3))
+    across.add(new components.Fill("R"))
+    var down = new components.VStack()
+    down.add(across)
+    down.add(new components.Label("status"), size = layout.Length.fixed(cells = 1))
+    let frame = view.snapshot(down, 3, 8)
+    assert(frame.line(0) == "LLLRRRRR")
+    assert(frame.line(1) == "LLLRRRRR")
+    assert(frame.line(2) == "status  ")
+
+struct Names:
+    values: list[str]
+
+    func at(index: i64) -> model.Line:
+        return model.plain(self.values[index], model.Style(foreground = index + 1))
+
+func test_rows_follow_selection_and_apply_the_selection_style():
+    let names = Names(values = ["zero", "one", "two", "three", "four"])
+    let content = new components.Rows(
+        total = 5,
+        render = names.at,
+        top = 0,
+        anchor = 4,
+        selected = 4,
+        selected_style = model.Style(foreground = 7, background = 4),
+    )
+    let frame = view.snapshot(content, 2, 7)
+    assert(frame.line(0) == "three  ")
+    assert(frame.line(1) == "four   ")
+    assert(frame.cell(1, 0).style.background == 4)
+    assert(frame.cell(1, 6).style.background == 4)
+    assert(components.Rows.visible_top(0, 5, 4, 2) == 3)
+
+func test_rows_can_follow_an_anchor_without_painting_a_selection():
+    let names = Names(values = ["zero", "one", "two", "three", "four"])
+    let content = new components.Rows(
+        total = 5,
+        render = names.at,
+        anchor = 4,
+        selected_style = model.Style(background = 4),
+    )
+    let frame = view.snapshot(content, 2, 7)
+    assert(frame.line(0) == "three  ")
+    assert(frame.line(1) == "four   ")
+    assert(frame.cell(1, 0).style.background == -1)
+
+func test_a_panel_owns_its_interior_title_and_edges():
+    let content = new components.Panel("box", new components.Label("inside"), style = model.Style(foreground = 3))
+    let frame = view.snapshot(content, 4, 10)
+    assert(frame.cell(0, 0).text == "┌")
+    assert(frame.cell(0, 9).text == "┐")
+    assert(frame.cell(3, 0).text == "└")
+    assert(frame.cell(3, 9).text == "┘")
+    assert(frame.cell(0, 3).text == "b")
+    assert(frame.cell(1, 1).text == "i")
+
+func test_overlapping_panels_merge_without_application_glyph_logic():
+    let surface = new canvas.Surface(5, 10)
+    surface.clear()
+    let one = new components.Panel("", new components.Empty())
+    one.draw(surface, model.Rect(rows = 5, columns = 6))
+    let two = new components.Panel("", new components.Empty())
+    two.draw(surface, model.Rect(row = 2, column = 5, rows = 3, columns = 5))
+    assert(surface.cell_at(2, 5).text == "├")
+    assert(surface.cell_at(4, 5).text == "┴")
+
+class Recorder:
+    trace: str
+    left: i64
+    right: i64
+
+    init():
+        self.trace = ""
+        self.left = 0
+        self.right = 0
+
+    func outer(event: input.Event, area: model.Rect) -> model.Response:
+        self.trace += "outer "
+        return model.Response.ignored
+
+    func inner(event: input.Event, area: model.Rect) -> model.Response:
+        self.trace += "inner"
+        return model.Response.handled
+
+    func left_event(event: input.Event, area: model.Rect) -> model.Response:
+        self.left += 1
+        return model.Response.handled
+
+    func right_event(event: input.Event, area: model.Rect) -> model.Response:
+        self.right += 1
+        return model.Response.handled
+
+func test_event_hosts_capture_then_continue_when_ignored():
+    let recorder = new Recorder()
+    let content = new components.EventHost(
+        new components.EventHost(new components.Label("ok"), recorder.inner),
+        recorder.outer,
+    )
+    let response = view.route(content, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 4))
+    assert(response == model.Response.handled)
+    assert(recorder.trace == "outer inner")
+
+func test_pointer_events_enter_only_the_allocated_child():
+    let recorder = new Recorder()
+    var across = new components.HStack()
+    across.add(new components.EventHost(new components.Label("left"), recorder.left_event), size = layout.Length.fixed(cells = 4))
+    across.add(new components.EventHost(new components.Label("right"), recorder.right_event))
+    let event = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 6))
+    assert(view.route(across, event, model.Rect(rows = 2, columns = 10)) == model.Response.handled)
+    assert(recorder.left == 0 and recorder.right == 1)
+
+func test_overlay_dispatches_the_visually_topmost_child_first():
+    let recorder = new Recorder()
+    var overlay = new components.ZStack()
+    overlay.add(new components.EventHost(new components.Label("bottom"), recorder.left_event))
+    overlay.add(new components.EventHost(new components.Label("top"), recorder.right_event))
+    view.route(overlay, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 10))
+    assert(recorder.left == 0 and recorder.right == 1)
+
+func test_a_cursor_host_uses_the_rectangle_the_view_received():
+    let recorder = new Recorder()
+    let content = new components.CursorHost(new components.Label("ok"), at_end)
+    let frame = view.snapshot(content, 3, 7)
+    let cursor = frame.cursor else model.Cursor()
+    assert(cursor.row == 2 and cursor.column == 6)
+
+func at_end(area: model.Rect) -> model.Cursor?:
+    return model.Cursor(row = area.row + area.rows - 1, column = area.column + area.columns - 1)

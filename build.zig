@@ -6,7 +6,7 @@ const test_suites = @import("tools/test_suites.zig");
 /// The public facade is small; model, input, layout, canvas and view form the
 /// hidden declarative engine, and runtime owns the terminal loop.
 const termui_version = "0.4.0";
-const termui_modules = [_][]const u8{ "termui", "model", "input", "layout", "canvas", "view", "runtime" };
+const termui_modules = [_][]const u8{ "termui", "model", "input", "layout", "canvas", "view", "components", "runtime" };
 
 /// The editor's own modules, its root (`editor`) first.  The specs
 /// compile the editor from these, and both its compile and its test run
@@ -1450,7 +1450,7 @@ pub fn build(b: *std.Build) void {
         .{
             .directory = "termui-" ++ termui_version,
             .modules = &termui_modules,
-            .tests = &.{ "model", "input", "layout", "canvas", "view", "facade" },
+            .tests = &.{ "model", "input", "layout", "canvas", "view", "components", "facade" },
         },
     };
     for (packages) |package| {

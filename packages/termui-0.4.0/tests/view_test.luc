@@ -1,146 +1,68 @@
 import model
 import input
-import layout
 import canvas
 import view
+import components
 
-func label(value: str, style: model.Style = model.Style()) -> view.View:
-    let lines: list[model.Line] = [model.plain(value, style)]
-    return view.View.label(lines = lines)
+# A test-local component: the openness the interface buys.  It takes
+# part in layout, drawing, and routing exactly like a shipped class.
+class Meter: view.View:
+    filled: i64
 
-func test_rows_and_columns_describe_nested_geometry():
-    let across: list[view.Item] = [
-        view.View.fill(glyph = "L", style = model.Style()).sized(layout.Length.fixed(cells = 3)),
-        view.View.fill(glyph = "R", style = model.Style()).sized(layout.Length.grow(weight = 1, minimum = 0)),
-    ]
-    let down: list[view.Item] = [
-        view.View.hstack(items = across, spacing = 0).sized(layout.Length.grow(weight = 1, minimum = 0)),
-        label("status").sized(layout.Length.fixed(cells = 1)),
-    ]
-    let frame = view.snapshot(view.View.vstack(items = down, spacing = 0), 3, 8)
-    assert(frame.line(0) == "LLLRRRRR")
-    assert(frame.line(1) == "LLLRRRRR")
-    assert(frame.line(2) == "status  ")
+    init(filled: i64):
+        self.filled = filled
 
-struct Names:
-    values: list[str]
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        for at_column in range(0, min(self.filled, area.columns)):
+            surface.write(area, 0, at_column, "#", model.Style())
+        return none
 
-    func at(index: i64) -> model.Line:
-        return model.plain(self.values[index], model.Style(foreground = index + 1))
-
-func test_lines_follow_selection_and_apply_the_selection_style():
-    let names = Names(values = ["zero", "one", "two", "three", "four"])
-    let content = view.View.lines(
-        total = 5,
-        top = 0,
-        anchor = 4,
-        selected = 4,
-        render = names.at,
-        selected_style = model.Style(foreground = 7, background = 4),
-    )
-    let frame = view.snapshot(content, 2, 7)
-    assert(frame.line(0) == "three  ")
-    assert(frame.line(1) == "four   ")
-    assert(frame.cell(1, 0).style.background == 4)
-    assert(frame.cell(1, 6).style.background == 4)
-    assert(view.visible_top(0, 5, 4, 2) == 3)
-
-func test_lines_can_follow_an_anchor_without_painting_a_selection():
-    let names = Names(values = ["zero", "one", "two", "three", "four"])
-    let content = view.View.lines(
-        total = 5,
-        top = 0,
-        anchor = 4,
-        selected = none,
-        render = names.at,
-        selected_style = model.Style(background = 4),
-    )
-    let frame = view.snapshot(content, 2, 7)
-    assert(frame.line(0) == "three  ")
-    assert(frame.line(1) == "four   ")
-    assert(frame.cell(1, 0).style.background == -1)
-
-func test_a_frame_owns_its_interior_title_and_edges():
-    let edges = model.Edges()
-    let children: list[view.View] = [label("inside")]
-    let content = view.View.panel(panel_children = children, title = "box", style = model.Style(foreground = 3), edges = edges)
-    let frame = view.snapshot(content, 4, 10)
-    assert(frame.cell(0, 0).text == "┌")
-    assert(frame.cell(0, 9).text == "┐")
-    assert(frame.cell(3, 0).text == "└")
-    assert(frame.cell(3, 9).text == "┘")
-    assert(frame.cell(0, 3).text == "b")
-    assert(frame.cell(1, 1).text == "i")
-
-func test_overlapping_strokes_merge_without_application_glyph_logic():
-    let surface = new canvas.Surface(5, 10)
-    surface.clear()
-    view.draw_frame(surface, model.Rect(rows = 5, columns = 6), "", model.Style(), model.Edges())
-    view.draw_frame(surface, model.Rect(row = 2, column = 5, rows = 3, columns = 5), "", model.Style(), model.Edges())
-    let frame = surface.snapshot(none)
-    assert(frame.cell(2, 5).text == "├")
-    assert(frame.cell(4, 5).text == "┴")
-
-class Recorder:
-    trace: str
-    left: i64
-    right: i64
-
-    init():
-        self.trace = ""
-        self.left = 0
-        self.right = 0
-
-    func outer(event: input.Event, area: model.Rect) -> model.Response:
-        self.trace += "outer "
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
         return model.Response.ignored
 
-    func inner(event: input.Event, area: model.Rect) -> model.Response:
-        self.trace += "inner"
+func test_a_user_component_draws_through_the_same_contract():
+    var stack = new components.VStack()
+    stack.add(new Meter(3))
+    let frame = view.snapshot(stack, 1, 5)
+    assert(frame.line(0) == "###  ")
+
+class Tally: view.View:
+    seen: i64
+
+    init():
+        self.seen = 0
+
+    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+        return none
+
+    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+        self.seen += 1
         return model.Response.handled
 
-    func left_event(event: input.Event, area: model.Rect) -> model.Response:
-        self.left += 1
-        return model.Response.handled
+func test_route_screens_lifecycle_events_before_any_dispatch():
+    let tally = new Tally()
+    let area = model.Rect(rows = 2, columns = 4)
+    assert(view.route(tally, input.Event.closed, area) == model.Response.ignored)
+    assert(view.route(tally, input.Event.resize, area) == model.Response.ignored)
+    assert(tally.seen == 0)
+    assert(view.route(tally, input.Event.key(pressed = input.Key.enter), area) == model.Response.handled)
+    assert(tally.seen == 1)
 
-    func right_event(event: input.Event, area: model.Rect) -> model.Response:
-        self.right += 1
-        return model.Response.handled
+func test_route_contains_pointer_events_to_the_child_rectangle():
+    let tally = new Tally()
+    let area = model.Rect(row = 1, column = 1, rows = 2, columns = 2)
+    let outside = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 0))
+    assert(view.route(tally, outside, area) == model.Response.ignored)
+    assert(tally.seen == 0)
+    let inside = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 2, column = 2))
+    assert(view.route(tally, inside, area) == model.Response.handled)
+    assert(tally.seen == 1)
 
-    func at_end(area: model.Rect) -> model.Cursor?:
-        return model.Cursor(row = area.row + area.rows - 1, column = area.column + area.columns - 1)
-
-func test_event_modifiers_capture_then_continue_when_ignored():
-    let recorder = new Recorder()
-    let content = label("ok").on_event(recorder.inner).on_event(recorder.outer)
-    let response = view.dispatch(content, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 4))
-    assert(response == model.Response.handled)
-    assert(recorder.trace == "outer inner")
-
-func test_pointer_events_enter_only_the_allocated_child():
-    let recorder = new Recorder()
-    let items: list[view.Item] = [
-        view.Item(size = layout.Length.fixed(cells = 4), content = label("left").on_event(recorder.left_event)),
-        view.Item(size = layout.Length.grow(weight = 1, minimum = 0), content = label("right").on_event(recorder.right_event)),
-    ]
-    let content = view.View.hstack(items = items, spacing = 0)
-    let event = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 6))
-    assert(view.dispatch(content, event, model.Rect(rows = 2, columns = 10)) == model.Response.handled)
-    assert(recorder.left == 0 and recorder.right == 1)
-
-func test_overlay_dispatches_the_visually_topmost_child_first():
-    let recorder = new Recorder()
-    let children: list[view.View] = [
-        label("bottom").on_event(recorder.left_event),
-        label("top").on_event(recorder.right_event),
-    ]
-    let content = view.View.zstack(children = children)
-    view.dispatch(content, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 10))
-    assert(recorder.left == 0 and recorder.right == 1)
-
-func test_a_cursor_modifier_uses_the_rectangle_the_view_received():
-    let recorder = new Recorder()
-    let content = label("ok").cursor(recorder.at_end)
-    let frame = view.snapshot(content, 3, 7)
+func test_snapshot_carries_the_cursor_a_component_requests():
+    let placed = new components.CursorHost(new Meter(1), locate_end)
+    let frame = view.snapshot(placed, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)
+
+func locate_end(area: model.Rect) -> model.Cursor?:
+    return model.Cursor(row = area.row + area.rows - 1, column = area.column + area.columns - 1)
