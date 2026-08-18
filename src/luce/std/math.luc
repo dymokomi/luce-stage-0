@@ -10,10 +10,9 @@
 # wrong answer, sin/cos trap outside that finite accuracy domain; tan
 # inherits the same boundary.
 #
-# Randomness is a Lehmer generator in a struct: `var rng =
-# math.rng(42)` then `rng.next()`.  The state is a value that is
-# written back, not an object that is mutated through a borrow; no
-# hidden globals.
+# Randomness is a Lehmer generator with identity: `var rng =
+# new math.Rng(42)` then `rng.next()`.  Every draw advances the one
+# state the class owns; no hidden globals.
 
 # These constants state `f64` explicitly because the module's accuracy
 # promises are binary64 promises. Their decimal spellings round directly
@@ -271,23 +270,22 @@ func axpy(xs: array[f64, _], factor: f64, ys: array[f64, _]):
 # Lehmer / MINSTD: state' = state * 48271 mod (2^31 - 1).  Period
 # 2^31 - 2; not cryptographic — games and shuffles, not secrets.
 #
-# The state is one `i64` in a struct, and every draw writes it back:
+# A generator is stateful identity, so `Rng` is a class: every draw
+# advances the one state, and handing the generator to a helper hands
+# the same sequence rather than silently copying it — the copy was
+# the struct shape's one footgun, a helper's draws that never
+# advanced the caller's generator.
 #
-#     var rng = math.rng(42)
+#     var rng = new math.Rng(42)
 #     let roll = rng.in_range(1, 7)
-#
-# This was a one-element `list[i64]`, allocated by a `seed` function
-# and kept alive for the life of `main`, whose entire purpose was to
-# give a `i64` reference semantics so the *state* could go out
-# through a borrow while the *draw* went out through `return`.  Two
-# values, two channels, one allocation.  An implied receiver updated
-# in place and the ordinary return between them delete all three.
-struct Rng:
-    # The generator's whole state.  Any seed works: one out of range
-    # is brought into range on first use.  Marked, because reaching
-    # through it was never the API — the factory below is
-    # (docs/VISIBILITY.md §6).
-    private state: i64
+class Rng:
+    private:
+        # The generator's whole state.  Any seed works: one out of
+        # range is brought into range on first use.
+        state: i64
+
+    init(seed: i64):
+        self.state = seed
 
     # The next raw state value in [1, 2^31 - 2].
     func next() -> i64:
@@ -316,7 +314,3 @@ struct Rng:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)
 
-# The constructor the module owes its callers: any seed works, and the
-# state stays the module's own (docs/VISIBILITY.md §6).
-func rng(seed: i64) -> Rng:
-    return Rng(state = seed)

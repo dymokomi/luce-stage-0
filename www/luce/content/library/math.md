@@ -97,9 +97,10 @@ func main():
 
 ## `Rng`
 
-`math.rng(seed: i64) -> Rng` creates a deterministic Lehmer/MINSTD
-generator. The state is private and is updated by its methods, so keep the
-receiver in a `var` binding.
+`new math.Rng(seed: i64)` creates a deterministic Lehmer/MINSTD
+generator. A generator is stateful identity — a class — so handing it to a
+helper hands the same sequence rather than a silent copy; the state stays
+private and every draw advances it.
 
 | Method | Result |
 |---|---|
@@ -115,9 +116,9 @@ sampling, and shuffles—not secrets.
 import std.math
 
 func main():
-    var rng = math.rng(2026)
+    var rng = new math.Rng(2026)
     print(str(rng.in_range(1, 7)))
-    var same = math.rng(2026)
+    var same = new math.Rng(2026)
     print(str(same.in_range(1, 7)))
 ```
 

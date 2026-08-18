@@ -16,7 +16,7 @@ package.
 
 ## Screen geometry
 
-```text
+```
 term.rows() -> i64
 term.cols() -> i64
 ```

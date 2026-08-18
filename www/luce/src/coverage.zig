@@ -532,7 +532,13 @@ fn standardModule(repository: Repository, module: []const u8) !Names {
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        for ([_][]const u8{ "func ", "const " }) |keyword| {
+        // Every public top-level declaration is surface a page has to
+        // name — the nominal types as much as the functions, now that
+        // a module's main door can be a class with an init.
+        for ([_][]const u8{
+            "func ",      "const ", "class ", "struct ",
+            "interface ", "enum ",  "union ", "alias ",
+        }) |keyword| {
             if (!std.mem.startsWith(u8, line, keyword)) continue;
             const rest = line[keyword.len..];
             var stop: usize = 0;
@@ -845,7 +851,31 @@ test "each std page names every function and constant its module exports" {
     {
         var names = try standardModule(repository, "os");
         defer names.deinit();
-        try expectDocumented(repository, "library/os.md", names, &.{});
+        // Term, IO, and UI are the terminal facade's carrier structs,
+        // read only through `os.term`; the os/term inversion that
+        // deletes them is the next standard-library change, so the
+        // page does not learn their names on the way out.
+        try expectDocumented(repository, "library/os.md", names, &.{ "IO", "Term", "UI" });
+    }
+    {
+        var names = try standardModule(repository, "io");
+        defer names.deinit();
+        try expectDocumented(repository, "library/io.md", names, &.{});
+    }
+    {
+        var names = try standardModule(repository, "network");
+        defer names.deinit();
+        try expectDocumented(repository, "library/network.md", names, &.{});
+    }
+    {
+        var names = try standardModule(repository, "http");
+        defer names.deinit();
+        try expectDocumented(repository, "library/http.md", names, &.{});
+    }
+    {
+        var names = try standardModule(repository, "term");
+        defer names.deinit();
+        try expectDocumented(repository, "library/term.md", names, &.{});
     }
     {
         var names = try standardModule(repository, "strings");

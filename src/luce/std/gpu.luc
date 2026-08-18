@@ -17,12 +17,18 @@ enum Backend:
     vulkan
     headless
 
-struct Surface:
+class Surface:
     private:
         raw: handle
 
+    private init(raw: handle):
+        self.raw = raw
+
+    # The cross-std construction seam: `handle` is a std-only
+    # spelling, so this door is unreachable from programs while
+    # letting `ui` hand a window's drawing state over.
     static func from_handle(raw: handle) -> Surface:
-        return Surface(raw = raw)
+        return new Surface(raw)
 
     func width() -> i64!:
         return try Builtin.gpu_surface_size(self.raw, 0)

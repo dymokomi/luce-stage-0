@@ -14,6 +14,12 @@ release is a complete toolchain rather than a compatibility promise.
   entry it is found on. `Writer` is a class made with
   `new zip.Writer()` - an accumulator with identity - and the free
   `zip.entries`, `zip.extract`, and `zip.writer` are gone.
+- Construction idiom sweep: `math.Rng` is a class made with
+  `new math.Rng(seed)` (a generator is stateful identity; the struct
+  copy was a footgun) and the free `math.rng` is gone; `ui.Window`
+  opens through its own fallible init - `try new ui.Window(title, w,
+  h)` - and the free `ui.open` is gone; `gpu.Surface` is a class whose
+  only door is the std-internal `from_handle` seam `ui` uses.
 - `http.Client` and `Response` methods: a client carries a base URL and
   default headers (`var api = new http.Client("http://host")`,
   `api.header(name, value)`, `api.get("/path")`), and a `Response`

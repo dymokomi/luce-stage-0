@@ -16,20 +16,20 @@ higher-level package rather than own window lifecycle and drawing directly.
 ## Open a window
 
 ```text
-ui.open(title: str, width: i64, height: i64) -> ui.Window!
+new ui.Window(title: str, width: i64, height: i64) -> ui.Window!
 ```
 
-`ui.open` takes a UTF-8 title and dimensions in backend pixels. Width and height
+Construction takes a UTF-8 title and dimensions in backend pixels. Width and height
 must be positive. The current macOS host accepts each dimension through
 16,384 pixels and may refuse a request because of native resource exhaustion
 or window-system failure. Those conditions arrive as an ordinary error.
 
 ```text
 func main() -> !:
-    let window = try ui.open("Hello", 800, 600)
+    let window = try new ui.Window("Hello", 800, 600)
 ```
 
-`Window` is a value wrapper around an ARC resource reference. Assigning or
+`Window` is a class owning the native window. Assigning or
 passing it retains the same native window; it does not create a second window.
 The native window closes when the last strong wrapper is released. There is
 no manual `close` operation.
@@ -48,7 +48,7 @@ is returned from or released before the surface. Drawing is explicit:
 import std.ui
 
 func main() -> !:
-    let window = try ui.open("Hello", 800, 600)
+    let window = try new ui.Window("Hello", 800, 600)
     let surface = try window.surface()
     try surface.clear(0, 0, 0)
     try surface.fill_rect(40, 40, 240, 120, 70, 130, 220)

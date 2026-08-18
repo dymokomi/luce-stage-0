@@ -64,7 +64,7 @@ test "gpu and ui: an unavailable native host fails closed" {
         \\import std.ui
         \\
         \\func main() -> !:
-        \\    let window = try ui.open("test", 320, 240)
+        \\    let window = try new ui.Window("test", 320, 240)
         \\    let surface = try window.surface()
         \\    try surface.present()
         \\
@@ -306,20 +306,20 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = math.rng(42)
-        \\    var again = math.rng(42)
+        \\    var rng = new math.Rng(42)
+        \\    var again = new math.Rng(42)
         \\    for i in range(0, 10):
         \\        assert(rng.next() == again.next())
-        \\    var negative_seed = math.rng(-7)
+        \\    var negative_seed = new math.Rng(-7)
         \\    assert(negative_seed.next() >= 1)
-        \\    var die = math.rng(2026)
+        \\    var die = new math.Rng(2026)
         \\    var seen = new map[i64, bool]
         \\    for i in range(0, 200):
         \\        let roll = die.in_range(1, 7)
         \\        assert(roll >= 1 and roll <= 6)
         \\        seen[roll] = true
         \\    assert(len(seen) == 6)
-        \\    var floats = math.rng(9)
+        \\    var floats = new math.Rng(9)
         \\    for i in range(0, 100):
         \\        let f = floats.real()
         \\        assert(f > 0.0 and f < 1.0)
@@ -329,7 +329,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = math.rng(1)
+        \\    var rng = new math.Rng(1)
         \\    let bad = rng.in_range(5, 5)
         \\
     , .explicit_trap);
