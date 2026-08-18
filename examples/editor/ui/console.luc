@@ -1,12 +1,12 @@
 # The output pane: the retained component that shows build output and
 # starts the divider drag on its own top border.
 
-from termui import View, Surface, Response, Rect, Event, Cursor, Line, Edges, Pointer, Rows, Panel, EventHost, CursorHost, plain, route
+from termui import View, Surface, Response, Rect, Event, Cursor, Line, Edges, Pointer, plain, route
+from termui.widgets import Rows, Panel, EventHost, CursorHost
 from document import count_lines, line_at, line_end
-from focus import Focus
-from keymap import Intent, intent_of
-from model import Model, Drag
-from theme import palette, pane_style
+from model import Model, Drag, Focus, Intent
+from ui.keymap import intent_of
+from ui.theme import palette, pane_style
 
 class Console: View:
     private model: Model

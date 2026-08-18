@@ -2,16 +2,17 @@
 
 import std.strings
 import termui
-from termui import VStack, HStack, Fixed, Grow, Rect, Event, Cursor, Key, Mouse, Pointer, Response, snapshot
+from termui import Rect, Event, Cursor, Key, Mouse, Pointer, Response, snapshot
+from termui.layout import VStack, HStack
+from termui.constraints import Fixed, Grow
 from document import Document
-from focus import Focus
 import model
-from model import Model, Drag
-from filelist import FileList
-from source import Editor
-from console import Console
-from statusbar import StatusBar
-from workbench import Workbench
+from model import Model, Drag, Focus
+from ui.filelist import FileList
+from ui.source import Editor
+from ui.console import Console
+from ui.statusbar import StatusBar
+from ui.workbench import Workbench
 
 func model_of() -> Model:
     var documents = list[Document]()

@@ -5,9 +5,12 @@ owns its state and says what should be visible. The package owns the terminal
 loop, layout, drawing, input routing, cursor, resize handling, and efficient
 screen updates.
 
-You import one module, hand `Application` a retained layout, and call
-`start`. Application code never opens a renderer, clears a surface,
-flushes a frame, or writes its own loop.
+The surface is grouped so imports read as a table of contents: the core
+`termui` module carries `Application`, the `View` contract, `Surface`,
+and the value vocabulary; `termui.layout`, `termui.constraints`, and
+`termui.widgets` carry composition, sizing, and the shipped components.
+Application code never opens a renderer, clears a surface, flushes a
+frame, or writes its own loop.
 
 ## Start an application
 
@@ -20,13 +23,15 @@ packages:
   termui: 0.5.0
 ```
 
-Then build the screen once. Components are classes: `new` builds one,
-`add` composes children into a stack, and the tree is retained — each
-component keeps its own state for the life of the run.
+Then build the screen once. Components are classes constructed by
+call, `add` composes children into a stack, and the tree is retained —
+each component keeps its own state for the life of the run.
 
 ```text
 import termui
-from termui import VStack, Label
+from termui.layout import VStack
+from termui.widgets import Label, Panel
+from termui.constraints import Fixed
 
 class Counter: termui.View:
     count: i64
@@ -53,9 +58,9 @@ class Counter: termui.View:
 func main():
     var stack = VStack()
     stack.add(Counter())
-    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.Fixed(1))
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), Fixed(1))
     var app = termui.Application()
-    app.set_layout(termui.Panel("counter", stack))
+    app.set_layout(Panel("counter", stack))
     app.start()
 ```
 
@@ -102,7 +107,8 @@ the frame that follows reads the result.
 
 ## Components
 
-The shipped components are classes conforming to `termui.View`:
+The shipped components live in `termui.widgets` and `termui.layout`,
+and every one is a class conforming to `termui.View`:
 
 | Component | Use it for |
 |---|---|
@@ -126,15 +132,19 @@ small helpers.
 Stacks receive children through `add(child, size)`; omitting the size
 means grow, which is what the main content of a screen usually wants,
 and the `Fixed`, `Grow`, `Ratio`, and `Preferred` classes spell a
-size the way the layout reads: `add(bar, Fixed(1))`. A retained layout reshapes with `resize(index, size)`; a hidden
-pane is `fixed(cells = 0)` — zero cells draw nothing and contain no
-pointer:
+size the way the layout reads: `add(bar, Fixed(1))`. A retained
+layout reshapes with `resize(index, size)`; a hidden pane is
+`Fixed(0)` — zero cells draw nothing and contain no pointer:
 
 ```text
-var across = termui.HStack(spacing = 1)
+from termui.layout import HStack
+from termui.constraints import Ratio
+from termui.widgets import Panel
+
+var across = HStack(spacing = 1)
 across.add(
-    termui.Panel("files", file_rows),
-    termui.Ratio(12, 28, 25),
+    Panel("files", file_rows),
+    Ratio(12, 28, 25),
 )
 across.add(source_rows)
 ```
@@ -145,7 +155,8 @@ foreground content.
 
 ### Constraint
 
-A size is a `Constraint` — an interface with what the solver asks:
+A size is a `Constraint` — `termui.constraints`' interface with what
+the solver asks:
 `minimum()`, `maximum()`, `weight()`, and `preference(axis)`. Four
 shipped classes conform, and a program's own constraint composes the
 same way:
@@ -175,6 +186,8 @@ For syntax highlighting or mixed styles, construct a `Line` from `Span`
 values and pass lines to `StyledText` or return them from `Rows`:
 
 ```text
+from termui.widgets import StyledText
+
 let warning = termui.Line(spans = [
     termui.Span(
         text = "warning: ",
@@ -186,7 +199,7 @@ let warning = termui.Line(spans = [
     ),
 ])
 
-let message = termui.StyledText([warning])
+let message = StyledText([warning])
 ```
 
 `plain(text, style)` constructs a one-span `Line`. Drawing clips content to the
@@ -198,7 +211,7 @@ rectangle assigned by the parent.
 interior. All four edges are present by default:
 
 ```text
-termui.Panel(
+Panel(
     "output",
     output,
     style = active_border,
@@ -215,7 +228,7 @@ chooses junction characters.
 `Rows` calls a provider only for visible indexes:
 
 ```text
-termui.Rows(
+Rows(
     total,
     self.line_at,
     top = top,
@@ -238,9 +251,9 @@ same index for both. A text editor uses the cursor line as its anchor and
 selection bar.
 
 The application owns the collection, top index, and selection. `Rows` stores
-no duplicate model. `visible_top(top, total, anchor, height)` exposes the exact
-window calculation when an event or cursor callback needs to map screen rows
-back to indexes.
+no duplicate model. `Rows.visible_top(top, total, anchor, height)` exposes the
+exact window calculation when an event or cursor callback needs to map screen
+rows back to indexes.
 
 ## Handle events
 
@@ -373,21 +386,23 @@ partial frames, stale cursors, forgotten flushes, and resize-order bugs.
 
 ## Public names
 
-The `termui` facade exports:
+Four modules are public:
 
-- components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
-  `VStack`, `ZStack`, `Panel`, `EventHost`, `CursorHost`;
-- the contract: `View`, `Surface`, `route`;
-- layout: the `Constraint` interface and its `Fixed`, `Grow`, `Ratio`, `Preferred` classes; `Rect`, `Edges`;
-- text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
-- input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
-- application: `Application` (`set_layout`, `start`), `Cursor`; and
-- testing: `Snapshot`, `snapshot`, `visible_top`.
+- `termui` — the contract and vocabulary: `Application` (`set_layout`,
+  `start`), `View`, `Surface`, `route`, `snapshot`, `Snapshot`;
+  `Rect`, `Edges`, `Cursor`; `Color`, `Style`, `Span`, `Line`, `plain`;
+  `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
+- `termui.layout` — `HStack`, `VStack`, `ZStack`;
+- `termui.constraints` — the `Constraint` interface and its `Fixed`,
+  `Grow`, `Ratio`, `Preferred` classes; and
+- `termui.widgets` — `Empty`, `Label`, `StyledText`, `Rows`, `Fill`,
+  `Panel`, `EventHost`, `CursorHost`.
 
-Application code should import `termui`, not its implementation modules. The
-package source is split into model, input, layout, canvas, view, components,
-and runtime boundaries so each piece can hide its complexity and be tested
-independently.
+Application code imports these four and nothing deeper. The package
+source keeps model, input, canvas, view, and runtime as implementation
+boundaries so each piece can hide its complexity and be tested
+independently; their public vocabulary arrives through the `termui`
+facade.
 
 ## Current limits
 

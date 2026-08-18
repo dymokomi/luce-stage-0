@@ -2,10 +2,12 @@
 # the hint strip.  It answers a cursor only while the find bar is open.
 
 import std.strings
-from termui import View, Surface, Response, Rect, Event, Cursor, Label, Fill, ZStack, HStack, CursorHost, Grow, Preferred
-from focus import Focus
-from model import Model
-from theme import palette
+from termui import View, Surface, Response, Rect, Event, Cursor
+from termui.layout import HStack, ZStack
+from termui.constraints import Grow, Preferred
+from termui.widgets import Label, Fill, CursorHost
+from model import Model, Focus
+from ui.theme import palette
 
 private func focus_label(where: Focus) -> str:
     match where:

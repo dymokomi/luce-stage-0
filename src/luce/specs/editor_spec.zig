@@ -36,32 +36,30 @@ const editor = @embedFile("editor.luc");
 /// bare and qualified names because their own imports are bare while the
 /// editor imports only the `termui` facade.
 const editor_files = [_]agree.File{
-    .{ .name = "workbench", .source = @embedFile("workbench.luc") },
-    .{ .name = "filelist", .source = @embedFile("filelist.luc") },
-    .{ .name = "source", .source = @embedFile("source.luc") },
-    .{ .name = "console", .source = @embedFile("console.luc") },
-    .{ .name = "statusbar", .source = @embedFile("statusbar.luc") },
     .{ .name = "model", .source = @embedFile("model.luc") },
-    .{ .name = "focus", .source = @embedFile("focus.luc") },
-    .{ .name = "keymap", .source = @embedFile("keymap.luc") },
     .{ .name = "document", .source = @embedFile("document.luc") },
     .{ .name = "history", .source = @embedFile("history.luc") },
-    .{ .name = "search", .source = @embedFile("search.luc") },
     .{ .name = "highlight", .source = @embedFile("highlight.luc") },
-    .{ .name = "theme", .source = @embedFile("theme.luc") },
-    .{ .name = "browser", .source = @embedFile("browser.luc") },
-    .{ .name = "shell", .source = @embedFile("shell.luc") },
+    .{ .name = "listing", .source = @embedFile("listing.luc") },
     .{ .name = "session", .source = @embedFile("session.luc") },
+    .{ .name = "ui.workbench", .source = @embedFile("ui/workbench.luc"), .path = "ui/workbench.luc" },
+    .{ .name = "ui.source", .source = @embedFile("ui/source.luc"), .path = "ui/source.luc" },
+    .{ .name = "ui.filelist", .source = @embedFile("ui/filelist.luc"), .path = "ui/filelist.luc" },
+    .{ .name = "ui.console", .source = @embedFile("ui/console.luc"), .path = "ui/console.luc" },
+    .{ .name = "ui.statusbar", .source = @embedFile("ui/statusbar.luc"), .path = "ui/statusbar.luc" },
+    .{ .name = "ui.keymap", .source = @embedFile("ui/keymap.luc"), .path = "ui/keymap.luc" },
+    .{ .name = "ui.theme", .source = @embedFile("ui/theme.luc"), .path = "ui/theme.luc" },
 } ++ termui_files;
 
 const termui_root = "termui-0.5.0";
 const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
     package("model", @embedFile("termui/model.luc")) ++
     package("input", @embedFile("termui/input.luc")) ++
+    package("constraints", @embedFile("termui/constraints.luc")) ++
     package("layout", @embedFile("termui/layout.luc")) ++
     package("canvas", @embedFile("termui/canvas.luc")) ++
     package("view", @embedFile("termui/view.luc")) ++
-    package("components", @embedFile("termui/components.luc")) ++
+    package("widgets", @embedFile("termui/widgets.luc")) ++
     package("runtime", @embedFile("termui/runtime.luc"));
 
 /// One package module under both of its spellings.  Every bare spelling

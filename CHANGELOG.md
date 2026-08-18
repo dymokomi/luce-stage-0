@@ -6,6 +6,29 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- termui's surface is grouped into public submodules, so an import
+  line says what it brings: `from termui import Application, View`
+  carries the contract and vocabulary, and `termui.layout` (the
+  stacks), `termui.constraints` (`Constraint` and the shipped sizes),
+  and `termui.widgets` (the leaf and wrapper components) carry the
+  rest. The facade no longer aliases what the groups own, and
+  `visible_top` is spelled where it lives: `Rows.visible_top`.
+  Internally `components.luc` split into `widgets.luc` and
+  `layout.luc`, and the solver moved to `constraints.luc`; `model`,
+  `input`, `canvas`, `view`, and `runtime` stay implementation
+  boundaries behind the facade.
+- The editor's sources say what they are: the panes and their
+  chrome live in `ui/` (`workbench`, `source`, `filelist`, `console`,
+  `statusbar`, `keymap`, `theme`) as project submodules imported as
+  `from ui.filelist import FileList`; `browser.luc` is renamed
+  `listing.luc` (it lists a directory - the file list is the UI);
+  `Focus`, `Intent`, and the search scan fold into `model.luc` (the
+  model speaks intents, the keymap only maps keys to them); the build
+  shell folds into `session.luc` beside the other host seams; and
+  `focus.luc`, `search.luc`, and `shell.luc` are gone. The
+  highlighter's helper predicates are `private`; its surface is
+  `tokens`, `Token`, and `TokenKind`. Eight scripted sessions replay
+  cell-identical across the reorganization.
 - `Constraint` is an interface - `minimum()`, `maximum()`, `weight()`,
   `preference(axis)` - and the sizes are classes conforming to it:
   `Fixed(cells)`, `Grow(weight, minimum)`, `Ratio(low, high, percent)`,

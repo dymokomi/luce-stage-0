@@ -1554,9 +1554,9 @@ fn inList(list: []const []const u8, word: []const u8) bool {
 const corpus = @embedFile("model.luc") ++ "\n" ++
     @embedFile("highlight.luc") ++ "\n" ++
     @embedFile("document.luc") ++ "\n" ++
-    @embedFile("workbench.luc") ++ "\n" ++
-    @embedFile("source.luc") ++ "\n" ++
-    @embedFile("browser.luc");
+    @embedFile("ui/workbench.luc") ++ "\n" ++
+    @embedFile("ui/source.luc") ++ "\n" ++
+    @embedFile("listing.luc");
 
 test "every language word the editor uses is coloured" {
     // A corpus test rather than another table test: `examples/editor/editor.luc`

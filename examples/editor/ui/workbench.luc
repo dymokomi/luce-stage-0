@@ -5,9 +5,11 @@
 # the next frame draws the new arrangement.
 
 import std.os
-from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, HStack, VStack, Constraint, Fixed, Ratio, Preferred, route
-from keymap import Intent, intent_of
-from model import Model, Drag
+from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, route
+from termui.layout import VStack, HStack
+from termui.constraints import Constraint, Fixed, Ratio, Preferred
+from model import Model, Drag, Intent
+from ui.keymap import intent_of
 
 private func is_global(intent: Intent) -> bool:
     match intent:

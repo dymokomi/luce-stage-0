@@ -5,11 +5,17 @@ owns its state and describes the screen it wants. The library owns terminal
 sizing, the application loop, layout, drawing, input routing, cursor placement,
 cell diffing, flushing, resize handling, and shutdown.
 
-The current package is `termui` 0.5.0 in `packages/termui-0.5.0/`. Applications
-normally import only its facade:
+The current package is `termui` 0.5.0 in `packages/termui-0.5.0/`. The
+surface is grouped so an import line says what it brings: the core
+module carries `Application`, the `View` contract, `Surface`, and the
+value and event vocabulary, while composition, sizing, and the shipped
+components live in named submodules.
 
 ```text
-import termui
+from termui import Application, View
+from termui.layout import VStack, HStack
+from termui.constraints import Fixed, Grow
+from termui.widgets import Label, Panel, Rows
 ```
 
 There is no renderer protocol for an application to coordinate and no public
@@ -30,7 +36,9 @@ closes or a routed event answers `quit`.
 
 ```text
 import termui
-from termui import VStack, Label
+from termui.layout import VStack
+from termui.widgets import Label, Panel
+from termui.constraints import Fixed
 
 class Counter: termui.View:
     count: i64
@@ -57,9 +65,9 @@ class Counter: termui.View:
 func main():
     var stack = VStack()
     stack.add(Counter())
-    stack.add(Label("Enter adds one · Ctrl-Q quits"), termui.Fixed(1))
+    stack.add(Label("Enter adds one · Ctrl-Q quits"), Fixed(1))
     var app = termui.Application()
-    app.set_layout(termui.Panel("counter", stack))
+    app.set_layout(Panel("counter", stack))
     app.start()
 ```
 
@@ -71,29 +79,28 @@ frame cheap.
 
 ## The public model
 
-The facade exports one application interface, one view interface, the
-component classes, layout values, input values, styling values, and four
-operations.
+Three public submodules group the surface; the core `termui` module
+carries everything an ordinary component signature mentions.
 
-| Name | Purpose |
-|---|---|
-| `Application` | the retained root: `set_layout(child)` and `start()` |
-| `View` | the component contract: `draw(surface, area) -> Cursor?` and `dispatch(event, area) -> Response` |
-| `Surface` | the cell canvas `draw` receives: `write`, `fill`, `put`, `stroke`, `cell_at`, `snapshot` |
-| `Label`, `StyledText` | plain or span-styled text |
-| `HStack`, `VStack`, `ZStack` | horizontal, vertical, and overlapping composition |
-| `Panel` | titled, junction-aware border around content |
-| `Rows` | lazily rendered visible window over indexed lines |
-| `Fill`, `Empty` | background content and intentional absence |
-| `EventHost`, `CursorHost` | behavior and cursor placement wrapped around content |
-| `Constraint` | one-axis sizing: bounds, weight, and an optional preference |
-| `Event`, `Key`, `Mouse`, `Pointer` | terminal input, `std.term`'s own types plus `closed` |
-| `Response` | `ignored`, `handled`, or `quit` |
-| `Style`, `Color`, `Span`, `Line`, `Edges` | presentation values |
-| `Rect`, `Cursor` | assigned geometry and cursor requests |
-| `route` | the one door a container dispatches a child through |
-| `snapshot` | host-free rendering for tests and previews |
-| `visible_top` | the exact scroll window `Rows` renders, for callbacks |
+| Module | Name | Purpose |
+|---|---|---|
+| `termui` | `Application` | the retained root: `set_layout(child)` and `start()` |
+| `termui` | `View` | the component contract: `draw(surface, area) -> Cursor?` and `dispatch(event, area) -> Response` |
+| `termui` | `Surface` | the cell canvas `draw` receives: `write`, `fill`, `put`, `stroke`, `cell_at`, `snapshot` |
+| `termui` | `Event`, `Key`, `Mouse`, `Pointer` | terminal input, `std.term`'s own types plus `closed` |
+| `termui` | `Response` | `ignored`, `handled`, or `quit` |
+| `termui` | `Style`, `Color`, `Span`, `Line`, `Edges` | presentation values |
+| `termui` | `Rect`, `Cursor` | assigned geometry and cursor requests |
+| `termui` | `route` | the one door a container dispatches a child through |
+| `termui` | `snapshot` | host-free rendering for tests and previews |
+| `termui.layout` | `HStack`, `VStack`, `ZStack` | horizontal, vertical, and overlapping composition |
+| `termui.constraints` | `Constraint` | the one-axis sizing contract: bounds, weight, and an optional preference |
+| `termui.constraints` | `Fixed`, `Grow`, `Ratio`, `Preferred` | the shipped sizes |
+| `termui.widgets` | `Label`, `StyledText` | plain or span-styled text |
+| `termui.widgets` | `Panel` | titled, junction-aware border around content |
+| `termui.widgets` | `Rows` | lazily rendered visible window over indexed lines |
+| `termui.widgets` | `Fill`, `Empty` | background content and intentional absence |
+| `termui.widgets` | `EventHost`, `CursorHost` | behavior and cursor placement wrapped around content |
 
 Component names are capitalized because they describe UI nodes. Operations and
 small helpers remain lowercase.
@@ -138,7 +145,7 @@ the frame that follows reads the result.
 
 ## Writing a component
 
-A component is any class conforming to `view.View` — the openness 0.4 exists
+A component is any class conforming to `termui.View` — the openness 0.4 exists
 for. `draw` describes cells through the surface it is given; `dispatch`
 answers one event. Both receive the exact rectangle the parent assigned.
 
@@ -181,12 +188,15 @@ in list order, so the last child is visually on top. A child enters with
 `Ratio`, and `Preferred` classes spell a size the way the layout
 reads: `add(bar, Fixed(1))`. A retained
 layout reshapes with `resize(index, size)` — a drag hands a pane its
-new constraint, and a hidden pane is `fixed(cells = 0)`: zero cells draw
+new constraint, and a hidden pane is `Fixed(0)`: zero cells draw
 nothing and contain no pointer, so hiding needs no tree surgery.
 
 ```text
-var across = termui.HStack(spacing = 1)
-across.add(sidebar, termui.Ratio(12, 28, 25))
+from termui.layout import HStack
+from termui.constraints import Ratio
+
+var across = HStack(spacing = 1)
+across.add(sidebar, Ratio(12, 28, 25))
 across.add(source)
 ```
 
@@ -209,15 +219,15 @@ truly tiny terminal optional regions may disappear.
 
 ## Text and styles
 
-`Label(text, style)` is the common one-line component. `new
-StyledText(lines)` accepts `list[Line]`. A line contains styled spans:
+`Label(text, style)` is the common one-line component.
+`StyledText(lines)` accepts `list[Line]`. A line contains styled spans:
 
 ```text
 let warning = termui.Line(spans = [
     termui.Span(text = "warning: ", style = termui.Style(foreground = 3, bold = true)),
     termui.Span(text = "unsaved changes", style = termui.Style(foreground = 7)),
 ])
-let message = termui.StyledText([warning])
+let message = StyledText([warning])
 ```
 
 The package has no global palette. An application owns its theme as ordinary
@@ -231,7 +241,7 @@ merge into the correct box-drawing junction; applications describe geometry
 and never choose `┼`, `├`, or `┴` themselves.
 
 ```text
-termui.Panel(
+Panel(
     "output",
     output,
     style = active_border,
@@ -244,16 +254,15 @@ termui.Panel(
 `Rows` renders only the indexes visible in its assigned height:
 
 ```text
-termui.Rows(total, render, top, anchor, selected, selected_style)
+Rows(total, render, top, anchor, selected, selected_style)
 ```
 
 `render(index) -> Line` supplies content and is required — a lazy window with
 nothing to render was never a real request. `top` is the requested first
 index. `anchor` is kept visible; `selected` is highlighted. They are separate
 because a source cursor should drive scrolling without highlighting the whole
-line. `Rows.visible_top(top, total, anchor, height)` — also reachable as the
-facade's `visible_top` — exposes the exact window calculation for pointer and
-cursor callbacks.
+line. `Rows.visible_top(top, total, anchor, height)` exposes the exact window
+calculation for pointer and cursor callbacks.
 
 The application owns `top`, selection, and the underlying data. `Rows` owns no
 hidden collection or selection model.
@@ -277,7 +286,7 @@ Routing is deterministic. A host sees an event before its content. Pointer
 events enter only rectangles containing the pointer. Stacks visit children in
 display order; `ZStack` visits the visually topmost child first. Keyboard and
 text events continue until a focused child accepts them. Resize and closed
-input remain lifecycle events owned by `run`.
+input remain lifecycle events owned by `start`.
 
 The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. `Key`,
 `Pointer`, and `Mouse` are `std.term`'s own types, re-exported as aliases,
@@ -329,29 +338,32 @@ frames, forgotten flushes, stale cursors, and loops that mishandle resize.
 
 ## Package boundaries
 
-The implementation has eight modules:
+The implementation has nine modules. Four are public — the facade and
+the three grouped submodules — and five are implementation:
 
 ```text
-termui.luc      public facade
-model.luc       public values
-input.luc       event decoding over std.term's vocabulary
-layout.luc      total one-axis solver
-canvas.luc      cell ownership, clipping, snapshots, and diffing
-view.luc        the View contract, route, and snapshot
-components.luc  the shipped component classes
-runtime.luc     Application and the sole loop
+termui.luc       the core: Application, View, Surface, values, operations
+constraints.luc  public: the Constraint contract, shipped sizes, the solver
+layout.luc       public: the stack containers
+widgets.luc      public: the shipped leaf and wrapper components
+model.luc        values, re-exported through the facade
+input.luc        event decoding over std.term's vocabulary
+canvas.luc       cell ownership, clipping, snapshots, and diffing
+view.luc         the View contract, route, and snapshot
+runtime.luc      Application and the sole loop
 ```
 
-These are implementation knowledge boundaries, not eight APIs for an
-application to orchestrate. Normal application code imports `termui` only.
+Application code imports the four public modules and nothing deeper;
+`model`, `input`, `canvas`, `view`, and `runtime` are knowledge
+boundaries whose public vocabulary arrives through the facade.
 
 The example editor is the end-to-end consumer. It composes retained
-`FileList`, `Editor`, `Console`, and `StatusBar` components over one
-shared model, with a `Workbench` reshaping the stacks through its
-model subscription; its entry point is argument validation followed by
-`set_layout` and `start`. Snapshot tests cover its screen, and eight
-scripted sessions run the complete hidden loop on both Luce engines
-with leak checking.
+`FileList`, `Editor`, `Console`, and `StatusBar` components (its `ui/`
+folder) over one shared model, with a `Workbench` reshaping the stacks
+through its model subscription; its entry point is argument validation
+followed by `set_layout` and `start`. Snapshot tests cover its screen,
+and eight scripted sessions run the complete hidden loop on both Luce
+engines with leak checking.
 
 ## Current limits
 

@@ -142,7 +142,7 @@ assemble_archive() {
     termui_release="$release_tree/lib/termui-$termui_version"
     mkdir -p "$termui_release"
     cp "$termui_source/luce.yaml" "$termui_release/luce.yaml"
-    for module in termui model input layout canvas view components runtime; do
+    for module in termui model input constraints layout widgets canvas view runtime; do
         cp "$termui_source/$module.luc" "$termui_release/$module.luc"
     done
 

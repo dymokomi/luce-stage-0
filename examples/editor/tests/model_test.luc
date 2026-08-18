@@ -1,10 +1,8 @@
 # The coordinator, driven through its key router: editing, undo
 # coalescing, and search all exercised end to end without a terminal.
 
-from model import Model
-from keymap import Intent
+from model import Model, Intent, Focus
 from document import Document
-from focus import Focus
 
 func fresh() -> Model:
     var documents = list[Document]()

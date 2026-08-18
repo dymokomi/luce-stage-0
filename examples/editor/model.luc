@@ -14,13 +14,10 @@
 # cursor, scroll, and undo History.
 
 import std.files
+import std.strings
 from document import Document, count_lines, previous_boundary
-import search
-import browser
-import shell
+import listing
 import session
-from keymap import Intent, steps_of
-from focus import Focus
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
@@ -53,6 +50,88 @@ class Selection:
 
     func move_by(steps: i64):
         self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
+
+# Which pane the keyboard is talking to.
+#
+# The application uses this one value to style the active view, route keys and
+# decide which cursor to expose. Search is a mode over the status line rather
+# than a separate region.
+enum Focus:
+    editor
+    files
+    output
+    search
+
+# What a key does.  A key the editor does not bind is `ignored` — a
+# member, so the `match` that handles it must say so out loud, and an
+# intent added later is a compile error at every match that missed it.
+enum Intent:
+    move_left
+    move_right
+    move_up
+    move_down
+    page_up
+    page_down
+    line_start
+    line_end
+    erase_left
+    erase_right
+    newline
+    indent
+    # `insert_text` rather than `insert`: `insert` is a list method, and
+    # the language reserves method names for their receivers.
+    insert_text
+    save
+    build
+    toggle_files
+    toggle_output
+    next_pane
+    find
+    undo
+    redo
+    escape
+    quit
+    ignored
+
+const STEPS = {
+    Intent.move_up: -1,
+    Intent.move_down: 1,
+    Intent.page_up: -8,
+    Intent.page_down: 8,
+}
+
+func steps_of(intent: Intent) -> i64:
+    let steps = STEPS.get(intent)
+    if steps == none:
+        return 0
+    return steps
+
+# Refill `matches` with the scalar position of every occurrence of `query`
+# in `content`.  An empty query matches nothing.  Overlapping matches
+# advance by one scalar, so "aa" in "aaa" finds two.
+private func scan(matches: list[i64], content: str, query: str):
+    matches.clear()
+    if query == "":
+        return
+    var at: i64 = 0
+    while at <= len(content):
+        let found = strings.find(content, query, at)
+        if found == none:
+            return
+        matches.append(found)
+        at = found + 1
+
+# The match index after moving `direction` (+1 next, -1 previous) from
+# `current`, wrapping at the ends; -1 when there are no matches.
+private func step(count: i64, current: i64, direction: i64) -> i64:
+    if count <= 0:
+        return -1
+    var next = current + direction
+    if next < 0:
+        next = count - 1
+    if next >= count:
+        next = 0
+    return next
 
 # Which divider a pointer is dragging.  Model state rather than a
 # pane's, because the pane that starts a drag (a border press) and the
@@ -137,12 +216,12 @@ class Model:
 
     func refresh_files():
         let doc = self.document()
-        let failure = browser.refresh(self.names, self.directory, doc.path)
+        let failure = listing.refresh(self.names, self.directory, doc.path)
         if failure != none:
             doc.message = failure
             return
         self.files.count = len(self.names)
-        self.files.selected = browser.select_index(self.names, self.directory, doc.path)
+        self.files.selected = listing.select_index(self.names, self.directory, doc.path)
 
     # Keep the file pane's scroll window on its selection.  `files` is
     # a class, so the frame and a mouse click read the same window this
@@ -154,7 +233,7 @@ class Model:
     func open_row(index: i64):
         if index < 0 or index >= len(self.names):
             return
-        match browser.classify(self.names[index], self.directory):
+        match listing.classify(self.names[index], self.directory):
             entered(directory):
                 self.directory = directory
                 self.refresh_files()
@@ -238,7 +317,7 @@ class Model:
 
     func rescan():
         let doc = self.document()
-        search.scan(self.search_matches, doc.content, self.search_query)
+        scan(self.search_matches, doc.content, self.search_query)
         if len(self.search_matches) > 0:
             self.search_current = 0
             doc.cursor = self.search_matches[0]
@@ -246,7 +325,7 @@ class Model:
             self.search_current = -1
 
     func jump_match(direction: i64):
-        let next = search.step(len(self.search_matches), self.search_current, direction)
+        let next = step(len(self.search_matches), self.search_current, direction)
         if next < 0:
             return
         self.search_current = next
@@ -332,7 +411,7 @@ class Model:
         if doc.dirty:
             self.output = "build skipped: " + doc.message + "\n"
         else:
-            self.output = shell.run(shell.build_command(doc.path))
+            self.output = session.run(session.build_command(doc.path))
             doc.message = "build/run finished"
         self.output_scroll = 0
         self.output_pane = true

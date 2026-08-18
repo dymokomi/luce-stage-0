@@ -2,7 +2,8 @@ import model
 import input
 import canvas
 import view
-import components
+from layout import VStack
+from widgets import CursorHost
 
 # A test-local component: the openness the interface buys.  It takes
 # part in layout, drawing, and routing exactly like a shipped class.
@@ -21,7 +22,7 @@ class Meter: view.View:
         return model.Response.ignored
 
 func test_a_user_component_draws_through_the_same_contract():
-    var stack = components.VStack()
+    var stack = VStack()
     stack.add(Meter(3))
     let frame = view.snapshot(stack, 1, 5)
     assert(frame.line(0) == "###  ")
@@ -59,7 +60,7 @@ func test_route_contains_pointer_events_to_the_child_rectangle():
     assert(tally.seen == 1)
 
 func test_snapshot_carries_the_cursor_a_component_requests():
-    let placed = components.CursorHost(Meter(1), locate_end)
+    let placed = CursorHost(Meter(1), locate_end)
     let frame = view.snapshot(placed, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)

@@ -1,223 +1,130 @@
-# Total one-axis layout for declarative rows and columns.
+# The layout containers: stacks that divide an axis among their
+# children by Constraint.
+#
+# `from termui.layout import VStack, HStack` is the public spelling.
 
-from model import Rect
+from constraints import Constraint, Grow, row, column
+from canvas import Surface
+from input import Event
+from model import Rect, Response, Cursor
+from view import View, route
 
-# What one child asks of its axis.  Any conformer lays out: the
-# shipped Fixed, Grow, Ratio, and Preferred are the common shapes, and
-# a program's own constraint composes exactly the same way.
-interface Constraint:
-    # The floor this child never gives up until the axis itself runs
-    # out.
-    func minimum() -> i64
-    # The ceiling surplus never pushes past; none is unbounded.
-    func maximum() -> i64?
-    # The share of surplus this child claims relative to the other
-    # growers.  Zero never grows past its preference or minimum.
-    func weight() -> i64
-    # The preferred size given the usable axis, or none.  A preference
-    # yields first when space runs short — it asked for comfort, not
-    # necessity.
-    func preference(axis: i64) -> i64?
+# Pairing a child with its constraint makes a row/column mismatch
+# impossible.
+private struct Slot:
+    size: Constraint
+    content: View
 
-# Exactly `cells` — never more, never less, until the axis itself is
-# smaller than everything's minimums.
-class Fixed: Constraint:
-    private cells: i64
-
-    init(cells: i64):
-        self.cells = cells
-
-    func minimum() -> i64:
-        return max(self.cells, 0)
-
-    func maximum() -> i64?:
-        return max(self.cells, 0)
-
-    func weight() -> i64:
-        return 0
-
-    func preference(axis: i64) -> i64?:
-        return none
-
-# Keep at least `minimum`, then take surplus in proportion to
-# `weight`.  The default is the main content of a screen: everything
-# the siblings leave.
-class Grow: Constraint:
-    private share: i64
-    private floor: i64
-
-    init(weight: i64 = 1, minimum: i64 = 0):
-        self.share = weight
-        self.floor = minimum
-
-    func minimum() -> i64:
-        return max(self.floor, 0)
-
-    func maximum() -> i64?:
-        return none
-
-    func weight() -> i64:
-        return max(self.share, 0)
-
-    func preference(axis: i64) -> i64?:
-        return none
-
-# A pane that scales with the terminal: `percent` of the axis, kept
-# between `low` and `high`.
-class Ratio: Constraint:
-    private low: i64
-    private high: i64
-    private percent: i64
-
-    init(low: i64, high: i64, percent: i64):
-        self.low = low
-        self.high = high
-        self.percent = percent
-
-    func minimum() -> i64:
-        return max(self.low, 0)
-
-    func maximum() -> i64?:
-        return max(self.high, max(self.low, 0))
-
-    func weight() -> i64:
-        return 0
-
-    func preference(axis: i64) -> i64?:
-        return floor_div(axis * clamp(self.percent, 0, 100), 100)
-
-# A pane with a remembered size — after a person drags a divider —
-# kept between `low` and `high`.
-class Preferred: Constraint:
-    private low: i64
-    private ideal: i64
-    private high: i64
-
-    init(low: i64, ideal: i64, high: i64):
-        self.low = low
-        self.ideal = ideal
-        self.high = high
-
-    func minimum() -> i64:
-        return max(self.low, 0)
-
-    func maximum() -> i64?:
-        return max(self.high, max(self.low, 0))
-
-    func weight() -> i64:
-        return 0
-
-    func preference(axis: i64) -> i64?:
-        return self.ideal
-
-private func floor_div(numerator: i64, denominator: i64) -> i64:
-    return i64(floor(numerator / denominator))
-
-# Turn one Constraint per child into non-negative sizes.  Preferences
-# compress before growers, growers before rigid children, and nothing
-# is ever negative or beyond the axis.
-func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i64]:
-    let count = len(constraints)
-    var sizes = list[i64]()
-    if count == 0:
-        return sizes
-    let gap = max(spacing, 0)
-    let usable = max(total - gap * (count - 1), 0)
-    var prefers = list[bool]()
-    var claimed: i64 = 0
-    var total_weight: i64 = 0
-
-    for constraint in constraints:
-        let floor_size = constraint.minimum()
-        var size = floor_size
-        let wanted = constraint.preference(usable)
-        if wanted != none:
-            size = wanted
-        let ceiling = constraint.maximum()
-        if ceiling != none:
-            size = min(size, max(ceiling, floor_size))
-        size = max(size, floor_size)
-        sizes.append(size)
-        prefers.append(wanted != none)
-        claimed += size
-        total_weight += constraint.weight()
-
-    if claimed <= usable:
-        let remaining = usable - claimed
-        if total_weight > 0:
-            var given: i64 = 0
-            var first: i64 = -1
-            for index in range(0, count):
-                let weight = constraints[index].weight()
-                if weight > 0:
-                    var share = floor_div(remaining * weight, total_weight)
-                    let ceiling = constraints[index].maximum()
-                    if ceiling != none:
-                        share = min(share, max(ceiling - sizes[index], 0))
-                    sizes[index] += share
-                    given += share
-                    if first < 0:
-                        first = index
-            if first >= 0:
-                var leftover = remaining - given
-                let ceiling = constraints[first].maximum()
-                if ceiling != none:
-                    leftover = min(leftover, max(ceiling - sizes[first], 0))
-                sizes[first] += leftover
-        return sizes
-
-    var over = claimed - usable
-    # First return preferring children's slack down to their floor.
-    for index in range(0, count):
-        if over <= 0:
-            break
-        if prefers[index]:
-            let cut = min(max(sizes[index] - constraints[index].minimum(), 0), over)
-            sizes[index] -= cut
-            over -= cut
-    # On a truly tiny axis, preferring panes disappear before primary
-    # content.
-    for index in range(0, count):
-        if over <= 0:
-            break
-        if prefers[index]:
-            let cut = min(sizes[index], over)
-            sizes[index] -= cut
-            over -= cut
-    for index in range(0, count):
-        if over <= 0:
-            break
-        if constraints[index].weight() > 0:
-            let cut = min(sizes[index], over)
-            sizes[index] -= cut
-            over -= cut
-    # Rigid children are the final claim.  This branch is reached only
-    # when the complete axis is smaller than every other child reduced
-    # to zero.
-    for index in range(0, count):
-        if over <= 0:
-            break
-        let cut = min(sizes[index], over)
-        sizes[index] -= cut
-        over -= cut
+private func constraints_of(slots: list[Slot]) -> list[Constraint]:
+    var sizes = list[Constraint]()
+    for slot in slots:
+        sizes.append(slot.size)
     return sizes
 
-func row(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
-    let widths = resolve(area.columns, spacing, constraints)
-    var rectangles = list[Rect]()
-    var at_column = area.column
-    let gap = max(spacing, 0)
-    for width in widths:
-        rectangles.append(Rect(row = area.row, column = at_column, rows = area.rows, columns = width))
-        at_column += width + gap
-    return rectangles
+# When absent, a child grows: filling what the siblings leave is the
+# most common intent, so it is the unstated one.
+private func slot_constraint(size: Constraint?) -> Constraint:
+    if size == none:
+        return Grow()
+    return size
 
-func column(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
-    let heights = resolve(area.rows, spacing, constraints)
-    var rectangles = list[Rect]()
-    var at_row = area.row
-    let gap = max(spacing, 0)
-    for height in heights:
-        rectangles.append(Rect(row = at_row, column = area.column, rows = height, columns = area.columns))
-        at_row += height + gap
-    return rectangles
+
+class VStack: View:
+    private slots: list[Slot]
+    private spacing: i64
+
+    init(spacing: i64 = 0):
+        self.slots = list[Slot]()
+        self.spacing = spacing
+
+    func add(child: View, size: Constraint? = none):
+        self.slots.append(Slot(size = slot_constraint(size), content = child))
+
+    # Retained layouts reshape by slot: a drag hands a pane its new
+    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
+    # nothing and contain no pointer, so hiding needs no tree surgery.
+    func resize(index: i64, size: Constraint):
+        if index < 0 or index >= len(self.slots):
+            return
+        self.slots[index] = Slot(size = size, content = self.slots[index].content)
+
+    func draw(surface: Surface, area: Rect) -> Cursor?:
+        let rectangles = column(area, self.spacing, constraints_of(self.slots))
+        var cursor: Cursor? = none
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let found = self.slots[index].content.draw(surface, rectangles[index])
+            if cursor == none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: Event, area: Rect) -> Response:
+        let rectangles = column(area, self.spacing, constraints_of(self.slots))
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let response = route(self.slots[index].content, event, rectangles[index])
+            if response != Response.ignored:
+                return response
+        return Response.ignored
+
+class HStack: View:
+    private slots: list[Slot]
+    private spacing: i64
+
+    init(spacing: i64 = 0):
+        self.slots = list[Slot]()
+        self.spacing = spacing
+
+    func add(child: View, size: Constraint? = none):
+        self.slots.append(Slot(size = slot_constraint(size), content = child))
+
+    # Retained layouts reshape by slot: a drag hands a pane its new
+    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
+    # nothing and contain no pointer, so hiding needs no tree surgery.
+    func resize(index: i64, size: Constraint):
+        if index < 0 or index >= len(self.slots):
+            return
+        self.slots[index] = Slot(size = size, content = self.slots[index].content)
+
+    func draw(surface: Surface, area: Rect) -> Cursor?:
+        let rectangles = row(area, self.spacing, constraints_of(self.slots))
+        var cursor: Cursor? = none
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let found = self.slots[index].content.draw(surface, rectangles[index])
+            if cursor == none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: Event, area: Rect) -> Response:
+        let rectangles = row(area, self.spacing, constraints_of(self.slots))
+        for index in range(0, min(len(self.slots), len(rectangles))):
+            let response = route(self.slots[index].content, event, rectangles[index])
+            if response != Response.ignored:
+                return response
+        return Response.ignored
+
+# Children draw in list order, so the last is visually on top — and
+# events visit the visually topmost child first.
+class ZStack: View:
+    private children: list[View]
+
+    init():
+        self.children = list[View]()
+
+    func add(child: View):
+        self.children.append(child)
+
+    func draw(surface: Surface, area: Rect) -> Cursor?:
+        var cursor: Cursor? = none
+        for child in self.children:
+            let found = child.draw(surface, area)
+            if found != none:
+                cursor = found
+        return cursor
+
+    func dispatch(event: Event, area: Rect) -> Response:
+        var index = len(self.children) - 1
+        while index >= 0:
+            let response = route(self.children[index], event, area)
+            if response != Response.ignored:
+                return response
+            index -= 1
+        return Response.ignored

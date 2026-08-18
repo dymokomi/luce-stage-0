@@ -1,35 +1,55 @@
-# Search finds every match and steps through them, wrapping at the ends.
+# In-file search, driven through the model the way keys drive it:
+# find every match, step through them wrapping at the ends, and treat
+# overlapping matches as the separate positions they are.
 
-import search
+from model import Model, Intent, Focus
+from document import Document
+
+func searching(content: str) -> Model:
+    var documents = list[Document]()
+    documents.append(Document(path = "f.luc", content = content))
+    let ed = Model(documents)
+    ed.key(Intent.find, "", 10)
+    return ed
 
 func test_scan_finds_every_occurrence():
-    var matches = list[i64]()
-    search.scan(matches, "the cat sat on the mat", "at")
-    # "cat", "sat", "mat" — the 'at' at bytes 5, 9, 20.
-    assert(len(matches) == 3)
-    assert(matches[0] == 5)
-    assert(matches[1] == 9)
-    assert(matches[2] == 20)
+    var ed = searching("the cat sat on the mat")
+    ed.key(Intent.insert_text, "at", 10)
+    # "cat", "sat", "mat" — the 'at' at scalars 5, 9, 20.
+    assert(len(ed.search_matches) == 3)
+    assert(ed.search_matches[0] == 5)
+    assert(ed.search_matches[1] == 9)
+    assert(ed.search_matches[2] == 20)
+    assert(ed.document().cursor == 5)
 
 func test_scan_counts_overlapping_matches():
-    var matches = list[i64]()
-    search.scan(matches, "aaa", "aa")
-    assert(len(matches) == 2)
-    assert(matches[0] == 0)
-    assert(matches[1] == 1)
+    var ed = searching("aaa")
+    ed.key(Intent.insert_text, "aa", 10)
+    assert(len(ed.search_matches) == 2)
+    assert(ed.search_matches[0] == 0)
+    assert(ed.search_matches[1] == 1)
 
 func test_an_empty_query_matches_nothing():
-    var matches = list[i64]()
-    search.scan(matches, "anything", "")
-    assert(len(matches) == 0)
+    var ed = searching("anything")
+    assert(len(ed.search_matches) == 0)
+    assert(ed.search_current == -1)
 
-func test_no_match_leaves_an_empty_list():
-    var matches = list[i64]()
-    search.scan(matches, "hello", "zzz")
-    assert(len(matches) == 0)
+func test_no_match_leaves_the_cursor_alone():
+    var ed = searching("hello")
+    ed.key(Intent.insert_text, "zzz", 10)
+    assert(len(ed.search_matches) == 0)
+    assert(ed.document().cursor == 0)
 
 func test_step_wraps_at_both_ends():
-    assert(search.step(3, 0, 1) == 1)
-    assert(search.step(3, 2, 1) == 0)
-    assert(search.step(3, 0, -1) == 2)
-    assert(search.step(0, 0, 1) == -1)
+    var ed = searching("ab ab ab")
+    ed.key(Intent.insert_text, "ab", 10)
+    assert(ed.search_current == 0)
+    ed.key(Intent.newline, "", 10)
+    assert(ed.search_current == 1)
+    ed.key(Intent.newline, "", 10)
+    assert(ed.search_current == 2)
+    # Wrap forward past the end, then back past the start.
+    ed.key(Intent.newline, "", 10)
+    assert(ed.search_current == 0)
+    ed.key(Intent.move_up, "", 10)
+    assert(ed.search_current == 2)

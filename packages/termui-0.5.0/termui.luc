@@ -1,4 +1,4 @@
-# Declarative terminal applications through one public module.
+# Declarative terminal applications through grouped public modules.
 #
 # An application builds its layout once — components constructed with
 # whatever model they observe — hands it to `Application.set_layout`,
@@ -6,13 +6,23 @@
 # placement, flushing, input and shutdown.  Components are classes
 # conforming to `View`; a program's own conformers compose with the
 # shipped ones through the same two-method contract.
+#
+# This module is the core: `Application`, the `View` contract, the
+# drawing `Surface`, and the value and event vocabulary.  The rest of
+# the surface is grouped where reading an import line says what it is:
+#
+#     from termui import Application, View
+#     from termui.layout import VStack, HStack
+#     from termui.constraints import Fixed, Grow
+#     from termui.widgets import Label, Panel, Rows
+#
+# `canvas`, `model`, `input`, `view`, and `runtime` are implementation
+# modules; their public vocabulary is re-exported here.
 
 import model
 import input
-import layout
 import canvas
 import view
-import components
 import runtime as app_runtime
 
 alias Color = model.Color
@@ -29,33 +39,13 @@ alias Pointer = input.Pointer
 alias Mouse = input.Mouse
 alias Event = input.Event
 
-alias Constraint = layout.Constraint
-alias Fixed = layout.Fixed
-alias Grow = layout.Grow
-alias Ratio = layout.Ratio
-alias Preferred = layout.Preferred
 alias View = view.View
 alias Surface = canvas.Surface
 alias Snapshot = canvas.Snapshot
 alias Application = app_runtime.Application
 
-alias Label = components.Label
-alias StyledText = components.StyledText
-alias VStack = components.VStack
-alias HStack = components.HStack
-alias ZStack = components.ZStack
-alias Panel = components.Panel
-alias Rows = components.Rows
-alias Fill = components.Fill
-alias Empty = components.Empty
-alias EventHost = components.EventHost
-alias CursorHost = components.CursorHost
-
 func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
-
-func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
-    return components.Rows.visible_top(top, total, selected, height)
 
 func route(child: View, event: Event, area: Rect) -> Response:
     return view.route(child, event, area)

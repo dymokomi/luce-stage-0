@@ -1,30 +1,16 @@
-# The shipped components: classes conforming to View.
+# The shipped widgets: text, framed and leaf content, and the hosts
+# that wrap behavior and cursor placement around it.
 #
-# Every component here draws through Surface and routes through
-# route, which is the whole of what a program's own component
-# does too — these are the first conformers, not a privileged set.
-# Values stay values (Style, Rect, Line, Constraint, Event); a component
-# is a class because a tree node built in `body()` is handed around by
-# reference while it is composed.
+# `from termui.widgets import Panel, Rows, EventHost` is the public
+# spelling.  Every widget conforms to View exactly the way a
+# program's own component does.
 
 import std.strings
-from model import Rect, Style, Response, Cursor, Line, Edges, plain
-from input import Event
-from layout import Constraint, Grow, row, column
+from constraints import Constraint
 from canvas import Surface
+from input import Event
+from model import Rect, Style, Response, Cursor, Line, Edges, plain
 from view import View, route
-
-# Pairing a child with its constraint makes a row/column mismatch
-# impossible.
-private struct Slot:
-    size: Constraint
-    content: View
-
-private func constraints(slots: list[Slot]) -> list[Constraint]:
-    var sizes = list[Constraint]()
-    for slot in slots:
-        sizes.append(slot.size)
-    return sizes
 
 private func draw_line(
     surface: Surface,
@@ -42,115 +28,6 @@ private func draw_line(
             style = override
         surface.write(area, row, at_column, span.text, style)
         at_column += span.text.width()
-
-# When absent, a child grows: filling what the siblings leave is the
-# most common intent, so it is the unstated one.
-private func slot_constraint(size: Constraint?) -> Constraint:
-    if size == none:
-        return Grow()
-    return size
-
-# --- stacks ----------------------------------------------------------
-
-class VStack: View:
-    private slots: list[Slot]
-    private spacing: i64
-
-    init(spacing: i64 = 0):
-        self.slots = list[Slot]()
-        self.spacing = spacing
-
-    func add(child: View, size: Constraint? = none):
-        self.slots.append(Slot(size = slot_constraint(size), content = child))
-
-    # Retained layouts reshape by slot: a drag hands a pane its new
-    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
-    # nothing and contain no pointer, so hiding needs no tree surgery.
-    func resize(index: i64, size: Constraint):
-        if index < 0 or index >= len(self.slots):
-            return
-        self.slots[index] = Slot(size = size, content = self.slots[index].content)
-
-    func draw(surface: Surface, area: Rect) -> Cursor?:
-        let rectangles = column(area, self.spacing, constraints(self.slots))
-        var cursor: Cursor? = none
-        for index in range(0, min(len(self.slots), len(rectangles))):
-            let found = self.slots[index].content.draw(surface, rectangles[index])
-            if cursor == none:
-                cursor = found
-        return cursor
-
-    func dispatch(event: Event, area: Rect) -> Response:
-        let rectangles = column(area, self.spacing, constraints(self.slots))
-        for index in range(0, min(len(self.slots), len(rectangles))):
-            let response = route(self.slots[index].content, event, rectangles[index])
-            if response != Response.ignored:
-                return response
-        return Response.ignored
-
-class HStack: View:
-    private slots: list[Slot]
-    private spacing: i64
-
-    init(spacing: i64 = 0):
-        self.slots = list[Slot]()
-        self.spacing = spacing
-
-    func add(child: View, size: Constraint? = none):
-        self.slots.append(Slot(size = slot_constraint(size), content = child))
-
-    # Retained layouts reshape by slot: a drag hands a pane its new
-    # constraint, and a hidden pane is `fixed(0)` — zero cells draw
-    # nothing and contain no pointer, so hiding needs no tree surgery.
-    func resize(index: i64, size: Constraint):
-        if index < 0 or index >= len(self.slots):
-            return
-        self.slots[index] = Slot(size = size, content = self.slots[index].content)
-
-    func draw(surface: Surface, area: Rect) -> Cursor?:
-        let rectangles = row(area, self.spacing, constraints(self.slots))
-        var cursor: Cursor? = none
-        for index in range(0, min(len(self.slots), len(rectangles))):
-            let found = self.slots[index].content.draw(surface, rectangles[index])
-            if cursor == none:
-                cursor = found
-        return cursor
-
-    func dispatch(event: Event, area: Rect) -> Response:
-        let rectangles = row(area, self.spacing, constraints(self.slots))
-        for index in range(0, min(len(self.slots), len(rectangles))):
-            let response = route(self.slots[index].content, event, rectangles[index])
-            if response != Response.ignored:
-                return response
-        return Response.ignored
-
-# Children draw in list order, so the last is visually on top — and
-# events visit the visually topmost child first.
-class ZStack: View:
-    private children: list[View]
-
-    init():
-        self.children = list[View]()
-
-    func add(child: View):
-        self.children.append(child)
-
-    func draw(surface: Surface, area: Rect) -> Cursor?:
-        var cursor: Cursor? = none
-        for child in self.children:
-            let found = child.draw(surface, area)
-            if found != none:
-                cursor = found
-        return cursor
-
-    func dispatch(event: Event, area: Rect) -> Response:
-        var index = len(self.children) - 1
-        while index >= 0:
-            let response = route(self.children[index], event, area)
-            if response != Response.ignored:
-                return response
-            index -= 1
-        return Response.ignored
 
 # --- framed and leaf content ----------------------------------------
 

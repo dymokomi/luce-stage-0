@@ -7,37 +7,7 @@
 # the table below is the whole translation.
 
 from termui import Key
-
-# What a key does.  A key the editor does not bind is `ignored` — a
-# member, so the `match` that handles it must say so out loud, and an
-# intent added later is a compile error at every match that missed it.
-enum Intent:
-    move_left
-    move_right
-    move_up
-    move_down
-    page_up
-    page_down
-    line_start
-    line_end
-    erase_left
-    erase_right
-    newline
-    indent
-    # `insert_text` rather than `insert`: `insert` is a list method, and
-    # the language reserves method names for their receivers.
-    insert_text
-    save
-    build
-    toggle_files
-    toggle_output
-    next_pane
-    find
-    undo
-    redo
-    escape
-    quit
-    ignored
+from model import Intent
 
 const INTENTS = {
     Key.left: Intent.move_left,
@@ -66,13 +36,6 @@ const INTENTS = {
 
 # How far a movement intent scrolls a list: one row, or a page of eight.
 # A key that moves nothing is not in the table, read as zero.
-const STEPS = {
-    Intent.move_up: -1,
-    Intent.move_down: 1,
-    Intent.page_up: -8,
-    Intent.page_down: 8,
-}
-
 # What a key means.  A key the editor does not bind is `ignored`.
 func intent_of(pressed: Key) -> Intent:
     let found = INTENTS.get(pressed)
@@ -82,8 +45,3 @@ func intent_of(pressed: Key) -> Intent:
 
 # How far this intent scrolls a list of rows; zero for every intent
 # that is not a movement.
-func steps_of(intent: Intent) -> i64:
-    let steps = STEPS.get(intent)
-    if steps == none:
-        return 0
-    return steps

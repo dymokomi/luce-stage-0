@@ -1,21 +1,22 @@
 # A key becomes an intent; an unbound key is `ignored`, not dropped.
 
-import keymap
-import termui
+from ui.keymap import intent_of
+from model import Intent, steps_of
+from termui import Key
 
 func test_bound_keys_map_to_their_intent():
-    assert(keymap.intent_of(termui.Key.left) == keymap.Intent.move_left)
-    assert(keymap.intent_of(termui.Key.ctrl_s) == keymap.Intent.save)
-    assert(keymap.intent_of(termui.Key.ctrl_f) == keymap.Intent.find)
-    assert(keymap.intent_of(termui.Key.ctrl_z) == keymap.Intent.undo)
-    assert(keymap.intent_of(termui.Key.ctrl_y) == keymap.Intent.redo)
+    assert(intent_of(Key.left) == Intent.move_left)
+    assert(intent_of(Key.ctrl_s) == Intent.save)
+    assert(intent_of(Key.ctrl_f) == Intent.find)
+    assert(intent_of(Key.ctrl_z) == Intent.undo)
+    assert(intent_of(Key.ctrl_y) == Intent.redo)
 
 func test_an_unbound_key_is_ignored():
-    assert(keymap.intent_of(termui.Key.ctrl_a) == keymap.Intent.ignored)
-    assert(keymap.intent_of(termui.Key.unknown) == keymap.Intent.ignored)
+    assert(intent_of(Key.ctrl_a) == Intent.ignored)
+    assert(intent_of(Key.unknown) == Intent.ignored)
 
 func test_steps_scroll_a_list_and_are_zero_otherwise():
-    assert(keymap.steps_of(keymap.Intent.move_up) == -1)
-    assert(keymap.steps_of(keymap.Intent.move_down) == 1)
-    assert(keymap.steps_of(keymap.Intent.page_up) == -8)
-    assert(keymap.steps_of(keymap.Intent.save) == 0)
+    assert(steps_of(Intent.move_up) == -1)
+    assert(steps_of(Intent.move_down) == 1)
+    assert(steps_of(Intent.page_up) == -8)
+    assert(steps_of(Intent.save) == 0)

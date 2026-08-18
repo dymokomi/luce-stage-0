@@ -10,13 +10,15 @@
 # termui owns the application loop, terminal lifecycle, layout,
 # drawing, input routing and shutdown.
 
-from termui import Application, VStack, HStack, Fixed, Grow
+from termui import Application
+from termui.layout import VStack, HStack
+from termui.constraints import Fixed, Grow
 import model
-from filelist import FileList
-from source import Editor
-from console import Console
-from statusbar import StatusBar
-from workbench import Workbench
+from ui.filelist import FileList
+from ui.source import Editor
+from ui.console import Console
+from ui.statusbar import StatusBar
+from ui.workbench import Workbench
 
 func main(args: list[str]):
     if len(args) == 0:

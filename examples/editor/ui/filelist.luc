@@ -1,11 +1,11 @@
 # The file pane: the retained component that lists the directory,
 # opens rows, and starts the divider drag on its own right border.
 
-from termui import View, Surface, Response, Rect, Event, Cursor, Line, Pointer, Edges, Rows, Panel, EventHost, CursorHost, plain, visible_top, route
-from focus import Focus
-from keymap import Intent, intent_of
-from model import Model, Drag
-from theme import palette, pane_style
+from termui import View, Surface, Response, Rect, Event, Cursor, Line, Pointer, Edges, plain, route
+from termui.widgets import Rows, Panel, EventHost, CursorHost
+from model import Model, Drag, Focus, Intent
+from ui.keymap import intent_of
+from ui.theme import palette, pane_style
 
 class FileList: View:
     private model: Model
@@ -23,7 +23,7 @@ class FileList: View:
     func file_cursor(area: Rect) -> Cursor?:
         if self.model.focus != Focus.files or area.is_empty():
             return none
-        let top = visible_top(
+        let top = Rows.visible_top(
             self.model.files.top,
             len(self.model.names),
             self.model.files.selected,
@@ -66,7 +66,7 @@ class FileList: View:
                 if pointer.kind != Pointer.press or pointer.button != 0:
                     return Response.ignored
                 self.model.focus = Focus.files
-                let top = visible_top(
+                let top = Rows.visible_top(
                     self.model.files.top,
                     len(self.model.names),
                     self.model.files.selected,

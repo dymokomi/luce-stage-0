@@ -1,17 +1,18 @@
 import model
 import input
-import layout
+from constraints import Fixed
 import canvas
 import view
-import components
+from layout import VStack, HStack, ZStack
+from widgets import Label, Fill, Empty, Panel, Rows, EventHost, CursorHost
 
 func test_rows_and_columns_describe_nested_geometry():
-    var across = components.HStack()
-    across.add(components.Fill("L"), size = layout.Fixed(3))
-    across.add(components.Fill("R"))
-    var down = components.VStack()
+    var across = HStack()
+    across.add(Fill("L"), size = Fixed(3))
+    across.add(Fill("R"))
+    var down = VStack()
     down.add(across)
-    down.add(components.Label("status"), size = layout.Fixed(1))
+    down.add(Label("status"), size = Fixed(1))
     let frame = view.snapshot(down, 3, 8)
     assert(frame.line(0) == "LLLRRRRR")
     assert(frame.line(1) == "LLLRRRRR")
@@ -25,7 +26,7 @@ struct Names:
 
 func test_rows_follow_selection_and_apply_the_selection_style():
     let names = Names(values = ["zero", "one", "two", "three", "four"])
-    let content = components.Rows(
+    let content = Rows(
         total = 5,
         render = names.at,
         top = 0,
@@ -38,11 +39,11 @@ func test_rows_follow_selection_and_apply_the_selection_style():
     assert(frame.line(1) == "four   ")
     assert(frame.cell(1, 0).style.background == 4)
     assert(frame.cell(1, 6).style.background == 4)
-    assert(components.Rows.visible_top(0, 5, 4, 2) == 3)
+    assert(Rows.visible_top(0, 5, 4, 2) == 3)
 
 func test_rows_can_follow_an_anchor_without_painting_a_selection():
     let names = Names(values = ["zero", "one", "two", "three", "four"])
-    let content = components.Rows(
+    let content = Rows(
         total = 5,
         render = names.at,
         anchor = 4,
@@ -54,7 +55,7 @@ func test_rows_can_follow_an_anchor_without_painting_a_selection():
     assert(frame.cell(1, 0).style.background == -1)
 
 func test_a_panel_owns_its_interior_title_and_edges():
-    let content = components.Panel("box", components.Label("inside"), style = model.Style(foreground = 3))
+    let content = Panel("box", Label("inside"), style = model.Style(foreground = 3))
     let frame = view.snapshot(content, 4, 10)
     assert(frame.cell(0, 0).text == "┌")
     assert(frame.cell(0, 9).text == "┐")
@@ -66,9 +67,9 @@ func test_a_panel_owns_its_interior_title_and_edges():
 func test_overlapping_panels_merge_without_application_glyph_logic():
     let surface = canvas.Surface(5, 10)
     surface.clear()
-    let one = components.Panel("", components.Empty())
+    let one = Panel("", Empty())
     one.draw(surface, model.Rect(rows = 5, columns = 6))
-    let two = components.Panel("", components.Empty())
+    let two = Panel("", Empty())
     two.draw(surface, model.Rect(row = 2, column = 5, rows = 3, columns = 5))
     assert(surface.cell_at(2, 5).text == "├")
     assert(surface.cell_at(4, 5).text == "┴")
@@ -101,8 +102,8 @@ class Recorder:
 
 func test_event_hosts_capture_then_continue_when_ignored():
     let recorder = Recorder()
-    let content = components.EventHost(
-        components.EventHost(components.Label("ok"), recorder.inner),
+    let content = EventHost(
+        EventHost(Label("ok"), recorder.inner),
         recorder.outer,
     )
     let response = view.route(content, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 4))
@@ -111,24 +112,24 @@ func test_event_hosts_capture_then_continue_when_ignored():
 
 func test_pointer_events_enter_only_the_allocated_child():
     let recorder = Recorder()
-    var across = components.HStack()
-    across.add(components.EventHost(components.Label("left"), recorder.left_event), size = layout.Fixed(4))
-    across.add(components.EventHost(components.Label("right"), recorder.right_event))
+    var across = HStack()
+    across.add(EventHost(Label("left"), recorder.left_event), size = Fixed(4))
+    across.add(EventHost(Label("right"), recorder.right_event))
     let event = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 6))
     assert(view.route(across, event, model.Rect(rows = 2, columns = 10)) == model.Response.handled)
     assert(recorder.left == 0 and recorder.right == 1)
 
 func test_overlay_dispatches_the_visually_topmost_child_first():
     let recorder = Recorder()
-    var overlay = components.ZStack()
-    overlay.add(components.EventHost(components.Label("bottom"), recorder.left_event))
-    overlay.add(components.EventHost(components.Label("top"), recorder.right_event))
+    var overlay = ZStack()
+    overlay.add(EventHost(Label("bottom"), recorder.left_event))
+    overlay.add(EventHost(Label("top"), recorder.right_event))
     view.route(overlay, input.Event.key(pressed = input.Key.enter), model.Rect(rows = 2, columns = 10))
     assert(recorder.left == 0 and recorder.right == 1)
 
 func test_a_cursor_host_uses_the_rectangle_the_view_received():
     let recorder = Recorder()
-    let content = components.CursorHost(components.Label("ok"), at_end)
+    let content = CursorHost(Label("ok"), at_end)
     let frame = view.snapshot(content, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)

@@ -6,12 +6,12 @@ const test_suites = @import("tools/test_suites.zig");
 /// The public facade is small; model, input, layout, canvas and view form the
 /// hidden declarative engine, and runtime owns the terminal loop.
 const termui_version = "0.5.0";
-const termui_modules = [_][]const u8{ "termui", "model", "input", "layout", "canvas", "view", "components", "runtime" };
+const termui_modules = [_][]const u8{ "termui", "model", "input", "constraints", "layout", "widgets", "canvas", "view", "runtime" };
 
 /// The editor's own modules, its root (`editor`) first.  The specs
 /// compile the editor from these, and both its compile and its test run
 /// name them as inputs so editing one re-runs what depends on it.
-const editor_modules = [_][]const u8{ "editor", "workbench", "filelist", "source", "console", "statusbar", "model", "focus", "keymap", "document", "history", "search", "highlight", "theme", "browser", "shell", "session" };
+const editor_modules = [_][]const u8{ "editor", "model", "document", "history", "highlight", "listing", "session", "ui/workbench", "ui/source", "ui/filelist", "ui/console", "ui/statusbar", "ui/keymap", "ui/theme" };
 const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "model", "workbench" };
 
 // LuciaOS v2 builds two executables from one language module:
@@ -1450,7 +1450,7 @@ pub fn build(b: *std.Build) void {
         .{
             .directory = "termui-" ++ termui_version,
             .modules = &termui_modules,
-            .tests = &.{ "model", "input", "layout", "canvas", "view", "components", "facade" },
+            .tests = &.{ "model", "input", "constraints", "canvas", "view", "widgets", "facade" },
         },
     };
     for (packages) |package| {

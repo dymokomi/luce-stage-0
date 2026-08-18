@@ -16,27 +16,27 @@ from document import next_boundary
 
 # --- one character, before anything decides what it means ----------
 
-func is_digit(code: char) -> bool:
+private func is_digit(code: char) -> bool:
     return code >= '0' and code <= '9'
 
-func is_hex_digit(code: char) -> bool:
+private func is_hex_digit(code: char) -> bool:
     return is_digit(code) or (code >= 'A' and code <= 'F') or (code >= 'a' and code <= 'f')
 
-func is_upper(code: char) -> bool:
+private func is_upper(code: char) -> bool:
     return code >= 'A' and code <= 'Z'
 
-func is_alpha(code: char) -> bool:
+private func is_alpha(code: char) -> bool:
     return is_upper(code) or (code >= 'a' and code <= 'z')
 
-func is_word_start(code: char) -> bool:
+private func is_word_start(code: char) -> bool:
     return is_alpha(code) or code == '_' or u32(code) >= 128
 
-func is_word(code: char) -> bool:
+private func is_word(code: char) -> bool:
     return is_word_start(code) or is_digit(code)
 
 # Where a quoted str that opens at `opening` closes, bounded by
 # `finish`. A backslash escapes the next scalar.
-func quoted_end(value: str, finish: i64, opening: i64) -> i64:
+private func quoted_end(value: str, finish: i64, opening: i64) -> i64:
     var close = opening + 1
     var closed = false
     while close < finish and not closed:
@@ -101,7 +101,7 @@ struct Token:
 # Which of the four word kinds a word is.  The order is the language's:
 # a reserved word is a keyword before anything else, and a capitalized
 # name is a type before a builtin (no builtin is capitalized).
-func classify_word(text: str) -> TokenKind:
+private func classify_word(text: str) -> TokenKind:
     if keyword_words.has(text):
         return TokenKind.keyword
     if type_words.has(text):

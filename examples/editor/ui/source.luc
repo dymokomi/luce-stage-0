@@ -2,12 +2,12 @@
 # buffer and routes its keys, text, and pointer to the model.
 
 import std.strings
-from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, Line, Span, Rows, EventHost, CursorHost, visible_top, route
+from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, Line, Span, route
+from termui.widgets import Rows, EventHost, CursorHost
 import highlight
-from focus import Focus
-from keymap import Intent, intent_of
-from model import Model
-from theme import palette, style_for
+from model import Model, Focus, Intent
+from ui.keymap import intent_of
+from ui.theme import palette, style_for
 
 # Luce's lexer steps four columns; the gutter holds a line number and
 # one space inside five cells.
@@ -52,7 +52,7 @@ class Editor: View:
         let doc = self.model.document()
         let line = doc.line_of(doc.cursor)
         let total = doc.count_lines()
-        let top = visible_top(doc.scroll, total, line, area.rows)
+        let top = Rows.visible_top(doc.scroll, total, line, area.rows)
         let column = doc.column_of(doc.cursor)
         return Cursor(
             row = area.row + clamp(line - top, 0, max(area.rows - 1, 0)),
@@ -87,7 +87,7 @@ class Editor: View:
                 self.model.focus = Focus.editor
                 let total = doc.count_lines()
                 let cursor_line = doc.line_of(doc.cursor)
-                let top = visible_top(doc.scroll, total, cursor_line, area.rows)
+                let top = Rows.visible_top(doc.scroll, total, cursor_line, area.rows)
                 let line = top + pointer.row - area.row
                 if line < total:
                     let start = doc.line_at(line)

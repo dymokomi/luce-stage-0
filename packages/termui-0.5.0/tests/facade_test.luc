@@ -1,5 +1,7 @@
 import termui
-from termui import VStack, Fill, EventHost
+from layout import VStack
+from widgets import Fill, EventHost
+from constraints import Fixed
 
 # A retained component: constructed once, drawing its current state
 # each frame and updating that state in place when routed an event.
@@ -26,7 +28,7 @@ class Ticker: termui.View:
 func test_a_retained_layout_updates_in_place():
     var stack = VStack()
     stack.add(Fill("."))
-    stack.add(Ticker(41), size = termui.Fixed(1))
+    stack.add(Ticker(41), size = Fixed(1))
 
     var app = termui.Application()
     app.set_layout(stack)

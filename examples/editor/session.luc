@@ -7,6 +7,8 @@
 # operations it calls.
 
 import std.files
+import std.os
+import std.strings
 from document import Document
 
 private func draft_path(path: str) -> str:
@@ -71,3 +73,23 @@ func save_draft(path: str, content: str):
 func discard_draft(path: str):
     files.delete(draft_path(path)) catch:
         return
+
+# --- the build shell --------------------------------------------------
+
+# One shell word, including paths with spaces or shell punctuation.
+private func shell_quote(value: str) -> str:
+    return "'" + strings.replace(value, "'", "'\\''") + "'"
+
+# Compile `path` to a sibling executable and run it, so a person sees
+# both the compiler's diagnostics and the program's output in one pass.
+func build_command(path: str) -> str:
+    let output = path + ".run"
+    return "luce build " + shell_quote(path) + " --emit=exe -o " + shell_quote(output) + " && " + shell_quote(output)
+
+# Run a command and answer its combined output, or the failure message
+# if the shell service itself refused.
+func run(command: str) -> str:
+    var output = ""
+    output = os.run(command) catch reason:
+        return reason
+    return output

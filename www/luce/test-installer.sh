@@ -137,7 +137,7 @@ for notice in THIRD_PARTY_NOTICES.md LLVM-LICENSE.txt ZIG-LICENSE.txt \
     printf '%s\n' fixture >"$archive_tree/share/licenses/third-party/$notice"
 done
 for package_file in luce.yaml termui.luc model.luc input.luc layout.luc \
-    canvas.luc view.luc components.luc runtime.luc; do
+    constraints.luc widgets.luc canvas.luc view.luc runtime.luc; do
     printf '%s\n' fixture >"$archive_tree/lib/termui-0.5.0/$package_file"
 done
 extension_tree="$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0"
