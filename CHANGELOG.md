@@ -6,6 +6,13 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- A bare `luce build` builds the project: the `luce.yaml` governing
+  the working directory gains an optional top-level `main:` key naming
+  the project's entry source, and `luce build` with no file expands to
+  exactly the file form, options unchanged.  Without a manifest, or
+  without the key, the bare form refuses and says which of the two to
+  add — no convention scan.
+
 - The filesystem completes: `files.size` and `files.modified` are the
   two stat facts a build tool stands on; `files.copy` streams one
   file's bytes in constant space and `files.move` renames with a

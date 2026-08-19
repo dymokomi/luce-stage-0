@@ -49,7 +49,7 @@ not load your interactive shell profile.
 ```text
 luce --version
 luce --build-info
-luce build FILE [-o OUT] [--release] [--emit=WHAT]
+luce build [FILE] [-o OUT] [--release] [--emit=WHAT]
 luce check FILE
 luce query diagnostics FILE
 luce ir FILE [--full]
@@ -82,7 +82,13 @@ package registry or upload protocol is configured yet.
 
 `build` accepts a `.luc` source file, a `.lcm` intermediate module, or `-`
 for standard input. Standard input needs `-o` because there is no source
-name from which to derive an output path. `check` type-checks without
+name from which to derive an output path. With no file at all, `build`
+compiles the project's entry program: the `luce.yaml` governing the working
+directory names it with an optional top-level `main:` key
+(`main: src/atlas.luc`), and the bare form expands to exactly the file
+form, options unchanged. Without a governing manifest, or with a manifest
+that names no `main:`, the bare form refuses and says which of the two to
+add. `check` type-checks without
 writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
 described in [Testing](/tools/testing/).

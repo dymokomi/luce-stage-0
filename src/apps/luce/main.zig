@@ -1,7 +1,8 @@
 //! The luce compiler: .luc source in, machine code out.
 //!
 //! The compiler commands over one pipeline:
-//!   luce build FILE.luc [-o OUT]   compile and write an executable
+//!   luce build [FILE.luc] [-o OUT]  compile and write an executable; bare
+//!                                    builds the project manifest's main:
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
 //!   luce test [PATH ...]           compile and run the tests found
@@ -117,19 +118,51 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         return package.run(gpa, io, out, err, arguments[2..]);
     }
 
-    if (arguments.len < 3) return usage(err);
-    const path = arguments[2];
-
     if (std.mem.eql(u8, command, "build")) {
-        // The file comes first and the options follow it.  An option
-        // written in the file's slot pushes the file into the option
-        // list, where the loop below meets it and reports the file —
-        // "sums.luc is not an option build takes", a true sentence
-        // about the wrong word, which sends the reader to look at a
-        // file that is fine.  The mistake is the order, so the order
-        // is what is said.  A bare `-` is standard input, a file.
-        if (path.len > 1 and path[0] == '-') {
-            return refuse(err, "build takes its file first: luce build FILE {s}", .{path});
+        // The file comes first and the options follow it.  A bare
+        // `luce build` — nothing after the command, or options only —
+        // builds the project's `main:` instead (docs/BUILD.md phase
+        // A): the governing luce.yaml is found from the working
+        // directory, and the key expands to the ordinary file form.
+        // A bare `-` is standard input, a file.
+        var path: []const u8 = undefined;
+        var index: usize = 3;
+        if (arguments.len >= 3 and (arguments[2].len <= 1 or arguments[2][0] != '-')) {
+            path = arguments[2];
+        } else {
+            // Before treating this as a bare project build, see
+            // whether a file was named after the options — the
+            // mistake is then the order, so the order is what is
+            // said, with the fix written out.
+            var scan: usize = 2;
+            while (scan < arguments.len) : (scan += 1) {
+                if (std.mem.eql(u8, arguments[scan], "-o")) {
+                    scan += 1;
+                    continue;
+                }
+                if (arguments[scan].len > 1 and arguments[scan][0] == '-') continue;
+                return refuse(err, "build takes its file first: luce build FILE {s}", .{arguments[2]});
+            }
+            index = 2;
+            path = switch (try files.discoverProject(arena_state.allocator(), io, ".")) {
+                .rootless => return refuse(
+                    err,
+                    "a bare build needs a project: no luce.yaml governs this directory, so name a file — luce build FILE",
+                    .{},
+                ),
+                .refused => |reason| return refuse(err, "{s}", .{reason}),
+                .governed => |governed| chosen: {
+                    const entry = governed.manifest.main orelse return refuse(
+                        err,
+                        "{s}/luce.yaml names no main:; add one (main: src/NAME.luc) or name a file — luce build FILE",
+                        .{governed.root},
+                    );
+                    break :chosen try std.fs.path.join(
+                        arena_state.allocator(),
+                        &.{ governed.root, entry },
+                    );
+                },
+            };
         }
         var output_path: []const u8 = "";
         var release = false;
@@ -137,7 +170,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         var said_output = false;
         var said_release = false;
         var said_emit = false;
-        var index: usize = 3;
         while (index < arguments.len) : (index += 1) {
             const argument = arguments[index];
             if (std.mem.eql(u8, argument, "-o")) {
@@ -179,6 +211,10 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             .driver = environment.get("LUCE_CC"),
         });
     }
+
+    if (arguments.len < 3) return usage(err);
+    const path = arguments[2];
+
     if (std.mem.eql(u8, command, "query")) {
         // `luce query diagnostics FILE` — the machine half of `check`:
         // one JSON array on standard output, `[]` for a clean compile.
@@ -277,7 +313,7 @@ fn usage(err: *std.Io.Writer) !u8 {
         "usage:\n" ++
             "  luce --version\n" ++
             "  luce --build-info\n" ++
-            "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
+            "  luce build [FILE] [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
             "  luce query diagnostics FILE\n" ++
             "  luce ir FILE [--full]\n" ++

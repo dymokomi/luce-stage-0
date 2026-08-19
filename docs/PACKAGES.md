@@ -47,6 +47,7 @@ before any Luce code could run.
 ```yaml
 name: atlas
 version: 0.3.0
+main: src/atlas.luc                 # what a bare `luce build` builds
 
 packages:
   geo: 1.2.0
@@ -55,6 +56,13 @@ packages:
 ```
 
 - `name` and `version` are the project's own identity — both required.
+- `main` is optional: the project-root-relative source a bare
+  `luce build` (no file named) compiles, run from anywhere under the
+  root.  Without it the bare form refuses and names the key — no
+  convention scan, because a build that guesses `main.luc` today
+  guesses wrong the day two candidates exist ([BUILD.md](BUILD.md)
+  phase A).  `luce build FILE.luc` is unchanged: the file form is the
+  primitive the bare form expands to.
 - `packages` is the *want list*. **A version is exact** — no ranges, no
   `^`/`~`. Upgrading a dependency is editing the number. A package not
   named here is unresolvable from any store, so a stray install cannot

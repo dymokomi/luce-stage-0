@@ -133,11 +133,12 @@ test "a command line with nothing to do prints usage and fails" {
 
     // No arguments at all, a command that does not exist, and a
     // command with no file: all the same answer, because they are all
-    // "there is nothing here to compile".
+    // "there is nothing here to compile".  `build` is not among them:
+    // a bare build means the project's `main:` now, and its own test
+    // below says what it answers where no project governs.
     const empty_handed = [_][]const []const u8{
         &.{},
         &.{"polish"},
-        &.{"build"},
         &.{"check"},
         &.{"ir"},
         &.{"package"},
@@ -155,7 +156,7 @@ test "a command line with nothing to do prints usage and fails" {
             for ([_][]const u8{
                 "luce --version",
                 "luce --build-info",
-                "luce build FILE [-o OUT] [--release] [--emit=WHAT]",
+                "luce build [FILE] [-o OUT] [--release] [--emit=WHAT]",
                 "luce check FILE",
                 "luce ir FILE [--full]",
                 "luce test [PATH ...]",
@@ -252,7 +253,7 @@ test "an option in the file's slot is answered with the rule, not the wrong word
     const misordered = [_][]const []const u8{
         &.{ "build", "--emit=object", program },
         &.{ "build", "--release", program },
-        &.{ "build", "--emit=exe" },
+        &.{ "build", "-o", "out", program },
     };
     for (misordered) |arguments| {
         var ran = try runLuce(gpa, &tree, arguments, null);
@@ -269,6 +270,52 @@ test "an option in the file's slot is answered with the rule, not the wrong word
         try testing.expect(!tree.exists("sums.lc"));
         try testing.expect(!tree.exists("sums.o"));
     }
+}
+
+test "a bare build compiles the manifest's main, and says what is missing without one" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    // No project: the bare form refuses and names both remedies.
+    var rootless = try runLuceHere(gpa, &tree, &.{"build"});
+    defer rootless.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), rootless.status);
+    try testing.expect(rootless.saysErr("a bare build needs a project"));
+    try testing.expect(rootless.saysErr("luce build FILE"));
+
+    // A governing manifest without the key names the key.
+    try tree.write("luce.yaml",
+        \\name: sums
+        \\version: 0.1.0
+        \\
+    );
+    var unkeyed = try runLuceHere(gpa, &tree, &.{"build"});
+    defer unkeyed.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), unkeyed.status);
+    try testing.expect(unkeyed.saysErr("names no main:"));
+
+    // With the key, the bare form is exactly the file form: the
+    // executable lands beside the source, named after it, and an
+    // option rides along unchanged.
+    try tree.write("luce.yaml",
+        \\name: sums
+        \\version: 0.1.0
+        \\main: src/sums.luc
+        \\
+    );
+    try tree.write("src/sums.luc", greeting);
+    var built = try runLuceHere(gpa, &tree, &.{"build"});
+    defer built.deinit(gpa);
+    try testing.expectEqualStrings("", built.err);
+    try testing.expectEqual(@as(u8, 0), built.status);
+    try testing.expect(tree.exists("src/sums"));
+
+    var emitted = try runLuceHere(gpa, &tree, &.{ "build", "--emit=library" });
+    defer emitted.deinit(gpa);
+    try testing.expectEqualStrings("", emitted.err);
+    try testing.expectEqual(@as(u8, 0), emitted.status);
+    try testing.expect(tree.exists("src/sums.lc"));
 }
 
 test "package commands create a direct source package and version it" {

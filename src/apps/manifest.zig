@@ -45,6 +45,11 @@ pub const Entry = struct {
 pub const Manifest = struct {
     name: []const u8,
     version: []const u8,
+    /// What a bare `luce build` builds: a project-root-relative source
+    /// path, or null for a project that names none — the bare form
+    /// then refuses and names this key as the remedy.  Optional
+    /// because a library project has no entry program.
+    main: ?[]const u8 = null,
     packages: []const Entry = &.{},
     override: []const Entry = &.{},
 };
@@ -66,6 +71,7 @@ pub const Result = union(enum) {
 pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
     var project_name: ?[]const u8 = null;
     var project_version: ?[]const u8 = null;
+    var project_main: ?[]const u8 = null;
     var packages: std.ArrayList(Entry) = .empty;
     var overrides: std.ArrayList(Entry) = .empty;
     var seen_packages = false;
@@ -114,7 +120,8 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
             section_indent = null;
 
             const is_name = std.mem.eql(u8, key, "name");
-            if (is_name or std.mem.eql(u8, key, "version")) {
+            const is_version = std.mem.eql(u8, key, "version");
+            if (is_name or is_version or std.mem.eql(u8, key, "main")) {
                 var words = std.mem.tokenizeAny(u8, value_text, " \t");
                 var value: ?[]const u8 = null;
                 while (words.next()) |word| {
@@ -124,7 +131,7 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
                     value = word;
                 }
                 const given = value orelse return refuse(arena, line_number, "{s}: names nothing", .{key});
-                const slot = if (is_name) &project_name else &project_version;
+                const slot = if (is_name) &project_name else if (is_version) &project_version else &project_main;
                 if (slot.* != null) return refuse(arena, line_number, "{s}: is given twice", .{key});
                 slot.* = given;
                 continue;
@@ -146,7 +153,7 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
                 continue;
             }
 
-            return refuse(arena, line_number, "{s} is not a manifest key; the keys are name, version, packages and override", .{key});
+            return refuse(arena, line_number, "{s} is not a manifest key; the keys are name, version, main, packages and override", .{key});
         }
 
         // Indented: an entry of the open map.
@@ -215,6 +222,7 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
     return .{ .manifest = .{
         .name = named,
         .version = versioned,
+        .main = project_main,
         .packages = try packages.toOwnedSlice(arena),
         .override = try overrides.toOwnedSlice(arena),
     } };

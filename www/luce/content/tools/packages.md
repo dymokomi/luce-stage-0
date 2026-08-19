@@ -68,9 +68,12 @@ name: hello_app
 version: 0.1.0
 ```
 
-The top-level `name` and `version` identify the project. The `packages:` map
-is the project's **want list**; every entry has one exact version. Now let the
-tool create the package directory and add the development want:
+The top-level `name` and `version` identify the project. An optional
+`main:` key names the project-root-relative source a bare `luce build`
+compiles, so `luce build` with no file works from anywhere under the root.
+The `packages:` map is the project's **want list**; every entry has one
+exact version. Now let the tool create the package directory and add the
+development want:
 
 ```sh
 luce package new greet 0.1.0
