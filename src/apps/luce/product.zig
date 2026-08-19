@@ -160,6 +160,7 @@ test "a command line with nothing to do prints usage and fails" {
                 "luce check FILE",
                 "luce ir FILE [--full]",
                 "luce test [PATH ...]",
+                "luce install",
                 "luce package new NAME [VERSION]",
                 "luce package version NAME VERSION",
                 "luce package publish NAME",
@@ -316,6 +317,262 @@ test "a bare build compiles the manifest's main, and says what is missing withou
     try testing.expectEqualStrings("", emitted.err);
     try testing.expectEqual(@as(u8, 0), emitted.status);
     try testing.expect(tree.exists("src/sums.lc"));
+}
+
+// ---------------------------------------------------------------------------
+// luce install
+// ---------------------------------------------------------------------------
+
+const ZipEntry = struct { name: []const u8, data: []const u8 };
+
+/// The tree hash docs/PACKAGES.md states, restated independently of
+/// `files.hashPackageDirectory` so the two cannot drift together:
+/// every regular file in sorted relative-path order, each contributing
+/// its path, a NUL, its u64 little-endian length, and its bytes.
+fn treeDigest(entries: []const ZipEntry) [64]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (entries) |entry| {
+        hasher.update(entry.name);
+        hasher.update(&[_]u8{0});
+        var length: [8]u8 = undefined;
+        std.mem.writeInt(u64, &length, entry.data.len, .little);
+        hasher.update(&length);
+        hasher.update(entry.data);
+    }
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn appendInt(gpa: Allocator, bytes: *std.ArrayList(u8), comptime T: type, value: T) !void {
+    var encoded: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &encoded, value, .little);
+    try bytes.appendSlice(gpa, &encoded);
+}
+
+/// A store-only (no compression) zip of the entries — enough archive
+/// for the installer to read back exactly what went in.  Caller frees.
+fn storeZip(gpa: Allocator, entries: []const ZipEntry) ![]u8 {
+    var bytes: std.ArrayList(u8) = .empty;
+    errdefer bytes.deinit(gpa);
+    var offsets: [8]u32 = undefined;
+    for (entries, 0..) |entry, index| {
+        offsets[index] = @intCast(bytes.items.len);
+        try bytes.appendSlice(gpa, "PK\x03\x04");
+        try appendInt(gpa, &bytes, u16, 20);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u32, std.hash.Crc32.hash(entry.data));
+        try appendInt(gpa, &bytes, u32, @intCast(entry.data.len));
+        try appendInt(gpa, &bytes, u32, @intCast(entry.data.len));
+        try appendInt(gpa, &bytes, u16, @intCast(entry.name.len));
+        try appendInt(gpa, &bytes, u16, 0);
+        try bytes.appendSlice(gpa, entry.name);
+        try bytes.appendSlice(gpa, entry.data);
+    }
+    const central_start: u32 = @intCast(bytes.items.len);
+    for (entries, 0..) |entry, index| {
+        try bytes.appendSlice(gpa, "PK\x01\x02");
+        try appendInt(gpa, &bytes, u16, 20);
+        try appendInt(gpa, &bytes, u16, 20);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u32, std.hash.Crc32.hash(entry.data));
+        try appendInt(gpa, &bytes, u32, @intCast(entry.data.len));
+        try appendInt(gpa, &bytes, u32, @intCast(entry.data.len));
+        try appendInt(gpa, &bytes, u16, @intCast(entry.name.len));
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u16, 0);
+        try appendInt(gpa, &bytes, u32, 0);
+        try appendInt(gpa, &bytes, u32, offsets[index]);
+        try bytes.appendSlice(gpa, entry.name);
+    }
+    const central_size: u32 = @intCast(bytes.items.len - central_start);
+    try bytes.appendSlice(gpa, "PK\x05\x06");
+    try appendInt(gpa, &bytes, u16, 0);
+    try appendInt(gpa, &bytes, u16, 0);
+    try appendInt(gpa, &bytes, u16, @intCast(entries.len));
+    try appendInt(gpa, &bytes, u16, @intCast(entries.len));
+    try appendInt(gpa, &bytes, u32, central_size);
+    try appendInt(gpa, &bytes, u32, central_start);
+    try appendInt(gpa, &bytes, u16, 0);
+    return bytes.toOwnedSlice(gpa);
+}
+
+/// One-shot loopback HTTP file server: accept one connection, read one
+/// request head, answer the payload, hang up.  All the network an
+/// install test needs, and no certificate authority.
+const OneArchive = struct {
+    server: std.Io.net.Server,
+    payload: []const u8,
+
+    fn open(payload: []const u8) !OneArchive {
+        const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+        return .{ .server = try address.listen(io, .{}), .payload = payload };
+    }
+
+    fn port(self: *const OneArchive) !u16 {
+        var storage: std.c.sockaddr.storage = undefined;
+        var length: std.c.socklen_t = @sizeOf(std.c.sockaddr.storage);
+        const asked = std.c.getsockname(self.server.socket.handle, @ptrCast(&storage), &length);
+        if (std.posix.errno(asked) != .SUCCESS) return error.NoPort;
+        if (storage.family != std.c.AF.INET) return error.NoPort;
+        const in_network_order = @as(*align(1) const std.c.sockaddr.in, @ptrCast(&storage)).port;
+        return std.mem.bigToNative(u16, in_network_order);
+    }
+
+    fn serve(self: *OneArchive) void {
+        var stream = self.server.accept(io) catch return;
+        defer stream.close(io);
+        var in_buffer: [4096]u8 = undefined;
+        var request = stream.reader(io, &in_buffer);
+        var head: usize = 0;
+        while (std.mem.indexOf(u8, request.interface.buffered(), "\r\n\r\n") == null) {
+            request.interface.fillMore() catch break;
+            head += 1;
+            if (head > 64) break;
+        }
+        var out_buffer: [1024]u8 = undefined;
+        var response = stream.writer(io, &out_buffer);
+        response.interface.print(
+            "HTTP/1.1 200 OK\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n",
+            .{self.payload.len},
+        ) catch return;
+        response.interface.writeAll(self.payload) catch return;
+        response.interface.flush() catch return;
+    }
+};
+
+const geo_entries = [_]ZipEntry{
+    .{ .name = "geo.luc", .data = "func area(size: i64) -> i64:\n    return size * size\n" },
+    .{ .name = "luce.yaml", .data = "name: geo\nversion: 1.2.0\n" },
+};
+
+fn installManifest(gpa: Allocator, port: u16, digest: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        gpa,
+        "name: atlas\nversion: 0.1.0\n\npackages:\n  geo: 1.2.0 url:http://127.0.0.1:{d}/geo-1.2.0.zip sha256:{s}\n",
+        .{ port, digest },
+    );
+}
+
+test "luce install fetches, verifies, fills the store once, and the package resolves" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    const digest = treeDigest(&geo_entries);
+    const archive = try storeZip(gpa, &geo_entries);
+    defer gpa.free(archive);
+    var served = try OneArchive.open(archive);
+    defer served.server.deinit(io);
+    const manifest_text = try installManifest(gpa, try served.port(), &digest);
+    defer gpa.free(manifest_text);
+    try tree.write("luce.yaml", manifest_text);
+    var thread = try std.Thread.spawn(.{}, OneArchive.serve, .{&served});
+
+    var ran = try runLuceHere(gpa, &tree, &.{"install"});
+    defer ran.deinit(gpa);
+    thread.join();
+    try testing.expectEqualStrings("", ran.err);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(ran.saysOut("installed geo 1.2.0"));
+    try testing.expect(tree.exists(".luce/packages/geo-1.2.0/geo.luc"));
+    try testing.expect(tree.exists(".luce/packages/geo-1.2.0/luce.yaml"));
+    // Nothing transient survives a clean install.
+    try testing.expect(!tree.exists(".luce/packages/geo-1.2.0.staging"));
+    try testing.expect(!tree.exists(".luce/packages/geo-1.2.0.fetched.zip"));
+
+    // Idempotent, and verified rather than trusted: the second run
+    // re-hashes the store and fetches nothing — the server is gone, so
+    // a fetch would fail loudly.
+    var again = try runLuceHere(gpa, &tree, &.{"install"});
+    defer again.deinit(gpa);
+    try testing.expectEqualStrings("", again.err);
+    try testing.expectEqual(@as(u8, 0), again.status);
+    try testing.expect(again.saysOut("geo 1.2.0: already installed"));
+
+    // The reason install exists: the installed package resolves and
+    // links like any other.
+    try tree.write("main.luc",
+        \\import geo
+        \\
+        \\func main():
+        \\    print(str(geo.area(4)))
+        \\
+    );
+    var built = try runLuceHere(gpa, &tree, &.{ "build", "main.luc", "--emit=library" });
+    defer built.deinit(gpa);
+    try testing.expectEqualStrings("", built.err);
+    try testing.expectEqual(@as(u8, 0), built.status);
+    try testing.expect(tree.exists("main.lc"));
+}
+
+test "luce install refuses the unverifiable, the non-loopback, and the unnamed" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    const rows = [_]struct { row: []const u8, says: []const u8 }{
+        .{
+            .row = "  geo: 1.2.0 url:http://127.0.0.1:1/geo.zip",
+            .says = "names url: but no sha256:",
+        },
+        .{
+            .row = "  geo: 1.2.0 url:http://pkg.example.com/geo.zip sha256:" ++ ("ab" ** 32),
+            .says = "only the loopback host may be fetched over http",
+        },
+        .{
+            .row = "  geo: 1.2.0",
+            .says = "names no url: to fetch from",
+        },
+    };
+    for (rows) |case| {
+        const text = try std.fmt.allocPrint(
+            gpa,
+            "name: atlas\nversion: 0.1.0\n\npackages:\n{s}\n",
+            .{case.row},
+        );
+        defer gpa.free(text);
+        try tree.write("luce.yaml", text);
+        var ran = try runLuceHere(gpa, &tree, &.{"install"});
+        defer ran.deinit(gpa);
+        try testing.expectEqual(@as(u8, 1), ran.status);
+        try testing.expect(ran.saysErr(case.says));
+        try testing.expect(!tree.exists(".luce/packages/geo-1.2.0"));
+    }
+}
+
+test "a fetched tree that hashes to different bytes never lands in the store" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    const archive = try storeZip(gpa, &geo_entries);
+    defer gpa.free(archive);
+    var served = try OneArchive.open(archive);
+    defer served.server.deinit(io);
+    const wrong = "ab" ** 32;
+    const manifest_text = try installManifest(gpa, try served.port(), wrong);
+    defer gpa.free(manifest_text);
+    try tree.write("luce.yaml", manifest_text);
+    var thread = try std.Thread.spawn(.{}, OneArchive.serve, .{&served});
+
+    var ran = try runLuceHere(gpa, &tree, &.{"install"});
+    defer ran.deinit(gpa);
+    thread.join();
+    try testing.expectEqual(@as(u8, 1), ran.status);
+    try testing.expect(ran.saysErr("does not match its stated hash"));
+    try testing.expect(ran.saysErr("nothing was installed"));
+    try testing.expect(!tree.exists(".luce/packages/geo-1.2.0"));
+    try testing.expect(!tree.exists(".luce/packages/geo-1.2.0.staging"));
+    try testing.expect(!tree.exists(".luce/packages/geo-1.2.0.fetched.zip"));
 }
 
 test "package commands create a direct source package and version it" {

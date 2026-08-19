@@ -251,9 +251,14 @@ The source directory must contain `luce.yaml` saying `name: greet` and
 Only the root project chooses `path:`. A package cannot redirect one of its
 own dependencies this way; that decision belongs in the consuming root.
 
-When a package manager is available, it will copy the package source into a
-versioned store directory, verify its manifest and (when present) its hash.
-Until then, you can simulate installation by copying the source directory:
+A package published as a zip archive installs itself: give its want row a
+`url:` and a `sha256:` (the tree hash of the unpacked package), and
+`luce install` fetches it, verifies the hash and the inner manifest, and
+lands it in the store in one rename. A `url:` row without `sha256:` is
+refused — an unverifiable download never installs — and a row already in
+the store is verified and skipped, so `luce install` is safe to run
+repeatedly. For a local package you can also promote the source directory
+by hand:
 
 ```sh
 mkdir -p .luce/packages

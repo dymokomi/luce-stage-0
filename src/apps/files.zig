@@ -44,6 +44,7 @@ const manifest = @import("manifest.zig");
 // file a second time through a separate CLI module would make Zig reject the
 // duplicate module ownership.
 pub const ProjectManifest = manifest.Manifest;
+pub const ManifestEntry = manifest.Entry;
 pub const manifest_file_name = manifest.file_name;
 pub const parseManifest = manifest.parse;
 

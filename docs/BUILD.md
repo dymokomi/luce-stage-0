@@ -13,7 +13,7 @@ cache, `luce package` authoring, `std.files` (complete: stat facts, copy,
 move, removals), `std.http`, `std.zip`, `std.json`, `os.Process`, and
 `channel[T]` for a parallel runner later.
 
-## Phase A — bare `luce build` (and the manifest entry point)
+## Phase A — bare `luce build` (**landed**)
 
 `luce build` with no file, run anywhere under a governing `luce.yaml`,
 builds the project's entry program. The manifest gains one optional
@@ -38,7 +38,7 @@ main: src/atlas.luc     # what a bare `luce build` builds
 Phase A is CLI + manifest work only: no new language surface, no ABI or
 MIR movement.
 
-## Phase B — `luce install`: filling the store
+## Phase B — `luce install`: filling the store (**landed**)
 
 The want list learns where a package comes from. A row may carry a
 `url:` beside its version, and a fetched row **must** carry `sha256:` —
@@ -52,24 +52,29 @@ packages:
   ansi: 0.4.1 path:../ansi           # local rows never fetch
 ```
 
-`luce install`:
+`luce install` reads the want list and brings each row to its installed
+state: a row already in the store is re-verified and reported, never
+re-fetched (idempotent, `make_directory`'s rule again); a `url:` row is
+fetched, unpacked into a staging directory beside its final name,
+tree-hashed, checked against its own inner `luce.yaml` identity, and
+only then renamed into `.luce/packages/NAME-VERSION/` — so a killed
+install never leaves half a package where the resolver probes.
 
-1. reads the want list; every row already satisfied by the store (hash
-   verified when present) is reported and skipped — install is
-   idempotent, `make_directory`'s rule again;
-2. fetches each `url:` row (https only) into a temporary directory,
-   verifies the archive's content hash **before** unpacking anything
-   into the store, then unpacks `<name>-<version>/` into
-   `.luce/packages/` — write-then-rename, so a killed install never
-   leaves half a package where the resolver probes;
-3. verifies the unpacked directory's own `luce.yaml` agrees on name and
-   version, exactly as the resolver would;
-4. refuses a row with `url:` but no `sha256:`, naming the missing hash.
+Three decisions this phase settled, each recorded in the code and
+PACKAGES.md:
 
-The fetch lives in the `luce` binary (Zig, `std.http.Client`): install
-configures import resolution, so like the manifest parser it must not
-depend on any Luce code having been built. The archive format is `.zip`
-first (std.zip already speaks it for the Luce side; the host uses Zig's).
+- **One hash, one meaning.** The `sha256:` on a `url:` row is the same
+  tree hash the resolver already verifies, computed over the *unpacked*
+  staging tree.  An archive hash would have been a second meaning for
+  the same key.
+- **`https` everywhere except loopback.** `http://127.0.0.1`,
+  `localhost`, and `[::1]` are allowed, which is how the product test
+  serves a real archive through the real client without owning a
+  certificate authority.
+- **The archive is a zip**, read by Zig's `std.zip` in the `luce`
+  binary: install configures import resolution, so like the manifest
+  parser it cannot depend on any Luce code having been built.
+
 A registry — names without URLs, publishing, yanking, scopes — stays in
 PACKAGES.md's "not yet built" list; `url:` rows are the lock-file-honest
 subset that needs no server of ours.

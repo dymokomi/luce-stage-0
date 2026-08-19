@@ -77,6 +77,11 @@ packages:
   package from a directory instead of the store, and say so on every
   build. It keeps every resolution decision in the one file — an
   environment variable is not allowed to decide what a program means.
+- The optional `url:` entry is where `luce install` fetches the
+  package's zip archive from. The resolver never reads it, and a
+  fetched row **must** also state `sha256:` — an unverifiable download
+  is refused, not warned about. `https` is required everywhere except
+  the loopback host, which is how a test serves a real archive.
 
 An `override:` section, in the same row shape, resolves a disagreeing
 diamond by the consumer's stated decision (below). `path:` and `override:`
@@ -174,9 +179,15 @@ things:
 └── cache/            # compile cache, keyed as artifacts already are
 ```
 
-- **`packages/` is the store** the resolver probes. Today it is filled by
-  hand — vendoring is just the store with no tooling — which is how the
-  machinery stays testable before any fetch protocol exists.
+- **`packages/` is the store** the resolver probes. `luce install` fills
+  it from the manifest's own `url:` rows: the archive is unpacked into a
+  staging directory beside its final name, the staging tree is hashed
+  with the same tree hash the resolver verifies, its inner `luce.yaml`
+  is checked against the identity the row claims, and only then does one
+  rename put it where the resolver probes — a killed install never
+  leaves half a package. Install is idempotent: a row already in the
+  store is re-verified and reported, never re-fetched. Filling the store
+  by hand — vendoring — remains just the store with no tooling.
 - **`cache/` is the project compile cache.** Under a governing `luce.yaml`,
   loom keeps a program's artifact at the program's own relative spot,
   mirrored under the cache: `src/tools/x.luc` caches at
@@ -243,11 +254,11 @@ host loader, names in and bytes out. Four properties make that hold:
 
 ## Not yet built
 
-- **Fetching** — no network, no registry, and no lockfile. Exact versions plus
-  optional hashes are the lock until registry metadata justifies anything
-  more. Future install/update commands belong in the `luce` binary and need a
-  specified registry and trust protocol first; local project bootstrapping is
-  already handled by `luce package new`.
+- **A registry** — names without URLs. `luce install` fetches the
+  manifest's own `url:` rows under mandatory hashes; exact versions plus
+  those hashes are the lock, and a registry that merely resolves a name
+  to a URL-plus-hash pair is the part that still needs a specified trust
+  protocol. There is no separate lockfile.
 - **Registry publishing** — mandatory hashes, signatures, yanking, scoped
   names, and a package-level export boundary.
 - **Version ranges and a solver** — a solver needs registry metadata, so

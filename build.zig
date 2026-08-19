@@ -1059,6 +1059,21 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Filling the store from the manifest's own url rows.  Like the
+    // package tool it shares project discovery and stays a separate
+    // module, so the compiler pipeline never learns what a fetch is.
+    const app_install = b.createModule(.{
+        .root_source_file = b.path("src/apps/luce/install.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "files", .module = app_files },
+        },
+    });
+    const app_install_tests = b.addTest(.{ .root_module = app_install });
+    test_apps_step.dependOn(&b.addRunArtifact(app_install_tests).step);
+
     // Finding the tools, linking an object, loading an artifact — and
     // finding the `luce` binary, which is how loom gets something
     // built.  Shared by both executables and linking nothing itself;
@@ -1234,6 +1249,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
             .{ .name = "package", .module = app_package },
+            .{ .name = "install", .module = app_install },
             .{ .name = "native", .module = app_native },
             .{ .name = "emit", .module = emit },
             .{ .name = "streams", .module = app_streams },

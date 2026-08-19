@@ -39,6 +39,11 @@ pub const Entry = struct {
     /// Development override: resolve from this directory instead of
     /// the store.
     path: ?[]const u8 = null,
+    /// Where `luce install` fetches the package's archive from.  The
+    /// resolver never reads it; a fetched row must also state
+    /// `sha256:`, and install is where that rule is enforced
+    /// (docs/BUILD.md phase B).
+    url: ?[]const u8 = null,
 };
 
 /// A well-formed project file.
@@ -185,6 +190,7 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
         var version: ?[]const u8 = null;
         var sha256: ?[]const u8 = null;
         var override_path: ?[]const u8 = null;
+        var fetch_url: ?[]const u8 = null;
         while (words.next()) |word| {
             if (word[0] == '#') break;
             if (badToken(word)) |reason| return refuse(arena, line_number, "{s}", .{reason});
@@ -196,7 +202,7 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
                 continue;
             }
             const split = std.mem.indexOfScalar(u8, word, ':') orelse
-                return refuse(arena, line_number, "{s} is not a package annotation; sha256: and path: are", .{word});
+                return refuse(arena, line_number, "{s} is not a package annotation; sha256:, path: and url: are", .{word});
             const prefix = word[0..split];
             const payload = word[split + 1 ..];
             if (payload.len == 0) return refuse(arena, line_number, "{s}: names nothing", .{prefix});
@@ -206,13 +212,22 @@ pub fn parse(arena: Allocator, text: []const u8) error{OutOfMemory}!Result {
             } else if (std.mem.eql(u8, prefix, "path")) {
                 if (override_path != null) return refuse(arena, line_number, "path: is given twice", .{});
                 override_path = payload;
+            } else if (std.mem.eql(u8, prefix, "url")) {
+                if (fetch_url != null) return refuse(arena, line_number, "url: is given twice", .{});
+                fetch_url = payload;
             } else {
-                return refuse(arena, line_number, "{s}: is not a package annotation; sha256: and path: are", .{prefix});
+                return refuse(arena, line_number, "{s}: is not a package annotation; sha256:, path: and url: are", .{prefix});
             }
         }
         const wanted = version orelse
             return refuse(arena, line_number, "package {s} names no version; a want is exact, like geo: 1.2.0", .{key});
-        try list.append(arena, .{ .name = key, .version = wanted, .sha256 = sha256, .path = override_path });
+        try list.append(arena, .{
+            .name = key,
+            .version = wanted,
+            .sha256 = sha256,
+            .path = override_path,
+            .url = fetch_url,
+        });
     }
 
     const named = project_name orelse

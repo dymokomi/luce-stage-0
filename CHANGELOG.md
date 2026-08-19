@@ -6,6 +6,15 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `luce install` fills the package store from the manifest alone: a
+  `packages:` row may carry `url:` beside its exact version, a fetched
+  row must carry `sha256:` — the same tree hash the resolver already
+  verifies, computed over the unpacked archive — and the verified tree
+  lands in `.luce/packages/` in one rename, so a killed install never
+  leaves half a package where imports resolve.  Idempotent: an
+  installed row is re-verified and skipped.  `https` required except
+  on the loopback host.
+
 - A bare `luce build` builds the project: the `luce.yaml` governing
   the working directory gains an optional top-level `main:` key naming
   the project's entry source, and `luce build` with no file expands to

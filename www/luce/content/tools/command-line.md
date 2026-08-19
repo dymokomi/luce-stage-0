@@ -54,6 +54,7 @@ luce check FILE
 luce query diagnostics FILE
 luce ir FILE [--full]
 luce test [PATH ...]
+luce install
 luce package NAME() [VERSION]
 luce package version NAME VERSION
 luce package publish NAME
@@ -62,8 +63,15 @@ luce package publish NAME
 `--version` prints the short tool version and exits. `--build-info` adds the
 immutable source revision, target, optimization mode, serialized-module
 format, and host ABI for a precise bug report. The compiler's command words
-are `build`, `check`, `query`, `ir`, `test`, and `package`; the runner's are
-`run` and `luce`.
+are `build`, `check`, `query`, `ir`, `test`, `install`, and `package`; the
+runner's are `run` and `luce`.
+
+`luce install` fills the package store from the manifest alone: a
+`packages:` row carrying `url:` and `sha256:` is fetched, unpacked, hashed,
+and moved into `.luce/packages/` in one rename — a row without the hash is
+refused, a row already installed is verified and skipped, and nothing
+half-fetched is ever left where imports resolve. See
+[Packages](/tools/packages/).
 
 `luce query diagnostics FILE` is the machine half of `check`: one JSON
 array on standard output — `[]` for a clean compile, otherwise one

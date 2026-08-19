@@ -54,6 +54,7 @@ const front = @import("front.zig");
 const streams = @import("streams");
 const suite = @import("suite.zig");
 const package = @import("package");
+const install = @import("install");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -116,6 +117,12 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     // FILE-required commands below.
     if (std.mem.eql(u8, command, "package")) {
         return package.run(gpa, io, out, err, arguments[2..]);
+    }
+
+    // Filling the store is host-side file work too, driven wholly by
+    // the manifest's own rows (docs/BUILD.md phase B).
+    if (std.mem.eql(u8, command, "install")) {
+        return install.run(gpa, io, out, err, arguments[2..]);
     }
 
     if (std.mem.eql(u8, command, "build")) {
@@ -318,6 +325,7 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce query diagnostics FILE\n" ++
             "  luce ir FILE [--full]\n" ++
             "  luce test [PATH ...]\n" ++
+            "  luce install\n" ++
             "  luce package new NAME [VERSION]\n" ++
             "  luce package version NAME VERSION\n" ++
             "  luce package publish NAME\n" ++
