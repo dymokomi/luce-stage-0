@@ -1,0 +1,32 @@
+# LSP positions are 0-based lines and UTF-16 code units; the compiler
+# speaks 1-based lines and Unicode-scalar columns.  This is the one
+# translation, computed against the buffer the diagnostics are about —
+# a scalar beyond the Basic Multilingual Plane is two UTF-16 units,
+# and an editor given scalar counts would underline the wrong span in
+# any line with an emoji before the problem.
+
+import std.strings
+
+# The UTF-16 code-unit offset of 1-based scalar `column` in `line`.
+func utf16_column(line: str, column: i64) -> i64:
+    var units: i64 = 0
+    var at: i64 = 0
+    let stop = min(column - 1, len(line))
+    while at < stop:
+        if u32(line[at]) >= 65536:
+            units += 2
+        else:
+            units += 1
+        at += 1
+    return units
+
+# One end of a diagnostic span as an LSP position, against the
+# buffer's lines.  Lines beyond the buffer clamp to its last line.
+func position(lines: list[str], line: i64, column: i64) -> (i64, i64):
+    if len(lines) == 0:
+        return 0, 0
+    let index = clamp(line - 1, 0, len(lines) - 1)
+    return index, utf16_column(lines[index], column)
+
+func lines_of(content: str) -> list[str]:
+    return strings.split(content, "\n")

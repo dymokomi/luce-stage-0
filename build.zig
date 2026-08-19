@@ -1410,6 +1410,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "dice" },
         .{ .name = "zipper" },
         .{ .name = "adventure", .deps = &.{ "world", "story", "command", "journal" } },
+        .{ .name = "lsp", .deps = &.{ "frames", "positions", "diagnostics", "server" } },
     };
     for (bundled) |program| {
         const compile_program = b.addRunArtifact(compiler);
@@ -1510,6 +1511,21 @@ pub fn build(b: *std.Build) void {
     linkAgainstRuntime(test_editor, install_runtime, runtime_directory, runtime_archive);
     addTermuiPackage(b, test_editor, runtime_directory, "editor");
     test_editor_product_step.dependOn(&test_editor.step);
+
+    // The language server's own suites run the same way: pure userland
+    // tests over its framing, position translation, and conversation,
+    // with a scripted compiler where the real one would be asked.
+    const test_lsp = b.addRunArtifact(compiler);
+    test_lsp.addArg("test");
+    test_lsp.setCwd(b.path("examples/lsp"));
+    for ([_][]const u8{ "lsp", "frames", "positions", "diagnostics", "server" }) |module| {
+        test_lsp.addFileInput(b.path(b.fmt("examples/lsp/{s}.luc", .{module})));
+    }
+    for ([_][]const u8{ "frames", "positions", "server" }) |one| {
+        test_lsp.addFileInput(b.path(b.fmt("examples/lsp/tests/{s}_test.luc", .{one})));
+    }
+    linkAgainstRuntime(test_lsp, install_runtime, runtime_directory, runtime_archive);
+    test_examples_step.dependOn(&test_lsp.step);
 
     // The editor is also useful as a standalone command.  Keep this
     // executable in the build graph beside the `.lc`: the source and its

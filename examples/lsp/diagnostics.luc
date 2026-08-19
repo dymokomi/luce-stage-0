@@ -1,0 +1,59 @@
+# From the compiler's answer to the editor's vocabulary.
+#
+# `luce query diagnostics -` prints one JSON array; this module turns
+# it into the `textDocument/publishDiagnostics` params for a given
+# uri, translating positions against the buffer that was compiled.
+# Pure: the subprocess is the caller's, so a test can hand this any
+# answer and read what an editor would be told.
+
+import std.json
+from positions import lines_of, position
+
+# The params of one publishDiagnostics notification.
+func published(uri: str, content: str, answer: str) -> json.Json!:
+    let rows = try json.parse(answer)
+    let lines = lines_of(content)
+    var out = list[json.Json]()
+    for index in range(0, rows.count()):
+        let row = rows.element(index)
+        out.append(diagnostic(lines, row))
+    var params = map[str, json.Json]()
+    params["uri"] = json.Json.text(value = uri)
+    params["diagnostics"] = json.Json.array(items = out)
+    return json.Json.object(fields = params)
+
+private func diagnostic(lines: list[str], row: json.Json) -> json.Json:
+    let line = number(row, "line")
+    let column = number(row, "column")
+    let end_line = number(row, "end_line")
+    let end_column = number(row, "end_column")
+    let start_line, start_character = position(lines, line, column)
+    let stop_line, stop_character = position(lines, end_line, end_column)
+    var range_fields = map[str, json.Json]()
+    range_fields["start"] = place(start_line, start_character)
+    range_fields["end"] = place(stop_line, stop_character)
+    var fields = map[str, json.Json]()
+    fields["range"] = json.Json.object(fields = range_fields)
+    fields["severity"] = json.Json.integer(value = 1)
+    fields["source"] = json.Json.text(value = "luce")
+    fields["code"] = json.Json.text(value = text(row, "code"))
+    fields["message"] = json.Json.text(value = text(row, "message"))
+    return json.Json.object(fields = fields)
+
+private func place(line: i64, character: i64) -> json.Json:
+    var fields = map[str, json.Json]()
+    fields["line"] = json.Json.integer(value = line)
+    fields["character"] = json.Json.integer(value = character)
+    return json.Json.object(fields = fields)
+
+private func number(row: json.Json, name: str) -> i64:
+    let held = row.member(name)
+    if held == none:
+        return 0
+    return held.as_i64() else 0
+
+private func text(row: json.Json, name: str) -> str:
+    let held = row.member(name)
+    if held == none:
+        return ""
+    return held.as_text() else ""

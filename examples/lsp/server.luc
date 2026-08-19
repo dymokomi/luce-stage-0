@@ -1,0 +1,183 @@
+# The server: LSP methods in, framed replies out.
+#
+# One class owns the whole conversation — the open documents, the
+# handshake state, and what each method means.  Its answers are
+# ready-to-send frames, so the entry point is a loop and nothing else.
+# The one host effect, running `luce query`, sits behind the Compiler
+# interface the entry hands in: the server's logic stays testable
+# with a scripted compiler.
+
+import std.json
+from frames import framed
+from diagnostics import published
+
+# The one question the server asks the toolchain: this buffer's
+# diagnostics, as `luce query diagnostics` JSON.  An interface rather
+# than a function value because the asking can fail, and a function
+# type carries no fallibility.
+interface Compiler:
+    func diagnostics(content: str) -> str!
+
+# What one incoming message produces: zero, one, or two frames to
+# send (a response, and sometimes a diagnostics notification), and
+# whether the server should leave its loop.
+class Outcome:
+    frames: list[list[u8]]
+    leaving: bool
+
+    init(leaving: bool = false):
+        self.frames = list[list[u8]]()
+        self.leaving = leaving
+
+class Server:
+    private compiler: Compiler
+    private documents: map[str, str]
+    private leaving_asked: bool
+
+    init(compiler: Compiler):
+        self.compiler = compiler
+        self.documents = map[str, str]()
+        self.leaving_asked = false
+
+    # One message, dispatched.  A request (it has an id) always gets a
+    # response; a notification never does.  A body that is not JSON is
+    # dropped: there is no id to answer with.
+    func handle(body: str) -> Outcome:
+        var outcome = Outcome()
+        self.dispatch(outcome, body) catch reason:
+            return outcome
+        return outcome
+
+    private func dispatch(outcome: Outcome, body: str) -> !:
+        let message = try json.parse(body)
+        let method_held = message.member("method")
+        if method_held == none:
+            return
+        let method = method_held.as_text() else ""
+        let id = message.member("id")
+        match method:
+            "initialize":
+                self.reply(outcome, id, initialize_result())
+            "initialized":
+                return
+            "shutdown":
+                self.leaving_asked = true
+                self.reply(outcome, id, json.Json.null)
+            "exit":
+                outcome.leaving = true
+            "textDocument/didOpen", "textDocument/didChange", "textDocument/didSave":
+                self.changed(outcome, message)
+            "textDocument/didClose":
+                self.closed(outcome, message)
+            else:
+                if id != none:
+                    self.refuse(outcome, id, -32601, "unknown method " + method)
+
+    # --- documents and their diagnostics -----------------------------
+
+    # A changed buffer publishes fresh diagnostics.  A compiler or a
+    # parse that fails publishes nothing this round — stale squiggles
+    # beat a dead server — which is what the swallowed catch means.
+    private func changed(outcome: Outcome, message: json.Json):
+        self.publish(outcome, message) catch reason:
+            return
+
+    private func publish(outcome: Outcome, message: json.Json) -> !:
+        let uri = uri_of(message)
+        if uri == "":
+            return
+        let text = text_of(message)
+        if text != none:
+            self.documents[uri] = text
+        if not self.documents.has(uri):
+            return
+        let content = self.documents[uri]
+        let answer = try self.compiler.diagnostics(content)
+        let params = try published(uri, content, answer)
+        outcome.frames.append(framed(notification("textDocument/publishDiagnostics", params)))
+
+    private func closed(outcome: Outcome, message: json.Json):
+        let uri = uri_of(message)
+        if uri == "" or not self.documents.has(uri):
+            return
+        self.documents.remove(uri)
+        var params = map[str, json.Json]()
+        params["uri"] = json.Json.text(value = uri)
+        params["diagnostics"] = json.Json.array(items = list[json.Json]())
+        outcome.frames.append(framed(notification(
+            "textDocument/publishDiagnostics",
+            json.Json.object(fields = params),
+        )))
+
+    # --- answering ---------------------------------------------------
+
+    private func reply(outcome: Outcome, id: json.Json?, result: json.Json):
+        var fields = map[str, json.Json]()
+        fields["jsonrpc"] = json.Json.text(value = "2.0")
+        fields["id"] = id else json.Json.null
+        fields["result"] = result
+        outcome.frames.append(framed(json.Json.object(fields = fields).write()))
+
+    private func refuse(outcome: Outcome, id: json.Json?, code: i64, message: str):
+        var failure = map[str, json.Json]()
+        failure["code"] = json.Json.integer(value = code)
+        failure["message"] = json.Json.text(value = message)
+        var fields = map[str, json.Json]()
+        fields["jsonrpc"] = json.Json.text(value = "2.0")
+        fields["id"] = id else json.Json.null
+        fields["error"] = json.Json.object(fields = failure)
+        outcome.frames.append(framed(json.Json.object(fields = fields).write()))
+
+# --- the shapes ------------------------------------------------------
+
+private func initialize_result() -> json.Json:
+    var sync = map[str, json.Json]()
+    # Full-document sync: every change carries the whole text, which
+    # is what `luce query diagnostics -` wants anyway.
+    var capabilities = map[str, json.Json]()
+    capabilities["textDocumentSync"] = json.Json.integer(value = 1)
+    var info = map[str, json.Json]()
+    info["name"] = json.Json.text(value = "luce-lsp")
+    var fields = map[str, json.Json]()
+    fields["capabilities"] = json.Json.object(fields = capabilities)
+    fields["serverInfo"] = json.Json.object(fields = info)
+    return json.Json.object(fields = fields)
+
+private func notification(method: str, params: json.Json) -> str:
+    var fields = map[str, json.Json]()
+    fields["jsonrpc"] = json.Json.text(value = "2.0")
+    fields["method"] = json.Json.text(value = method)
+    fields["params"] = params
+    return json.Json.object(fields = fields).write()
+
+private func uri_of(message: json.Json) -> str:
+    let params = message.member("params")
+    if params == none:
+        return ""
+    let document = params.member("textDocument")
+    if document == none:
+        return ""
+    let uri = document.member("uri")
+    if uri == none:
+        return ""
+    return uri.as_text() else ""
+
+# The buffer a change carries: didOpen's textDocument.text, or the
+# last full-sync element of didChange's contentChanges; absent for
+# didSave, whose buffer the server already holds.
+private func text_of(message: json.Json) -> str?:
+    let params = message.member("params")
+    if params == none:
+        return none
+    let document = params.member("textDocument")
+    if document != none:
+        let text = document.member("text")
+        if text != none:
+            return text.as_text()
+    let changes = params.member("contentChanges")
+    if changes != none and changes.count() > 0:
+        let last = changes.element(changes.count() - 1)
+        let text = last.member("text")
+        if text != none:
+            return text.as_text()
+    return none

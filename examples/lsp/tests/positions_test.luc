@@ -1,0 +1,19 @@
+# Scalar columns become UTF-16 code units against the real line.
+
+from positions import utf16_column, position, lines_of
+
+func test_ascii_columns_shift_to_zero_based():
+    assert(utf16_column("let x = 1", 5) == 4)
+    assert(utf16_column("abc", 1) == 0)
+
+func test_astral_scalars_count_two_units():
+    # "😀x" — the emoji is one scalar and two UTF-16 units, so a
+    # diagnostic at the x lands at character 2.
+    assert(utf16_column("😀x", 2) == 2)
+    assert(utf16_column("😀😀x", 3) == 4)
+
+func test_positions_clamp_to_the_buffer():
+    let lines = lines_of("one\ntwo")
+    let line, character = position(lines, 9, 1)
+    assert(line == 1)
+    assert(character == 0)

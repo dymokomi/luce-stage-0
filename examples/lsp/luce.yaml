@@ -1,0 +1,5 @@
+# The Luce language server: a Luce program speaking LSP over stdio.
+#
+#   luce build examples/lsp/lsp.luc -o luce-lsp
+name: lsp
+version: 0.1.0

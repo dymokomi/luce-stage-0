@@ -1,0 +1,45 @@
+# luce-lsp — the Luce language server, in Luce.
+#
+# The protocol rides standard input and output (frames.luc); what each
+# method means lives in server.luc; the compiler is asked through
+# `luce query diagnostics -`, the buffer fed to its standard input.
+# Build it, point an editor at the binary, and unsaved buffers get the
+# compiler's own diagnostics.
+
+import std.io
+import std.os
+from frames import Frames
+from server import Server, Compiler
+
+# The real toolchain behind the Compiler seam: feed the buffer to
+# `luce query diagnostics -` and answer the JSON array it prints.
+class Toolchain: Compiler:
+    init():
+        return
+
+    func diagnostics(content: str) -> str!:
+        let transcript = try os.run("luce query diagnostics -", content)
+        return first_line(transcript)
+
+func main() -> !:
+    let input = try os.stdin()
+    let out = try os.stdout()
+    let server = Server(Toolchain())
+    let arriving = Frames(input)
+    while true:
+        let body = try arriving.next()
+        if body == none:
+            return
+        let outcome = server.handle(body)
+        for frame in outcome.frames:
+            try io.send(out, frame)
+        if outcome.leaving:
+            return
+
+# `os.run` appends the exit-status line to the captured output; the
+# query's answer is the JSON array on the first line.
+func first_line(transcript: str) -> str:
+    var at: i64 = 0
+    while at < len(transcript) and transcript[at] != '\n':
+        at += 1
+    return transcript[0:at]

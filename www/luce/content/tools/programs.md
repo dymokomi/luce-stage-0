@@ -233,3 +233,29 @@ host boundary, then dispatches with an exhaustive `match`. Its keyword
 and builtin tables are immutable maps. This keeps input decoding and
 editor behavior separate; the [status page](/status/) records the
 remaining tooling work.
+
+## lsp — the language server, in Luce
+
+`lsp` is the Luce language server: a Luce program speaking the Language
+Server Protocol over standard input and output. Five files split the
+problem the way the protocol does:
+
+```text
+lsp.luc          the loop, and the only file that talks to the world
+frames.luc       Content-Length framing over std.io byte streams
+server.luc       what each LSP method means; documents live here
+diagnostics.luc  the compiler's JSON answer becomes publishDiagnostics
+positions.luc    scalar columns become 0-based UTF-16 characters
+```
+
+It stands on the pieces the toolchain grew for it: `os.stdin()` and
+`os.stdout()` carry the protocol, and every changed buffer is fed to
+`luce query diagnostics -` through `os.run`'s standard-input feed — so
+an editor sees the compiler's own diagnostics for text it has not
+saved. The compiler sits behind a one-method `Compiler` interface, so
+the server's tests script it.
+
+```sh
+luce build examples/lsp/lsp.luc -o luce-lsp
+# point an LSP client at the binary; it announces full-document sync
+```

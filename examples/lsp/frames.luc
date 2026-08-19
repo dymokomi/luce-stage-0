@@ -1,0 +1,116 @@
+# LSP's transport: each message is `Content-Length: N`, a blank line,
+# then exactly N bytes of body.
+#
+# `Frames` owns the byte-accumulation problem — reads arrive in
+# whatever chunks the pipe felt like, a header can split across two of
+# them, and one read can end with half of the next message — so the
+# caller sees whole message bodies and nothing else.  `framed` is the
+# writing half: the body with its header, ready for one send.
+
+import std.io
+import std.strings
+
+class Frames:
+    private:
+        source: io.Reader
+        pending: list[u8]
+        taken: i64
+
+    init(source: io.Reader):
+        self.source = source
+        self.pending = list[u8]()
+        self.taken = 0
+
+    # The next message body, or `none` when input has ended between
+    # messages.  Input ending in the middle of one is an error: the
+    # peer promised N bytes and stopped, which is news, not absence.
+    func next() -> str?!:
+        let header_end = try self.until_blank_line()
+        if header_end < 0:
+            return none
+        let length = try self.content_length(header_end)
+        try self.fill(header_end + 4 + length)
+        var body = list[u8]()
+        for at in range(header_end + 4, header_end + 4 + length):
+            body.append(self.pending[at])
+        self.discard(header_end + 4 + length)
+        let text = strings.from_bytes(body)
+        if text == none:
+            error("frame body is not UTF-8")
+        return text
+
+    # --- the accumulator ---------------------------------------------
+
+    # Read until the header/body separator is buffered; its position,
+    # or -1 for a clean end of input before any byte of a new message.
+    private func until_blank_line() -> i64!:
+        while true:
+            let found = self.find_blank_line()
+            if found >= 0:
+                return found
+            let got = try self.refill()
+            if got == 0:
+                if len(self.pending) == 0:
+                    return -1
+                error("input ended inside a frame header")
+
+    private func find_blank_line() -> i64:
+        var at: i64 = 0
+        while at + 3 < len(self.pending):
+            if self.pending[at] == 13 and self.pending[at + 1] == 10 and self.pending[at + 2] == 13 and self.pending[at + 3] == 10:
+                return at
+            at += 1
+        return -1
+
+    # Read until `total` bytes are buffered.
+    private func fill(total: i64) -> !:
+        while len(self.pending) < total:
+            let got = try self.refill()
+            if got == 0:
+                error("input ended inside a frame body")
+
+    private func refill() -> i64!:
+        var buffer = array[u8](4096)
+        let got = try self.source.read(buffer)
+        var at: i64 = 0
+        while at < got:
+            self.pending.append(buffer[at])
+            at += 1
+        return got
+
+    private func discard(count: i64):
+        var kept = list[u8]()
+        for at in range(count, len(self.pending)):
+            kept.append(self.pending[at])
+        self.pending = kept
+
+    # The declared body length.  Headers are ASCII, names
+    # case-insensitive; Content-Length is the one that must be there.
+    private func content_length(header_end: i64) -> i64!:
+        var header = list[u8]()
+        for at in range(0, header_end):
+            header.append(self.pending[at])
+        let text = strings.from_bytes(header) else ""
+        let crlf = str(char(13)) + "\n"
+        for line in strings.split(text, crlf):
+            let split = strings.find(line, ":")
+            if split == none:
+                continue
+            let name = strings.lower(strings.trim(line[0:split]))
+            if name == "content-length":
+                let value = strings.trim(line[split + 1:len(line)])
+                let length = parse_i64(value)
+                if length == none or length < 0:
+                    error("Content-Length is not a length: " + value)
+                return length
+        error("a frame arrived without Content-Length")
+
+# One message, framed for the wire.  Lengths count bytes; the body is
+# measured through its byte form, not its scalar count.
+func framed(body: str) -> list[u8]:
+    let payload = strings.to_bytes(body)
+    let crlf = str(char(13)) + "\n"
+    var out = strings.to_bytes("Content-Length: " + str(len(payload)) + crlf + crlf)
+    for byte in payload:
+        out.append(byte)
+    return out
