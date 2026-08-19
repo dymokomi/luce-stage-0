@@ -489,7 +489,7 @@ const Module = struct {
             .term_style => builder.fnType(.i32, &.{ .ptr, .i64, .i64, .i32 }, .normal),
             .term_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .term_copy => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
-            .key_read => builder.fnType(.i32, &.{ .ptr, .ptr, .ptr, .ptr, .ptr }, .normal),
+            .key_read => builder.fnType(.i32, &.{ .ptr, .i64, .ptr, .ptr, .ptr, .ptr }, .normal),
             .call_depth => builder.fnType(.i64, &.{.ptr}, .normal),
             // Prompt in, line out — one call, so the prompt is on the
             // screen before the host blocks.
@@ -8536,7 +8536,7 @@ const Body = struct {
                 try typed.clear(self);
                 const answer = try self.callHost(
                     .key_read,
-                    &.{ name.text, name.length, typed.text, typed.length },
+                    &.{ self.produced[of[0]].value, name.text, name.length, typed.text, typed.length },
                     "key",
                 );
                 const has_key = try self.saidYes(answer);

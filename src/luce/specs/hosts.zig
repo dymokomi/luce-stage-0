@@ -1733,11 +1733,13 @@ pub const Capture = struct {
 
     fn keyRead(
         context: ?*anyopaque,
+        timeout_ms: i64,
         name: *[*]const u8,
         name_length: *i64,
         text: *[*]const u8,
         text_length: *i64,
     ) callconv(.c) abi.Answer {
+        _ = timeout_ms;
         const pressed = of(context).world.nextKey() orelse return .no;
         name.* = pressed.name.ptr;
         name_length.* = @intCast(pressed.name.len);
@@ -2107,8 +2109,9 @@ pub const Reference = struct {
         return of(context).world.eventData(field);
     }
 
-    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!?interpreter.KeyEvent {
+    fn keyRead(context: *anyopaque, arena: Allocator, timeout_ms: i64) error{OutOfMemory}!?interpreter.KeyEvent {
         _ = arena;
+        _ = timeout_ms;
         const pressed = of(context).world.nextKey() orelse return null;
         return .{ .name = pressed.name, .text = pressed.text };
     }

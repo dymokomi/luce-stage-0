@@ -16,14 +16,24 @@ from view import View, route
 
 class Application:
     private root: View?
+    private tick_ms: i64
 
     init():
         self.root = none
+        self.tick_ms = -1
 
     # The retained tree.  Calling it again replaces the layout whole,
     # which is the retained model's one honest reshape.
     func set_layout(child: View):
         self.root = child
+
+    # Ask the loop to wake at most this often even with no input, and
+    # route an `idle` event through the tree — the turn components use
+    # to pump held work (a language server, an animation).  Negative
+    # turns ticking off, which is the default: an application that
+    # holds nothing sleeps in the read.
+    func set_tick(milliseconds: i64):
+        self.tick_ms = milliseconds
 
     # Run until input closes or a routed event answers `quit`.  The
     # same tree is drawn and then receives the event, so pointer
@@ -49,12 +59,15 @@ class Application:
             )
             term.flush()
 
-            let event = events.next()
+            let event = events.next(self.tick_ms)
             match event:
                 closed:
                     return
                 resize:
                     continue
                 else:
+                    # `idle` routes like any event: a component that
+                    # holds work pumps it, everything else ignores it,
+                    # and the redraw above keeps the frame honest.
                     if route(root, event, surface.area()) == Response.quit:
                         return

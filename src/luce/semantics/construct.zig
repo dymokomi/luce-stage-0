@@ -1232,6 +1232,8 @@ pub fn lowerIntrinsic(
             // in the closed set (docs/FAILURE.md).  The same fact
             // `read_line` already answers `none` for, off the same
             // descriptor.
+            if (!arguments[0].value_type.eql(.i64))
+                return failIntrinsic(self, call, "key_read takes a timeout in milliseconds");
             result = .{ .optional = .str };
         },
         .key_text => {

@@ -330,7 +330,7 @@ pub const Terminal = struct {
     /// `read_line` answers null for off the same descriptor
     /// (docs/FAILURE.md).  A host that cannot say it is a host whose
     /// caller loops forever asking.
-    key_read: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!?KeyEvent,
+    key_read: *const fn (context: *anyopaque, arena: Allocator, timeout_ms: i64) error{OutOfMemory}!?KeyEvent,
 };
 
 /// One decoded key: a stable name ("text", "enter", "up", "ctrl_s",

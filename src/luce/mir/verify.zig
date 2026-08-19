@@ -2076,7 +2076,8 @@ fn verifyIntrinsic(
         .key_read => {
             // `str?`: a keyboard that has run dry has nothing to
             // hand over, which is absence and not news (docs/FAILURE.md).
-            try exactly(arguments, 0);
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .i64);
             try expectType(result, .{ .optional = .str });
         },
         .read_line, .env_get => {

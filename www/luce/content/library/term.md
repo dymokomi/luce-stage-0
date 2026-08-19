@@ -57,8 +57,13 @@ permission the first time.
 ## Read events
 
 ```
-term.read() -> term.Event?
+term.read(timeout_ms: i64 = -1) -> term.Event?
 ```
+
+A negative `timeout_ms` blocks until an event or end of input, as a
+plain `read()` always has. Zero or more waits at most that long and
+answers `Event.idle` when nothing arrived — the turn a program uses to
+pump held work between keys.
 
 The result is the next event as a value, or `none` when input has ended —
 nothing failed, there is simply nobody left to ask, so an empty input
@@ -69,6 +74,7 @@ returns; a held event never changes under a later read.
 
 | Case | Payload |
 |---|---|
+| `idle` | a timed read in which nothing arrived; input is still alive |
 | `key(press: term.KeyPress)` | one named key with its held modifiers |
 | `text(typed: str)` | printable text |
 | `mouse(pointer: term.Mouse)` | one mouse action |

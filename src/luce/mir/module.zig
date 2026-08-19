@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 61;
+pub const format_version: u32 = 62;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2257,7 +2257,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 60 -> 61: the four child doors — `process_spawn`, `process_ready`,
     // `process_wait`, `process_finish_input` — join after
     // `os_standard_stream`.
-    try testing.expectEqual(@as(u32, 61), format_version);
+    // 61 -> 62: `key_read` grows its timeout argument — the
+    // shape-changed case the hash cannot catch, so only the version
+    // moves.
+    try testing.expectEqual(@as(u32, 62), format_version);
     try testing.expectEqual(@as(u64, 15805484922640709197), hasher.final());
 }
 

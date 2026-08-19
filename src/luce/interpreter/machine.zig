@@ -2335,7 +2335,7 @@ pub const Machine = struct {
                 // after the end of input must not still be holding the
                 // last key's text.  The compiled path clears the same
                 // two out-parameters for the same reason.
-                const event = try screen.key_read(screen.context, self.arena) orelse {
+                const event = try screen.key_read(screen.context, self.arena, registers[arguments[0]].asI64()) orelse {
                     try self.runtime.setKeyText("");
                     return .none;
                 };

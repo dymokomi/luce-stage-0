@@ -919,6 +919,37 @@ test "the standard streams read, write, and outlive their handles on both engine
         "[stdout]still open\n", session.printed());
 }
 
+test "a timed read answers idle when nothing arrives" {
+    // The scripted keyboard hands over an idle row exactly where the
+    // host would synthesize one on a timeout: input alive, nothing to
+    // route, and the reader gets its turn back.
+    const keys = [_]agree.World.Key{
+        .{ .name = "idle" },
+        .{ .name = "text", .text = "x" },
+    };
+    var session = try hosted.compare(
+        \\func describe(event: term.Event?) -> str:
+        \\    if event == none:
+        \\        return "none"
+        \\    match event:
+        \\        idle:
+        \\            return "idle"
+        \\        text(typed):
+        \\            return "text/" + typed
+        \\        else:
+        \\            return "other"
+        \\
+        \\func main():
+        \\    print(describe(term.read(50)))
+        \\    print(describe(term.read()))
+        \\    print(describe(term.read(50)))
+        \\
+    , .{ .world = .{ .keys = &keys } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("idle\ntext/x\nnone\n", session.printed());
+}
+
 test "a Process is fed, read, and waited on both engines" {
     // The scripted child records its spawn and every feed in the
     // transcript, serves scripted output, and answers a scripted

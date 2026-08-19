@@ -1029,7 +1029,7 @@ pub const Host = struct {
     /// when input ends — a lone `\x1b`, the prefix of an arrow key
     /// nobody finished.  There is no more input to complete it with,
     /// so it is dropped rather than waited on.
-    fn nextKey(self: *Host) error{OutOfMemory}!?KeyView {
+    fn nextKey(self: *Host, timeout_ms: i64) error{OutOfMemory}!?KeyView {
         try self.ensureScreen();
         // Present whatever the program drew before blocking: key_read
         // is the natural end of a frame.
@@ -1043,6 +1043,12 @@ pub const Host = struct {
             return .{ .name = "resize" };
         }
 
+        // The deadline a non-negative timeout waits until, measured on
+        // the host's own clock; a blocking call has none.
+        const deadline: ?i64 = if (timeout_ms >= 0)
+            self.clockMilliseconds() + timeout_ms
+        else
+            null;
         while (true) {
             if (self.screen.pending_used != 0) {
                 std.mem.copyForwards(
@@ -1107,6 +1113,26 @@ pub const Host = struct {
             if (self.screen.pending_len == self.screen.pending.len) {
                 self.screen.pending_len = 0;
                 continue;
+            }
+            if (deadline) |until| {
+                // Wait for bytes only as long as the timeout allows;
+                // when nothing arrives, the answer is "idle" — input
+                // still alive, nothing to route — and the caller gets
+                // its turn back.
+                const remaining = until - self.clockMilliseconds();
+                var asked = [_]std.posix.pollfd{.{
+                    .fd = self.screen.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+                const landed = std.posix.poll(
+                    &asked,
+                    @intCast(@max(remaining, 0)),
+                ) catch 0;
+                if (landed == 0) {
+                    self.screen.event = .{};
+                    return .{ .name = "idle" };
+                }
             }
             const count = std.posix.read(
                 self.screen.handle,
@@ -1960,12 +1986,13 @@ pub const Host = struct {
 
     fn cKeyRead(
         context: ?*anyopaque,
+        timeout_ms: i64,
         name: *[*]const u8,
         name_length: *i64,
         text: *[*]const u8,
         text_length: *i64,
     ) callconv(.c) abi.Answer {
-        const view = (of(context).nextKey() catch return .exhausted) orelse return .no;
+        const view = (of(context).nextKey(timeout_ms) catch return .exhausted) orelse return .no;
         name.* = view.name.ptr;
         name_length.* = @intCast(view.name.len);
         text.* = view.text.ptr;

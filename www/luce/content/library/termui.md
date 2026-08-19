@@ -286,6 +286,7 @@ child accepts them.
 ```text
 closed
 resize
+idle
 key(press: KeyPress)
 text(typed: str)
 mouse(pointer: Mouse)
@@ -389,7 +390,7 @@ partial frames, stale cursors, forgotten flushes, and resize-order bugs.
 Four modules are public:
 
 - `termui` — the contract and vocabulary: `Application` (`set_layout`,
-  `start`), `View`, `Surface`, `route`, `snapshot`, `Snapshot`;
+  `set_tick`, `start`), `View`, `Surface`, `route`, `snapshot`, `Snapshot`;
   `Rect`, `Edges`, `Cursor`; `Color`, `Style`, `Span`, `Line`, `plain`;
   `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
 - `termui.layout` — `HStack`, `VStack`, `ZStack`;

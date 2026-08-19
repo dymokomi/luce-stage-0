@@ -1910,6 +1910,8 @@ test "files, arguments, the screen, and the keyboard agree" {
         \\            return "mouse"
         \\        resize:
         \\            return "resize"
+        \\        idle:
+        \\            return "idle"
         \\
         \\func main(args: list[str]) -> !:
         \\    print(str(len(args)) + " " + args[0] + "," + args[1])

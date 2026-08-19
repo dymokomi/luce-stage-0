@@ -84,7 +84,7 @@ carries everything an ordinary component signature mentions.
 
 | Module | Name | Purpose |
 |---|---|---|
-| `termui` | `Application` | the retained root: `set_layout(child)` and `start()` |
+| `termui` | `Application` | the retained root: `set_layout(child)`, `set_tick(ms)`, and `start()` |
 | `termui` | `View` | the component contract: `draw(surface, area) -> Cursor?` and `dispatch(event, area) -> Response` |
 | `termui` | `Surface` | the cell canvas `draw` receives: `write`, `fill`, `put`, `stroke`, `cell_at`, `snapshot` |
 | `termui` | `Event`, `Key`, `Mouse`, `Pointer` | terminal input, `std.term`'s own types plus `closed` |
@@ -288,7 +288,10 @@ display order; `ZStack` visits the visually topmost child first. Keyboard and
 text events continue until a focused child accepts them. Resize and closed
 input remain lifecycle events owned by `start`.
 
-The `Event` union is `closed`, `resize`, `key`, `text`, or `mouse`. A
+The `Event` union is `closed`, `resize`, `idle`, `key`, `text`, or
+`mouse`. `idle` arrives when a tick was asked for (`set_tick`) and the
+wait produced nothing: a component holding work — a language server, an
+animation — pumps it in `dispatch`, and everything else ignores it. A
 `key` carries a `KeyPress` — the key plus `shift`/`alt`/`control`
 booleans for what was held with it. `Key`, `KeyPress`,
 `Pointer`, and `Mouse` are `std.term`'s own types, re-exported as aliases,

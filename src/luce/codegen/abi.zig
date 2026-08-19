@@ -265,7 +265,7 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 28;
+pub const version: u32 = 29;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
 // terminal owns what "the system clipboard" means over SSH and mux.
@@ -275,6 +275,10 @@ pub const version: u32 = 28;
 // the two capabilities a tool that speaks a protocol over stdio (the
 // language server) stands on.
 // 28 — a child you can hold: four slots at the end of the table.
+// (see below)
+// 29 — `key_read` takes a timeout: under zero blocks as it always
+// did; zero or more waits at most that long and answers "idle" when
+// nothing arrived, so a program can pump held work between keys.
 // `process_spawn` answers a handle whose reads are the child's output
 // and whose writes are its input; `process_ready` is the no-block
 // poll; `process_wait` the exit status; `process_finish_input` the
@@ -587,8 +591,13 @@ pub const TermEventDataFn = *const fn (
 /// reaches nothing and a program that never read a key gets "".  End
 /// of input clears it too — the payload of a key that never came is
 /// "" and not the one before it.
+/// `timeout_ms` under zero blocks until input or end of input; zero
+/// or more waits at most that long and answers the name "idle" when
+/// nothing arrived — input still alive, nothing to route — which is
+/// how a program pumps other work between keys.
 pub const KeyReadFn = *const fn (
     context: ?*anyopaque,
+    timeout_ms: i64,
     name: *[*]const u8,
     name_length: *i64,
     text: *[*]const u8,

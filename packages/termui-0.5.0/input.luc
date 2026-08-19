@@ -17,6 +17,9 @@ alias Mouse = term.Mouse
 union Event:
     closed
     resize
+    # A timed wait in which nothing arrived — the tick a retained
+    # application pumps held work on.
+    idle
     key(press: KeyPress)
     text(typed: str)
     mouse(pointer: Mouse)
@@ -29,13 +32,15 @@ class Stream:
     init():
         return
 
-    func next() -> Event:
-        let read = term.read()
+    func next(timeout_ms: i64 = -1) -> Event:
+        let read = term.read(timeout_ms)
         if read == none:
             return Event.closed
         match read:
             resize:
                 return Event.resize
+            idle:
+                return Event.idle
             key(press):
                 return Event.key(press = press)
             text(typed):

@@ -141,6 +141,10 @@ struct Mouse:
 # the terminal moved.
 union Event:
     resize
+    # A timed `read` in which nothing arrived: input is still alive,
+    # there is simply nothing to route yet — the turn a program uses
+    # to pump held work between keys.
+    idle
     key(press: KeyPress)
     text(typed: str)
     mouse(pointer: Mouse)
@@ -149,16 +153,21 @@ union Event:
 # absence rather than an error for the same reason `read_line`'s is:
 # nothing failed, there is simply nobody left to ask.
 #
+# `timeout_ms` under zero blocks; zero or more waits at most that
+# long and answers `Event.idle` when nothing arrived.
+#
 # The host keeps event details in mutable slots; this copies every
 # slot into the value before returning, so the event a program holds
 # is its own.
-func read() -> Event?:
-    let name = Builtin.key_read()
+func read(timeout_ms: i64 = -1) -> Event?:
+    let name = Builtin.key_read(timeout_ms)
     if name == none:
         return none
     match name:
         "resize":
             return Event.resize
+        "idle":
+            return Event.idle
         "text":
             return Event.text(typed = Builtin.key_text())
         else:
