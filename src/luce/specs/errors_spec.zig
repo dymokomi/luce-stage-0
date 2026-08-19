@@ -575,7 +575,7 @@ test "a matched pair of typographic quotes is one mistake" {
     // word processor.  It used to be two stray-character reports
     // naming neither the pair nor the string it delimits.
     try expectOnlySayingAt(
-        "func main():\n    let a = \u{201C}hello\u{201D}\n    print(a)\n",
+        "func main():\n    let a = \u{201C}hello\u{201D}\n",
         "luce.lex.character",
         "typographic quotes (U+201C and U+201D) around a string; text is written \"like this\"",
         2,
@@ -2585,7 +2585,7 @@ test "luce.parse.comment: a line that starts with // is told what // is" {
     try expectOnlySayingAt(
         \\func main():
         \\    // this is a comment
-        \\    print("hi")
+        \\    let quiet = 1
         \\
     ,
         "luce.parse.comment",
@@ -3194,7 +3194,7 @@ test "luce.parse.expression: the comparison operators of other languages" {
 
 test "luce.parse.expression: '**' names the std function that does it" {
     try expectOnlySayingAcross(
-        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
+        "func main():\n    let a = 2 ** 3\n",
         "luce.parse.expression",
         "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for i64",
         2,
@@ -5011,6 +5011,38 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
         5,
         13,
     );
+}
+
+test "a parse error does not hide the semantic diagnostics around it" {
+    // Error-tolerant analysis: recovery drops the broken statement and
+    // semantics runs over what parsed, so an editor sees every problem
+    // in one round.  The program still never runs — the lowering gate
+    // refuses any diagnosed program.
+    var result = try compile_mod.compile(testing.allocator,
+        \\func main():
+        \\    let x = undefined_name
+        \\    let y = 3 +
+        \\    let z = also_missing
+        \\
+    , script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    const failed = &result.failure;
+    var saw_parse = false;
+    var saw_first_name = false;
+    var saw_second_name = false;
+    for (0..failed.count()) |index| {
+        const one = failed.at(index).?;
+        if (std.mem.eql(u8, one.code, "luce.parse.expression")) saw_parse = true;
+        if (std.mem.eql(u8, one.code, "luce.sema.name")) {
+            const place = failed.resolve(index).?;
+            if (place.line == 2) saw_first_name = true;
+            if (place.line == 4) saw_second_name = true;
+        }
+    }
+    try testing.expect(saw_parse);
+    try testing.expect(saw_first_name);
+    try testing.expect(saw_second_name);
 }
 
 test "luce.sema.catch: a catch block initializing a binding must always leave" {

@@ -56,6 +56,10 @@ pub fn settle(self: *Analyzer) Error!void {
 
 fn check(self: *Analyzer) Error!void {
     const index = self.function_names.get("main") orelse {
+        // With parse or lex reports already on the list, recovery may
+        // have dropped the very declaration that held main; claiming
+        // it is missing would be a guess dressed as a fact.
+        if (self.diagnostics_at_entry != 0) return;
         try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
         return;
     };

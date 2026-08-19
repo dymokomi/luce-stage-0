@@ -707,7 +707,13 @@ pub const Parser = struct {
                     .{},
                 );
                 _ = self.advance(); // the colon
-                self.recover();
+                // The region's body is ordinary declarations that
+                // happen to be indented: consume the layout tokens
+                // and let the program loop read them at file scope,
+                // unmarked — the marker is what was wrong, not the
+                // declarations under it.
+                if (self.peekKind() == .newline) _ = self.advance();
+                if (self.peekKind() == .indent) _ = self.advance();
             },
             .keyword_public, .keyword_private => {
                 try self.report(
@@ -2520,7 +2526,10 @@ pub const Parser = struct {
             // A marker on a local is a category mistake, not a typo:
             // visibility is about the module boundary, and there is no
             // smaller boundary for it to mean anything at
-            // (docs/VISIBILITY.md §5).
+            // (docs/VISIBILITY.md §5).  The statement behind it is
+            // unmistakable, so it is read after the report — dropping
+            // the binding too would turn one mistake into an unknown
+            // name at every later use.
             .keyword_public, .keyword_private => {
                 try self.report(
                     "luce.parse.expected",
@@ -2528,7 +2537,8 @@ pub const Parser = struct {
                     "visibility applies to file-scope declarations and struct members",
                     .{},
                 );
-                return null;
+                _ = self.advance();
+                return self.statement();
             },
             else => return self.assignOrExpression(),
         }

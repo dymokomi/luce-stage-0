@@ -138,6 +138,7 @@ pub fn analyze(
         .modules = modules,
         .options = options,
         .diagnostics = diagnostics,
+        .diagnostics_at_entry = diagnostics.count(),
         .pool = pool,
     };
     defer analyzer.deinitScratch();
@@ -158,6 +159,12 @@ pub const Analyzer = struct {
     arena: Allocator,
     temporary: Allocator,
     modules: []const ModuleTree,
+    /// How many diagnostics existed when analysis began — parse and
+    /// lex reports the body walk is allowed to see past.  The
+    /// declaration gate compares against this, not against zero, so
+    /// a syntax error above does not hide the name and type problems
+    /// below it.
+    diagnostics_at_entry: usize = 0,
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 
@@ -321,7 +328,13 @@ pub const Analyzer = struct {
         try signatures.synthesizeShapes(self);
         try interfaces.synthesizeShapes(self);
         try interfaces.settleConformances(self);
-        if (self.diagnostics.hasErrors()) return null;
+        // Bail only when *settling itself* reported: with broken
+        // declaration tables, checking bodies would cascade.  Parse
+        // diagnostics that arrived before this stage do not stop the
+        // body walk — they are exactly what error-tolerant analysis
+        // exists to see past — and the lowering gate below still
+        // refuses any diagnosed program.
+        if (self.diagnostics.count() != self.diagnostics_at_entry) return null;
 
         // The check/lower seam (hir.zig): every body is checked and
         // recorded first, and only a program with no diagnostics is

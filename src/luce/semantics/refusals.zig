@@ -153,8 +153,30 @@ fn offerLocals(self: *FunctionBuilder, suggestion: *helpers.Suggestion) void {
 /// name whose own declaration already failed, in which case the
 /// error the reader needs is already reported and this one is
 /// only noise.
+/// A namespace whose import was written and already reported — the
+/// module never loaded, so every use of it would be one more echo of
+/// the import diagnostic.  Met with silence, like an abandoned local:
+/// the error that matters is on the list (error-tolerant analysis).
+pub fn phantomNamespace(self: *FunctionBuilder, written: []const u8) bool {
+    const head = if (std.mem.indexOfScalar(u8, written, '.')) |dot| written[0..dot] else written;
+    if (head.len == 0) return false;
+    var asked = false;
+    for (self.analyzer.modules[self.module].tree.imports) |row| {
+        if (std.mem.eql(u8, row.binding, head)) {
+            asked = true;
+            break;
+        }
+    }
+    if (!asked) return false;
+    for (self.analyzer.modules) |module| {
+        if (std.mem.eql(u8, module.binding, head)) return false;
+    }
+    return true;
+}
+
 pub fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Error!void {
     if (self.undeclared.contains(name)) return;
+    if (phantomNamespace(self, name)) return;
     if (try failCapturedName(self, name, span)) return;
     if (std.mem.eql(u8, name, "self")) {
         if (self.static_member) {
@@ -300,6 +322,7 @@ pub fn failNamespaceMember(
     joined: []const u8,
     span: Span,
 ) Error!void {
+    if (phantomNamespace(self, namespace)) return;
     const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ namespace, member });
     if (try failNotAValue(self, written, joined, span)) return;
 
@@ -366,6 +389,7 @@ pub fn forgetName(self: *FunctionBuilder, name: []const u8) Error!void {
 /// Report a call whose callee names no declaration, offering the
 /// closest function or struct the reader could have meant.
 pub fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
+    if (phantomNamespace(self, written)) return;
     if (try failCapturedName(self, written, span)) return;
     var suggestion = helpers.Suggestion.init(written);
     var functions = self.analyzer.function_names.iterator();

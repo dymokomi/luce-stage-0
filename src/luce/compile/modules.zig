@@ -73,11 +73,12 @@ pub fn loadAll(
         modules.deinit(gpa);
         return null;
     };
+    // A tree with parse errors is still a tree: recovery dropped the
+    // broken statements and kept the rest, and semantics running over
+    // what parsed is what lets one syntax error stop hiding every
+    // name and type problem below it.  The program still never runs —
+    // stage 4's lowering gate refuses any diagnosed program.
     const root_tree = try parseModule(gpa, scaffold, root, diagnostics);
-    if (diagnostics.hasErrors()) {
-        modules.deinit(gpa);
-        return null;
-    }
     try modules.append(gpa, .{ .prefix = "", .binding = "", .tree = root_tree, .file = root });
 
     // Breadth-first over the import graph.  `pending` carries the file
@@ -141,10 +142,6 @@ pub fn loadAll(
             try std.fmt.allocPrint(scaffold, "{s}/{s}", .{ loaded.root, binding });
         try modules.append(gpa, .{ .prefix = prefix, .binding = binding, .tree = tree, .file = file });
         for (tree.imports) |onward| try pending.append(gpa, .{ .from = file, .import = onward });
-    }
-    if (diagnostics.hasErrors()) {
-        modules.deinit(gpa);
-        return null;
     }
     return try modules.toOwnedSlice(gpa);
 }
