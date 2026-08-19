@@ -136,6 +136,19 @@ pub const FileAct = enum(i32) {
     accept,
     /// A listener would not say which port it holds.
     ask,
+    /// A stat fact was refused (`path_size`, `path_modified`,
+    /// docs/FILESYSTEM.md): nothing there, a directory asked for a
+    /// byte count, a world that would not say.  Appended, so nothing
+    /// renumbers.
+    measure,
+    /// An empty directory could not be removed (`dir_remove`) —
+    /// something is still in it, a file holds the name, it was never
+    /// there.  Appended, so nothing renumbers.
+    remove,
+    /// A tree could not be removed (`tree_remove`).  Absence is not
+    /// this — nothing there is success — so this is a live refusal
+    /// somewhere under the path.  Appended, so nothing renumbers.
+    remove_tree,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -156,6 +169,9 @@ pub const FileAct = enum(i32) {
             .listen => "cannot listen on ",
             .accept => "cannot accept on ",
             .ask => "cannot ask ",
+            .measure => "cannot measure ",
+            .remove => "cannot remove directory ",
+            .remove_tree => "cannot remove ",
         };
     }
 };

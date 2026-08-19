@@ -353,15 +353,25 @@ pub const Session = struct {
         return into[0..held];
     }
 
-    /// The one file the world holds now, or null when it holds none.
-    /// Both engines left it this way — `settle` compared them.
+    /// The first file the world holds now, or null when it holds none
+    /// — the one file, for the many specs whose world never holds
+    /// more.  Both engines left it this way — `settle` compared them.
     pub fn file(self: *const Session) ?struct { name: []const u8, content: []const u8 } {
         const world = &self.reference.world;
-        if (world.file_name_length == 0) return null;
-        return .{
-            .name = world.file_name[0..world.file_name_length],
-            .content = world.file_content[0..world.file_content_length],
-        };
+        for (&world.files_held) |*slot| {
+            if (slot.name_length == 0) continue;
+            return .{
+                .name = slot.name[0..slot.name_length],
+                .content = slot.content[0..slot.content_length],
+            };
+        }
+        return null;
+    }
+
+    /// The named file's content, or null when the world does not hold
+    /// it.  Both engines left it this way — `settle` compared them.
+    pub fn fileNamed(self: *const Session, path: []const u8) ?[]const u8 {
+        return self.reference.world.read(path);
     }
 };
 
@@ -463,22 +473,36 @@ fn settle(reference: *Reference, capture: *Capture, status: abi.Status) !End {
 /// written with the bytes of the previous statement, a key read one
 /// time too many, a clock read that never happened.
 fn sameWorld(reference: *const World, capture: *const World) !void {
-    try testing.expectEqualStrings(
-        reference.file_name[0..reference.file_name_length],
-        capture.file_name[0..capture.file_name_length],
-    );
-    try testing.expectEqualStrings(
-        reference.file_content[0..reference.file_content_length],
-        capture.file_content[0..capture.file_content_length],
-    );
+    for (&reference.files_held, &capture.files_held) |*ours, *theirs| {
+        try testing.expectEqualStrings(
+            ours.name[0..ours.name_length],
+            theirs.name[0..theirs.name_length],
+        );
+        try testing.expectEqualStrings(
+            ours.content[0..ours.content_length],
+            theirs.content[0..theirs.content_length],
+        );
+        // The scripted stamps depend only on operation order, so a
+        // stamp that differs is a write one engine performed and the
+        // other did not.
+        try testing.expectEqual(ours.modified, theirs.modified);
+    }
+    try testing.expectEqual(reference.writes_made, capture.writes_made);
     try testing.expectEqual(reference.keys_read, capture.keys_read);
     try testing.expectEqual(reference.lines_read, capture.lines_read);
     try testing.expectEqual(reference.clock, capture.clock);
     try testing.expectEqual(reference.epoch, capture.epoch);
-    try testing.expectEqual(reference.open_handle, capture.open_handle);
     try testing.expectEqual(reference.next_handle, capture.next_handle);
-    try testing.expectEqual(reference.handle_position, capture.handle_position);
-    try testing.expectEqual(reference.handle_writes, capture.handle_writes);
+    try testing.expectEqual(reference.open_count, capture.open_count);
+    for (
+        reference.open_rows[0..reference.open_count],
+        capture.open_rows[0..capture.open_count],
+    ) |ours, theirs| {
+        try testing.expectEqual(ours.handle, theirs.handle);
+        try testing.expectEqual(ours.file, theirs.file);
+        try testing.expectEqual(ours.position, theirs.position);
+        try testing.expectEqual(ours.writes, theirs.writes);
+    }
     // The directories each arm made, in the order it made them: a
     // `dir_create` that made a parent on one engine and not on the
     // other is exactly the disagreement this comparison is for.

@@ -169,6 +169,26 @@ func main():
 | `delete(path)` | `-> !` | removes the file |
 | `rename(from, to)` | `-> !` | moves the file, replacing an existing `to` |
 | `make_directory(path)` | `-> !` | ensures a directory exists at the path, making parents |
+| `size(path)` | `-> i64!` | the file's byte count; a directory has no honest one and is an error |
+| `modified(path)` | `-> i64!` | when the file or directory last changed, in epoch milliseconds |
+| `copy(from, to)` | `-> !` | one file's bytes to a new name, replacing the target; streaming, constant space |
+| `move(from, to)` | `-> !` | rename, falling back to copy-then-delete when the world will not rename |
+| `remove_directory(path)` | `-> !` | removes one **empty** directory |
+| `remove_all(path)` | `-> !` | removes whatever is at the path, everything under it included; absence is success |
+
+The completion group keeps three deliberate lines. `size` refuses a
+directory because a directory's `st_size` is a filesystem implementation
+detail, not a fact a program can use. `modified` is wall-clock time on
+`epoch_ms`'s terms — compare two of these to each other, never to a
+deadline. `remove_all` mirrors `make_directory`'s idempotence ("there is
+nothing at this path when I return"), and removes a symbolic link **as a
+link**: a recursive delete that followed links would walk out of the tree
+it was asked to remove, which is the classic way a cleanup empties a home
+directory. `copy` and `move` are plain Luce over the byte channel and the
+name services — portable by construction, no new host promise — while the
+two removals and the two stat facts are host slots (`abi.PathFactFn`,
+`abi.DirRemoveFn`, `abi.TreeRemoveFn`), because no composition of the
+existing table can answer them honestly.
 
 Two line conventions differ from Python deliberately, and both are what
 every caller means: `read_lines` and `read_line` **strip** the trailing
@@ -356,10 +376,11 @@ These are not gaps to fill; each is a decision, with the reason:
   would cost a new type and a conversion at every boundary and buy no
   familiarity. Reopened only by a type-safety customer, never by an
   ergonomics argument.
-- **`stat`** — size, mtime, mode, inode. Each field is a promise the ABI
-  must keep on every platform, and no current customer wants one. "How
-  big is it" is answered by reading it, and the compile cache keys on
-  content, not mtime.
+- **`stat` as a struct** — mode, inode, owner, block counts. The two
+  fields with a customer — `size` and `modified`, which `std.build`
+  stands on — arrived as two named questions rather than a record of
+  platform-shaped fields, and each is a separate ABI promise. The rest
+  still waits for a customer.
 - **`seek`, `tell`, `truncate`, and the `"r+"`/`"w+"` modes.** A
   random-access file is a different resource from a stream and would
   arrive as one, with its own design.
@@ -375,10 +396,13 @@ These are not gaps to fill; each is a decision, with the reason:
 - **Symlink creation, reading, or resolution.** `kind` gives the whole
   symlink surface a program needs: a link is what it points at, and a
   broken one is nothing.
-- **Recursive helpers** (`shutil.copy`, `rmtree`, `copytree`). Each is a
-  loop over the primitives plus a policy; once `kind` exists these are a
-  few legible lines with their policy in view, and a recursive delete in
-  a standard library is a foot-gun with no undo.
+- **`copytree`**. A recursive copy is a walk with policy in it — what
+  happens at a link, at a special file, at a collision — and a program
+  that needs one writes the loop where the policy shows.  `copy`,
+  `move`, and `remove_all` arrived (the owner's completion ruling);
+  `remove_all` went host-side precisely because its link rule — remove
+  the link, never what it points at — cannot be expressed over a `kind`
+  that follows links.
 - **Current-directory calls** (`getcwd`, `chdir`, `abspath`). A program
   that can move its own cwd makes every relative path in it ambiguous;
   loom resolves relative to the directory it was started in.

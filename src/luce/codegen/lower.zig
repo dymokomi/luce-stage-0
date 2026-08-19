@@ -506,7 +506,16 @@ const Module = struct {
                 &.{ .ptr, .ptr, .i64, .ptr, .i64 },
                 .normal,
             ),
-            .file_delete, .dir_create => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            .file_delete,
+            .dir_create,
+            .dir_remove,
+            .tree_remove,
+            => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            // A stat fact is `path_kind`'s shape: a path in, a number
+            // in an out-parameter, an answer that may be a refusal.
+            .path_size,
+            .path_modified,
+            => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr }, .normal),
             .dir_list => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
             .exited => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
             // One shape for all three machine facts and for the wall
@@ -8101,6 +8110,28 @@ const Body = struct {
                 );
                 self.produced[register].outcome = try self.raiseIo(.make, answer, path, path_length);
             },
+            // The two removals are `dir_create`'s shape backwards: a
+            // path in, an outcome back, the policy — empty-only for
+            // one, everything-under-it and never through a link for
+            // the other — the host's rule, not generated code's.
+            .dir_remove => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const answer = try self.callHost(
+                    .dir_remove,
+                    &.{ path, path_length },
+                    "removed",
+                );
+                self.produced[register].outcome = try self.raiseIo(.remove, answer, path, path_length);
+            },
+            .tree_remove => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const answer = try self.callHost(
+                    .tree_remove,
+                    &.{ path, path_length },
+                    "swept",
+                );
+                self.produced[register].outcome = try self.raiseIo(.remove_tree, answer, path, path_length);
+            },
 
             // -- backend-neutral window/GPU channel ------------------
             //
@@ -8568,6 +8599,33 @@ const Body = struct {
                     .host_unavailable,
                 );
                 self.produced[register].value = kind;
+            },
+            // The stat facts share `path_kind`'s wire shape — box
+            // cleared first, an out-parameter number, an answer that
+            // may be a refusal — without its range check: any i64 is
+            // a byte count or a timestamp.
+            .path_size, .path_modified => |fact| {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const box = try self.scratch(.i64, value_alignment, "fact.box");
+                _ = try self.wip.store(
+                    .normal,
+                    try self.module.builder.intValue(.i64, 0),
+                    box,
+                    value_alignment,
+                );
+                const answer = try self.callHost(
+                    if (fact == .path_size) .path_size else .path_modified,
+                    &.{ path, path_length, box },
+                    "fact",
+                );
+                self.produced[register].outcome = try self.raiseIo(.measure, answer, path, path_length);
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    box,
+                    value_alignment,
+                    "fact.value",
+                );
             },
             .term_rows => {
                 self.produced[register].value = try self.callHostNumber(.term_rows, "rows");

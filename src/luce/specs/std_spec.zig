@@ -1108,6 +1108,123 @@ test "files: kind answers each member, and none for a name nothing holds" {
     try testing.expectEqualStrings("file\ndirectory\nother\nnothing\n", session.printed());
 }
 
+test "files: size and modified are the two stat facts, and a directory has no size" {
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    assert(try files.size("notes.txt") == 6)
+        \\    try files.make_directory("papers")
+        \\    var said = ""
+        \\    var told: i64 = -1
+        \\    told = files.size("papers") catch reason:
+        \\        said = reason
+        \\    assert(told == -1)
+        \\    assert(said == "cannot measure papers")
+        \\    let before = try files.modified("notes.txt")
+        \\    assert(before > 0)
+        \\    try files.append("notes.txt", "!")
+        \\    assert(try files.modified("notes.txt") > before)
+        \\    assert(try files.modified("papers") > 0)
+        \\    print("measured")
+        \\
+    , withNotes("abcdef"),
+        \\measured
+        \\
+    );
+}
+
+test "files: copy streams the bytes whole and leaves the source alone" {
+    // The harness world takes three bytes per write, so this is the
+    // short-write loop inside `files.copy` — the slide-the-tail
+    // round — proven on both engines, not just the happy path.
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    try files.copy("notes.txt", "twin.txt")
+        \\    assert(try files.read("twin.txt") == "abcdefgh")
+        \\    assert(try files.read("notes.txt") == "abcdefgh")
+        \\    try files.append("notes.txt", "!")
+        \\    assert(try files.read("twin.txt") == "abcdefgh")
+        \\    try files.write("twin.txt", "held")
+        \\    try files.copy("notes.txt", "twin.txt")
+        \\    assert(try files.read("twin.txt") == "abcdefgh!")
+        \\    print("copied")
+        \\
+    , withNotes("abcdefgh"),
+        \\copied
+        \\
+    );
+}
+
+test "files: move renames, and a source nothing holds says the rename's own refusal" {
+    // The copy-then-delete fallback cannot be scripted here — this
+    // world has no second filesystem to refuse a rename across — but
+    // it is plain Luce over `copy` and `delete`, each proven above.
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var said = ""
+        \\    files.move("ghost.txt", "landed.txt") catch reason:
+        \\        said = reason
+        \\    assert(said == "cannot rename ghost.txt")
+        \\    try files.move("notes.txt", "moved.txt")
+        \\    assert(not try files.exists("notes.txt"))
+        \\    assert(try files.read("moved.txt") == "abcdef")
+        \\    print("moved")
+        \\
+    , withNotes("abcdef"),
+        \\moved
+        \\
+    );
+}
+
+test "files: remove_directory takes only an empty directory" {
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    try files.make_directory("build/out")
+        \\    var said = ""
+        \\    files.remove_directory("build") catch reason:
+        \\        said = reason
+        \\    assert(said == "cannot remove directory build")
+        \\    try files.remove_directory("build/out")
+        \\    try files.remove_directory("build")
+        \\    assert(not try files.is_dir("build"))
+        \\    print("removed")
+        \\
+    , withNotes("abcdef"),
+        \\removed
+        \\
+    );
+}
+
+test "files: remove_all sweeps the tree it was given, and nothing there is success" {
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    try files.make_directory("build/deep/nest")
+        \\    try files.write("build/notes.txt", "kept")
+        \\    try files.remove_all("build")
+        \\    assert(not try files.exists("build/notes.txt"))
+        \\    assert(not try files.is_dir("build"))
+        \\    try files.remove_all("build")
+        \\    var said = ""
+        \\    files.remove_all("alpha.txt") catch reason:
+        \\        said = reason
+        \\    assert(said == "cannot remove alpha.txt")
+        \\    print("swept")
+        \\
+    , withNotes("abcdef"),
+        \\swept
+        \\
+    );
+}
+
 test "files: exists, is_file and is_dir answer bool! and let a refusal through" {
     var world: agree.World = .withFile("notes.txt", "body");
     world.kinds = &[_]agree.World.KindRow{

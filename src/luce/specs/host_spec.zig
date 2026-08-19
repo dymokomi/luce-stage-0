@@ -120,9 +120,11 @@ test "print, arguments, and files flow through the host" {
     defer session.deinit();
 
     try testing.expectEqualStrings("args: 1\nfile body\n", session.printed());
-    const left = session.file().?;
-    try testing.expectEqualStrings("out.txt", left.name);
-    try testing.expectEqualStrings("saved", left.content);
+    // The write made a second file rather than replacing the first —
+    // the world holds a small set now, like the filesystem it stands
+    // in for.
+    try testing.expectEqualStrings("file body", session.fileNamed("notes.txt").?);
+    try testing.expectEqualStrings("saved", session.fileNamed("out.txt").?);
 }
 
 test "an argument out of range traps, and a refused write is an error" {

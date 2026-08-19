@@ -28,11 +28,55 @@ a `File`, an ordinary class this module declares, and there is no source
 | `files.write_lines(path: str, lines: list[str]) -> !` | writes one newline after each line; an empty list writes an empty file |
 | `files.append(path: str, text: str) -> !` | appends text and creates the file if needed |
 | `files.append_lines(path: str, lines: list[str]) -> !` | appends newline-terminated lines; an empty list does nothing |
-| `files.delete(path: str) -> !` | removes a path; absence is an `io_failed` error |
+| `files.delete(path: str) -> !` | removes a file; absence is an `io_failed` error |
 | `files.rename(from: str, to: str) -> !` | moves a path and replaces an existing target |
 | `files.make_directory(path: str) -> !` | creates the directory and missing parents; an existing directory is success |
 | `files.list(path: str) -> list[str]!` | sorted names in the directory |
 | `files.entries(path: str) -> list[Entry]!` | sorted entries with their names, paths, and kinds |
+
+## Size, modification time, copy, move, and removal
+
+| Signature | Result |
+|---|---|
+| `files.size(path: str) -> i64!` | the file's byte count; a directory has no honest size and is an error |
+| `files.modified(path: str) -> i64!` | when the file or directory last changed, in milliseconds since the Unix epoch |
+| `files.copy(from: str, to: str) -> !` | copies one file's bytes, replacing the target; the source is untouched |
+| `files.move(from: str, to: str) -> !` | renames, and falls back to copy-then-delete when a rename cannot happen |
+| `files.remove_directory(path: str) -> !` | removes one **empty** directory; anything still inside is an error |
+| `files.remove_all(path: str) -> !` | removes whatever is at the path, everything under it included; absence is success |
+
+`modified` is wall-clock time on `os.epoch_ms`'s terms — an operator may set
+the clock, and a copied tree keeps old stamps — so compare two of these to
+each other, never to a deadline. `copy` moves bytes only: permissions and
+ownership are an operating-system surface Luce has not taken up. `move`
+handles the destination on another filesystem the way `shutil.move` does,
+by copying and deleting; directories move only by rename.
+
+`remove_all` mirrors `make_directory`: the call means "there is nothing at
+this path when I return", so a path already empty is success and cleaning a
+build directory needs no guard. A symbolic link is removed **as a link** —
+what it points at is untouched. There is no undo; the precise tools
+(`delete`, `remove_directory`) refuse anything unexpected, and `remove_all`
+is for the tree the program itself laid out.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.write("keep.txt", "abcdef")
+    try files.copy("keep.txt", "spare.txt")
+    print(str(try files.size("spare.txt")))
+    try files.make_directory("stage/deep")
+    try files.remove_all("stage")
+    print(str(try files.is_dir("stage")))
+    try files.delete("keep.txt")
+    try files.delete("spare.txt")
+```
+
+```output
+6
+false
+```
 
 `Kind` has three members: `file`, `directory`, and `other`. Links are
 followed; a dangling link is absent. `Entry` has public fields `name`,

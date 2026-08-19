@@ -137,6 +137,10 @@ pub const standard_intrinsics = [_]Builtin{
     .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "dir_create", .kind = .dir_create, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "path_kind", .kind = .path_kind, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "path_size", .kind = .path_size, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "path_modified", .kind = .path_modified, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "dir_remove", .kind = .dir_remove, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "tree_remove", .kind = .tree_remove, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "gpu_backend", .kind = .gpu_backend, .host = true },
     .{ .name = "ui_window_open", .kind = .ui_window_open, .parameters = &.{
         .{ .name = "title" },

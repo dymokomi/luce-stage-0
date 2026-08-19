@@ -265,7 +265,7 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 29;
+pub const version: u32 = 30;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
 // terminal owns what "the system clipboard" means over SSH and mux.
@@ -285,6 +285,14 @@ pub const version: u32 = 29;
 // half-close that means end of input.  Closing the handle kills a
 // child still running — releasing the last reference cannot leak a
 // process.
+// 30 — the filesystem completes (docs/FILESYSTEM.md): four slots at
+// the end of the table.  `path_size` and `path_modified` are the two
+// stat facts a build tool stands on; `dir_remove` takes one empty
+// directory; `tree_remove` takes whatever is at a path, everything
+// under it included, and is the one path service that does **not**
+// follow links — a symlink is removed as a link, never as what it
+// points at, because a recursive delete that followed links would
+// walk out of the tree it was asked to remove.
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -768,6 +776,55 @@ pub const PathKindFn = *const fn (
     kind: *i64,
 ) callconv(.c) Answer;
 
+/// How many bytes the ordinary file at `path` holds — `path_size`.
+/// Links are followed, like every other path-addressed service except
+/// `tree_remove`.  `yes` fills `answer`; `no` is everything that has
+/// no honest byte count — nothing there, a directory, a device, a
+/// world that would not say — which the program meets as `io_failed`.
+/// A directory's `st_size` is a filesystem implementation detail, not
+/// a fact a program can use, so it is refused rather than reported.
+///
+/// For `path_modified` the answer is milliseconds since the Unix
+/// epoch, on `epoch_ms`'s terms — **not monotonic**, the operator owns
+/// the clock — and a directory does have one, so only absence and
+/// refusal are `no` there.
+pub const PathFactFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+    answer: *i64,
+) callconv(.c) Answer;
+
+/// Remove the **empty** directory at `path`.  `no` on anything that
+/// left it there: not empty, not a directory, never there, refused —
+/// the host cannot tell those apart and neither can `Answer`
+/// (docs/FAILURE.md).  This is the precise tool; the sweeping one is
+/// `tree_remove`.
+pub const DirRemoveFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+) callconv(.c) Answer;
+
+/// Remove whatever is at `path` — a file, or a directory and
+/// everything under it.  Two rules, each the caller's whole reason for
+/// calling:
+///
+///   * **Nothing there is `yes`.**  The call means "there is nothing
+///     at this path when I return" — `dir_create`'s idempotence rule,
+///     mirrored — so the caller never writes the existence check that
+///     is a race.
+///   * **Links are NOT followed.**  A symlink is removed as a link and
+///     what it points at is untouched, because a recursive delete that
+///     followed links would walk out of the tree it was asked to
+///     remove.  This is the one path-addressed service on the table
+///     that says `lstat`, and it says so out loud.
+pub const TreeRemoveFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+) callconv(.c) Answer;
+
 // ---------------------------------------------------------------------------
 // The backend-neutral window/GPU channel (version 19)
 // ---------------------------------------------------------------------------
@@ -1094,6 +1151,14 @@ pub const Host = extern struct {
     process_ready: ?ProcessAskFn = null,
     process_wait: ?ProcessAskFn = null,
     process_finish_input: ?ProcessPlainFn = null,
+    /// Version 30: the filesystem completes (docs/FILESYSTEM.md).  Two
+    /// stat facts and two removals, appended together in one bump for
+    /// the reason the handle five were: a version is a rebuild of every
+    /// artifact there is.  All optional and fail-closed.
+    path_size: ?PathFactFn = null,
+    path_modified: ?PathFactFn = null,
+    dir_remove: ?DirRemoveFn = null,
+    tree_remove: ?TreeRemoveFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -1159,6 +1224,10 @@ pub const Slot = enum(u32) {
     process_ready = 56,
     process_wait = 57,
     process_finish_input = 58,
+    path_size = 59,
+    path_modified = 60,
+    dir_remove = 61,
+    tree_remove = 62,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

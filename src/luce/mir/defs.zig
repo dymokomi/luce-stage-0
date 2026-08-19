@@ -357,6 +357,24 @@ pub const Intrinsic = enum {
     channel_close,
     channel_len,
     channel_cap,
+    /// The filesystem completes (docs/FILESYSTEM.md): two stat facts
+    /// and two removals, all path-addressed, all fallible on the same
+    /// grounds as every other file service — the world decides, and no
+    /// non-racy check stands in for the result.
+    ///
+    /// `path_size` is the byte count of the ordinary file the path
+    /// names; a directory has no honest byte count and is refused.
+    /// `path_modified` is milliseconds since the Unix epoch on
+    /// `epoch_ms`'s terms, and a directory does have one.
+    /// `dir_remove` takes one **empty** directory — the precise tool.
+    /// `tree_remove` takes whatever is at the path, everything under
+    /// it included; nothing there is success (`dir_create`'s
+    /// idempotence rule mirrored), and it is the one path service that
+    /// does **not** follow links.
+    path_size,
+    path_modified,
+    dir_remove,
+    tree_remove,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -474,6 +492,10 @@ pub const Intrinsic = enum {
             .dir_list,
             .dir_create,
             .path_kind,
+            .path_size,
+            .path_modified,
+            .dir_remove,
+            .tree_remove,
             .epoch_ms,
             .term_rows,
             .term_cols,
@@ -627,6 +649,10 @@ pub const Intrinsic = enum {
             // race rather than a guard.
             .dir_create,
             .path_kind,
+            .path_size,
+            .path_modified,
+            .dir_remove,
+            .tree_remove,
             // The byte channel, on the same grounds.
             .file_open,
             .socket_connect,
@@ -860,6 +886,10 @@ pub const Intrinsic = enum {
             .dir_list,
             .dir_create,
             .path_kind,
+            .path_size,
+            .path_modified,
+            .dir_remove,
+            .tree_remove,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,
@@ -973,6 +1003,10 @@ pub const Intrinsic = enum {
             .dir_list,
             .dir_create,
             .path_kind,
+            .path_size,
+            .path_modified,
+            .dir_remove,
+            .tree_remove,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,

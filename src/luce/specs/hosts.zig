@@ -55,10 +55,16 @@ const max_worker_threads = 16;
 /// Each arm gets its own copy, so a program that writes a file cannot
 /// leave the second run a world the first one changed.
 pub const World = struct {
-    file_name: [64]u8 = undefined,
-    file_name_length: usize = 0,
-    file_content: [1024]u8 = undefined,
-    file_content_length: usize = 0,
+    /// The files this world holds — a small fixed set rather than one,
+    /// because the surface under test moved past one: a streaming
+    /// `files.copy` holds the source and the destination open at once,
+    /// and a build-shaped spec lays out several.  A slot with an empty
+    /// name holds nothing.
+    files_held: [max_files]FileSlot = @splat(.{}),
+    /// How many writes this world has taken, driving the scripted
+    /// modification stamps (`modifiedOf`): stamps depend only on
+    /// operation order, so two engines replaying one script agree.
+    writes_made: i64 = 0,
     /// A world that will not take a write, which is the `io_failed`
     /// side of a fallible effect (docs/FAILURE.md).
     refuse_writes: bool = false,
@@ -148,11 +154,12 @@ pub const World = struct {
     /// `host_unavailable` — the refusal a null slot gives, arriving
     /// through a slot that is there.
     unmeasurable: bool = false,
-    /// The one handle this world will have open, or null when it has
-    /// none.  Numbers never repeat, so a handle whose scope closed it
-    /// is refused rather than mistaken for the next one — which is what
-    /// lets a spec see that a close happened.
-    open_handle: ?i64 = null,
+    /// The handles this world has open.  Numbers never repeat, so a
+    /// handle whose scope closed it is refused rather than mistaken
+    /// for the next one — which is what lets a spec see that a close
+    /// happened.
+    open_rows: [max_open]OpenRow = @splat(.{}),
+    open_count: usize = 0,
     next_handle: i64 = 0,
     /// What the program's standard input will answer, and how much of
     /// it has been taken.  Standard handles live at a fixed range so a
@@ -201,11 +208,6 @@ pub const World = struct {
     toward_client: [256]u8 = undefined,
     toward_client_length: usize = 0,
     toward_client_taken: usize = 0,
-    /// Where the open handle has read to, and whether it was opened
-    /// for writing.
-    handle_position: usize = 0,
-    handle_writes: bool = false,
-
     pub const Key = struct {
         name: []const u8,
         text: []const u8 = "",
@@ -226,6 +228,34 @@ pub const World = struct {
     /// buffers throughout (see the header), and a spec that wants a
     /// deeper tree than this is a spec about the file system.
     const max_made_directories = 16;
+    /// How many files one world may hold, and how many handles it may
+    /// have open at once — small for `max_made_directories`'s reason.
+    const max_files = 4;
+    const max_open = 4;
+    /// Where the scripted modification stamps start and how far each
+    /// write moves the next one.  A plausible wall-clock number, with
+    /// a step distinct from `epoch_step` so a spec printing both
+    /// cannot confuse which it is looking at.
+    const modified_base: i64 = 1_754_000_000_000;
+    const modified_step: i64 = 7;
+
+    /// One file: its name, its bytes, and when it last changed.
+    pub const FileSlot = struct {
+        name: [64]u8 = undefined,
+        name_length: usize = 0,
+        content: [1024]u8 = undefined,
+        content_length: usize = 0,
+        modified: i64 = 0,
+    };
+
+    /// One open handle: which file it reaches, where it has read to,
+    /// and whether it was opened for writing.
+    pub const OpenRow = struct {
+        handle: i64 = 0,
+        file: usize = 0,
+        position: usize = 0,
+        writes: bool = false,
+    };
 
     /// One path and what is at it (`abi.PathKindFn`'s four codes,
     /// named).
@@ -269,12 +299,34 @@ pub const World = struct {
 
     /// Put a file there without asking the world's permission.
     pub fn place(self: *World, path: []const u8, content: []const u8) void {
-        std.debug.assert(path.len != 0 and path.len <= self.file_name.len);
-        std.debug.assert(content.len <= self.file_content.len);
-        @memcpy(self.file_name[0..path.len], path);
-        self.file_name_length = path.len;
-        @memcpy(self.file_content[0..content.len], content);
-        self.file_content_length = content.len;
+        std.debug.assert(path.len != 0 and path.len <= 64);
+        std.debug.assert(content.len <= 1024);
+        const index = self.fileIndex(path) orelse self.emptySlot();
+        const slot = &self.files_held[index];
+        @memcpy(slot.name[0..path.len], path);
+        slot.name_length = path.len;
+        @memcpy(slot.content[0..content.len], content);
+        slot.content_length = content.len;
+        slot.modified = modified_base + self.writes_made * modified_step;
+        self.writes_made += 1;
+    }
+
+    /// Which slot holds `path`, or null when none does.  The bytes are
+    /// compared as given, exactly as the one-file world compared them;
+    /// `kindOf` normalizes before it asks.
+    fn fileIndex(self: *const World, path: []const u8) ?usize {
+        for (&self.files_held, 0..) |*slot, index| {
+            if (slot.name_length == 0) continue;
+            if (std.mem.eql(u8, slot.name[0..slot.name_length], path)) return index;
+        }
+        return null;
+    }
+
+    fn emptySlot(self: *World) usize {
+        for (&self.files_held, 0..) |*slot, index| {
+            if (slot.name_length == 0) return index;
+        }
+        @panic("this world is full: raise World.max_files");
     }
 
     fn variable(name: []const u8) ?[]const u8 {
@@ -461,46 +513,68 @@ pub const World = struct {
 
     fn append(self: *World, path: []const u8, content: []const u8) bool {
         if (self.refuse_writes) return false;
-        if (!self.exists(path)) return self.write(path, content);
-        if (self.file_content_length + content.len > self.file_content.len) return false;
-        @memcpy(self.file_content[self.file_content_length..][0..content.len], content);
-        self.file_content_length += content.len;
+        const index = self.fileIndex(path) orelse return self.write(path, content);
+        const slot = &self.files_held[index];
+        if (slot.content_length + content.len > slot.content.len) return false;
+        @memcpy(slot.content[slot.content_length..][0..content.len], content);
+        slot.content_length += content.len;
+        slot.modified = modified_base + self.writes_made * modified_step;
+        self.writes_made += 1;
         return true;
     }
 
     fn delete(self: *World, path: []const u8) bool {
-        if (!self.exists(path)) return false;
-        self.file_name_length = 0;
-        self.file_content_length = 0;
+        const index = self.fileIndex(path) orelse return false;
+        self.files_held[index].name_length = 0;
+        self.files_held[index].content_length = 0;
         return true;
     }
 
+    /// Renaming onto a name another file holds replaces it, which is
+    /// what makes write-then-rename the way to replace a file — the
+    /// same rule the real host keeps.
     fn rename(self: *World, from: []const u8, to: []const u8) bool {
-        if (!self.exists(from)) return false;
-        if (to.len == 0 or to.len > self.file_name.len) return false;
-        @memcpy(self.file_name[0..to.len], to);
-        self.file_name_length = to.len;
+        const index = self.fileIndex(from) orelse return false;
+        if (to.len == 0 or to.len > 64) return false;
+        if (self.fileIndex(to)) |taken| {
+            if (taken != index) {
+                self.files_held[taken].name_length = 0;
+                self.files_held[taken].content_length = 0;
+            }
+        }
+        const slot = &self.files_held[index];
+        @memcpy(slot.name[0..to.len], to);
+        slot.name_length = to.len;
         return true;
     }
 
     /// The file's bytes, or null when nothing of that name was written.
-    /// Borrowed until the next write.
-    fn read(self: *const World, path: []const u8) ?[]const u8 {
-        if (!self.exists(path)) return null;
-        return self.file_content[0..self.file_content_length];
+    /// Borrowed until the next write.  Public for `place`'s reason: a
+    /// spec seeds a world and reads what a program left in it.
+    pub fn read(self: *const World, path: []const u8) ?[]const u8 {
+        const index = self.fileIndex(path) orelse return null;
+        return self.files_held[index].content[0..self.files_held[index].content_length];
     }
 
     fn write(self: *World, path: []const u8, content: []const u8) bool {
         if (self.refuse_writes) return false;
-        if (path.len == 0 or path.len > self.file_name.len) return false;
-        if (content.len > self.file_content.len) return false;
+        if (path.len == 0 or path.len > 64) return false;
+        if (content.len > 1024) return false;
+        // A full table refuses like a full disk, instead of trapping
+        // the harness: the caller meets `io_failed`.
+        if (self.fileIndex(path) == null) {
+            var free = false;
+            for (&self.files_held) |*slot| {
+                if (slot.name_length == 0) free = true;
+            }
+            if (!free) return false;
+        }
         self.place(path, content);
         return true;
     }
 
     fn exists(self: *const World, path: []const u8) bool {
-        if (self.file_name_length == 0) return false;
-        return std.mem.eql(u8, self.file_name[0..self.file_name_length], path);
+        return self.fileIndex(path) != null;
     }
 
     /// What is at `path`, or null for a world that will not say
@@ -514,17 +588,118 @@ pub const World = struct {
     /// nothing in this world created.
     fn kindOf(self: *const World, path: []const u8) ?i64 {
         const wanted = normalizedPath(path);
-        for (self.refused_kinds) |refused| {
-            const under = normalizedPath(refused);
-            if (!std.mem.startsWith(u8, wanted, under)) continue;
-            if (wanted.len == under.len or wanted[under.len] == '/') return null;
-        }
+        if (self.refused(wanted)) return null;
         if (self.hasDirectory(wanted)) return 2;
         if (self.exists(wanted)) return 1;
         for (self.kinds) |row| {
             if (std.mem.eql(u8, normalizedPath(row.path), wanted)) return @intFromEnum(row.kind);
         }
         return 0;
+    }
+
+    /// Whether this world refuses to answer about `path` — the memo's
+    /// measured case, a `chmod 000` parent.  Takes a path already
+    /// normalized.
+    fn refused(self: *const World, wanted: []const u8) bool {
+        for (self.refused_kinds) |held| {
+            const under = normalizedPath(held);
+            if (!std.mem.startsWith(u8, wanted, under)) continue;
+            if (wanted.len == under.len or wanted[under.len] == '/') return true;
+        }
+        return false;
+    }
+
+    /// The byte count of the ordinary file at `path`, or null for
+    /// anything that has no honest one (`abi.PathFactFn`): nothing
+    /// there, a directory, a scripted name this world holds no bytes
+    /// for, a refusal.
+    fn sizeOf(self: *const World, path: []const u8) ?i64 {
+        const wanted = normalizedPath(path);
+        if (self.refused(wanted)) return null;
+        const index = self.fileIndex(wanted) orelse return null;
+        return @intCast(self.files_held[index].content_length);
+    }
+
+    /// When what `path` names last changed: a held file answers its
+    /// scripted stamp, a made directory answers the base stamp, and
+    /// everything else — including the script's names, which this
+    /// world never wrote — is null.
+    fn modifiedOf(self: *const World, path: []const u8) ?i64 {
+        const wanted = normalizedPath(path);
+        if (self.refused(wanted)) return null;
+        if (self.fileIndex(wanted)) |index| return self.files_held[index].modified;
+        if (self.hasDirectory(wanted)) return modified_base;
+        return null;
+    }
+
+    /// Whether `name` is `wanted` itself or anything under it.
+    fn atOrUnder(name: []const u8, wanted: []const u8) bool {
+        if (!std.mem.startsWith(u8, name, wanted)) return false;
+        return name.len == wanted.len or name[wanted.len] == '/';
+    }
+
+    /// Remove the empty directory at `path` (`abi.DirRemoveFn`): only
+    /// a directory this world was made to hold, with nothing under it.
+    /// The script's directories are the world's law and refuse, like
+    /// everything else that leaves the path occupied.
+    fn removeDirectory(self: *World, path: []const u8) bool {
+        if (self.refuse_writes) return false;
+        const wanted = normalizedPath(path);
+        if (self.refused(wanted)) return false;
+        if (!self.hasDirectory(wanted)) return false;
+        for (0..self.made_count) |row| {
+            const held = self.made[row][0..self.made_lengths[row]];
+            if (held.len > wanted.len and atOrUnder(held, wanted)) return false;
+        }
+        for (&self.files_held) |*slot| {
+            if (slot.name_length == 0) continue;
+            if (atOrUnder(slot.name[0..slot.name_length], wanted)) return false;
+        }
+        self.dropDirectories(wanted, false);
+        return true;
+    }
+
+    /// Remove whatever is at `path`, everything under it included
+    /// (`abi.TreeRemoveFn`).  Nothing there is success; a scripted
+    /// name still standing is a refusal, because this world cannot
+    /// unsay its script.
+    fn removeTree(self: *World, path: []const u8) bool {
+        if (self.refuse_writes) return false;
+        const wanted = normalizedPath(path);
+        if (self.refused(wanted)) return false;
+        for (self.kinds) |row| {
+            if (row.kind == .nothing) continue;
+            if (atOrUnder(normalizedPath(row.path), wanted)) return false;
+        }
+        for (&self.files_held) |*slot| {
+            if (slot.name_length == 0) continue;
+            if (!atOrUnder(slot.name[0..slot.name_length], wanted)) continue;
+            slot.name_length = 0;
+            slot.content_length = 0;
+        }
+        self.dropDirectories(wanted, true);
+        return true;
+    }
+
+    /// Drop `wanted` from the made set — and everything under it when
+    /// `sweep` says so — keeping the survivors in the order they were
+    /// made.
+    fn dropDirectories(self: *World, wanted: []const u8, sweep: bool) void {
+        var kept: usize = 0;
+        for (0..self.made_count) |row| {
+            const held = self.made[row][0..self.made_lengths[row]];
+            const doomed = if (sweep)
+                atOrUnder(held, wanted)
+            else
+                std.mem.eql(u8, held, wanted);
+            if (doomed) continue;
+            if (kept != row) {
+                @memcpy(self.made[kept][0..held.len], held);
+                self.made_lengths[kept] = held.len;
+            }
+            kept += 1;
+        }
+        self.made_count = kept;
     }
 
     /// A path as this world names it: without a trailing separator,
@@ -587,10 +762,10 @@ pub const World = struct {
 
     // -- the byte channel (docs/BYTES.md) ------------------------------
     //
-    // One open file at a time, which is all a world with one file can
-    // have.  The handle number never repeats, so a handle that outlived
-    // its close is told from a live one and a close is observable — the
-    // world can say "that file is not open any more", which is what a
+    // A few open files at a time — a streaming copy holds two.  The
+    // handle number never repeats, so a handle that outlived its close
+    // is told from a live one and a close is observable — the world
+    // can say "that file is not open any more", which is what a
     // scope-end-closes spec has to be able to see.
 
     /// How much of a write this world takes at a time.  Deliberately
@@ -609,49 +784,74 @@ pub const World = struct {
             } else if (self.refuse_writes) return .no,
             else => return .no,
         }
-        if (self.open_handle != null) return .no;
+        if (self.open_count == max_open) return .no;
         self.next_handle += 1;
-        self.open_handle = self.next_handle;
-        self.handle_position = 0;
-        self.handle_writes = wanted != .read;
+        self.open_rows[self.open_count] = .{
+            .handle = self.next_handle,
+            .file = self.fileIndex(path).?,
+            .position = 0,
+            .writes = wanted != .read,
+        };
+        self.open_count += 1;
         handle.* = self.next_handle;
         return .yes;
     }
 
+    /// The open row a handle names, or null for a number that is not
+    /// open — never there, or already closed.
+    fn openRow(self: *World, handle: i64) ?*OpenRow {
+        for (self.open_rows[0..self.open_count]) |*row| {
+            if (row.handle == handle) return row;
+        }
+        return null;
+    }
+
     fn readFrom(self: *World, handle: i64, into: []u8, filled: *i64) abi.Answer {
         if (self.socketRole(handle)) |role| return self.socketReadFrom(role, into, filled);
-        if (self.open_handle != handle) return .no;
-        if (self.handle_writes) return .no;
-        const rest = self.file_content[self.handle_position..self.file_content_length];
+        const row = self.openRow(handle) orelse return .no;
+        if (row.writes) return .no;
+        const slot = &self.files_held[row.file];
+        const rest = slot.content[row.position..slot.content_length];
         const taken = @min(rest.len, into.len);
         @memcpy(into[0..taken], rest[0..taken]);
-        self.handle_position += taken;
+        row.position += taken;
         filled.* = @intCast(taken);
         return .yes;
     }
 
     fn writeTo(self: *World, handle: i64, from: []const u8, written: *i64) abi.Answer {
         if (self.socketRole(handle)) |role| return self.socketWriteTo(role, from, written);
-        if (self.open_handle != handle) return .no;
-        if (!self.handle_writes or self.refuse_writes) return .no;
+        const row = self.openRow(handle) orelse return .no;
+        if (!row.writes or self.refuse_writes) return .no;
+        const slot = &self.files_held[row.file];
         const wanted = @min(from.len, short_write);
-        if (self.file_content_length + wanted > self.file_content.len) return .no;
-        @memcpy(self.file_content[self.file_content_length..][0..wanted], from[0..wanted]);
-        self.file_content_length += wanted;
+        if (slot.content_length + wanted > slot.content.len) return .no;
+        @memcpy(slot.content[slot.content_length..][0..wanted], from[0..wanted]);
+        slot.content_length += wanted;
+        slot.modified = modified_base + self.writes_made * modified_step;
+        self.writes_made += 1;
         written.* = @intCast(wanted);
         return .yes;
     }
 
     fn flushAt(self: *World, handle: i64) abi.Answer {
         if (self.socketRole(handle)) |role| return self.socketFlushAt(role);
-        return if (self.open_handle == handle) .yes else .no;
+        return if (self.openRow(handle) != null) .yes else .no;
     }
 
     fn closeAt(self: *World, handle: i64) abi.Answer {
         if (self.socketRole(handle) != null) return self.socketCloseAt(handle);
-        if (self.open_handle != handle) return .no;
-        self.open_handle = null;
-        return .yes;
+        for (self.open_rows[0..self.open_count], 0..) |row, index| {
+            if (row.handle != handle) continue;
+            // Shift the survivors down so the order two engines see
+            // stays the order the opens happened in.
+            for (index + 1..self.open_count) |ahead| {
+                self.open_rows[ahead - 1] = self.open_rows[ahead];
+            }
+            self.open_count -= 1;
+            return .yes;
+        }
+        return .no;
     }
 
     // -- the transport (docs/NETWORK.md) -----------------------------
@@ -1556,6 +1756,10 @@ pub const Capture = struct {
             .socket_accept = if (provided.network) Sockets.accept else null,
             .socket_port = if (provided.network) Sockets.port else null,
             .socket_close = if (provided.network) Sockets.close else null,
+            .path_size = if (provided.files) pathSize else null,
+            .path_modified = if (provided.files) pathModified else null,
+            .dir_remove = if (provided.files) dirRemove else null,
+            .tree_remove = if (provided.files) treeRemove else null,
         };
     }
 
@@ -1756,6 +1960,44 @@ pub const Capture = struct {
         return if (of(context).world.delete(path[0..@intCast(path_length)])) .yes else .no;
     }
 
+    fn pathSize(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        answer: *i64,
+    ) callconv(.c) abi.Answer {
+        const measured = of(context).world.sizeOf(path[0..@intCast(path_length)]) orelse return .no;
+        answer.* = measured;
+        return .yes;
+    }
+
+    fn pathModified(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        answer: *i64,
+    ) callconv(.c) abi.Answer {
+        const measured = of(context).world.modifiedOf(path[0..@intCast(path_length)]) orelse return .no;
+        answer.* = measured;
+        return .yes;
+    }
+
+    fn dirRemove(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).world.removeDirectory(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn treeRemove(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).world.removeTree(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
     fn fileRename(
         context: ?*anyopaque,
         from: [*]const u8,
@@ -1948,6 +2190,10 @@ pub const Reference = struct {
             .file_rename = if (self.provided.files) renameFile else null,
             .dir_list = if (self.provided.files) listDirectory else null,
             .dir_create = if (self.provided.files) makeDirectory else null,
+            .path_size = if (self.provided.files) sizeAt else null,
+            .path_modified = if (self.provided.files) modifiedAt else null,
+            .dir_remove = if (self.provided.files) removeDirectory else null,
+            .tree_remove = if (self.provided.files) removeTree else null,
             .read_line = if (self.provided.input) readLine else null,
             .print_error = if (self.provided.diagnostics) printError else null,
             .clock_ms = if (self.provided.clock) clockMilliseconds else null,
@@ -2002,6 +2248,22 @@ pub const Reference = struct {
 
     fn makeDirectory(context: *anyopaque, path: []const u8) bool {
         return of(context).world.createDirectory(path);
+    }
+
+    fn sizeAt(context: *anyopaque, path: []const u8) ?i64 {
+        return of(context).world.sizeOf(path);
+    }
+
+    fn modifiedAt(context: *anyopaque, path: []const u8) ?i64 {
+        return of(context).world.modifiedOf(path);
+    }
+
+    fn removeDirectory(context: *anyopaque, path: []const u8) bool {
+        return of(context).world.removeDirectory(path);
+    }
+
+    fn removeTree(context: *anyopaque, path: []const u8) bool {
+        return of(context).world.removeTree(path);
     }
 
     fn listDirectory(

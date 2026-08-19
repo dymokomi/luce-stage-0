@@ -6,6 +6,20 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The filesystem completes: `files.size` and `files.modified` are the
+  two stat facts a build tool stands on; `files.copy` streams one
+  file's bytes in constant space and `files.move` renames with a
+  copy-then-delete fallback — both pure Luce over the byte channel,
+  no new host promise; `files.remove_directory` takes one empty
+  directory and `files.remove_all` takes a whole tree, removing a
+  symbolic link as a link and treating absence as success, the
+  `make_directory` idempotence rule mirrored.  Four host slots
+  (`path_size`, `path_modified`, `dir_remove`, `tree_remove`) join
+  the table — ABI 29 → 30, MIR format 63 → 64 — and the differential
+  harness's world grows from one file to a small set with several
+  open handles, so a streaming copy is proven short-write by
+  short-write on both engines.
+
 - Channels: `channel[T]` is a bounded conduit between workers and the
   one reference a boundary admits. `send` parks a deep copy and
   `receive` rebuilds it in the receiver — no identity ever crosses,

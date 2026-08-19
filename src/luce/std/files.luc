@@ -157,6 +157,103 @@ func delete(path: str) -> !:
 func rename(from: str, to: str) -> !:
     try Builtin.file_rename(from, to)
 
+# -- the two stat facts ------------------------------------------------
+
+# How many bytes the file holds — `os.path.getsize`.
+#
+# The byte count of the *file*, so a directory is an error here and
+# not a number: a directory's `st_size` is a filesystem implementation
+# detail no program can use.  Like every question about the world it
+# is about the past — sizing a file and then reading it is two calls
+# with a window between them — so the honest use is display and
+# bookkeeping, not a buffer size to trust.
+func size(path: str) -> i64!:
+    return try Builtin.path_size(path)
+
+# When the file or directory was last modified, in milliseconds since
+# the Unix epoch — `os.path.getmtime`, on `os.epoch_ms`'s terms.
+#
+# It is wall-clock time: an operator may set the clock, a copied tree
+# keeps old stamps, and two machines disagree.  A build tool compares
+# two of these to each other and nothing else.
+func modified(path: str) -> i64!:
+    return try Builtin.path_modified(path)
+
+# -- copy and move -----------------------------------------------------
+
+# Copy one file's bytes to a new name, replacing whatever held it —
+# `shutil.copyfile`.  A streaming loop over two open files, so a file
+# larger than memory copies in constant space.  Nothing else crosses:
+# permissions and ownership are the operating-system surface Luce has
+# not taken up, and a copy that silently carried some of them would be
+# promising what it cannot keep.
+func copy(from: str, to: str) -> !:
+    var source = try File(from)
+    var sink = try File(to, Mode.create)
+    var buffer = array[u8](4096)
+    var landed = try source.read(buffer)
+    while landed > 0:
+        var remaining = landed
+        while remaining > 0:
+            let sent = try sink.write(buffer, remaining)
+            if sent <= 0:
+                error("the write made no progress")
+            # A short write is ordinary: slide the unsent tail to the
+            # front, because a Writer always takes from the front.
+            var at: i64 = 0
+            while at < remaining - sent:
+                buffer[at] = buffer[sent + at]
+                at += 1
+            remaining -= sent
+        landed = try source.read(buffer)
+    try sink.flush()
+
+# Move a file: rename when the world allows it, and copy-then-delete
+# when it does not — `shutil.move`'s answer to a destination on
+# another filesystem, where a rename cannot happen.  Directories move
+# only by rename; carrying a tree across filesystems is a walk with
+# policy in it, and a program that needs one writes the loop where the
+# policy shows.
+func move(from: str, to: str) -> !:
+    rename(from, to) catch:
+        if not (try is_file(from)):
+            # Only a file falls back to copy.  Asking again re-raises
+            # the rename's own refusal, in its own words — and a world
+            # that changed its mind is a move that landed.
+            try rename(from, to)
+            return
+        try copy(from, to)
+        try delete(from)
+
+# -- removing what a program made --------------------------------------
+
+# Remove one **empty** directory — `os.rmdir`, the precise tool.  A
+# directory with anything still in it is an error, which is the
+# safety: this call cannot take more than the one name it was given.
+func remove_directory(path: str) -> !:
+    try Builtin.dir_remove(path)
+
+# Remove whatever is at the path — a file, or a directory and
+# everything under it — `shutil.rmtree` and the file half of Swift's
+# `removeItem` in one call.
+#
+# Two rules, said here because a caller plans around both:
+#
+#   * **Nothing there is success.**  The call means "there is nothing
+#     at this path when I return" — `make_directory`'s idempotence
+#     rule, mirrored — so cleaning a build directory needs no guard in
+#     front of it.
+#   * **A symbolic link is removed as a link.**  What it points at is
+#     untouched: a recursive delete that followed links would walk out
+#     of the tree it was asked to remove, which is the classic way a
+#     cleanup empties a home directory.
+#
+# There is no undo.  The precise tools — `delete`, `remove_directory`
+# — refuse anything unexpected; this one is for the tree the program
+# itself laid out.
+func remove_all(path: str) -> !:
+    try Builtin.tree_remove(path)
+
 # Make a directory, and every directory leading to it.
 #
 # It means "there is a directory at this path when I return", so a

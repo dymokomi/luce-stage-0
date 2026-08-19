@@ -2159,6 +2159,52 @@ pub const Machine = struct {
                 }
                 return .none;
             },
+            .dir_remove => {
+                const host = try self.service();
+                const callback = host.dir_remove orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asStr();
+                if (!callback(host.context, path)) {
+                    self.runtime.raiseIo(.remove, path, self.placeOf(site));
+                }
+                return .none;
+            },
+            .tree_remove => {
+                const host = try self.service();
+                const callback = host.tree_remove orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asStr();
+                if (!callback(host.context, path)) {
+                    self.runtime.raiseIo(.remove_tree, path, self.placeOf(site));
+                }
+                return .none;
+            },
+            // The stat facts share `path_kind`'s channels: null is the
+            // world with no number, and the zero left behind is never
+            // read because the `errored` beside the call has already
+            // seen the error.
+            .path_size => {
+                const host = try self.service();
+                const callback = host.path_size orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asStr();
+                const told = callback(host.context, path) orelse {
+                    self.runtime.raiseIo(.measure, path, self.placeOf(site));
+                    return .ofI64(0);
+                };
+                return .ofI64(told);
+            },
+            .path_modified => {
+                const host = try self.service();
+                const callback = host.path_modified orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asStr();
+                const told = callback(host.context, path) orelse {
+                    self.runtime.raiseIo(.measure, path, self.placeOf(site));
+                    return .ofI64(0);
+                };
+                return .ofI64(told);
+            },
             .dir_list => {
                 const host = try self.service();
                 const callback = host.dir_list orelse

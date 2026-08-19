@@ -196,6 +196,23 @@ pub const Host = struct {
     /// services above do (`abi.DirCreateFn` says the same rules on the
     /// other table).
     dir_create: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    /// The two stat facts (docs/FILESYSTEM.md): the byte count of the
+    /// ordinary file the path names, and when what the path names was
+    /// last modified, in milliseconds since the Unix epoch on
+    /// `epoch_ms`'s terms.  Null is the world with no number — nothing
+    /// there, a directory asked for a byte count, a refusal — which
+    /// the program meets as `io_failed` (`abi.PathFactFn` says the
+    /// same rules on the other table).
+    path_size: ?*const fn (context: *anyopaque, path: []const u8) ?i64 = null,
+    path_modified: ?*const fn (context: *anyopaque, path: []const u8) ?i64 = null,
+    /// The two removals (docs/FILESYSTEM.md).  `dir_remove` takes one
+    /// **empty** directory and `false` is anything that left it there.
+    /// `tree_remove` takes whatever is at the path, everything under
+    /// it included; nothing there is `true` (`dir_create`'s
+    /// idempotence rule mirrored), and links are **not** followed — a
+    /// symlink is removed as a link, never as what it points at.
+    dir_remove: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    tree_remove: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
     /// One line of standard input, the prompt written and flushed
     /// first.  Null means end of input, which the program meets as
     /// `none` — nothing there, and no reason worth carrying.

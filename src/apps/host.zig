@@ -342,6 +342,10 @@ pub const Host = struct {
             .socket_accept = cSocketAccept,
             .socket_port = cSocketPort,
             .socket_close = cSocketClose,
+            .path_size = cPathSize,
+            .path_modified = cPathModified,
+            .dir_remove = cDirRemove,
+            .tree_remove = cTreeRemove,
         };
     }
 
@@ -607,6 +611,42 @@ pub const Host = struct {
     fn renameFile(self: *Host, from: []const u8, to: []const u8) bool {
         const cwd = std.Io.Dir.cwd();
         cwd.rename(from, cwd, to, self.io) catch return false;
+        return true;
+    }
+
+    /// How many bytes the ordinary file at `path` holds, or null for
+    /// anything that has no honest byte count — nothing there, a
+    /// directory, a device, a refusal (`abi.PathFactFn`).  One `stat`,
+    /// links followed, like `pathKind`.
+    fn pathSize(self: *Host, path: []const u8) ?i64 {
+        const found = std.Io.Dir.cwd().statFile(self.io, path, .{ .follow_symlinks = true }) catch
+            return null;
+        if (found.kind != .file) return null;
+        return std.math.cast(i64, found.size) orelse null;
+    }
+
+    /// When what `path` names was last modified, in milliseconds since
+    /// the Unix epoch, or null for nothing there or a refusal.  A
+    /// directory does have one, so only the `stat` itself gates this.
+    fn pathModified(self: *Host, path: []const u8) ?i64 {
+        const found = std.Io.Dir.cwd().statFile(self.io, path, .{ .follow_symlinks = true }) catch
+            return null;
+        return std.math.cast(i64, @divFloor(found.mtime.nanoseconds, std.time.ns_per_ms)) orelse null;
+    }
+
+    /// Remove the empty directory at `path` — `false` on anything that
+    /// left it there, `abi.DirRemoveFn`'s rule.
+    fn removeDirectory(self: *Host, path: []const u8) bool {
+        std.Io.Dir.cwd().deleteDir(self.io, path) catch return false;
+        return true;
+    }
+
+    /// Remove whatever is at `path`, everything under it included.
+    /// `deleteTree` already keeps both of `abi.TreeRemoveFn`'s rules:
+    /// nothing there is success, and links are removed as links rather
+    /// than followed.
+    fn removeTree(self: *Host, path: []const u8) bool {
+        std.Io.Dir.cwd().deleteTree(self.io, path) catch return false;
         return true;
     }
 
@@ -2218,6 +2258,42 @@ pub const Host = struct {
         return if (of(context).createDirectory(path[0..@intCast(path_length)])) .yes else .no;
     }
 
+    fn cPathSize(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        answer: *i64,
+    ) callconv(.c) abi.Answer {
+        answer.* = of(context).pathSize(path[0..@intCast(path_length)]) orelse return .no;
+        return .yes;
+    }
+
+    fn cPathModified(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        answer: *i64,
+    ) callconv(.c) abi.Answer {
+        answer.* = of(context).pathModified(path[0..@intCast(path_length)]) orelse return .no;
+        return .yes;
+    }
+
+    fn cDirRemove(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).removeDirectory(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn cTreeRemove(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).removeTree(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
     fn cEpoch(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
         answer.* = of(context).epochMilliseconds();
         return .yes;
@@ -3262,6 +3338,92 @@ test "the C table offers every service, over the same implementation" {
         occupied.ptr,
         @intCast(occupied.len),
     ));
+
+    // The two stat facts, against the real filesystem: the empty file
+    // sizes at zero, a directory has no honest byte count, and the
+    // stamp is held to `epoch_ms`'s own bounds rather than to a date
+    // a test would expire on.  A name nothing holds has neither fact.
+    var fact: i64 = undefined;
+    try testing.expectEqual(abi.Answer.yes, table.path_size.?(
+        table.context,
+        occupied.ptr,
+        @intCast(occupied.len),
+        &fact,
+    ));
+    try testing.expectEqual(@as(i64, 0), fact);
+    try testing.expectEqual(abi.Answer.no, table.path_size.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+        &fact,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.path_modified.?(
+        table.context,
+        occupied.ptr,
+        @intCast(occupied.len),
+        &fact,
+    ));
+    try testing.expect(fact > 1_000_000_000_000 and fact < 4_102_444_800_000);
+    try testing.expectEqual(abi.Answer.yes, table.path_modified.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+        &fact,
+    ));
+    const ghost = try std.fs.path.join(testing.allocator, &.{ directory, "ghost" });
+    defer testing.allocator.free(ghost);
+    try testing.expectEqual(abi.Answer.no, table.path_size.?(
+        table.context,
+        ghost.ptr,
+        @intCast(ghost.len),
+        &fact,
+    ));
+    try testing.expectEqual(abi.Answer.no, table.path_modified.?(
+        table.context,
+        ghost.ptr,
+        @intCast(ghost.len),
+        &fact,
+    ));
+
+    // The precise removal takes only an empty directory: the parent
+    // with something in it refuses, the empty leaf goes, and saying
+    // it twice is a refusal because nothing is there to take.
+    try testing.expectEqual(abi.Answer.no, table.dir_remove.?(
+        table.context,
+        store.ptr,
+        @intCast(store.len),
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.dir_remove.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+    ));
+    try testing.expectEqual(abi.Answer.no, table.dir_remove.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+    ));
+
+    // The sweeping removal takes the rest of the tree, and nothing
+    // there is success — `dir_create`'s idempotence rule, mirrored.
+    try testing.expectEqual(abi.Answer.yes, table.tree_remove.?(
+        table.context,
+        store.ptr,
+        @intCast(store.len),
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.tree_remove.?(
+        table.context,
+        store.ptr,
+        @intCast(store.len),
+    ));
+    var swept_kind: i64 = undefined;
+    try testing.expectEqual(abi.Answer.yes, table.path_kind.?(
+        table.context,
+        store.ptr,
+        @intCast(store.len),
+        &swept_kind,
+    ));
+    try testing.expectEqual(@as(i64, 0), swept_kind);
 
     // The clock only promises that differences mean something, so
     // that is all this checks.

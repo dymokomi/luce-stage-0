@@ -652,8 +652,8 @@ test "constants: file.read through a parameter traps before changing the world" 
     defer session.deinit();
     try testing.expectEqual(luce.mir.TrapCode.immutable_object, session.end.trapped);
     try testing.expectEqualStrings("", session.printed());
-    try testing.expectEqual(@as(usize, 0), session.reference.world.handle_position);
-    try testing.expectEqual(@as(usize, 0), session.capture.world.handle_position);
+    try testing.expectEqual(@as(usize, 0), session.reference.world.open_rows[0].position);
+    try testing.expectEqual(@as(usize, 0), session.capture.world.open_rows[0].position);
     const remained = session.file() orelse return error.MissingFile;
     try testing.expectEqualStrings("notes.txt", remained.name);
     try testing.expectEqualStrings("abcdef", remained.content);

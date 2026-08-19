@@ -317,6 +317,10 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .file_rename,
         .dir_list,
         .dir_create,
+        .path_size,
+        .path_modified,
+        .dir_remove,
+        .tree_remove,
         // The byte channel: `file_open` takes a table row and every
         // other one reaches the world through a handle.
         .file_open,
@@ -555,8 +559,14 @@ pub fn viewStable(instruction: Instruction) bool {
             .file_delete,
             .file_rename,
             // Making a directory takes no table row: it is a path in
-            // and an outcome back, like deleting one.
+            // and an outcome back, like deleting one.  So are both
+            // removals, and each stat fact is a path in and a number
+            // back.
             .dir_create,
+            .dir_remove,
+            .tree_remove,
+            .path_size,
+            .path_modified,
             // Reading and writing through a handle resolves that
             // handle and the buffer, which are reads.
             .handle_read,

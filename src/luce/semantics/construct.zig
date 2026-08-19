@@ -1318,6 +1318,31 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "file_rename takes (from str, to str)");
             result = .none;
         },
+        // The two removals answer nothing for `dir_create`'s reason:
+        // the world decided, and what it said travels in the error
+        // channel.
+        .dir_remove => {
+            if (arguments[0].value_type != .str)
+                return failIntrinsic(self, call, "dir_remove takes a str path");
+            result = .none;
+        },
+        .tree_remove => {
+            if (arguments[0].value_type != .str)
+                return failIntrinsic(self, call, "tree_remove takes a str path");
+            result = .none;
+        },
+        // The two stat facts answer numbers: a byte count, and
+        // milliseconds since the epoch on `epoch_ms`'s terms.
+        .path_size => {
+            if (arguments[0].value_type != .str)
+                return failIntrinsic(self, call, "path_size takes a str path");
+            result = .i64;
+        },
+        .path_modified => {
+            if (arguments[0].value_type != .str)
+                return failIntrinsic(self, call, "path_modified takes a str path");
+            result = .i64;
+        },
         .dir_list => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "dir_list takes a str path");

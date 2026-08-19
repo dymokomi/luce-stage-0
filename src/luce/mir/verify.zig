@@ -2126,12 +2126,19 @@ fn verifyIntrinsic(
             // error channel, like every other file service.
             try expectType(result, .none);
         },
-        .file_delete, .dir_create => {
+        .file_delete, .dir_create, .dir_remove, .tree_remove => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);
             // Answers nothing: whether the world took it travels in
             // the error channel, like every other file service.
             try expectType(result, .none);
+        },
+        // The two stat facts: a path in, a number out — a byte count,
+        // or milliseconds since the epoch.
+        .path_size, .path_modified => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .str);
+            try expectType(result, .i64);
         },
         .dir_list => {
             try exactly(arguments, 1);
