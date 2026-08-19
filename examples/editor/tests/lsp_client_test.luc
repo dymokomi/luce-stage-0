@@ -1,0 +1,44 @@
+# The client's pure halves: frames out of accumulated bytes, and what
+# a publishDiagnostics body means.
+
+import std.strings
+from lsp_client import Diagnostic, extracted, published_for
+
+private func wire(body: str) -> list[u8]:
+    return strings.to_bytes("Content-Length: " + str(len(strings.to_bytes(body))) + "\r\n\r\n" + body)
+
+func test_frames_survive_arbitrary_chunk_boundaries():
+    var pending = list[u8]()
+    var whole = wire("{\"a\":1}")
+    for byte in wire("{\"b\":2}"):
+        whole.append(byte)
+    # Arrive in three ragged pieces; only complete frames come out.
+    var cut: i64 = 9
+    for at in range(0, cut):
+        pending.append(whole[at])
+    assert(len(extracted(pending)) == 0)
+    for at in range(cut, len(whole) - 3):
+        pending.append(whole[at])
+    let first = extracted(pending)
+    assert(len(first) == 1)
+    assert(first[0] == "{\"a\":1}")
+    for at in range(len(whole) - 3, len(whole)):
+        pending.append(whole[at])
+    let second = extracted(pending)
+    assert(len(second) == 1)
+    assert(second[0] == "{\"b\":2}")
+    assert(len(pending) == 0)
+
+func test_published_diagnostics_arrive_for_the_right_uri():
+    let body = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file://a.luc\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":2,\"character\":4},\"end\":{\"line\":2,\"character\":9}},\"message\":\"unknown name x\"}]}}"
+    let rows = published_for(body, "file://a.luc")
+    assert(rows != none)
+    let listed = rows else list[Diagnostic]()
+    assert(len(listed) == 1)
+    assert(listed[0].line == 2)
+    assert(listed[0].column == 4)
+    assert(listed[0].message == "unknown name x")
+    # Another uri's news is not this buffer's.
+    assert(published_for(body, "file://b.luc") == none)
+    # A response is not a notification.
+    assert(published_for("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}", "file://a.luc") == none)

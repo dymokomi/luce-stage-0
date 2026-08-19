@@ -20,6 +20,7 @@ struct Theme:
     punct: Style
     gutter: Style
     gutter_current: Style
+    gutter_diagnostic: Style
     status: Style
     status_key: Style
     selected: Style
@@ -41,6 +42,7 @@ const palette = Theme(
     punct = Style(foreground = 249),
     gutter = Style(foreground = 240),
     gutter_current = Style(foreground = 250),
+    gutter_diagnostic = Style(foreground = 203, bold = true),
     status = Style(foreground = 252, background = 237),
     status_key = Style(foreground = 214, background = 237, bold = true),
     selected = Style(foreground = 252, background = 237, bold = true),

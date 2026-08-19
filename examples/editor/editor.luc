@@ -10,6 +10,7 @@
 # termui owns the application loop, terminal lifecycle, layout,
 # drawing, input routing and shutdown.
 
+import std.strings
 from termui import Application
 from termui.layout import VStack, HStack
 from termui.constraints import Fixed, Grow
@@ -37,4 +38,11 @@ func main(args: list[str]):
 
     var app = Application()
     app.set_layout(Workbench(shared, across, screen))
+    # A Luce buffer gets the toolchain's language server, held through
+    # the loop's idle tick; the command is data, so another language's
+    # server plugs in the same way.  A world without the server leaves
+    # the editor exactly as it was.
+    if strings.ends_with(shared.document().path, ".luc"):
+        shared.attach_lsp("luce-lsp")
+        app.set_tick(100)
     app.start()

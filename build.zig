@@ -11,8 +11,8 @@ const termui_modules = [_][]const u8{ "termui", "model", "input", "constraints",
 /// The editor's own modules, its root (`editor`) first.  The specs
 /// compile the editor from these, and both its compile and its test run
 /// name them as inputs so editing one re-runs what depends on it.
-const editor_modules = [_][]const u8{ "editor", "model", "document", "history", "highlight", "listing", "session", "ui/workbench", "ui/source", "ui/filelist", "ui/console", "ui/statusbar", "ui/keymap", "ui/theme" };
-const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "selection", "highlight", "model", "workbench" };
+const editor_modules = [_][]const u8{ "editor", "model", "document", "history", "highlight", "listing", "session", "lsp_client", "ui/workbench", "ui/source", "ui/filelist", "ui/console", "ui/statusbar", "ui/keymap", "ui/theme" };
+const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "selection", "highlight", "lsp_client", "model", "workbench" };
 
 // LuciaOS v2 builds two executables from one language module:
 //
@@ -1549,6 +1549,26 @@ pub fn build(b: *std.Build) void {
     compile_editor.addFileInput(b.path("src/luce/std/os.luc"));
     compile_editor.step.dependOn(&install_start.step);
     compile_editor.addFileInput(start_library.getEmittedBin());
+
+    // The language server ships as an executable beside `luce` and
+    // `loom`: the editor spawns it by name, and the child PATH the
+    // host builds puts the install directory first.
+    const compile_lsp = b.addRunArtifact(compiler);
+    compile_lsp.addArg("build");
+    compile_lsp.addFileArg(b.path("examples/lsp/lsp.luc"));
+    compile_lsp.addArg("--emit=exe");
+    compile_lsp.addArg("--release");
+    compile_lsp.addArg("-o");
+    const lsp_executable = compile_lsp.addOutputFileArg("luce-lsp");
+    for ([_][]const u8{ "frames", "positions", "diagnostics", "server" }) |dependency| {
+        compile_lsp.addFileInput(b.path(b.fmt("examples/lsp/{s}.luc", .{dependency})));
+    }
+    compile_lsp.addFileInput(b.path("src/luce/std/os.luc"));
+    compile_lsp.step.dependOn(&install_start.step);
+    compile_lsp.addFileInput(start_library.getEmittedBin());
+    linkAgainstRuntime(compile_lsp, install_runtime, runtime_directory, runtime_archive);
+    const install_lsp = b.addInstallFile(lsp_executable, "luce-lsp");
+    b.getInstallStep().dependOn(&install_lsp.step);
     linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_archive);
     addTermuiPackage(b, compile_editor, runtime_directory, "editor");
     const install_editor = b.addInstallFile(editor_executable, "editor");

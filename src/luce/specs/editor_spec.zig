@@ -42,6 +42,7 @@ const editor_files = [_]agree.File{
     .{ .name = "highlight", .source = @embedFile("highlight.luc") },
     .{ .name = "listing", .source = @embedFile("listing.luc") },
     .{ .name = "session", .source = @embedFile("session.luc") },
+    .{ .name = "lsp_client", .source = @embedFile("lsp_client.luc") },
     .{ .name = "ui.workbench", .source = @embedFile("ui/workbench.luc"), .path = "ui/workbench.luc" },
     .{ .name = "ui.source", .source = @embedFile("ui/source.luc"), .path = "ui/source.luc" },
     .{ .name = "ui.filelist", .source = @embedFile("ui/filelist.luc"), .path = "ui/filelist.luc" },
@@ -346,6 +347,46 @@ test "shift selects, the clipboard round-trips, and a drag extends" {
     // and replaced by W leaves "Wld".  The cut hit the host clipboard.
     try testing.expectEqualStrings("hellohello\nWld\n", session.file().?.content);
     try testing.expect(std.mem.indexOf(u8, session.printed(), "[copy]hello") != null);
+}
+
+/// One LSP frame, its Content-Length computed at comptime — the spec
+/// cannot hand-count bytes without rotting on every edit.
+fn framed(comptime body: []const u8) []const u8 {
+    return std.fmt.comptimePrint("Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
+}
+
+test "the editor holds its language server and shows what it said" {
+    // The scripted child answers the handshake and publishes one
+    // diagnostic for the opened buffer's first line; the idle tick
+    // pumps it; the status bar and gutter show it.  The spawn and
+    // every frame the editor fed the child land in the transcript, so
+    // both engines pin the whole conversation.
+    const child_says = comptime framed(
+        \\{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}
+    ) ++ framed(
+        \\{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file://probe.luc","diagnostics":[{"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":17}},"message":"unknown name missing"}]}}
+    );
+    const keys = [_]agree.World.Key{
+        .{ .name = "idle" },
+        .{ .name = "idle" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("probe.luc", "func main():\n    print(missing)\n");
+    world.arguments = &[_][]const u8{"probe.luc"};
+    world.keys = &keys;
+    world.child_output = child_says;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    const transcript = session.printed();
+    try testing.expect(std.mem.indexOf(u8, transcript, "[spawn]luce-lsp") != null);
+    try testing.expect(std.mem.indexOf(u8, transcript, "textDocument/didOpen") != null);
+    // The diagnostic's sentence reached the frame the person saw.
+    const shown = try screenText(transcript);
+    defer testing.allocator.free(shown);
+    try testing.expect(std.mem.indexOf(u8, shown, "unknown name missing") != null);
 }
 
 /// What the screen said, frame by frame.

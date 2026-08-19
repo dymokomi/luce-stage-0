@@ -43,6 +43,12 @@ class StatusBar: View:
         var left = f" {doc.path}{flag}  {line + 1}:{column + 1}"
         if len(doc.message) > 0:
             left += f"  — {doc.message}"
+        else:
+            # With nothing of the editor's own to say, the line under
+            # the cursor speaks: the language server's sentence for it.
+            let problem = self.model.diagnostic_here()
+            if problem != none:
+                left += f"  — {problem.message}"
         return left + focus_label(self.model.focus)
 
     func status_cursor(area: Rect) -> Cursor?:

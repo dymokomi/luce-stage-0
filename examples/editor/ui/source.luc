@@ -34,6 +34,9 @@ class Editor: View:
         let cursor_line = doc.line_of(doc.cursor)
         if index == cursor_line and self.model.focus == Focus.editor:
             gutter_style = palette.gutter_current
+        for row in self.model.diagnostics():
+            if row.line == index:
+                gutter_style = palette.gutter_diagnostic
         spans.append(Span(
             text = strings.pad_left(str(index + 1), gutter_width - 1) + " ",
             style = gutter_style,

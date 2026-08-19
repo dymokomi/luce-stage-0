@@ -1,0 +1,227 @@
+# The editor's side of the Language Server Protocol.
+#
+# The server is any LSP-speaking command — `luce-lsp` for Luce — held
+# as an `os.Process`.  The client sends didOpen/didChange as the
+# buffer moves and pumps the child's output on the loop's idle tick,
+# so a keystroke never waits on a diagnostic.  Framing and message
+# reading are pure functions over accumulated bytes, which is what
+# lets a test drive them without a child.
+
+import std.json
+import std.os
+import std.strings
+
+# One diagnostic the way the panes want it: 0-based positions against
+# the buffer the server was shown, and the sentence to show.
+struct Diagnostic:
+    line: i64 = 0
+    column: i64 = 0
+    end_line: i64 = 0
+    end_column: i64 = 0
+    message: str = ""
+
+# --- pure: frames out of accumulated bytes ---------------------------
+
+# Extract every complete `Content-Length` frame from `pending`,
+# leaving the incomplete tail in place.  Answers the message bodies.
+func extracted(pending: list[u8]) -> list[str]:
+    var bodies = list[str]()
+    while true:
+        let found = frame_end(pending)
+        if found < 0:
+            return bodies
+        let start = header_end(pending) + 4
+        var body = list[u8]()
+        for at in range(start, found):
+            body.append(pending[at])
+        let text = strings.from_bytes(body)
+        if text != none:
+            bodies.append(text)
+        var kept = list[u8]()
+        for at in range(found, len(pending)):
+            kept.append(pending[at])
+        pending.clear()
+        for byte in kept:
+            pending.append(byte)
+
+# Where the current frame's header separator sits, or -1.
+private func header_end(pending: list[u8]) -> i64:
+    var at: i64 = 0
+    while at + 3 < len(pending):
+        if pending[at] == 13 and pending[at + 1] == 10 and pending[at + 2] == 13 and pending[at + 3] == 10:
+            return at
+        at += 1
+    return -1
+
+# One past the current frame's body, or -1 when it is incomplete.
+private func frame_end(pending: list[u8]) -> i64:
+    let split = header_end(pending)
+    if split < 0:
+        return -1
+    var header = list[u8]()
+    for at in range(0, split):
+        header.append(pending[at])
+    let text = strings.from_bytes(header) else ""
+    var length: i64 = -1
+    for line in strings.split(text, "\r\n"):
+        let colon = strings.find(line, ":")
+        if colon == none:
+            continue
+        if strings.lower(strings.trim(line[0:colon])) == "content-length":
+            length = parse_i64(strings.trim(line[colon + 1:len(line)])) else -1
+    if length < 0:
+        return -1
+    if split + 4 + length > len(pending):
+        return -1
+    return split + 4 + length
+
+# --- pure: what a message means --------------------------------------
+
+# The diagnostics of a publishDiagnostics notification for `uri`, or
+# none when the body is something else (a response, another uri).
+func published_for(body: str, uri: str) -> list[Diagnostic]?:
+    let message = json.parse(body) catch reason:
+        return none
+    let method = message.member("method")
+    if method == none:
+        return none
+    if (method.as_text() else "") != "textDocument/publishDiagnostics":
+        return none
+    let params = message.member("params")
+    if params == none:
+        return none
+    let told = params.member("uri")
+    if told == none or (told.as_text() else "") != uri:
+        return none
+    var rows = list[Diagnostic]()
+    let listed = params.member("diagnostics")
+    if listed == none:
+        return rows
+    for index in range(0, listed.count()):
+        rows.append(one_diagnostic(listed.element(index)))
+    return rows
+
+private func one_diagnostic(row: json.Json) -> Diagnostic:
+    var made = Diagnostic()
+    let message = row.member("message")
+    if message != none:
+        made.message = message.as_text() else ""
+    let range_held = row.member("range")
+    if range_held == none:
+        return made
+    let start = range_held.member("start")
+    if start != none:
+        made.line = number(start, "line")
+        made.column = number(start, "character")
+    let finish = range_held.member("end")
+    if finish != none:
+        made.end_line = number(finish, "line")
+        made.end_column = number(finish, "character")
+    return made
+
+private func number(row: json.Json, name: str) -> i64:
+    let held = row.member(name)
+    if held == none:
+        return 0
+    return held.as_i64() else 0
+
+# --- the held server -------------------------------------------------
+
+class Client:
+    private:
+        server: os.Process?
+        pending: list[u8]
+        next_id: i64
+        broken: bool
+
+    command: str
+    uri: str
+    diagnostics: list[Diagnostic]
+    fresh: bool
+
+    # `command` is data — any LSP server plugs in; `luce-lsp` is the
+    # one the toolchain installs for Luce.
+    init(command: str):
+        self.command = command
+        self.server = none
+        self.pending = list[u8]()
+        self.next_id = 1
+        self.broken = false
+        self.uri = ""
+        self.diagnostics = list[Diagnostic]()
+        self.fresh = false
+
+    # Spawn and shake hands on first use.  A world without the server
+    # marks the client broken and the editor simply works without it.
+    private func ensure_started() -> bool:
+        if self.broken:
+            return false
+        if self.server != none:
+            return true
+        let started = os.Process(self.command) catch reason:
+            self.broken = true
+            return false
+        self.server = started
+        self.post_request("initialize", "{}")
+        self.post("initialized", "{}")
+        return true
+
+    func opened_document(path: str, text: str):
+        if not self.ensure_started():
+            return
+        self.uri = "file://" + path
+        self.post("textDocument/didOpen", "{\"textDocument\":{\"uri\":" + json.quote(self.uri) + ",\"languageId\":\"luce\",\"version\":1,\"text\":" + json.quote(text) + "}}")
+
+    func changed(text: str):
+        if self.uri == "" or not self.ensure_started():
+            return
+        self.post("textDocument/didChange", "{\"textDocument\":{\"uri\":" + json.quote(self.uri) + "},\"contentChanges\":[{\"text\":" + json.quote(text) + "}]}")
+
+    # Drain whatever the server has said so far; true when the
+    # diagnostics changed.  Never blocks: the ready poll gates every
+    # read, which is what makes this safe on the editor's tick.
+    func pump() -> bool:
+        let held = self.server
+        if held == none:
+            return false
+        var moved = false
+        while (held.ready() catch false):
+            var buffer = array[u8](4096)
+            let got = held.read(buffer) catch reason:
+                self.broken = true
+                return moved
+            if got == 0:
+                self.broken = true
+                return moved
+            var at: i64 = 0
+            while at < got:
+                self.pending.append(buffer[at])
+                at += 1
+            moved = true
+        if not moved:
+            return false
+        var changed_rows = false
+        for body in extracted(self.pending):
+            let rows = published_for(body, self.uri)
+            if rows != none:
+                self.diagnostics = rows
+                self.fresh = true
+                changed_rows = true
+        return changed_rows
+
+    # --- wire helpers -------------------------------------------------
+
+    private func post(method: str, params: str):
+        self.send("{\"jsonrpc\":\"2.0\",\"method\":" + json.quote(method) + ",\"params\":" + params + "}")
+
+    private func post_request(method: str, params: str):
+        self.send("{\"jsonrpc\":\"2.0\",\"id\":" + str(self.next_id) + ",\"method\":" + json.quote(method) + ",\"params\":" + params + "}")
+        self.next_id += 1
+
+    private func send(body: str):
+        let held = self.server
+        if held == none:
+            return
+        let payload = strings.to_bytes(body)
+        held.feed("Content-Length: " + str(len(payload)) + "\r\n\r\n" + body) catch reason:
+            self.broken = true

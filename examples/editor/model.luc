@@ -19,6 +19,7 @@ import std.term
 from document import Document, count_lines, previous_boundary
 import listing
 import session
+from lsp_client import Client, Diagnostic
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
@@ -182,6 +183,8 @@ class Model:
     dragging: Drag = Drag.idle
     files_width: i64 = 0
     output_height: i64 = 0
+    lsp: Client?
+    private last_sent: str = ""
     private watchers: list[(func())?]
 
     init(documents: list[Document]):
@@ -190,6 +193,7 @@ class Model:
         self.search_matches = list[i64]()
         self.files = Selection()
         self.watchers = list[(func())?]()
+        self.lsp = none
 
     # The active file.  A Document is a reference, so panes and model
     # read and mutate the same one; switching files is switching which
@@ -505,6 +509,49 @@ class Model:
             return
         self.begin_edit(false)
         self.document().insert(self.clipboard)
+
+    # --- the language server -----------------------------------------
+
+    # Hold `command` as this editor's language server.  The command is
+    # data — any LSP server; `luce-lsp` is the toolchain's — and a
+    # world without it leaves the editor exactly as it was.
+    func attach_lsp(command: str):
+        let client = Client(command)
+        self.lsp = client
+        let doc = self.document()
+        client.opened_document(doc.path, doc.content)
+        self.last_sent = doc.content
+
+    # The idle tick's work: drain the server, and repaint when the
+    # diagnostics moved.  Also where an edited buffer is sent — once
+    # per quiet moment rather than once per keystroke.
+    func pump_lsp():
+        let client = self.lsp
+        if client == none:
+            return
+        let doc = self.document()
+        if doc.content != self.last_sent:
+            client.changed(doc.content)
+            self.last_sent = doc.content
+        if client.pump():
+            self.notify()
+
+    # The active document's diagnostics — empty when no server holds.
+    func diagnostics() -> list[Diagnostic]:
+        let client = self.lsp
+        if client == none:
+            return list[Diagnostic]()
+        return client.diagnostics
+
+    # The diagnostic under the cursor's line, if any — what the status
+    # bar says when the cursor stands on a problem.
+    func diagnostic_here() -> Diagnostic?:
+        let doc = self.document()
+        let line = doc.line_of(doc.cursor)
+        for row in self.diagnostics():
+            if row.line == line:
+                return row
+        return none
 
     # --- the keystroke router ----------------------------------------
 

@@ -49,6 +49,19 @@ Typing over a selection replaces it. A copy lands on the system
 clipboard through the terminal (OSC 52), and a paste from the system
 clipboard arrives as one edit and one undo step (bracketed paste).
 
+## The language server in the margin
+
+Opening a `.luc` file starts the toolchain's language server,
+`luce-lsp`, held as a child for the life of the session. As the buffer
+changes, the editor sends it the unsaved text and the compiler's own
+diagnostics come back: a diagnosed line's number turns red in the
+gutter, and when the cursor stands on one, the status line says the
+compiler's sentence for it. The pump runs on the loop's idle tick — a
+keystroke never waits on a diagnostic — and a machine without
+`luce-lsp` on the path simply leaves the margin quiet. The server
+command is data in the editor's source; any LSP server plugs into the
+same client.
+
 ## Build and run inside the editor
 
 Ctrl-B writes the file, compiles a standalone executable with a `.run` suffix,
