@@ -91,8 +91,7 @@ class Frames:
         for at in range(0, header_end):
             header.append(self.pending[at])
         let text = strings.from_bytes(header) else ""
-        let crlf = str(char(13)) + "\n"
-        for line in strings.split(text, crlf):
+        for line in strings.split(text, "\r\n"):
             let split = strings.find(line, ":")
             if split == none:
                 continue
@@ -109,8 +108,7 @@ class Frames:
 # measured through its byte form, not its scalar count.
 func framed(body: str) -> list[u8]:
     let payload = strings.to_bytes(body)
-    let crlf = str(char(13)) + "\n"
-    var out = strings.to_bytes("Content-Length: " + str(len(payload)) + crlf + crlf)
+    var out = strings.to_bytes("Content-Length: " + str(len(payload)) + "\r\n\r\n")
     for byte in payload:
         out.append(byte)
     return out

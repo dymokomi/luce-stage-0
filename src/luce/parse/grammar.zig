@@ -2620,27 +2620,27 @@ pub const Parser = struct {
         }
         if ((try self.expect(.assign, "'=' with an initial value")) == null) return null;
         const value = (try self.expression()) orelse return null;
-        // `let a = risky() catch:` — the block form of catch, in the one
-        // place it cannot go, with or without a binding of its own.  A
-        // handler block supplies no value, and a binding is nothing but
-        // a value; the expression form is what a binding takes, and the
-        // block form wants a name that already exists to assign to
-        // (docs/FAILURE.md).  Saying "expected end of line, found
-        // 'catch'" leaves the reader to guess which of those two facts
-        // they have met.
+        // `let a = risky() catch:` — the block form of catch on a
+        // binding.  The handler has no value to give the name, so it
+        // is legal on one condition stage 4 owns: the block always
+        // leaves (return, error, trap), and the name is only readable
+        // on the path where the call succeeded (docs/FAILURE.md).
         if (self.peekKind() == .keyword_catch and expr.opensHandler(self)) {
-            try self.report(
-                "luce.parse.expected",
-                self.peek().span,
-                "a catch block supplies no value, so it cannot initialize {s}: write '{s} {s} = … catch VALUE', or declare {s} first and guard the assignment",
-                .{
-                    self.text(name),
-                    if (mutable) "var" else "let",
-                    self.text(name),
-                    self.text(name),
-                },
-            );
-            return null;
+            const attempt: ast.Statement = if (mutable) .{ .variable = .{
+                .name = self.text(name),
+                .name_span = name.span,
+                .annotation = annotation,
+                .value = value,
+                .weak = weak,
+                .span = .{ .start = start.span.start, .end = value.span().end },
+            } } else .{ .let = .{
+                .name = self.text(name),
+                .name_span = name.span,
+                .annotation = annotation,
+                .value = value,
+                .span = .{ .start = start.span.start, .end = value.span().end },
+            } };
+            return self.guarded(attempt);
         }
         // A block closure consumed its own newline, indentation, and closing
         // dedent. The next token is already the next statement at this level.

@@ -148,11 +148,14 @@ rejected.
 |---|---|
 | `\n` | line feed |
 | `\t` | tab |
+| `\r` | carriage return |
 | `\\` | backslash |
 | `\"` | double quote |
 
-Other string escapes, including `\r`, `\0`, hexadecimal, and Unicode
-escapes, are invalid.
+Other string escapes, including `\0`, hexadecimal, and Unicode
+escapes, are invalid. `\r` exists for protocol text — network and
+LSP framing end lines with `\r\n` — not for source layout; source
+line endings are always a bare line feed.
 
 A character literal is one Unicode scalar in single quotes: `'A'`, `'λ'`,
 `'\n'`, or `'\u{1F44B}'`. Empty, multi-scalar, surrogate, and malformed

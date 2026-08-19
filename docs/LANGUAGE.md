@@ -121,7 +121,7 @@ read the source the same way. `is` compares two references of the same nominal
 class; `==` remains value or reference-identity equality for types that support
 it and is not synthesized for classes or function values.
 
-Text literals use double quotes and the escapes `\n`, `\t`, `\\`, and `\"`.
+Text literals use double quotes and the escapes `\n`, `\t`, `\r`, `\\`, and `\"`.
 An f-string begins `f"..."` and evaluates expressions inside braces through
 `str(...)`. There are no character literals; `chr` and `ord` cross the
 numeric/scalar boundary.

@@ -18,7 +18,7 @@ class Scripted: Compiler:
 
 private func body_of(frame: list[u8]) -> str:
     let text = strings.from_bytes(frame) else ""
-    let split = strings.find(text, str(char(13)) + "\n" + str(char(13)) + "\n") else -1
+    let split = strings.find(text, "\r\n\r\n") else -1
     return text[split + 2:len(text)]
 
 func test_initialize_answers_capabilities():

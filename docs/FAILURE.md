@@ -146,10 +146,10 @@ func main() -> !:
     print(cfg)
 ```
 
-**`catch:` block** guards a single statement — a call, or a plain
-assignment whose value is a call — and runs an indented handler on
-failure. It supplies no value; it is for the case where the response is
-to do something rather than to name a fallback:
+**`catch:` block** guards a single statement — a call, a plain
+assignment whose value is a call, or a binding — and runs an indented
+handler on failure. It supplies no value; it is for the case where the
+response is to do something rather than to name a fallback:
 
 ```luce
 import std.files
@@ -170,6 +170,23 @@ func read(path: str) -> str!:
 func main() -> !:
     read("missing.txt") catch reason:
         print("failed: " + reason)
+```
+
+On a binding — `let a = risky() catch:` — the handler must always
+leave (`return`, `error`, a trap): it has no value to give the name,
+so falling through would reach a read nothing initialized, and the
+checker refuses it (`luce.sema.catch`). The name itself is not
+visible inside the handler, for the same reason. This is the shape an
+early-return guard takes:
+
+```luce
+func risky() -> i64!:
+    return 7
+
+func read() -> i64:
+    let a = risky() catch:
+        return -1
+    return a + 1
 ```
 
 The bound name is a `str` — the message, and only the message. An

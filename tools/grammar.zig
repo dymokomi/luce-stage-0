@@ -707,7 +707,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const escape_rules = [_]Rule{
         .{ .match = .{
             .scope = "constant.character.escape.luce",
-            .pattern = "\\\\[nt\\\\\"]",
+            .pattern = "\\\\[ntr\\\\\"]",
         } },
         .{ .match = .{
             .scope = "invalid.illegal.escape.luce",
@@ -717,7 +717,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const character_escape_rules = [_]Rule{
         .{ .match = .{
             .scope = "constant.character.escape.luce",
-            .pattern = "\\\\(?:[nt\\\\'\"]|u\\{[0-9A-Fa-f]+\\})",
+            .pattern = "\\\\(?:[ntr\\\\'\"]|u\\{[0-9A-Fa-f]+\\})",
         } },
         .{ .match = .{
             .scope = "invalid.illegal.escape.luce",

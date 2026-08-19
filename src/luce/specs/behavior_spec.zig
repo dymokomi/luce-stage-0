@@ -4722,9 +4722,57 @@ test "trap: char conversion of a codepoint beyond Unicode's range" {
 // they live here and run on both engines like everything else.
 
 /// The four bytes of U+1F642, written where a Luce string literal has
-/// to carry them: the lexer's escape set is `\n \t \\ \"` and nothing
-/// else, so a codepoint above ASCII arrives as itself.
+/// to carry them: the lexer's escape set is `\n \t \r \\ \"` and
+/// nothing else, so a codepoint above ASCII arrives as itself.
 const smiley = "\xF0\x9F\x99\x82";
+
+test "strings: the carriage-return escape decodes to one scalar" {
+    // Protocol text ends lines with \r\n; the escape exists so that
+    // text can be written without spelling char(13) around every
+    // frame.  One scalar, distinct from \n, identical in a char
+    // literal and a string.
+    try agreeOk(
+        \\func main():
+        \\    let crlf = "\r\n"
+        \\    assert(len(crlf) == 2)
+        \\    assert(crlf[0] == '\r')
+        \\    assert(crlf[0] == char(13))
+        \\    assert(crlf[1] == '\n')
+        \\    assert(crlf[0] != crlf[1])
+        \\    assert("a\rb" == "a" + str(char(13)) + "b")
+        \\
+    );
+}
+
+test "catch: a diverging handler initializes a binding on both engines" {
+    // `let a = risky() catch:` with a handler that always leaves —
+    // the success path reads the value, the failure path never
+    // reaches the read, and the reason binding still arrives.
+    try agreeOk(
+        \\func risky(fail: bool) -> i64!:
+        \\    if fail:
+        \\        error("refused")
+        \\    return 7
+        \\
+        \\func read(fail: bool) -> i64:
+        \\    let a = risky(fail) catch:
+        \\        return -1
+        \\    return a + 1
+        \\
+        \\func told(fail: bool) -> str:
+        \\    var b = risky(fail) catch reason:
+        \\        return reason
+        \\    b += 1
+        \\    return str(b)
+        \\
+        \\func main():
+        \\    assert(read(false) == 8)
+        \\    assert(read(true) == -1)
+        \\    assert(told(false) == "8")
+        \\    assert(told(true) == "refused")
+        \\
+    );
+}
 
 test "structs: a smooth pointer transform computes exactly" {
     try agreeOk(

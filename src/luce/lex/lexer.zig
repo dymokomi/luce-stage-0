@@ -1037,12 +1037,12 @@ const Lexer = struct {
                 if (self.offset >= self.source.len) break;
                 if (self.source[self.offset] == '\n') break;
                 switch (self.source[self.offset]) {
-                    'n', 't', '\\' => {},
+                    'n', 't', 'r', '\\' => {},
                     '"' => escaped_quote = true,
                     else => try self.report(
                         "luce.lex.escape",
                         .{ .start = self.offset - 1, .end = self.offset + 1 },
-                        "unknown escape (use \\n, \\t, \\\\, or \\\")",
+                        "unknown escape (use \\n, \\t, \\r, \\\\, or \\\")",
                         .{},
                     ),
                 }
@@ -1785,11 +1785,11 @@ test "a point with no fraction is a number, not an unfinished member access" {
 
 // --- strings ---------------------------------------------------------------
 
-test "the four escapes are accepted and every other one is reported" {
-    try lexKinds(testing.allocator, "a = \"\\n\\t\\\\\\\"\"\n", &.{
+test "the five escapes are accepted and every other one is reported" {
+    try lexKinds(testing.allocator, "a = \"\\n\\t\\r\\\\\\\"\"\n", &.{
         .identifier, .assign, .string_literal, .newline, .end_of_file,
     });
-    for ([_][]const u8{ "\\r", "\\0", "\\x41", "\\u{41}", "\\q" }) |escape| {
+    for ([_][]const u8{ "\\0", "\\x41", "\\u{41}", "\\q" }) |escape| {
         var text: [32]u8 = undefined;
         const source = try std.fmt.bufPrint(&text, "a = \"{s}\"\n", .{escape});
         var diagnostics = Diagnostics.init(testing.allocator);

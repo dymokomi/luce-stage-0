@@ -110,6 +110,30 @@ the write did not land
 (new file)
 ```
 
+A binding may take the block form too, when the handler always
+leaves — `return` or `error` — because a handler that fell through
+would reach a name nothing initialized. This is the early-return
+guard:
+
+```luce run
+import std.files
+import std.strings
+
+func first_line(path: str) -> str:
+    let text = files.read(path) catch:
+        return "(unreadable)"
+    for line in strings.split(text, "\n"):
+        return line
+    return text
+
+func main():
+    print(first_line("absent.txt"))
+```
+
+```output
+(unreadable)
+```
+
 The block form can bind the error message. The binding is an immutable
 `str` scoped to the handler:
 

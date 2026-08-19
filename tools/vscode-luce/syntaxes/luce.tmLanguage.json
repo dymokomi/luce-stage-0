@@ -460,7 +460,7 @@
             },
             {
               "name": "constant.character.escape.luce",
-              "match": "\\\\[nt\\\\\"]"
+              "match": "\\\\[ntr\\\\\"]"
             },
             {
               "name": "invalid.illegal.escape.luce",
@@ -481,7 +481,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.luce",
-              "match": "\\\\[nt\\\\\"]"
+              "match": "\\\\[ntr\\\\\"]"
             },
             {
               "name": "invalid.illegal.escape.luce",
@@ -502,7 +502,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.luce",
-              "match": "\\\\(?:[nt\\\\'\"]|u\\{[0-9A-Fa-f]+\\})"
+              "match": "\\\\(?:[ntr\\\\'\"]|u\\{[0-9A-Fa-f]+\\})"
             },
             {
               "name": "invalid.illegal.escape.luce",

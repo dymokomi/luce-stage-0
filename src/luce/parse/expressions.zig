@@ -1158,6 +1158,7 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
             try literal.append(self.arena, switch (inner[index]) {
                 'n' => '\n',
                 't' => '\t',
+                'r' => '\r',
                 '\\' => '\\',
                 '"' => '"',
                 else => inner[index],
@@ -1436,6 +1437,7 @@ fn decodeCharEscape(self: *Parser, item: Token, inner: []const u8) Error!u32 {
     if (inner.len == 2) return switch (inner[1]) {
         'n' => '\n',
         't' => '\t',
+        'r' => '\r',
         '\\' => '\\',
         '\'' => '\'',
         '"' => '"',
@@ -1488,6 +1490,7 @@ pub fn decodeString(self: *Parser, item: Token) Error![]const u8 {
             try decoded.append(self.arena, switch (inner[index]) {
                 'n' => '\n',
                 't' => '\t',
+                'r' => '\r',
                 '\\' => '\\',
                 '"' => '"',
                 else => inner[index],

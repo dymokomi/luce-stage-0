@@ -1961,6 +1961,31 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     // nulls a pointer and the arena holding them goes with the run
     // — writing it this way means nothing here depends on that.
     // The channel is read, copied, and only then emptied.
+    // A binding attempt — `let a = risky() catch:` — makes two
+    // demands the assignment forms do not.  The name has no value
+    // where the handler runs, so it is hidden from the handler's
+    // scope; and the handler must always leave (return, error, trap),
+    // because falling through would reach a read of a name nothing
+    // initialized.  The parser sends the shape here; this is where it
+    // is decided (docs/FAILURE.md).
+    const bound_name: ?[]const u8 = switch (guarded.attempt.*) {
+        .let => |binding| binding.name,
+        .variable => |binding| binding.name,
+        else => null,
+    };
+    var hidden: ?context.LocalInfo = null;
+    if (bound_name) |name| {
+        if (!helpers.alwaysExits(guarded.handler)) {
+            try self.fail(
+                "luce.sema.catch",
+                guarded.handler.span,
+                "this catch block can fall through, and {s} would have no value there: end every path with return or error, or write '… catch VALUE'",
+                .{name},
+            );
+        }
+        const top = &self.scopes.items[self.scopes.items.len - 1];
+        if (top.names.fetchRemove(name)) |removed| hidden = removed.value;
+    }
     var error_local: ?LocalId = null;
     if (guarded.binding) |binding| {
         try self.pushScope();
@@ -1971,6 +1996,12 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
         self.popScope();
     } else {
         try lowerBlock(self, guarded.handler);
+    }
+    if (bound_name) |name| {
+        if (hidden) |info| {
+            const top = &self.scopes.items[self.scopes.items.len - 1];
+            try top.names.put(self.temporary(), name, info);
+        }
     }
     const handler_recorded = self.recorded_block.?;
 

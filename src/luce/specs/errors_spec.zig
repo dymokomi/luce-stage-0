@@ -5013,13 +5013,13 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     );
 }
 
-test "luce.parse.expected: a catch block cannot initialize a binding" {
-    // The block form guards a statement or an assignment; it supplies
-    // no value, and a binding is nothing but a value (docs/FAILURE.md).
-    // The old answer was "expected end of line after the binding,
-    // found the keyword 'catch'", which leaves the reader to work out
-    // which of the two catch forms they have met.
-    try expectSayingAt(
+test "luce.sema.catch: a catch block initializing a binding must always leave" {
+    // The block form on a binding is legal exactly when the handler
+    // cannot fall through: a falling-through handler would reach a
+    // read of a name nothing initialized (docs/FAILURE.md).
+    // `assert(false)` is a call, not a terminator the checker can
+    // prove, so this handler counts as falling through.
+    try expectRejected(
         \\func risky() -> i64!:
         \\    return 1
         \\
@@ -5028,29 +5028,33 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
         \\        assert(false)
         \\    assert(a == 1)
         \\
-    ,
-        "luce.parse.expected",
-        "a catch block supplies no value, so it cannot initialize a: " ++
-            "write 'let a = … catch VALUE', or declare a first and guard the assignment",
-        5,
-        21,
-    );
-    try expectSayingAt(
+    , "luce.sema.catch");
+    try expectSaying(
         \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
         \\    var total = risky() catch:
-        \\        assert(false)
+        \\        print("close")
         \\    assert(total == 1)
         \\
     ,
-        "luce.parse.expected",
-        "a catch block supplies no value, so it cannot initialize total: " ++
-            "write 'var total = … catch VALUE', or declare total first and guard the assignment",
-        5,
-        25,
+        "luce.sema.catch",
+        "this catch block can fall through, and total would have no value there",
     );
+    // And the name is not readable where the handler runs: it has no
+    // value on that path.
+    try expectRejected(
+        \\func risky() -> i64!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch:
+        \\        let doubled = a + a
+        \\        return
+        \\    assert(a == 1)
+        \\
+    , "luce.sema.name");
     // Both fixes the message names actually compile.
     var fallback = try compile_mod.compile(
         testing.allocator,
@@ -5087,26 +5091,21 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     try testing.expect(guarded == .success);
 }
 
-test "luce.parse.expected: a catch block with a binding cannot initialize one either" {
-    // The same refusal, and it has to reach the binding form too: the
-    // Pratt loop declines `catch NAME:` for the statement, so without
-    // this the reader would get "expected end of line after the
-    // binding" back again for exactly the mistake the message above
-    // was written for.
-    try expectHostSayingAt(
+test "luce.sema.catch: the binding form reaches catch with a reason too" {
+    // `catch reason:` on a binding follows the same rule: the handler
+    // reads the reason, and it must still leave.
+    try expectHostSaying(
         \\func risky() -> i64!:
         \\    return 1
         \\
         \\func main():
         \\    let a = risky() catch reason:
         \\        print(reason)
+        \\    assert(a == 1)
         \\
     ,
-        "luce.parse.expected",
-        "a catch block supplies no value, so it cannot initialize a: " ++
-            "write 'let a = … catch VALUE', or declare a first and guard the assignment",
-        5,
-        21,
+        "luce.sema.catch",
+        "this catch block can fall through, and a would have no value there",
     );
 }
 
