@@ -319,4 +319,8 @@ for architecture in aarch64 x86_64; do
         /source/www/luce/install-smoke.sh /release /smoke
 done
 
-echo "==> release complete: macOS arm64, Linux arm64, and Linux x86-64"
+if [ -n "$skip_linux" ]; then
+    echo "==> release complete: macOS arm64 (Linux archives carried forward unchanged)"
+else
+    echo "==> release complete: macOS arm64, Linux arm64, and Linux x86-64"
+fi
