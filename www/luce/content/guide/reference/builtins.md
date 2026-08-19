@@ -141,6 +141,24 @@ to obtain its text.
 Releasing the last reference to an unwaited task joins it and discards its
 answer. See [Concurrency](/guide/concurrency/).
 
+## channel
+
+| Method | Meaning |
+|---|---|
+| `send(v)` | fallible; blocks while full; a closed channel is the `channel_closed` error |
+| `try_send(v) -> bool` | fallible; false instead of waiting on a full queue |
+| `receive() -> T` | fallible; blocks while empty; drains a closed channel first, then errors |
+| `try_receive() -> T?` | fallible; `none` when nothing is parked right now |
+| `receive_timeout(ms) -> T?` | fallible; `none` when the wait ran out |
+| `close()` | idempotent; any holder may close |
+| `len() -> i64` | values parked right now — a snapshot |
+| `cap() -> i64` | the bound construction chose |
+
+`send` parks a deep copy and `receive` rebuilds it in the receiver, so
+mutating a value after sending it is always safe. See
+[Concurrency](/guide/concurrency/) and the
+[types reference](/guide/reference/types/#channel).
+
 ## str
 
 The language keeps only the operations needed to represent and inspect text:

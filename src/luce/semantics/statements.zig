@@ -1638,6 +1638,10 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
             try self.fail("luce.sema.loop", loop.span, "a class is not iterable", .{});
             return;
         },
+        .channel => {
+            try self.fail("luce.sema.loop", loop.span, "a channel is not iterable; loop on receive() until it answers the closed error", .{});
+            return;
+        },
         .list => |element| element,
         .array => |shape| blk: {
             if (shape.rank != 1) {

@@ -495,6 +495,14 @@ pub const HeapType = union(enum) {
     /// tasks that differ in it are two different obligations, and a
     /// `list[task[f64]]` may not hold both.
     task: struct { result: Type, fallible: bool },
+    /// A typed conduit between workers (docs/THREADS.md): the one
+    /// reference that crosses runtimes.  `send` parks a deep copy of
+    /// the value; `receive` copies it out — no object identity ever
+    /// crosses, which is the whole of the language's data-race story.
+    /// The element type is checked sendable where the channel is
+    /// constructed, so a `channel[files.File]` is refused before a
+    /// send could ever be asked to copy a resource.
+    channel: Type,
     /// One instance of a nominal `class` layout. Unlike a value struct,
     /// copying this type copies one object handle and therefore shares
     /// identity. Appended so every existing serialized heap-shape tag keeps
@@ -513,6 +521,7 @@ pub const HeapType = union(enum) {
             .handle => other == .handle,
             .task => |work| other == .task and
                 work.result.eql(other.task.result) and work.fallible == other.task.fallible,
+            .channel => |element| other == .channel and element.eql(other.channel),
         };
     }
 };
@@ -747,6 +756,11 @@ pub const Builtin = enum {
     /// decides whether `wait` is a site that says `try`.  There is no
     /// `new task`: `spawn` is the only way to make one.
     task,
+    /// A typed conduit between workers (docs/THREADS.md): written
+    /// `channel[T]`, constructed by call — `channel[i64]()`, or
+    /// `channel[i64](64)` for an explicit capacity — and the one
+    /// reference a worker boundary lets through.
+    channel,
 };
 
 /// The builtin a name spells, or null when it names nothing builtin —
@@ -786,6 +800,7 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "array", .is = .array },
     .{ .name = "builder", .is = .builder },
     .{ .name = "task", .is = .task },
+    .{ .name = "channel", .is = .channel },
 };
 
 /// The standard library's private spellings — the type-name half of the
@@ -819,7 +834,7 @@ pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => builtin,
-        .boolean, .list, .map, .array, .builder, .handle, .task => null,
+        .boolean, .list, .map, .array, .builder, .handle, .task, .channel => null,
     };
 }
 
@@ -907,6 +922,11 @@ fn writeTypeName(
             },
             .builder => try written.appendSlice(allocator, "builder"),
             .handle => try written.appendSlice(allocator, "handle"),
+            .channel => |element| {
+                try written.appendSlice(allocator, "channel[");
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, element);
+                try written.appendSlice(allocator, "]");
+            },
             .task => |work| {
                 try written.appendSlice(allocator, "task");
                 if (work.result != .none) {

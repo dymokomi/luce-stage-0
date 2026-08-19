@@ -143,7 +143,7 @@ pub fn accept(runtime: *Runtime, held: Value) Error!?Value {
             resource.handle
         else
             return runtime.fail(.not_owned),
-        .instance, .list, .map, .array, .builder, .task => return runtime.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .task, .channel => return runtime.fail(.not_owned),
     };
     // The listener's label is borrowed for the error message only; the
     // accepted socket gets a label of its own so a later read failure
@@ -170,7 +170,7 @@ pub fn portOf(runtime: *Runtime, held: Value) Error!?i64 {
             resource.handle
         else
             return runtime.fail(.not_owned),
-        .instance, .list, .map, .array, .builder, .task => return runtime.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .task, .channel => return runtime.fail(.not_owned),
     };
     var port: i64 = 0;
     if (!try files.hostAnswer(runtime, service(runtime.sockets.context, listener, &port))) return null;

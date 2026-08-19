@@ -647,7 +647,7 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             const head = self.text(self.peek());
             if (self.peekAhead(1) == .left_bracket and
                 (std.mem.eql(u8, head, "list") or std.mem.eql(u8, head, "map") or
-                    std.mem.eql(u8, head, "array")))
+                    std.mem.eql(u8, head, "array") or std.mem.eql(u8, head, "channel")))
             {
                 return containerConstruction(self);
             }

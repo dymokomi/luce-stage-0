@@ -13,7 +13,7 @@ i8 i16 i32 i64
 f16 f32 f64
 char str bytes
 list map array builder
-task
+task channel
 ```
 
 User declarations add aliases, structs, classes, enums, unions, and
@@ -28,6 +28,7 @@ The kind of a type decides assignment, argument, and return behavior.
 | Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, function values | copy the value; a captured function retains its ARC environment |
 | Reference | classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder` | share one ARC object |
 | Resource reference | `task[...]` | share one ARC object; join at the last release |
+| Resource reference | `channel[T]` | share one ARC wrapper; the last release anywhere closes the row |
 
 A value may contain references. Copying the value copies its value fields and
 retains its reference fields. There are no source retain, release, borrow,
@@ -426,6 +427,20 @@ An ARC resource produced only by `spawn`. The result shape is written in
 brackets: `task`, `task[!]`, `task[i64]`, or `task[i64!]`. Assignment shares
 one worker handle. `wait()` observes the result once; the final release joins
 an unfinished worker. A task cannot cross another worker boundary or be weak.
+
+## `channel[T]` {#channel}
+
+A bounded conduit between workers, and the one reference a worker
+boundary admits ([Threads](/guide/concurrency/)). Constructed by call —
+`channel[i64]()` for the default capacity of sixteen, `channel[i64](64)`
+for an explicit one, never less than one. `send` parks a deep copy and
+`receive` rebuilds it in the receiver, so no identity crosses; the
+element type must be sendable, checked where the channel is written
+(`luce.sema.channel`). The methods are `send`, `try_send`, `receive`,
+`try_receive`, `receive_timeout`, `close`, `len`, and `cap`; the
+blocking forms answer the `channel_closed` error rather than trapping.
+A channel cannot be weak, and cannot ride inside another sent value —
+it crosses whole, as a `spawn` argument.
 
 ## Return shapes {#return-shapes}
 

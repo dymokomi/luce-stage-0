@@ -77,6 +77,7 @@ pub const graphics = @import("runtime/graphics.zig");
 /// argument and result transfers, the join, and the effect lock
 /// (docs/THREADS.md).  Reached the same two ways `files` is.
 pub const workers = @import("runtime/workers.zig");
+pub const channels = @import("runtime/channels.zig");
 
 pub const Tag = @import("runtime/value.zig").Tag;
 pub const Value = @import("runtime/value.zig").Value;

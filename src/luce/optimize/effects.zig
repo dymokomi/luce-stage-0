@@ -180,6 +180,19 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 /// table to be consulted incompletely.
 fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
+        // Channel operations move values between runtimes and block:
+        // as wide as an effect gets, like a host call, and never
+        // reordered or dropped.
+        .channel_new,
+        .channel_send,
+        .channel_try_send,
+        .channel_receive,
+        .channel_try_receive,
+        .channel_receive_timeout,
+        .channel_close,
+        .channel_len,
+        .channel_cap,
+        => .impure,
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs of a signed minimum overflows.
         .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc => .pure,
@@ -418,6 +431,18 @@ pub fn viewStable(instruction: Instruction) bool {
         .spawn => false,
 
         .intrinsic => |call| switch (call.kind) {
+            // A receive attaches fresh objects and a send resolves the
+            // wrapper: the table moves, like a join's copy-out.
+            .channel_new,
+            .channel_send,
+            .channel_try_send,
+            .channel_receive,
+            .channel_try_receive,
+            .channel_receive_timeout,
+            .channel_close,
+            .channel_len,
+            .channel_cap,
+            => false,
             // Scalars and text: no handle is resolved, nothing is
             // attached, nothing is freed.  `str` of a builder reads a
             // row, which is a read.

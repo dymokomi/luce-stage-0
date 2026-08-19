@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 62;
+pub const format_version: u32 = 63;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -396,6 +396,7 @@ const Writer = struct {
                 try self.valueType(work.result);
                 try self.int(u8, @intFromBool(work.fallible));
             },
+            .channel => |element| try self.valueType(element),
         }
     }
 
@@ -850,6 +851,7 @@ const Reader = struct {
                 .result = try self.valueType(),
                 .fallible = (try self.int(u8)) != 0,
             } },
+            .channel => .{ .channel = try self.valueType() },
         };
     }
 
@@ -2260,8 +2262,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 61 -> 62: `key_read` grows its timeout argument — the
     // shape-changed case the hash cannot catch, so only the version
     // moves.
-    try testing.expectEqual(@as(u32, 62), format_version);
-    try testing.expectEqual(@as(u64, 15805484922640709197), hasher.final());
+    // 62 -> 63: channels arrive — the `channel` heap tag, nine
+    // `channel_*` intrinsics after `task_wait`, and the
+    // `channel_closed` error code all join the wire.
+    try testing.expectEqual(@as(u32, 63), format_version);
+    try testing.expectEqual(@as(u64, 532631186516529820), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

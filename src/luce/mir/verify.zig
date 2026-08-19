@@ -80,6 +80,10 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (element == .function) return error.BadStruct;
             try verifyType(program, element);
         },
+        .channel => |element| {
+            if (element == .function) return error.BadStruct;
+            try verifyType(program, element);
+        },
         // A key is an explicit integer width, `str`, or an enum. An enum
         // reaches the runtime at its backing width (`mir.mapKeyStorage`).
         .map => |pair| {
@@ -249,7 +253,7 @@ fn isWeakTarget(program: *const Program, of: Type) bool {
             false
         else switch (program.heap_types[index]) {
             .class, .list, .map, .array, .builder => true,
-            .handle, .task => false,
+            .handle, .task, .channel => false,
         },
         else => false,
     };
@@ -444,6 +448,7 @@ fn typeReferenceAt(program: *const Program, node: usize, edge: usize) ?Type {
         },
         .array => |shape| if (edge == 0) shape.element else null,
         .task => |work| if (edge == 0) work.result else null,
+        .channel => |element| if (edge == 0) element else null,
         .builder, .handle => null,
     };
 
@@ -723,7 +728,7 @@ fn verifyContainerConstant(
 
     if (constant.heap >= program.heap_types.len) return error.BadConstant;
     switch (program.heap_types[constant.heap]) {
-        .class => return error.BadConstant,
+        .class, .channel => return error.BadConstant,
         .list => |element| switch (constant.payload) {
             .sequence => |values| for (values) |value| {
                 try verifyConstantValue(program, value, element, false, 0);
@@ -1302,6 +1307,15 @@ fn verifyInstruction(
             // a resource (a defensive trap) or a function value (a
             // borrowed receiver with no valid owner on the far side).
             for (callee.locals[0..callee.parameter_count]) |parameter| {
+                // A whole channel is the one reference the boundary
+                // admits: the copier mints a wrapper on the far side.
+                // Nested inside another value it is still refused.
+                if (parameter.local_type == .heap and
+                    parameter.local_type.heap < program.heap_types.len and
+                    program.heap_types[parameter.local_type.heap] == .channel)
+                {
+                    continue;
+                }
                 if (try typeCarriesWorker(allocator, program, parameter.local_type, .class) or
                     try typeCarriesWorker(allocator, program, parameter.local_type, .resource) or
                     try typeCarriesWorker(allocator, program, parameter.local_type, .function) or
@@ -1355,7 +1369,7 @@ fn verifyInstruction(
                 // doors.  Treating one as an ordinary heap allocation
                 // leaves the interpreter at `unreachable` and gives
                 // the backend no constructor it can lower.
-                .handle, .task => return error.BadIntrinsic,
+                .handle, .task, .channel => return error.BadIntrinsic,
             };
             if (new.dims.len != expected_dims) return error.BadStruct;
             for (new.dims) |dimension| {
@@ -1567,7 +1581,7 @@ fn verifyIntrinsic(
                 if (arguments[0] != .heap) return error.BadIntrinsic;
                 switch (try heapShape(program, arguments[0])) {
                     .list, .map, .array, .builder => {},
-                    .class, .handle, .task => return error.BadIntrinsic,
+                    .class, .handle, .task, .channel => return error.BadIntrinsic,
                 }
             }
             try expectType(result, .i64);
@@ -1688,7 +1702,7 @@ fn verifyIntrinsic(
                     for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .i64);
                     break :blk shape.element;
                 },
-                .class, .builder, .handle, .task => return error.BadIntrinsic,
+                .class, .builder, .handle, .task, .channel => return error.BadIntrinsic,
             };
             if (reads) {
                 try expectType(result, element);
@@ -1817,7 +1831,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {
                 .list, .map, .builder => {},
-                .class, .array, .handle, .task => return error.BadIntrinsic,
+                .class, .array, .handle, .task, .channel => return error.BadIntrinsic,
             }
             try expectType(result, .none);
         },
@@ -1896,7 +1910,7 @@ fn verifyIntrinsic(
                 break :accepted switch (shape) {
                     .list => |element| element == .u8,
                     .array => |array| array.rank == 1 and array.element == .u8,
-                    .class, .map, .builder, .handle, .task => false,
+                    .class, .map, .builder, .handle, .task, .channel => false,
                 };
             } else false;
             if (!accepted) return error.BadIntrinsic;
@@ -2163,6 +2177,45 @@ fn verifyIntrinsic(
             if (shape != .task) return error.BadIntrinsic;
             if (!result.eql(shape.task.result)) return error.BadIntrinsic;
         },
+        .channel_new => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .i64);
+            if (try heapShape(program, result) != .channel) return error.BadIntrinsic;
+        },
+        .channel_send, .channel_try_send => {
+            try exactly(arguments, 2);
+            const element = try channelElement(program, arguments[0]);
+            if (!arguments[1].eql(element)) return error.BadIntrinsic;
+            try expectType(result, if (call.kind == .channel_send) .none else .boolean);
+        },
+        .channel_receive => {
+            try exactly(arguments, 1);
+            const element = try channelElement(program, arguments[0]);
+            if (!result.eql(element)) return error.BadIntrinsic;
+        },
+        .channel_try_receive => {
+            try exactly(arguments, 1);
+            const element = try channelElement(program, arguments[0]);
+            const wanted = types.Type.optionalOf(element) orelse return error.BadIntrinsic;
+            if (!result.eql(wanted)) return error.BadIntrinsic;
+        },
+        .channel_receive_timeout => {
+            try exactly(arguments, 2);
+            const element = try channelElement(program, arguments[0]);
+            try expectType(arguments[1], .i64);
+            const wanted = types.Type.optionalOf(element) orelse return error.BadIntrinsic;
+            if (!result.eql(wanted)) return error.BadIntrinsic;
+        },
+        .channel_close => {
+            try exactly(arguments, 1);
+            _ = try channelElement(program, arguments[0]);
+            try expectType(result, .none);
+        },
+        .channel_len, .channel_cap => {
+            try exactly(arguments, 1);
+            _ = try channelElement(program, arguments[0]);
+            try expectType(result, .i64);
+        },
         .handle_flush => {
             try exactly(arguments, 1);
             if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
@@ -2329,7 +2382,7 @@ fn typeCarriesWorker(
                 seen_heaps[index] = true;
                 switch (program.heap_types[index]) {
                     .class => if (sought == .class) return true,
-                    .handle, .task => if (sought == .resource) return true,
+                    .handle, .task, .channel => if (sought == .resource) return true,
                     .list => |element| try pending.append(allocator, element),
                     .map => |pair| {
                         try pending.append(allocator, pair.key);
@@ -2360,6 +2413,14 @@ fn typeCarriesWorker(
         }
     }
     return false;
+}
+
+/// The element type a channel-shaped operand carries, or the refusal
+/// hostile IR earns.
+fn channelElement(program: *const Program, of: Type) VerifyError!Type {
+    const shape = try heapShape(program, of);
+    if (shape != .channel) return error.BadIntrinsic;
+    return shape.channel;
 }
 
 fn heapShape(program: *const Program, of: Type) VerifyError!types.HeapType {

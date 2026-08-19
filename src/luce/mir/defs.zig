@@ -348,6 +348,15 @@ pub const Intrinsic = enum {
     /// `try`, and `mir/verify.zig` reads to decide whether an
     /// `errored` may name it.
     task_wait,
+    channel_new,
+    channel_send,
+    channel_try_send,
+    channel_receive,
+    channel_try_receive,
+    channel_receive_timeout,
+    channel_close,
+    channel_len,
+    channel_cap,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -490,6 +499,16 @@ pub const Intrinsic = enum {
 
             // `key_text` reads the slot the last `key_read` filled,
             // which is the run's own state and not the host's.
+            // A channel is the runtime's own machinery end to end.
+            .channel_new,
+            .channel_send,
+            .channel_try_send,
+            .channel_receive,
+            .channel_try_receive,
+            .channel_receive_timeout,
+            .channel_close,
+            .channel_len,
+            .channel_cap,
             .key_text,
             // The file runtime locks each host callback (see above).
             .file_read,
@@ -520,7 +539,9 @@ pub const Intrinsic = enum {
             .gpu_surface_present,
             // A wait joins a thread; it must **not** hold the lock
             // while it does, or a worker that prints could never
-            // finish (docs/THREADS.md D9).
+            // finish (docs/THREADS.md D9).  A channel's blocking send
+            // and receive park on the row's own condition for the same
+            // reason; they are listed with the other nine below.
             .task_wait,
             .abs,
             .min,
@@ -632,8 +653,20 @@ pub const Intrinsic = enum {
             .process_ready,
             .process_wait,
             .process_finish_input,
+            // A closed channel refuses a send and, once drained, a
+            // receive — recoverable news, never a trap
+            // (docs/THREADS.md).
+            .channel_send,
+            .channel_try_send,
+            .channel_receive,
+            .channel_try_receive,
+            .channel_receive_timeout,
             => true,
 
+            .channel_new,
+            .channel_close,
+            .channel_len,
+            .channel_cap,
             .abs,
             .min,
             .max,
@@ -748,13 +781,27 @@ pub const Intrinsic = enum {
             .bytes_value,
             // A worker's result is re-owned into *this* runtime as it
             // crosses the join, so a string that comes back is storage
-            // nobody else owns (docs/THREADS.md).
+            // nobody else owns (docs/THREADS.md).  A received channel
+            // value crosses the same way.
             .task_wait,
+            .channel_receive,
+            .channel_try_receive,
+            .channel_receive_timeout,
+            // A fresh wrapper is storage its scope must release, like
+            // an opened file.
+            .channel_new,
             => true,
 
             // Everything else that answers text answers a *view*: a
             // slice, an element, a field, a map key, the key-text slot,
             // a constant, a parameter.  The rest answer no text at all.
+            // A send parks a copy the row owns; nothing fresh lands in
+            // this runtime until a receive rebuilds it (the true list).
+            .channel_send,
+            .channel_try_send,
+            .channel_close,
+            .channel_len,
+            .channel_cap,
             .abs,
             .min,
             .max,
@@ -961,6 +1008,15 @@ pub const Intrinsic = enum {
             .handle_write,
             .handle_flush,
             .task_wait,
+            .channel_new,
+            .channel_send,
+            .channel_try_send,
+            .channel_receive,
+            .channel_try_receive,
+            .channel_receive_timeout,
+            .channel_close,
+            .channel_len,
+            .channel_cap,
             .os_cpu_count,
             .shell_run,
             .os_standard_stream,

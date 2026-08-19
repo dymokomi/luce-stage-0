@@ -57,7 +57,7 @@ pub const type_names = [_][]const u8{
     // user-facing sample would be a lie about the vocabulary.
     "bool",  "u8",   "u16", "u32",   "u64",     "i8",   "i16",
     "i32",   "i64",  "f16", "f32",   "f64",     "char", "str",
-    "bytes", "list", "map", "array", "builder", "task",
+    "bytes", "list", "map", "array", "builder", "task", "channel",
 };
 
 /// Everything callable by name on its own: the small public prelude and

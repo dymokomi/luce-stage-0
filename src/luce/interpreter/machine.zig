@@ -27,6 +27,7 @@ const Budget = interpreter.Budget;
 
 const containers = runtime.containers;
 const files = runtime.files;
+const channels = runtime.channels;
 const sockets = runtime.sockets;
 const graphics = runtime.graphics;
 const operators = runtime.operators;
@@ -69,9 +70,15 @@ pub fn run(
     // worker here is a second one of exactly what the root run is.
     var nursery: Nursery = .{ .program = program, .host = host, .base = memory.objects };
     machine.runtime.finalizers = nursery.finalizerChannel(@intCast(budget.call_depth));
+    // The root runtime owns the run's one channel registry; workers
+    // inherit the pointer at spawn.
+    if (runtime.channels.Registry.create(memory.objects)) |registry| {
+        machine.runtime.channels = registry;
+        machine.runtime.owns_channels = true;
+    } else |_| {}
+    machine.runtime.nursery = nursery.channel();
     if (host) |given| {
         machine.runtime.workers = given.workers;
-        machine.runtime.nursery = nursery.channel();
         machine.runtime.depth_budget = @intCast(budget.call_depth);
     }
     // Object storage is a real allocator now, so the run has to hand
@@ -196,6 +203,10 @@ const Nursery = struct {
             .arena = owned.arena.allocator(),
             .objects = self.base,
         });
+        if (runtime.channels.Registry.create(self.base)) |registry| {
+            owned.runtime.channels = registry;
+            owned.runtime.owns_channels = true;
+        } else |_| {}
         return &owned.runtime;
     }
 
@@ -745,7 +756,7 @@ pub const Machine = struct {
         current: *RuntimeValue,
     ) EvalError!RuntimeValue {
         switch (self.program.heap_types[declared.heap]) {
-            .class => unreachable, // classes are runtime values, never constants
+            .class, .channel => unreachable, // never constants; the verifier refuses both
             .list => |element| {
                 current.* = try self.runtime.newList(try self.zeroValue(element));
                 for (declared.payload.sequence) |encoded| {
@@ -1480,6 +1491,10 @@ pub const Machine = struct {
             // there is no `new handle` for this to answer; stage 4
             // refuses one and the verifier refuses the IR.
             .handle => unreachable,
+            // Nor a `new channel` through this door: construction is
+            // the channel_new intrinsic, so the registry can size the
+            // row and check the capacity in one place.
+            .channel => unreachable,
             // Nor is there a `new task`: `spawn` is the only door in,
             // for the same reason (docs/THREADS.md D3).
             .task => unreachable,
@@ -1539,7 +1554,7 @@ pub const Machine = struct {
             .list => |element| element,
             // The verifier admits nothing else here: keys and values
             // answer a list and only a list.
-            .class, .map, .array, .builder, .handle, .task => unreachable,
+            .class, .map, .array, .builder, .handle, .task, .channel => unreachable,
         };
     }
 
@@ -1811,6 +1826,59 @@ pub const Machine = struct {
             .forget => {
                 self.runtime.forget();
                 return .none;
+            },
+            .channel_new => {
+                return channels.make(&self.runtime, registers[arguments[0]].asI64());
+            },
+            .channel_send, .channel_try_send => {
+                const blocking = operation.kind == .channel_send;
+                const outcome = try channels.send(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]],
+                    blocking,
+                );
+                return switch (outcome) {
+                    .value => if (blocking) .none else .ofBoolean(true),
+                    .nothing => .ofBoolean(false),
+                    .closed => blk: {
+                        self.runtime.raise(.channel_closed, channels.closed_message, self.placeOf(site));
+                        break :blk if (blocking) .none else .ofBoolean(false);
+                    },
+                };
+            },
+            .channel_receive, .channel_try_receive, .channel_receive_timeout => {
+                const blocking = operation.kind != .channel_try_receive;
+                const timeout: i64 = if (operation.kind == .channel_receive_timeout)
+                    registers[arguments[1]].asI64()
+                else
+                    -1;
+                const outcome = try channels.receive(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    blocking,
+                    timeout,
+                );
+                return switch (outcome) {
+                    // try_receive and receive_timeout answer T?; the
+                    // present value is its own presence.
+                    .value => |landed| landed,
+                    .nothing => .none,
+                    .closed => blk: {
+                        self.runtime.raise(.channel_closed, channels.closed_message, self.placeOf(site));
+                        break :blk .none;
+                    },
+                };
+            },
+            .channel_close => {
+                try channels.close(&self.runtime, registers[arguments[0]]);
+                return .none;
+            },
+            .channel_len => {
+                return .ofI64(try channels.length(&self.runtime, registers[arguments[0]]));
+            },
+            .channel_cap => {
+                return .ofI64(try channels.capacityOf(&self.runtime, registers[arguments[0]]));
             },
             .raise_error => {
                 // `raise` takes the copy that outlives the releases

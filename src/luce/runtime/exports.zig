@@ -70,6 +70,7 @@ const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const files = @import("files.zig");
+const channels_mod = @import("channels.zig");
 const graphics = @import("graphics.zig");
 const sockets = @import("sockets.zig");
 const heap = @import("heap.zig");
@@ -168,6 +169,16 @@ pub export fn luce_rt_open(
         .objects = object_allocator,
     });
     if (functions) |described| owned.runtime.functions = described[0..function_count];
+    // Every runtime is born able to make channels; a worker's own
+    // registry is destroyed at spawn when it inherits its parent's.
+    if (channels_mod.Registry.create(object_allocator)) |registry| {
+        owned.runtime.channels = registry;
+        owned.runtime.owns_channels = true;
+    } else |_| {}
+    // And with the runtime-side nursery halves, so the registry can
+    // open its parking runtime without a spawn ever having installed
+    // the worker machinery; `run` stays null until workers_install.
+    owned.runtime.nursery = .{ .open = workerOpen, .close = workerClose };
     return &owned.runtime;
 }
 
@@ -938,6 +949,113 @@ pub export fn luce_rt_gpu_surface_present(
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.flush, "gpu.surface", runtime.frameAt(function, instruction));
+    return completed(runtime);
+}
+
+pub export fn luce_rt_channel_new(
+    runtime: *Runtime,
+    capacity: i64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    out.* = channels_mod.make(runtime, capacity) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+/// Send (blocking or try): `outcome` is 1 for delivered, 0 for a full
+/// queue a try declined to wait on, and -1 for closed — the caller
+/// raises the recoverable error at its own site.
+pub export fn luce_rt_channel_send(
+    runtime: *Runtime,
+    channel: [*c]const Value,
+    held: [*c]const Value,
+    blocking: i32,
+    outcome: [*c]i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, outcome)) return raised_trap;
+    if (!requireValueInput(runtime, channel)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    const answer = channels_mod.send(runtime, channel.*, held.*, blocking != 0) catch |mistake|
+        return failed(runtime, mistake);
+    outcome.* = switch (answer) {
+        .value => 1,
+        .nothing => 0,
+        .closed => -1,
+    };
+    if (answer == .closed) {
+        runtime.raise(.channel_closed, channels_mod.closed_message, runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+/// Receive (blocking, try, or timed): `outcome` 1 delivered into
+/// `out`, 0 nothing (try/timeout), -1 closed and drained.
+pub export fn luce_rt_channel_receive(
+    runtime: *Runtime,
+    channel: [*c]const Value,
+    blocking: i32,
+    timeout_ms: i64,
+    out: [*c]Value,
+    outcome: [*c]i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i64, runtime, outcome)) return raised_trap;
+    if (!requireValueInput(runtime, channel)) return raised_trap;
+    // Absence is the initialized state: a try that answers nothing
+    // reads back as `none` without a second write.
+    out.* = Value.none;
+    const answer = channels_mod.receive(runtime, channel.*, blocking != 0, timeout_ms) catch |mistake|
+        return failed(runtime, mistake);
+    switch (answer) {
+        .value => |landed| {
+            out.* = landed;
+            outcome.* = 1;
+        },
+        .nothing => outcome.* = 0,
+        .closed => {
+            outcome.* = -1;
+            runtime.raise(.channel_closed, channels_mod.closed_message, runtime.frameAt(function, instruction));
+        },
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_channel_close(
+    runtime: *Runtime,
+    channel: [*c]const Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, channel)) return raised_trap;
+    channels_mod.close(runtime, channel.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_channel_len(
+    runtime: *Runtime,
+    channel: [*c]const Value,
+    out: [*c]i64,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, channel)) return raised_trap;
+    out.* = channels_mod.length(runtime, channel.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_channel_cap(
+    runtime: *Runtime,
+    channel: [*c]const Value,
+    out: [*c]i64,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, channel)) return raised_trap;
+    out.* = channels_mod.capacityOf(runtime, channel.*) catch |mistake|
+        return failed(runtime, mistake);
     return completed(runtime);
 }
 

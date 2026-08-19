@@ -317,7 +317,7 @@ pub fn resourceHandle(runtime: *Runtime, held: Value, wanted: heap.Object.File.K
             resource.handle
         else
             runtime.fail(.not_owned),
-        .instance, .list, .map, .array, .builder, .task => runtime.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .task, .channel => runtime.fail(.not_owned),
     };
 }
 

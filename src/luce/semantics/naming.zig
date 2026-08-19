@@ -166,6 +166,7 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             else
                 null,
             .list => |element| privateMentioned(self, element),
+            .channel => |element| privateMentioned(self, element),
             // A map key is an explicit integer width, `str`, or an **enum**, and an enum
             // can be private (docs/ENUMS.md, As built 2026-08-12), so
             // the key is walked exactly as the value is: a public

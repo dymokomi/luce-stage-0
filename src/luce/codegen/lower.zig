@@ -1387,7 +1387,7 @@ const Module = struct {
 
             const descriptor = self.program.heap_types[constant.heap];
             switch (descriptor) {
-                .class => unreachable, // classes are runtime values, never constants
+                .class, .channel => unreachable, // never constants; the verifier refuses both
                 .list => |element| {
                     _ = try wip.store(
                         .normal,
@@ -1549,7 +1549,7 @@ const Module = struct {
                 .map => |pair| for (constant.payload.map) |_| {
                     count += 1 + @as(usize, @intFromBool(constantOwnsStorage(pair.value)));
                 },
-                .class, .builder, .handle, .task => {},
+                .class, .builder, .handle, .task, .channel => {},
             }
         }
         return @intCast(count);
@@ -4140,7 +4140,7 @@ const Body = struct {
                 .growable = false,
             },
             .list => |element| .{ .element = element, .rank = 1, .growable = true },
-            .class, .map, .builder, .handle, .task => null,
+            .class, .map, .builder, .handle, .task, .channel => null,
         };
     }
 
@@ -8303,6 +8303,87 @@ const Body = struct {
             // a value, an error the task's own shape says may come, and
             // a trap, which is this frame's trap now and unwinds with
             // the worker's frames already in front of its own.
+            .channel_new => {
+                const box = try self.scratch(self.module.value_type, value_alignment, "channel.box");
+                try self.callChecked(.luce_rt_channel_new, &.{
+                    self.runtime,
+                    self.produced[of[0]].value,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "channel.value");
+                self.produced[register].box = box;
+            },
+            .channel_send, .channel_try_send => {
+                const blocking = called.kind == .channel_send;
+                const outcome = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "send.outcome");
+                try self.callChecked(.luce_rt_channel_send, &.{
+                    self.runtime,
+                    try self.boxedRegister(of[0], "channel"),
+                    try self.boxedRegister(of[1], "sent"),
+                    try self.module.builder.intValue(.i32, @intFromBool(blocking)),
+                    outcome,
+                    try self.module.builder.intValue(.i32, self.index),
+                    try self.module.builder.intValue(.i32, self.current),
+                });
+                const told = try self.wip.load(.normal, .i64, outcome, Builder.Alignment.fromByteUnits(8), "send.told");
+                const refused = try self.wip.icmp(.eq, told, try self.module.builder.intValue(.i64, -1), "send.closed");
+                self.produced[register].outcome = try self.wip.select(
+                    .normal,
+                    refused,
+                    try self.module.builder.intValue(.i32, outcome_errored),
+                    try self.module.builder.intValue(.i32, outcome_ok),
+                    "send.result",
+                );
+                if (!blocking) {
+                    self.produced[register].value = try self.wip.icmp(.eq, told, try self.module.builder.intValue(.i64, 1), "send.landed");
+                }
+            },
+            .channel_receive, .channel_try_receive, .channel_receive_timeout => {
+                const blocking = called.kind != .channel_try_receive;
+                const timeout: Builder.Value = if (called.kind == .channel_receive_timeout)
+                    self.produced[of[1]].value
+                else
+                    try self.module.builder.intValue(.i64, -1);
+                const box = try self.scratch(self.module.value_type, value_alignment, "receive.box");
+                const outcome = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "receive.outcome");
+                try self.callChecked(.luce_rt_channel_receive, &.{
+                    self.runtime,
+                    try self.boxedRegister(of[0], "channel"),
+                    try self.module.builder.intValue(.i32, @intFromBool(blocking)),
+                    timeout,
+                    box,
+                    outcome,
+                    try self.module.builder.intValue(.i32, self.index),
+                    try self.module.builder.intValue(.i32, self.current),
+                });
+                const told = try self.wip.load(.normal, .i64, outcome, Builder.Alignment.fromByteUnits(8), "receive.told");
+                const refused = try self.wip.icmp(.eq, told, try self.module.builder.intValue(.i64, -1), "receive.closed");
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "receive.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = try self.wip.select(
+                    .normal,
+                    refused,
+                    try self.module.builder.intValue(.i32, outcome_errored),
+                    try self.module.builder.intValue(.i32, outcome_ok),
+                    "receive.result",
+                );
+            },
+            .channel_close => {
+                _ = try self.callChecked(.luce_rt_channel_close, &.{
+                    self.runtime,
+                    try self.boxedRegister(of[0], "channel"),
+                });
+            },
+            .channel_len, .channel_cap => {
+                const answer = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "channel.count");
+                try self.callChecked(
+                    if (called.kind == .channel_len) .luce_rt_channel_len else .luce_rt_channel_cap,
+                    &.{ self.runtime, try self.boxedRegister(of[0], "channel"), answer },
+                );
+                self.produced[register].value = try self.wip.load(.normal, .i64, answer, Builder.Alignment.fromByteUnits(8), "channel.told");
+            },
             .task_wait => {
                 const result = self.function.result_types[register];
                 const out = try self.scratch(
@@ -8758,7 +8839,7 @@ const Body = struct {
         if (of != .heap) return self.fail("keys or values answering no object");
         const element = switch (self.module.program.heap_types[of.heap]) {
             .list => |written| written,
-            .class, .map, .array, .builder, .handle, .task => return self.fail(
+            .class, .map, .array, .builder, .handle, .task, .channel => return self.fail(
                 "keys or values answering something other than a list",
             ),
         };
@@ -8783,6 +8864,7 @@ const Body = struct {
             // the same reason: a task with no worker behind it is the
             // one state this type must never hold (docs/THREADS.md D3).
             .task => return self.fail("new task"),
+            .channel => return self.fail("a channel enters through channel_new"),
             .builder => try self.callAnswering(register, .luce_rt_new_builder, &.{self.runtime}),
             .array => |shape| {
                 const dims = try self.scratchRun(

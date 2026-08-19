@@ -171,28 +171,28 @@ pub const Nursery = struct {
 /// Zero-initialized on every arm: `pthread_mutex_t`'s default *is*
 /// `PTHREAD_MUTEX_INITIALIZER` (macOS's signature field included), and
 /// an SRWLOCK's is `SRWLOCK_INIT`.
-const Lock = if (builtin.os.tag == .windows) struct {
+pub const Lock = if (builtin.os.tag == .windows) struct {
     handle: std.os.windows.SRWLOCK = .{},
 
-    fn lock(self: *Lock) void {
+    pub fn lock(self: *Lock) void {
         std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&self.handle);
     }
-    fn unlock(self: *Lock) void {
+    pub fn unlock(self: *Lock) void {
         std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&self.handle);
     }
-    fn tryLock(self: *Lock) bool {
+    pub fn tryLock(self: *Lock) bool {
         return std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&self.handle) != 0;
     }
 } else struct {
     handle: std.c.pthread_mutex_t = .{},
 
-    fn lock(self: *Lock) void {
+    pub fn lock(self: *Lock) void {
         std.debug.assert(std.c.pthread_mutex_lock(&self.handle) == .SUCCESS);
     }
-    fn unlock(self: *Lock) void {
+    pub fn unlock(self: *Lock) void {
         std.debug.assert(std.c.pthread_mutex_unlock(&self.handle) == .SUCCESS);
     }
-    fn tryLock(self: *Lock) bool {
+    pub fn tryLock(self: *Lock) bool {
         return std.c.pthread_mutex_trylock(&self.handle) == .SUCCESS;
     }
 };
@@ -354,6 +354,11 @@ pub fn spawn(
     child.sockets = parent.sockets;
     child.graphics = parent.graphics;
     child.workers = parent.workers;
+    if (child.owns_channels) {
+        if (child.channels) |registry| registry.destroy();
+        child.owns_channels = false;
+    }
+    child.channels = parent.channels;
     child.nursery = parent.nursery;
     child.finalizers = parent.finalizers;
     child.effects = effects;
@@ -503,7 +508,7 @@ fn take(joiner: *Runtime, task: Value) heap.Error!*Worker {
         },
         // The verifier admits only a task here; IR that arrived some
         // other way is refused rather than reinterpreted.
-        .instance, .list, .map, .array, .builder, .file => return joiner.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .file, .channel => return joiner.fail(.not_owned),
     }
 }
 

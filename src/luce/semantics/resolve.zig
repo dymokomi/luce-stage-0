@@ -187,7 +187,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 .char => .char,
                 .str => .str,
                 .bytes => .bytes,
-                .list, .map, .array, .builder, .handle, .task => unreachable, // answered by the outer switch
+                .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered by the outer switch
             };
         },
         .list => {
@@ -199,6 +199,21 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             if (try refuseOptionalPart(self, element, written.arguments[0], "list element")) return null;
             if (try refuseFunctionPart(self, element, written.arguments[0].span, "list element")) return null;
             return try internHeapType(self, .{ .list = element });
+        },
+        .channel => {
+            if (written.arguments.len != 1 or written.wildcards != 0) {
+                try self.fail("luce.sema.container.type", written.span, "channel takes one element type: channel[i64]", .{});
+                return null;
+            }
+            const element = (try resolveType(self, module, written.arguments[0])) orelse return null;
+            if (try refuseOptionalPart(self, element, written.arguments[0], "channel element")) return null;
+            if (try refuseFunctionPart(self, element, written.arguments[0].span, "channel element")) return null;
+            // The element must be sendable *by type*: a channel exists
+            // to cross workers, and a value that cannot cross must be
+            // refused where the channel is written, not where a send
+            // finally trips (docs/THREADS.md).
+            if (try refuseUnsendablePart(self, element, written.arguments[0].span)) return null;
+            return try internHeapType(self, .{ .channel = element });
         },
         .map => {
             if (written.arguments.len != 2 or written.wildcards != 0) {
@@ -449,6 +464,32 @@ pub fn refuseFunctionPart(
         .{ role, try self.typeName(part) },
     );
     return true;
+}
+
+/// A channel element must be sendable: nothing in its type graph may
+/// be a class, a function value, weak storage, or a resource — the
+/// worker boundary's own refusals, decided here by type where the
+/// boundary decides them by graph (docs/THREADS.md).
+pub fn refuseUnsendablePart(self: *Analyzer, part: Type, span: Span) Error!bool {
+    const shapes_mod = @import("shapes.zig");
+    const carried: [4]struct { kind: shapes_mod.Carried, said: []const u8 } = .{
+        .{ .kind = .class, .said = "a class has identity one runtime owns" },
+        .{ .kind = .function, .said = "a function value cannot cross workers" },
+        .{ .kind = .weak, .said = "weak storage names one runtime's table" },
+        .{ .kind = .resource, .said = "a resource belongs to the runtime that made it" },
+    };
+    for (carried) |sought| {
+        if (try shapes_mod.carries(self, part, sought.kind)) {
+            try self.fail(
+                "luce.sema.channel",
+                span,
+                "channel[{s}] cannot cross workers: {s}",
+                .{ try self.typeName(part), sought.said },
+            );
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Report a written type name that names nothing, offering the

@@ -21,6 +21,7 @@ const sockets = @import("sockets.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
 const workers = @import("workers.zig");
+const channels = @import("channels.zig");
 
 const Allocator = std.mem.Allocator;
 const Handle = value.Handle;
@@ -238,6 +239,11 @@ pub const Object = struct {
         /// (`files`): `freeObject` is where the last release arrives, and
         /// nothing is standing there to hand a host in.
         file: File,
+        /// A channel wrapper: this runtime's reference to a global
+        /// row (`runtime/channels.zig`).  The row outlives any one
+        /// runtime; the wrapper's last release lowers the row's holder
+        /// count, and the last holder anywhere closes and frees it.
+        channel: i64,
         /// A running worker (docs/THREADS.md D3).
         ///
         /// A resource on exactly the terms `file` is one, and the same
@@ -682,6 +688,10 @@ pub const Object = struct {
                 allocator.free(open.path);
                 self.data = .{ .file = .{ .handle = no_file, .path = "" } };
             },
+            // The wrapper's release already lowered the row's holder
+            // count (`freeObject`); blank the id so the end-of-run
+            // sweep cannot lower it twice.
+            .channel => self.data = .{ .channel = -1 },
             // `Runtime.freeObject` has already joined the worker and
             // closed its runtime; the pointer is blanked so the
             // end-of-run sweep does not join a second time what
@@ -1120,6 +1130,12 @@ pub const Runtime = struct {
     /// caller is standing to hand a host in.  Empty until installed,
     /// and fail-closed like every other effect.
     workers: workers.Channel = .{},
+    /// The channel registry every runtime of this run shares
+    /// (`runtime/channels.zig`); the entry runtime creates and
+    /// destroys it, workers inherit the pointer at spawn (their own
+    /// is destroyed there, which `owns_channels` records).
+    channels: ?*channels.Registry = null,
+    owns_channels: bool = false,
 
     /// How this engine makes a runtime for a worker and runs one
     /// function in it (docs/THREADS.md).  Not a *host* service — a
@@ -1186,6 +1202,12 @@ pub const Runtime = struct {
     /// object ownership already released reclaims nothing, because
     /// `Object.release` left the empty value of its kind behind.
     pub fn deinit(self: *Runtime) void {
+        if (self.owns_channels) {
+            if (self.channels) |registry| registry.destroy();
+            self.channels = null;
+            self.owns_channels = false;
+        }
+
         // Nothing is freed while a program runs, so the final sweep is
         // where every live row's storage and resources come back.  A
         // constant row holds no more than any other and is swept in the
@@ -1237,6 +1259,9 @@ pub const Runtime = struct {
             // the sweep joins it, for the same reason and with the
             // same silence (`workers.release`).
             .task => |held| if (held) |worker| workers.release(self, worker),
+            // A channel wrapper released is one holder fewer on the
+            // global row; the last holder anywhere closes it.
+            .channel => |row| channels.releaseRow(self, row),
         }
         object.release(self.objects);
     }
@@ -1619,6 +1644,20 @@ pub const Runtime = struct {
     /// that receives it owns it, and its scope's end closes it.
     pub fn newFile(self: *Runtime, handle: i64, path: []const u8) Error!Value {
         return self.newResource(handle, path, .file);
+    }
+
+    /// This runtime's wrapper for channel row `id`.
+    pub fn newChannel(self: *Runtime, id: i64) Error!Value {
+        return self.attach(.{ .data = .{ .channel = id } });
+    }
+
+    /// The row a channel value names; traps for anything else.
+    pub fn channelRow(self: *Runtime, held: Value) Error!i64 {
+        const object = try self.resolve(held);
+        return switch (object.data) {
+            .channel => |row| row,
+            else => self.fail(.not_owned),
+        };
     }
 
     /// Attach a host-owned resource to the object table.  `file`, `window`,
@@ -2094,7 +2133,7 @@ pub const Runtime = struct {
                 const object = self.liveObject(handle) orelse
                     return self.fail(if (handle.index == value.null_index) .null_object else .use_after_free);
                 switch (object.data) {
-                    .file, .task => return self.fail(.invalid_weak_target),
+                    .file, .task, .channel => return self.fail(.invalid_weak_target),
                     else => {},
                 }
                 break :weak Value.ofWeak(handle);
@@ -2309,6 +2348,7 @@ pub const Runtime = struct {
                 // And for a worker the scope's end is the join
                 // (docs/THREADS.md D5).
                 .task => |held| if (held) |worker| workers.release(self, worker),
+                .channel => |row| channels.releaseRow(self, row),
             }
 
             object.release(self.objects);
@@ -2420,8 +2460,9 @@ pub const Runtime = struct {
                 self.freeValue(entry.value);
             },
             .builder => {},
-            // `copyFrom` refuses resources before constructing storage.
-            .file, .task => unreachable,
+            // `copyFrom` refuses resources before constructing storage,
+            // and a channel crosses by minting, never by rebuilding.
+            .file, .task, .channel => unreachable,
         }
         storage.release(self.objects);
     }
@@ -2643,6 +2684,14 @@ pub const Runtime = struct {
                     // second owner of a resource; the analyzer refuses
                     // both and this is the runtime backstop.
                     .file, .task => return self.fail(.not_owned),
+                    // The one reference that crosses: the destination
+                    // runtime mints its own wrapper and the global row
+                    // gains a holder (docs/THREADS.md).  A row already
+                    // gone means the source wrapper was stale.
+                    .channel => |row| blk: {
+                        if (!channels.retainRow(self, row)) return self.fail(.use_after_free);
+                        break :blk .{ .data = .{ .channel = row } };
+                    },
                 };
 
                 var storage_owned = true;
@@ -2683,7 +2732,7 @@ pub const Runtime = struct {
                             });
                         }
                     },
-                    .builder, .file, .task => {},
+                    .builder, .file, .task, .channel => {},
                 }
             },
             .strukt => |fields| {

@@ -6,6 +6,18 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Channels: `channel[T]` is a bounded conduit between workers and the
+  one reference a boundary admits. `send` parks a deep copy and
+  `receive` rebuilds it in the receiver — no identity ever crosses,
+  and mutating a value after sending it is always safe. Blocking,
+  try, and timed forms; close is idempotent, drains before it
+  refuses, and answers a recoverable error, never a trap; FIFO and
+  per-sender program order are promised, waker order deliberately
+  not. Element sendability is checked where the channel is written.
+  Both engines agree on all of it, the leak census stays exact
+  across workers, and ThreadSanitizer holds the whole suite
+  race-free. MIR format 62 → 63.
+
 - A key knows what was held with it: `std.term`'s `Event.key` answers
   a `KeyPress` — the key plus `shift`/`alt`/`control` booleans — and
   the host decodes the xterm CSI modifier parameter, alt's

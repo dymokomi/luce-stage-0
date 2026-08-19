@@ -74,6 +74,7 @@ Errors have one of two stable codes:
 |---|---|
 | `io_failed` | A host file operation failed. |
 | `user_error` | `error(message)` was called. |
+| `channel_closed` | A send met a closed channel, or a receive drained its last value. |
 
 There are no typed error sets or error payloads beyond the message.
 The host deliberately does not split `io_failed` into invented

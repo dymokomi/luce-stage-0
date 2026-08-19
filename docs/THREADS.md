@@ -94,6 +94,47 @@ A task cannot carry a multi-value return because there is no corresponding
 `task[A, B]` shape. Wrap the values in a struct. A worker return graph also may
 not transitively contain a file, task, or function value.
 
+## Channels: the reference that crosses
+
+`channel[T]` is a bounded conduit between workers, and the one
+reference a boundary admits — passed whole as a `spawn` argument, the
+far side mints its own wrapper onto the same global row.
+
+```text
+var c = channel[i64]()        # capacity 16
+var d = channel[str](64)      # explicit; never less than one
+
+c.send(v)                     # ! — blocks while full; closed is an error
+c.try_send(v)                 # bool! — false instead of waiting
+c.receive()                   # T! — blocks while empty; drains, then closed
+c.try_receive()               # T?! — none when nothing is parked now
+c.receive_timeout(ms)         # T?! — none when the wait ran out
+c.close()                     # idempotent; any holder may
+c.len()   c.cap()             # parked count (a snapshot), capacity
+```
+
+`send` parks a deep copy — the same boundary copy `spawn` arguments
+make — and `receive` rebuilds it in the receiver, so no object
+identity ever crosses and **mutating a value after sending it is
+always safe**. The element type must be sendable, checked where the
+channel is written (`luce.sema.channel`): nothing in it may be a
+class, a function value, weak storage, or a resource — a channel
+inside a sent value included; channels cross whole or not at all.
+
+What is promised: the channel is FIFO — values arrive in the order
+sends completed — and two sends by one worker arrive in program
+order. Which of several blocked receivers wakes first is deliberately
+unspecified. Close never loses data: parked values drain first, and
+only then does `receive` answer the closed error. Sends after close
+answer it immediately. The last wrapper released anywhere closes and
+frees the row, so a channel nobody holds cannot strand a worker.
+
+The costs are the copy's: a send is O(size of the value graph), billed
+to the sender — resending a growing structure in a loop is the
+quadratic trap — and capacity counts **items, not bytes**. Aliases
+are preserved within one send; the same object sent twice arrives as
+two independent objects, and `is` never matches across sends.
+
 ## Isolation and effects
 
 No Luce object identity is shared across runtimes. Ordinary data races over

@@ -30,6 +30,7 @@ const Builtin = builtins_mod.Builtin;
 const builtins = builtins_mod.builtins;
 const string_methods = builtins_mod.string_methods;
 const list_methods = builtins_mod.list_methods;
+const channel_methods = builtins_mod.channel_methods;
 const array_methods = builtins_mod.array_methods;
 const map_methods = builtins_mod.map_methods;
 const builder_methods = builtins_mod.builder_methods;
@@ -1228,7 +1229,7 @@ fn lowerAliasCall(
                     // already resolved, so construction goes straight
                     // to it — re-resolving the written spelling would
                     // lose a namespace qualifier.
-                    .list, .map, .array, .builder => return expressions.lowerResolvedContainer(
+                    .list, .map, .array, .builder, .channel => return expressions.lowerResolvedContainer(
                         self,
                         target,
                         call.callee,
@@ -2205,6 +2206,15 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
     const descriptor = self.analyzer.heapOf(receiver) orelse return null;
     return switch (descriptor) {
         .class => null,
+        .channel => |element| blk: {
+            if (std.mem.eql(u8, name, "send")) break :blk try typeList(self, &.{element});
+            if (std.mem.eql(u8, name, "try_send")) break :blk try typeList(self, &.{element});
+            if (std.mem.eql(u8, name, "receive_timeout")) break :blk try typeList(self, &.{.i64});
+            if (std.mem.eql(u8, name, "receive") or std.mem.eql(u8, name, "try_receive") or
+                std.mem.eql(u8, name, "close") or std.mem.eql(u8, name, "len") or
+                std.mem.eql(u8, name, "cap")) break :blk &.{};
+            break :blk null;
+        },
         .list => |element| sequenceParameters(self, name, element, true),
         .array => |shape| blk: {
             if (std.mem.eql(u8, name, "dim")) break :blk try typeList(self, &.{.i64});
@@ -2596,6 +2606,15 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
     var suggestion = helpers.Suggestion.init(name);
     switch (descriptor) {
         .class => unreachable, // nominal methods are resolved before builtin dispatch
+        .channel => {
+            suggestion.offerAll(&channel_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "channel has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "channel has no method {s} (has send try_send receive try_receive receive_timeout close len cap)", .{name});
+            return;
+        },
         .list => {
             suggestion.offerAll(&list_methods);
             if (suggestion.best()) |closest| {
@@ -2714,6 +2733,46 @@ fn objectMethod(
     const name = method.name;
     switch (descriptor) {
         .class => unreachable, // nominal methods are resolved before builtin dispatch
+        // The conduit's eight (docs/THREADS.md).  The blocking pair
+        // and the timed receive park the caller; every receive answers
+        // a value rebuilt in this runtime; close is idempotent news,
+        // not an effect that can fail.
+        .channel => |element| {
+            if (std.mem.eql(u8, name, "send")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_send, .result = .none };
+            }
+            if (std.mem.eql(u8, name, "try_send")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_try_send, .result = .boolean };
+            }
+            if (std.mem.eql(u8, name, "receive")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_receive, .result = element };
+            }
+            if (std.mem.eql(u8, name, "try_receive")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_try_receive, .result = types.Type.optionalOf(element).? };
+            }
+            if (std.mem.eql(u8, name, "receive_timeout")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_receive_timeout, .result = types.Type.optionalOf(element).? };
+            }
+            if (std.mem.eql(u8, name, "close")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_close, .result = .none };
+            }
+            if (std.mem.eql(u8, name, "len")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_len, .result = .i64 };
+            }
+            if (std.mem.eql(u8, name, "cap")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_cap, .result = .i64 };
+            }
+            try failNoObjectMethod(self, method, descriptor);
+            return null;
+        },
         .list => |element| return sequenceMethod(self, method, receiver, element, true, arguments),
         .array => |shape| {
             if (std.mem.eql(u8, name, "dim")) {

@@ -1222,6 +1222,9 @@ test "the reference names every conversion constructor" {
         // function at all: it is spawned.  `guide/reference/types.md`
         // is where a reader looks for it.
         "task",
+        // And `channel` is a resource constructed by call, not a
+        // conversion of anything; the types reference owns it.
+        "channel",
     });
 }
 

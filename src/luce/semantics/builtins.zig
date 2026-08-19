@@ -223,6 +223,10 @@ pub const list_methods = [_][]const u8{
     "sort",   "sort_by", "reverse", "find", "contains",
 };
 pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
+pub const channel_methods = [_][]const u8{
+    "send",  "try_send", "receive", "try_receive", "receive_timeout",
+    "close", "len",      "cap",
+};
 pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
 pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 

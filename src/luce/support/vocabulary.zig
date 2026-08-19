@@ -79,12 +79,17 @@ pub const ErrorCode = enum {
     io_failed,
     /// `error("…")` — the program decided, and supplied the words.
     user_error,
+    /// A send met a channel that was closed, or a receive drained the
+    /// last parked value of one: recoverable news, never a trap
+    /// (docs/THREADS.md).
+    channel_closed,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: ErrorCode) []const u8 {
         return switch (self) {
             .io_failed => "the file operation failed",
             .user_error => "error",
+            .channel_closed => "the channel is closed",
         };
     }
 };

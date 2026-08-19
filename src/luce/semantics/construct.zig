@@ -549,7 +549,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f32 => .f32,
         .f64 => .f64,
         .char => .u32,
-        .boolean, .str, .bytes, .list, .map, .array, .builder, .handle, .task => null,
+        .boolean, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => null,
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
@@ -612,7 +612,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         const byte_sequence = if (self.analyzer.heapOf(value.value_type)) |descriptor| switch (descriptor) {
             .list => |element| element == .u8,
             .array => |shape| shape.rank == 1 and shape.element == .u8,
-            .class, .map, .builder, .handle, .task => false,
+            .class, .map, .builder, .handle, .task, .channel => false,
         } else false;
         if (value.value_type != .str and !byte_sequence) {
             return failConvert(self, call, value, produces);
@@ -690,7 +690,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered above
     };
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
@@ -740,7 +740,7 @@ fn lowerEnumToNumber(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task => unreachable, // answered by the caller
+        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered by the caller
     };
     return .{
         // The same node shape as the numeric constructors: one
@@ -945,6 +945,19 @@ pub fn lowerIntrinsic(
     // Argument and result typing per builtin.
     var result: Type = .none;
     switch (matched.kind) {
+        // Channel operations are receiver methods and construction,
+        // never `Builtin.` calls: no builtin row names them, so this
+        // dispatch cannot be asked.
+        .channel_new,
+        .channel_send,
+        .channel_try_send,
+        .channel_receive,
+        .channel_try_receive,
+        .channel_receive_timeout,
+        .channel_close,
+        .channel_len,
+        .channel_cap,
+        => unreachable,
         .abs => {
             if (!arguments[0].value_type.isNumeric()) return failIntrinsic(self, call, "abs takes a number");
             result = arguments[0].value_type;
@@ -985,7 +998,7 @@ pub fn lowerIntrinsic(
                 const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse break :measure false;
                 break :measure switch (descriptor) {
                     .list, .map, .array, .builder => true,
-                    .class, .handle, .task => false,
+                    .class, .handle, .task, .channel => false,
                 };
             };
             if (!measurable) {

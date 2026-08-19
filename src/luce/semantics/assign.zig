@@ -815,6 +815,10 @@ pub fn checkIndex(
             try self.fail("luce.sema.index", span, "{s} is a class and cannot be indexed", .{try self.analyzer.typeName(object_type)});
             return null;
         },
+        .channel => {
+            try self.fail("luce.sema.index", span, "a channel is not indexed; receive() answers the next value", .{});
+            return null;
+        },
         .list => |element| {
             if (indices.len != 1 or !indices[0].value_type.eql(.i64)) {
                 try self.fail("luce.sema.index", span, "lists index with one i64", .{});

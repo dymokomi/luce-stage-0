@@ -51,7 +51,7 @@ pub fn weakTarget(self: *const Analyzer, of: Type) bool {
     return switch (held) {
         .heap => |index| switch (self.heap_types.items[index]) {
             .class, .list, .map, .array, .builder => true,
-            .handle, .task => false,
+            .handle, .task, .channel => false,
         },
         else => false,
     };
@@ -110,6 +110,11 @@ pub const Carried = enum {
     /// to a worker would make the index/generation pair refer to a different
     /// table and could silently attach to an unrelated object.
     weak,
+    /// A resource — a handle, a task, a channel — belongs to the
+    /// machinery that made it.  A channel element type asks this: a
+    /// value sent through a channel may not carry one (a channel
+    /// itself crosses only whole, as a spawn argument).
+    resource,
 };
 
 /// Whether `of` reaches something of `sought` anywhere in its type
@@ -156,6 +161,10 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                 seen_heaps[index] = true;
                 switch (self.heap_types.items[index]) {
                     .class => if (sought == .class) return true,
+                    .channel => |element| {
+                        if (sought == .resource) return true;
+                        try pending.append(self.temporary, element);
+                    },
                     .list => |element| try pending.append(self.temporary, element),
                     .map => |pair| {
                         try pending.append(self.temporary, pair.key);
@@ -163,7 +172,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                     },
                     .array => |shape| try pending.append(self.temporary, shape.element),
                     .builder => {},
-                    .handle, .task => {},
+                    .handle, .task => if (sought == .resource) return true,
                 }
             },
             .variant => |index| {

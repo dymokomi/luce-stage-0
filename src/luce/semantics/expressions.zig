@@ -280,6 +280,11 @@ pub fn lowerNew(
             return null;
         }
         const descriptor = self.analyzer.heap_types.items[object_type.heap];
+        // Construction is the channel_new intrinsic, so the registry
+        // sizes the row and the capacity default lives in one place.
+        if (descriptor == .channel) {
+            return lowerChannelConstruction(self, object_type, new.type_name.name, new.arguments, new.span);
+        }
         // `new Counter(...)` — the class construction spelling. The
         // shared fork owns memberwise fields, the `init` factory, and
         // visibility, so `new` adds nothing but the reference-identity
@@ -337,6 +342,9 @@ pub fn lowerResolvedContainer(
         .arguments = arguments,
         .span = span,
     };
+    if (descriptor == .channel) {
+        return lowerChannelConstruction(self, object_type, written, arguments, span);
+    }
     if (descriptor == .array) {
         const dims = (try arrayDimensions(self, synthetic)) orelse return null;
         recorded_dims = (try lowerArrayDimensions(self, synthetic, dims, descriptor.array.rank)) orelse return null;
@@ -356,6 +364,71 @@ pub fn lowerResolvedContainer(
             .result = object_type,
             .span = span,
         } }),
+        .value_type = object_type,
+    };
+}
+
+/// `channel[T]()` and `channel[T](capacity)`: construction is the
+/// channel_new intrinsic, so the registry sizes the row in one place.
+/// The default capacity is sixteen — bounded, so a stalled consumer
+/// stalls its producer visibly instead of eating memory; explicit for
+/// anything else, and never zero (docs/THREADS.md).
+fn lowerChannelConstruction(
+    self: *FunctionBuilder,
+    object_type: Type,
+    written: []const u8,
+    arguments: []ast.Argument,
+    span: Span,
+) Error!?Typed {
+    if (arguments.len > 1) {
+        try self.fail(
+            "luce.sema.container.type",
+            span,
+            "{s} takes at most a capacity: write {s}() or {s}(64)",
+            .{ try self.analyzer.typeName(object_type), written, written },
+        );
+        return null;
+    }
+    var capacity: Typed = undefined;
+    if (arguments.len == 1) {
+        if (arguments[0].name != null) {
+            try self.fail("luce.sema.container.type", span, "a channel capacity is positional", .{});
+            return null;
+        }
+        self.wanted = .i64;
+        defer self.wanted = null;
+        capacity = (try self.lowerExpression(arguments[0].value, false)) orelse return null;
+        if (!capacity.value_type.eql(.i64)) {
+            try self.fail(
+                "luce.sema.container.type",
+                arguments[0].value.span(),
+                "a channel capacity is an i64 count of values",
+                .{},
+            );
+            return null;
+        }
+    } else {
+        capacity = .{
+            .node = try recorder.recordNode(self, .{ .const_integer = .{
+                .value = 16,
+                .result = .i64,
+                .span = span,
+            } }),
+            .value_type = .i64,
+        };
+    }
+    const entries = try self.arena().alloc(recorder.RecordedOperand, 1);
+    entries[0] = .{ .node = capacity.node, .slot = 0 };
+    return .{
+        .node = try recorder.recordCallNode(
+            self,
+            .{ .intrinsic = .channel_new },
+            entries,
+            1,
+            false,
+            object_type,
+            span,
+        ),
         .value_type = object_type,
     };
 }
@@ -438,7 +511,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
                 wanted_element = shape.element;
                 expected_container = place;
             },
-            .class, .map, .builder, .handle, .task => {},
+            .class, .map, .builder, .handle, .task, .channel => {},
         }
     }
     if (literal.elements.len == 0 and wanted_element == null) {
