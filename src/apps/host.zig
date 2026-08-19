@@ -110,6 +110,9 @@ pub const Host = struct {
     /// handles live in a disjoint number range (`socket_handle_base`)
     /// so one `handle_read` slot can serve both without a collision.
     open_sockets: std.ArrayList(OpenSocket) = .empty,
+    /// Children spawned through `process_spawn`, by handle offset.  A
+    /// closed row stays as a tombstone so handles never renumber.
+    children: std.ArrayList(?OpenChild) = .empty,
     /// The socket registry's own guard.  The ABI requires the socket
     /// callbacks to be thread-safe — they run outside the Effects
     /// serialization because they block for a peer — so every registry
@@ -223,6 +226,10 @@ pub const Host = struct {
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
         self.closeOpenSockets();
+        for (self.children.items) |*held| {
+            if (held.*) |*child| child.shutdown(self.io);
+        }
+        self.children.deinit(self.gpa);
         self.open_sockets.deinit(self.gpa);
         self.* = undefined;
     }
@@ -314,6 +321,10 @@ pub const Host = struct {
             .worker_join = cWorkerJoin,
             .shell_run = cShellRun,
             .standard_stream = cStandardStream,
+            .process_spawn = cProcessSpawn,
+            .process_ready = cProcessReady,
+            .process_wait = cProcessWait,
+            .process_finish_input = cProcessFinishInput,
             .path_kind = cPathKind,
             // The portable host leaves these unset. A runner-installed
             // channel is adapted through this Host so the table's single
@@ -765,26 +776,11 @@ pub const Host = struct {
         // process (loom/editor) on the child's PATH.  The parent process's
         // environment remains untouched, and the user's PATH stays after it
         // so ordinary host commands retain their normal lookup order.
-        var environment = processEnvironment().createMap(self.gpa) catch |mistake| switch (mistake) {
+        var environment = childEnvironment(self) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
         defer environment.deinit();
-        const executable_dir = std.process.executableDirPathAlloc(self.io, self.gpa) catch null;
-        defer if (executable_dir) |path| self.gpa.free(path);
-        if (executable_dir) |path| {
-            const old_path = environment.get("PATH") orelse "";
-            const child_path = if (old_path.len == 0)
-                try self.gpa.dupe(u8, path)
-            else
-                try std.fmt.allocPrint(
-                    self.gpa,
-                    "{s}{c}{s}",
-                    .{ path, if (builtin.os.tag == .windows) ';' else ':', old_path },
-                );
-            defer self.gpa.free(child_path);
-            try environment.put("PATH", child_path);
-        }
         const ran = self.runFed(&.{ shell, flag, command }, &environment, input) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
@@ -812,6 +808,32 @@ pub const Host = struct {
         };
         try self.shell_output.appendSlice(self.gpa, line);
         return self.shell_output.items;
+    }
+
+    /// The environment a child starts with: the parent's, with the
+    /// installed toolchain put in front of PATH — a terminal launched
+    /// from a GUI does not necessarily inherit the interactive shell's
+    /// profile, and shell services (Ctrl-B, the language server's
+    /// `luce query`) must find the toolchain anyway.
+    fn childEnvironment(self: *Host) !std.process.Environ.Map {
+        var environment = try processEnvironment().createMap(self.gpa);
+        errdefer environment.deinit();
+        const executable_dir = std.process.executableDirPathAlloc(self.io, self.gpa) catch null;
+        defer if (executable_dir) |path| self.gpa.free(path);
+        if (executable_dir) |path| {
+            const old_path = environment.get("PATH") orelse "";
+            const child_path = if (old_path.len == 0)
+                try self.gpa.dupe(u8, path)
+            else
+                try std.fmt.allocPrint(
+                    self.gpa,
+                    "{s}{c}{s}",
+                    .{ path, if (builtin.os.tag == .windows) ';' else ':', old_path },
+                );
+            defer self.gpa.free(child_path);
+            try environment.put("PATH", child_path);
+        }
+        return environment;
     }
 
     /// Spawn, feed, and collect one child.  `std.process.run` pins the
@@ -1408,6 +1430,24 @@ pub const Host = struct {
         // A socket or standard-stream handle travels the same slot a
         // file's does — the channel is the handle's, and the number
         // range says whose.
+        if (handle >= process_handle_base) {
+            const row = self.childAt(handle) orelse return .no;
+            const pipe = row.child.stdout orelse return .no;
+            const landed = pipe.readStreaming(
+                self.io,
+                &.{into[0..@intCast(capacity)]},
+            ) catch |mistake| switch (mistake) {
+                // The zero this slot promises: the child's output has
+                // ended, which is news for the loop, not a failure.
+                error.EndOfStream => {
+                    filled.* = 0;
+                    return .yes;
+                },
+                else => return .no,
+            };
+            filled.* = @intCast(landed);
+            return .yes;
+        }
         if (handle >= standard_handle_base) {
             if (handle - standard_handle_base != 0) return .no;
             // A raw stream read: short is "what was available", zero
@@ -1417,7 +1457,13 @@ pub const Host = struct {
             const landed = std.Io.File.stdin().readStreaming(
                 self.io,
                 &.{into[0..@intCast(capacity)]},
-            ) catch return .no;
+            ) catch |mistake| switch (mistake) {
+                error.EndOfStream => {
+                    filled.* = 0;
+                    return .yes;
+                },
+                else => return .no,
+            };
             filled.* = @intCast(landed);
             return .yes;
         }
@@ -1450,6 +1496,15 @@ pub const Host = struct {
         written: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
+        if (handle >= process_handle_base) {
+            const row = self.childAt(handle) orelse return .no;
+            if (!row.stdin_open) return .no;
+            const pipe = row.child.stdin orelse return .no;
+            const bytes = from[0..@intCast(length)];
+            pipe.writeStreamingAll(self.io, bytes) catch return .no;
+            written.* = @intCast(bytes.len);
+            return .yes;
+        }
         if (handle >= standard_handle_base) {
             const bytes = from[0..@intCast(length)];
             const stream: std.Io.File = switch (handle - standard_handle_base) {
@@ -1480,6 +1535,9 @@ pub const Host = struct {
         // A standard stream write already reached the descriptor, and
         // a socket has no host-side buffer to sync: the write already
         // handed the bytes to the kernel, so a flush is agreement.
+        if (handle >= process_handle_base) {
+            return if (self.childAt(handle) != null) .yes else .no;
+        }
         if (handle >= standard_handle_base) {
             return if (handle - standard_handle_base <= 2) .yes else .no;
         }
@@ -1496,6 +1554,16 @@ pub const Host = struct {
 
     fn cHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
         const self = of(context);
+        // A released child is shut down: input closed, and a child
+        // still running is killed — the last reference cannot leak a
+        // process.
+        if (handle >= process_handle_base) {
+            const row = self.childAt(handle) orelse return .no;
+            row.shutdown(self.io);
+            const index: usize = @intCast(handle - process_handle_base);
+            self.children.items[index] = null;
+            return .yes;
+        }
         // The descriptor belongs to the process: releasing the last
         // reference to os.stdin() must not close the real stdin.
         if (handle >= standard_handle_base) {
@@ -1519,6 +1587,10 @@ pub const Host = struct {
             .context = self,
             .open = pHandleOpen,
             .standard = pStandardStream,
+            .process_spawn = pProcessSpawn,
+            .process_ready = pProcessReady,
+            .process_wait = pProcessWait,
+            .process_finish_input = pProcessFinishInput,
             .read = pHandleRead,
             .write = pHandleWrite,
             .flush = pHandleFlush,
@@ -1995,6 +2067,100 @@ pub const Host = struct {
         return .yes;
     }
 
+    fn cProcessSpawn(
+        context: ?*anyopaque,
+        command: [*]const u8,
+        command_length: i64,
+        handle: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const written = command[0..@intCast(command_length)];
+        const shell = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
+        const flag = if (builtin.os.tag == .windows) "/C" else "-c";
+        var environment = childEnvironment(self) catch return .exhausted;
+        defer environment.deinit();
+        const child = std.process.spawn(self.io, .{
+            .argv = &.{ shell, flag, written },
+            .environ_map = &environment,
+            .stdin = .pipe,
+            .stdout = .pipe,
+            .stderr = .inherit,
+        }) catch return .no;
+        self.children.append(self.gpa, .{
+            .child = child,
+            .stdin_open = true,
+            .reaped = false,
+        }) catch {
+            var row: OpenChild = .{ .child = child, .stdin_open = true, .reaped = false };
+            row.shutdown(self.io);
+            return .exhausted;
+        };
+        handle.* = process_handle_base + @as(i64, @intCast(self.children.items.len - 1));
+        return .yes;
+    }
+
+    fn childAt(self: *Host, handle: i64) ?*OpenChild {
+        const index = handle - process_handle_base;
+        if (index < 0 or index >= self.children.items.len) return null;
+        if (self.children.items[@intCast(index)]) |*row| return row;
+        return null;
+    }
+
+    fn cProcessReady(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.childAt(handle) orelse return .no;
+        const pipe = row.child.stdout orelse {
+            answer.* = 0;
+            return .yes;
+        };
+        var poled = [_]std.posix.pollfd{.{ .fd = pipe.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+        const changed = std.posix.poll(&poled, 0) catch return .no;
+        answer.* = @intFromBool(changed != 0);
+        return .yes;
+    }
+
+    fn cProcessWait(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.childAt(handle) orelse return .no;
+        if (row.reaped) return .no;
+        row.finishInput(self.io);
+        row.reaped = true;
+        const term = row.child.wait(self.io) catch return .no;
+        answer.* = switch (term) {
+            .exited => |code| code,
+            else => -1,
+        };
+        return .yes;
+    }
+
+    fn cProcessFinishInput(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.childAt(handle) orelse return .no;
+        row.finishInput(self.io);
+        return .yes;
+    }
+
+    fn pProcessSpawn(
+        context: ?*anyopaque,
+        command: [*]const u8,
+        command_length: i64,
+        handle: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cProcessSpawn(context, command, command_length, handle));
+    }
+
+    fn pProcessReady(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) i32 {
+        return @intFromEnum(cProcessReady(context, handle, answer));
+    }
+
+    fn pProcessWait(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) i32 {
+        return @intFromEnum(cProcessWait(context, handle, answer));
+    }
+
+    fn pProcessFinishInput(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        return @intFromEnum(cProcessFinishInput(context, handle));
+    }
+
     fn cFileDelete(
         context: ?*anyopaque,
         path: [*]const u8,
@@ -2076,6 +2242,33 @@ const socket_handle_base: i64 = 1 << 32;
 /// stdin, stdout, stderr.  The descriptors belong to the process, so
 /// "closing" one is agreement, not a close.
 const standard_handle_base: i64 = 1 << 33;
+/// Child-process handles live above the standard streams.
+const process_handle_base: i64 = 1 << 34;
+
+/// One spawned child: reads drain its standard output, writes feed
+/// its standard input, and stderr is inherited so a child's own
+/// complaints stay visible.  `shutdown` is idempotent — close kills a
+/// child still running, and a kill after `wait` reaped is a no-op.
+const OpenChild = struct {
+    child: std.process.Child,
+    stdin_open: bool,
+    reaped: bool,
+
+    fn finishInput(self: *OpenChild, io: std.Io) void {
+        if (!self.stdin_open) return;
+        self.stdin_open = false;
+        if (self.child.stdin) |pipe| pipe.close(io);
+        self.child.stdin = null;
+    }
+
+    fn shutdown(self: *OpenChild, io: std.Io) void {
+        self.finishInput(io);
+        if (!self.reaped) {
+            self.reaped = true;
+            self.child.kill(io);
+        }
+    }
+};
 
 /// One row of the transport registry: a connected stream, a listening
 /// server, or the shut sentinel a stale handle lands on.

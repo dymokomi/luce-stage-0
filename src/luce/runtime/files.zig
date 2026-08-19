@@ -64,6 +64,24 @@ pub const StandardFn = *const fn (
     handle: *i64,
 ) callconv(.c) i32;
 
+pub const ProcessSpawnFn = *const fn (
+    context: ?*anyopaque,
+    command: [*]const u8,
+    command_length: i64,
+    handle: *i64,
+) callconv(.c) i32;
+
+pub const ProcessAskFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+    answer: *i64,
+) callconv(.c) i32;
+
+pub const ProcessPlainFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+) callconv(.c) i32;
+
 pub const OpenFn = *const fn (
     context: ?*anyopaque,
     path: [*]const u8,
@@ -112,6 +130,13 @@ pub const Channel = struct {
     /// one is a safe no-op, because the descriptor belongs to the
     /// process, not the program.
     standard: ?StandardFn = null,
+    /// The child doors (docs/STD.md): spawn answers a handle whose
+    /// reads are the child's output and whose writes its input; the
+    /// close a released handle runs kills a child still running.
+    process_spawn: ?ProcessSpawnFn = null,
+    process_ready: ?ProcessAskFn = null,
+    process_wait: ?ProcessAskFn = null,
+    process_finish_input: ?ProcessPlainFn = null,
     read: ?ReadFn = null,
     write: ?WriteFn = null,
     flush: ?FlushFn = null,
@@ -217,6 +242,39 @@ pub fn standard(runtime: *Runtime, which: i64) Error!?Value {
         else => "<stderr>",
     };
     return try runtime.newFile(handle, name);
+}
+
+/// Spawn one child and answer its owned handle resource — `open`'s
+/// road exactly, so releasing the last reference closes (kills) it.
+pub fn spawn(runtime: *Runtime, command: []const u8) Error!?Value {
+    const service = runtime.files.process_spawn orelse return runtime.fail(.host_unavailable);
+    if (runtime.files.close == null) return runtime.fail(.host_unavailable);
+    var handle: i64 = heap.no_file;
+    const answer = service(runtime.files.context, command.ptr, @intCast(command.len), &handle);
+    if (!try hostAnswer(runtime, answer)) return null;
+    if (handle == heap.no_file) return runtime.fail(.host_unavailable);
+    return try runtime.newFile(handle, command);
+}
+
+/// One scalar question of a child: ready (0/1) or the exit status.
+pub fn processAsk(
+    runtime: *Runtime,
+    service: ?ProcessAskFn,
+    handle_value: Value,
+) Error!?i64 {
+    const asked = service orelse return runtime.fail(.host_unavailable);
+    const raw = try handleOf(runtime, handle_value);
+    var answer: i64 = 0;
+    const said = asked(runtime.files.context, raw, &answer);
+    if (!try hostAnswer(runtime, said)) return null;
+    return answer;
+}
+
+pub fn processFinishInput(runtime: *Runtime, handle_value: Value) Error!?void {
+    const service = runtime.files.process_finish_input orelse return runtime.fail(.host_unavailable);
+    const raw = try handleOf(runtime, handle_value);
+    const said = service(runtime.files.context, raw);
+    if (!try hostAnswer(runtime, said)) return null;
 }
 
 pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {

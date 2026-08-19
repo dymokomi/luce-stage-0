@@ -32,7 +32,7 @@ cost of changing the embedded library.
 | `std.lists` | element-type-specialized list algorithms | stable `list.sort_by(func(T, T) -> bool)` routed as a method after import |
 | `std.paths` | pure path-name manipulation | absolute check, join/joined, base, directory, extension, stem |
 | `std.files` | fallible whole-file, directory, and open-file APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `Mode` and the `File` class (fallible `init(path, mode)`, conforming to `io.Reader`/`io.Writer`), entries/list |
-| `std.os` | console, time, environment, process and machine services | line input, standard error, clocks, environment, `os.run` (with an optional stdin feed), `stdin`/`stdout`/`stderr` as `io` streams, memory and CPU facts |
+| `std.os` | console, time, environment, process and machine services | line input, standard error, clocks, environment, `os.run` (with an optional stdin feed), `Process` (a held child: feed/read/ready/wait), `stdin`/`stdout`/`stderr` as `io` streams, memory and CPU facts |
 | `std.term` | the terminal | frame drawing (rows/cols, clear/move/style/write/flush), `copy` to the system clipboard, one typed `Event` stream behind `read()`, border glyphs and `junction` |
 | `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
 | `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |

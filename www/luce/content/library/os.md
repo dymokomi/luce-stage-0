@@ -115,6 +115,45 @@ func main() -> !:
     print(transcript)
 ```
 
+## A child you can hold
+
+```
+os.Process(command: str) -> os.Process!     # spawn, streams piped
+Process.feed(text: str) -> !                # write to the child's stdin
+Process.finish_input() -> !                 # the child's end of input
+Process.read(buffer: array[u8, _]) -> i64!  # io.Reader: 0 at end of output
+Process.ready() -> bool!                    # would a read land right now?
+Process.wait() -> i64!                      # exit status; finishes input first
+```
+
+`os.run` is the one-shot; a `Process` is the held conversation — spawn
+once, feed and read as the protocol goes. It conforms to
+[`io.Reader`](/library/io/), so framing code written against the
+contract works on a child exactly as on a file or a connection. The
+child's standard error stays on the host's, where complaints belong.
+Releasing the last reference shuts the child down — input closed, and
+a child still running is killed — so a dropped `Process` cannot leak.
+
+```text
+import std.io
+import std.os
+import std.strings
+
+func main() -> !:
+    let child = try os.Process("sort")
+    try child.feed("b
+a
+")
+    try child.finish_input()
+    let sorted = try io.drain(child)
+    print(strings.from_bytes(sorted) else "?")
+    assert(try child.wait() == 0)
+```
+
+`ready()` answers whether a read would land without blocking — the
+poll a pump asks between other work, which is how an editor holds a
+language server without stalling its own loop.
+
 ## The process's own byte streams
 
 ```

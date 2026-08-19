@@ -1938,6 +1938,26 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .i64);
             if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
         },
+        .process_spawn => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .str);
+            if (try heapShape(program, result) != .handle) return error.BadIntrinsic;
+        },
+        .process_ready => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            try expectType(result, .boolean);
+        },
+        .process_wait => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            try expectType(result, .i64);
+        },
+        .process_finish_input => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .handle) return error.BadIntrinsic;
+            try expectType(result, .none);
+        },
         .file_read => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);

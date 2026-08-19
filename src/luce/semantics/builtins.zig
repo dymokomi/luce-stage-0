@@ -164,6 +164,10 @@ pub const standard_intrinsics = [_]Builtin{
     .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
     .{ .name = "shell_run", .kind = .shell_run, .parameters = &.{ .{ .name = "command" }, .{ .name = "input" } }, .host = true },
     .{ .name = "os_standard_stream", .kind = .os_standard_stream, .parameters = &.{.{ .name = "which" }}, .host = true },
+    .{ .name = "process_spawn", .kind = .process_spawn, .parameters = &.{.{ .name = "command" }}, .host = true },
+    .{ .name = "process_ready", .kind = .process_ready, .parameters = &.{.{ .name = "child" }}, .host = true },
+    .{ .name = "process_wait", .kind = .process_wait, .parameters = &.{.{ .name = "child" }}, .host = true },
+    .{ .name = "process_finish_input", .kind = .process_finish_input, .parameters = &.{.{ .name = "child" }}, .host = true },
     .{ .name = "term_event_data", .kind = .term_event_data, .parameters = &.{.{ .name = "field" }}, .host = true },
 };
 

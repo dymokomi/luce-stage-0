@@ -14,6 +14,7 @@
 # failures use `!`.
 
 import std.io
+import std.strings
 
 # Read one line after writing `prompt`, without the trailing newline. End of
 # input is absence rather than an error.
@@ -97,6 +98,60 @@ class Output: io.Writer:
 
     func flush() -> !:
         try Builtin.handle_flush(self.raw)
+
+# --- a child you can hold --------------------------------------------
+#
+# `os.run` is the one-shot: feed, collect, done.  A `Process` is the
+# held conversation — spawn once, feed and read as the protocol goes,
+# and the child dies with the last reference.  Reads speak `io.Reader`
+# (zero at end of output), so framing code written against the
+# contract works on a child exactly as it does on a file or a socket.
+# The child's standard error stays on the host's, where complaints
+# belong.
+
+class Process: io.Reader:
+    private:
+        raw: handle
+
+    # Spawn `command` through the host shell with its input and
+    # output piped.  The world decides whether the spawn lands, so
+    # construction is fallible.
+    init(command: str) -> !:
+        self.raw = try Builtin.process_spawn(command)
+
+    # Hand text to the child's standard input, whole.
+    func feed(text: str) -> !:
+        let payload = strings.to_bytes(text)
+        var buffer = array[u8](4096)
+        var at: i64 = 0
+        while at < len(payload):
+            var held: i64 = 0
+            while held < 4096 and at + held < len(payload):
+                buffer[held] = payload[at + held]
+                held += 1
+            let sent = try Builtin.handle_write(self.raw, buffer, held)
+            if sent <= 0:
+                error("the child stopped taking input")
+            at += sent
+
+    func read(buffer: array[u8, _]) -> i64!:
+        return try Builtin.handle_read(self.raw, buffer)
+
+    # Whether a read would answer right now without blocking — the
+    # poll a pump asks between other work.
+    func ready() -> bool!:
+        return try Builtin.process_ready(self.raw)
+
+    # Close the child's standard input: its end of input.  A child
+    # like `sort` produces nothing until this says the feed is done.
+    func finish_input() -> !:
+        try Builtin.process_finish_input(self.raw)
+
+    # Block for the child to leave and answer its exit status;
+    # -1 when it was ended by a signal rather than an exit.
+    func wait() -> i64!:
+        try Builtin.process_finish_input(self.raw)
+        return try Builtin.process_wait(self.raw)
 
 func stdin() -> Input!:
     return try Input(0)

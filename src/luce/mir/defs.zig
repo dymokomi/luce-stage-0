@@ -373,6 +373,10 @@ pub const Intrinsic = enum {
     /// reserved so the host boundary stays in one place.
     shell_run,
     os_standard_stream,
+    process_spawn,
+    process_ready,
+    process_wait,
+    process_finish_input,
     /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -477,6 +481,10 @@ pub const Intrinsic = enum {
             .os_cpu_count,
             .shell_run,
             .os_standard_stream,
+            .process_spawn,
+            .process_ready,
+            .process_wait,
+            .process_finish_input,
             .term_event_data,
             => true,
 
@@ -620,6 +628,10 @@ pub const Intrinsic = enum {
             .task_wait,
             .shell_run,
             .os_standard_stream,
+            .process_spawn,
+            .process_ready,
+            .process_wait,
+            .process_finish_input,
             => true,
 
             .abs,
@@ -726,6 +738,10 @@ pub const Intrinsic = enum {
             .env_get,
             .shell_run,
             .os_standard_stream,
+            .process_spawn,
+            .process_ready,
+            .process_wait,
+            .process_finish_input,
             .pop_value,
             .copy_object,
             .own_storage,
@@ -948,6 +964,10 @@ pub const Intrinsic = enum {
             .os_cpu_count,
             .shell_run,
             .os_standard_stream,
+            .process_spawn,
+            .process_ready,
+            .process_wait,
+            .process_finish_input,
             .term_event_data,
             .own_storage,
             .drop_storage,

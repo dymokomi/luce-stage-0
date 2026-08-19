@@ -1105,6 +1105,29 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "os_standard_stream takes a stream number");
             result = try resolve.internHeapType(self.analyzer, .handle);
         },
+        .process_spawn => {
+            if (arguments[0].value_type != .str)
+                return failIntrinsic(self, call, "process_spawn takes a str command");
+            result = try resolve.internHeapType(self.analyzer, .handle);
+        },
+        .process_ready => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "process_ready takes a process handle");
+            result = .boolean;
+        },
+        .process_wait => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "process_wait takes a process handle");
+            result = .i64;
+        },
+        .process_finish_input => {
+            const handle_type = try resolve.internHeapType(self.analyzer, .handle);
+            if (!arguments[0].value_type.eql(handle_type))
+                return failIntrinsic(self, call, "process_finish_input takes a process handle");
+            result = .none;
+        },
         .file_read => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "file_read takes a str path");

@@ -265,7 +265,7 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 27;
+pub const version: u32 = 28;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
 // terminal owns what "the system clipboard" means over SSH and mux.
@@ -274,6 +274,13 @@ pub const version: u32 = 27;
 // handles, and `shell_run` grows an input the host feeds the child —
 // the two capabilities a tool that speaks a protocol over stdio (the
 // language server) stands on.
+// 28 — a child you can hold: four slots at the end of the table.
+// `process_spawn` answers a handle whose reads are the child's output
+// and whose writes are its input; `process_ready` is the no-block
+// poll; `process_wait` the exit status; `process_finish_input` the
+// half-close that means end of input.  Closing the handle kills a
+// child still running — releasing the last reference cannot leak a
+// process.
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -484,6 +491,30 @@ pub const StandardStreamFn = *const fn (
     context: ?*anyopaque,
     which: i64,
     handle: *i64,
+) callconv(.c) Answer;
+
+/// Spawn one child of the host shell with its three streams piped;
+/// the handle rides `handle_read` (child stdout+stderr) and
+/// `handle_write` (child stdin), and closing it kills a child still
+/// running.  `process_finish_input` half-closes stdin — the child's
+/// end of input; `process_ready` answers whether a read would land
+/// without blocking; `process_wait` blocks for the exit status.
+pub const ProcessSpawnFn = *const fn (
+    context: ?*anyopaque,
+    command: [*]const u8,
+    command_length: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+pub const ProcessAskFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+    answer: *i64,
+) callconv(.c) Answer;
+
+pub const ProcessPlainFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
 ) callconv(.c) Answer;
 
 /// How many program arguments there are.  Cannot fail, so it answers
@@ -1050,6 +1081,10 @@ pub const Host = extern struct {
     /// the slot null and the program traps `host_unavailable`.
     term_copy: ?TermWriteFn = null,
     standard_stream: ?StandardStreamFn = null,
+    process_spawn: ?ProcessSpawnFn = null,
+    process_ready: ?ProcessAskFn = null,
+    process_wait: ?ProcessAskFn = null,
+    process_finish_input: ?ProcessPlainFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -1111,6 +1146,10 @@ pub const Slot = enum(u32) {
     socket_close = 52,
     term_copy = 53,
     standard_stream = 54,
+    process_spawn = 55,
+    process_ready = 56,
+    process_wait = 57,
+    process_finish_input = 58,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

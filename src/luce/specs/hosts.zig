@@ -159,6 +159,13 @@ pub const World = struct {
     /// stale file handle can never alias one.
     standard_input: []const u8 = "",
     standard_read: usize = 0,
+    /// The one scripted child a world will spawn: what its output
+    /// says, how much has been read, and the status `wait` answers.
+    child_output: []const u8 = "",
+    child_read: usize = 0,
+    child_status: i64 = 0,
+    child_spawned: bool = false,
+    child_stdin_open: bool = false,
     // -- the transport (docs/NETWORK.md) -----------------------------
     //
     // One listener and one connected pair — the smallest world that
@@ -404,6 +411,43 @@ pub const World = struct {
     fn standardRole(handle: i64) ?i64 {
         if (handle < standard_base or handle > standard_base + 2) return null;
         return handle - standard_base;
+    }
+
+    const child_base: i64 = 12_000;
+
+    fn childSpawn(self: *World, handle: *i64) abi.Answer {
+        if (self.child_spawned) return .no;
+        self.child_spawned = true;
+        self.child_stdin_open = true;
+        self.child_read = 0;
+        handle.* = child_base;
+        return .yes;
+    }
+
+    fn childRole(handle: i64) bool {
+        return handle == child_base;
+    }
+
+    fn childReadFrom(self: *World, into: []u8, filled: *i64) abi.Answer {
+        if (!self.child_spawned) return .no;
+        const rest = self.child_output[self.child_read..];
+        const taken = @min(rest.len, into.len);
+        @memcpy(into[0..taken], rest[0..taken]);
+        self.child_read += taken;
+        filled.* = @intCast(taken);
+        return .yes;
+    }
+
+    fn childReady(self: *World, answer: *i64) abi.Answer {
+        if (!self.child_spawned) return .no;
+        answer.* = @intFromBool(self.child_read < self.child_output.len);
+        return .yes;
+    }
+
+    fn childWait(self: *World, answer: *i64) abi.Answer {
+        if (!self.child_spawned) return .no;
+        answer.* = self.child_status;
+        return .yes;
     }
 
     fn standardReadFrom(self: *World, into: []u8, filled: *i64) abi.Answer {
@@ -974,6 +1018,38 @@ fn HandleChannel(comptime Owner: type) type {
             return worldOf(context).standardAt(which, handle);
         }
 
+        fn processSpawn(
+            context: ?*anyopaque,
+            command: [*]const u8,
+            command_length: i64,
+            handle: *i64,
+        ) callconv(.c) abi.Answer {
+            const answer = worldOf(context).childSpawn(handle);
+            if (answer != .yes) return answer;
+            return note(context, "[spawn]", command[0..@intCast(command_length)]);
+        }
+
+        fn processReady(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) abi.Answer {
+            if (!World.childRole(handle)) return .no;
+            return worldOf(context).childReady(answer);
+        }
+
+        fn processWait(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) abi.Answer {
+            if (!World.childRole(handle)) return .no;
+            return worldOf(context).childWait(answer);
+        }
+
+        fn processFinishInput(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            if (!World.childRole(handle)) return .no;
+            const world = worldOf(context);
+            if (!world.child_spawned) return .no;
+            // Idempotent, like the real host: wait() finishes input on
+            // the way, and a feed already ended is agreement.
+            if (!world.child_stdin_open) return .yes;
+            world.child_stdin_open = false;
+            return note(context, "[child-eof]", "");
+        }
+
         fn read(
             context: ?*anyopaque,
             handle: i64,
@@ -981,6 +1057,9 @@ fn HandleChannel(comptime Owner: type) type {
             capacity: i64,
             filled: *i64,
         ) callconv(.c) abi.Answer {
+            if (World.childRole(handle)) {
+                return worldOf(context).childReadFrom(into[0..@intCast(capacity)], filled);
+            }
             if (World.standardRole(handle)) |role| {
                 if (role != 0) return .no;
                 return worldOf(context).standardReadFrom(into[0..@intCast(capacity)], filled);
@@ -995,6 +1074,14 @@ fn HandleChannel(comptime Owner: type) type {
             length: i64,
             written: *i64,
         ) callconv(.c) abi.Answer {
+            if (World.childRole(handle)) {
+                const world = worldOf(context);
+                if (!world.child_spawned or !world.child_stdin_open) return .no;
+                const answer = note(context, "[feed]", from[0..@intCast(length)]);
+                if (answer != .yes) return answer;
+                written.* = length;
+                return .yes;
+            }
             if (World.standardRole(handle)) |role| {
                 if (role == 0) return .no;
                 const tag: []const u8 = if (role == 1) "[stdout]" else "[stderr]";
@@ -1007,11 +1094,19 @@ fn HandleChannel(comptime Owner: type) type {
         }
 
         fn flush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            if (World.childRole(handle)) return .yes;
             if (World.standardRole(handle)) |role| return if (role != 0) .yes else .no;
             return worldOf(context).flushAt(handle);
         }
 
         fn close(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            if (World.childRole(handle)) {
+                const world = worldOf(context);
+                if (!world.child_spawned) return .no;
+                world.child_spawned = false;
+                world.child_stdin_open = false;
+                return .yes;
+            }
             // The descriptor belongs to the process; agreeing without
             // closing is the real host's behavior too.
             if (World.standardRole(handle) != null) return .yes;
@@ -1022,6 +1117,27 @@ fn HandleChannel(comptime Owner: type) type {
 
         fn standardPlain(context: ?*anyopaque, which: i64, handle: *i64) callconv(.c) i32 {
             return @intFromEnum(standard(context, which, handle));
+        }
+
+        fn processSpawnPlain(
+            context: ?*anyopaque,
+            command: [*]const u8,
+            command_length: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            return @intFromEnum(processSpawn(context, command, command_length, handle));
+        }
+
+        fn processReadyPlain(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) i32 {
+            return @intFromEnum(processReady(context, handle, answer));
+        }
+
+        fn processWaitPlain(context: ?*anyopaque, handle: i64, answer: *i64) callconv(.c) i32 {
+            return @intFromEnum(processWait(context, handle, answer));
+        }
+
+        fn processFinishInputPlain(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            return @intFromEnum(processFinishInput(context, handle));
         }
 
         fn openPlain(
@@ -1068,6 +1184,10 @@ fn HandleChannel(comptime Owner: type) type {
                 .context = owner,
                 .open = openPlain,
                 .standard = standardPlain,
+                .process_spawn = processSpawnPlain,
+                .process_ready = processReadyPlain,
+                .process_wait = processWaitPlain,
+                .process_finish_input = processFinishInputPlain,
                 .read = readPlain,
                 .write = writePlain,
                 .flush = flushPlain,
@@ -1420,6 +1540,10 @@ pub const Capture = struct {
             .shell_run = if (provided.shell) shellRun else null,
             .handle_open = if (provided.files) Handles.open else null,
             .standard_stream = if (provided.files) Handles.standard else null,
+            .process_spawn = if (provided.shell) Handles.processSpawn else null,
+            .process_ready = if (provided.shell) Handles.processReady else null,
+            .process_wait = if (provided.shell) Handles.processWait else null,
+            .process_finish_input = if (provided.shell) Handles.processFinishInput else null,
             .handle_read = if (provided.files) Handles.read else null,
             .handle_write = if (provided.files) Handles.write else null,
             .handle_flush = if (provided.files) Handles.flush else null,

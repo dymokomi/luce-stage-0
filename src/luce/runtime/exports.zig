@@ -734,6 +734,10 @@ pub export fn luce_rt_files_install(
     context: ?*anyopaque,
     open: ?files.OpenFn,
     standard: ?files.StandardFn,
+    process_spawn: ?files.ProcessSpawnFn,
+    process_ready: ?files.ProcessAskFn,
+    process_wait: ?files.ProcessAskFn,
+    process_finish_input: ?files.ProcessPlainFn,
     read: ?files.ReadFn,
     write: ?files.WriteFn,
     flush: ?files.FlushFn,
@@ -743,6 +747,10 @@ pub export fn luce_rt_files_install(
         .context = context,
         .open = open,
         .standard = standard,
+        .process_spawn = process_spawn,
+        .process_ready = process_ready,
+        .process_wait = process_wait,
+        .process_finish_input = process_finish_input,
         .read = read,
         .write = write,
         .flush = flush,
@@ -930,6 +938,92 @@ pub export fn luce_rt_gpu_surface_present(
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.flush, "gpu.surface", runtime.frameAt(function, instruction));
+    return completed(runtime);
+}
+
+pub export fn luce_rt_process_spawn(
+    runtime: *Runtime,
+    command: [*c]const u8,
+    length: i64,
+    out: [*c]Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    const named = checkedBytes(runtime, command, length) catch |mistake|
+        return failed(runtime, mistake);
+    const answer = files.spawn(runtime, named) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        runtime.raiseIo(.run, named, runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_process_ready(
+    runtime: *Runtime,
+    child: [*c]const Value,
+    out: [*c]i64,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    if (!requireValueInput(runtime, child)) return raised_trap;
+    const answer = files.processAsk(runtime, runtime.files.process_ready, child.*) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |ready| {
+        out.* = ready;
+    } else {
+        runtime.raiseIo(.read, files.pathOf(runtime, child.*), runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_process_wait(
+    runtime: *Runtime,
+    child: [*c]const Value,
+    out: [*c]i64,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    if (!requireValueInput(runtime, child)) return raised_trap;
+    const answer = files.processAsk(runtime, runtime.files.process_wait, child.*) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |status| {
+        out.* = status;
+    } else {
+        runtime.raiseIo(.run, files.pathOf(runtime, child.*), runtime.frameAt(function, instruction));
+    }
+    return completed(runtime);
+}
+
+pub export fn luce_rt_process_finish_input(
+    runtime: *Runtime,
+    child: [*c]const Value,
+    opened: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
+    if (!requireValueInput(runtime, child)) return raised_trap;
+    const answer = files.processFinishInput(runtime, child.*) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer == null) {
+        runtime.raiseIo(.write, files.pathOf(runtime, child.*), runtime.frameAt(function, instruction));
+    }
     return completed(runtime);
 }
 

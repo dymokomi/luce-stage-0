@@ -919,6 +919,38 @@ test "the standard streams read, write, and outlive their handles on both engine
         "[stdout]still open\n", session.printed());
 }
 
+test "a Process is fed, read, and waited on both engines" {
+    // The scripted child records its spawn and every feed in the
+    // transcript, serves scripted output, and answers a scripted
+    // status — so the conversation shape (spawn, feed, end of input,
+    // drain, wait) is pinned across both host tables.
+    var session = try hosted.compare(
+        \\import std.io
+        \\import std.os
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    let child = try os.Process("sort")
+        \\    try child.feed("b\na\n")
+        \\    try child.finish_input()
+        \\    assert(try child.ready())
+        \\    let all = try io.drain(child)
+        \\    let text = strings.from_bytes(all) else "?"
+        \\    print("got " + text)
+        \\    assert(not try child.ready())
+        \\    let status = try child.wait()
+        \\    print("status " + str(status))
+        \\
+    , .{ .world = .{ .child_output = "a\nb\n" } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("[spawn]sort\n" ++
+        "[feed]b\na\n\n" ++
+        "[child-eof]\n" ++
+        "got a\nb\n\n" ++
+        "status 0\n", session.printed());
+}
+
 test "term_style's defaults fill from the table, on both engines" {
     // docs/ARGS.md §3: the table is the builtin's signature, and its
     // two defaults — bg = -1, bold = false — are the whole of what

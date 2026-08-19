@@ -2365,6 +2365,37 @@ pub const Machine = struct {
                     break :blk .none;
                 };
             },
+            .process_spawn => {
+                const command = registers[arguments[0]].asStr();
+                const opened = try files.spawn(&self.runtime, command);
+                return opened orelse blk: {
+                    self.runtime.raiseIo(.run, command, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .process_ready => {
+                const held = registers[arguments[0]];
+                const answer = try files.processAsk(&self.runtime, self.runtime.files.process_ready, held);
+                return .ofBoolean((answer orelse blk: {
+                    self.runtime.raiseIo(.read, files.pathOf(&self.runtime, held), self.placeOf(site));
+                    break :blk 0;
+                }) != 0);
+            },
+            .process_wait => {
+                const held = registers[arguments[0]];
+                const answer = try files.processAsk(&self.runtime, self.runtime.files.process_wait, held);
+                return .ofI64(answer orelse blk: {
+                    self.runtime.raiseIo(.run, files.pathOf(&self.runtime, held), self.placeOf(site));
+                    break :blk 0;
+                });
+            },
+            .process_finish_input => {
+                const held = registers[arguments[0]];
+                const finished = try files.processFinishInput(&self.runtime, held);
+                if (finished == null)
+                    self.runtime.raiseIo(.write, files.pathOf(&self.runtime, held), self.placeOf(site));
+                return .none;
+            },
             .os_standard_stream => {
                 const which = registers[arguments[0]].asI64();
                 const opened = try files.standard(&self.runtime, which);

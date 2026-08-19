@@ -610,6 +610,10 @@ const Module = struct {
                 .normal,
             ),
             .standard_stream => builder.fnType(.i32, &.{ .ptr, .i64, .ptr }, .normal),
+            .process_spawn => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr }, .normal),
+            .process_ready => builder.fnType(.i32, &.{ .ptr, .i64, .ptr }, .normal),
+            .process_wait => builder.fnType(.i32, &.{ .ptr, .i64, .ptr }, .normal),
+            .process_finish_input => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
         };
     }
 
@@ -2608,6 +2612,10 @@ const Module = struct {
             context,
             try self.loadHostSlot(&wip, host, .handle_open, "files.open.fn"),
             try self.loadHostSlot(&wip, host, .standard_stream, "files.standard.fn"),
+            try self.loadHostSlot(&wip, host, .process_spawn, "files.spawn.fn"),
+            try self.loadHostSlot(&wip, host, .process_ready, "files.ready.fn"),
+            try self.loadHostSlot(&wip, host, .process_wait, "files.wait.fn"),
+            try self.loadHostSlot(&wip, host, .process_finish_input, "files.finish.fn"),
             try self.loadHostSlot(&wip, host, .handle_read, "files.read.fn"),
             try self.loadHostSlot(&wip, host, .handle_write, "files.write.fn"),
             try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
@@ -8349,6 +8357,44 @@ const Body = struct {
                 self.produced[register].value = try self.unboxed(made, box, "stream.value");
                 self.produced[register].box = box;
                 self.produced[register].outcome = opened;
+            },
+            .process_spawn => {
+                const command, const command_length = try self.textParts(of[0], "command");
+                const box = try self.scratch(self.module.value_type, value_alignment, "spawn.box");
+                const opened = try self.fileService(.luce_rt_process_spawn, &.{
+                    command,
+                    command_length,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "spawn.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
+            .process_ready => {
+                const answer = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "ready.answer");
+                const outcome = try self.fileService(.luce_rt_process_ready, &.{
+                    try self.boxedRegister(of[0], "child"),
+                    answer,
+                });
+                const raw = try self.wip.load(.normal, .i64, answer, Builder.Alignment.fromByteUnits(8), "ready.raw");
+                self.produced[register].value = try self.wip.icmp(.ne, raw, try self.module.builder.intValue(.i64, 0), "ready.bool");
+                self.produced[register].outcome = outcome;
+            },
+            .process_wait => {
+                const answer = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "wait.answer");
+                const outcome = try self.fileService(.luce_rt_process_wait, &.{
+                    try self.boxedRegister(of[0], "child"),
+                    answer,
+                });
+                self.produced[register].value = try self.wip.load(.normal, .i64, answer, Builder.Alignment.fromByteUnits(8), "wait.status");
+                self.produced[register].outcome = outcome;
+            },
+            .process_finish_input => {
+                const outcome = try self.fileService(.luce_rt_process_finish_input, &.{
+                    try self.boxedRegister(of[0], "child"),
+                });
+                self.produced[register].outcome = outcome;
             },
             .print_error => {
                 const text, const length = try self.textParts(of[0], "diagnostic");
