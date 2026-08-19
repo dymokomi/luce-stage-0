@@ -148,6 +148,7 @@ function indentationCorrection(textThroughPreviousLine, previousLine, currentLin
 
 function activate(context) {
   const vscode = require("vscode");
+  require("./lsp.js").startClient(vscode, context);
   const provider = {
     provideOnTypeFormattingEdits(document, position, character) {
       if (character !== "\n" || position.line === 0) return [];

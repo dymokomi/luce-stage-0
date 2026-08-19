@@ -1,8 +1,8 @@
 {
   "name": "luce-language",
   "displayName": "Luce Language",
-  "description": "Syntax highlighting and brace-aware editor configuration for Luce.",
-  "version": "0.4.1",
+  "description": "Syntax highlighting, brace-aware editing, and the Luce language server for VS Code.",
+  "version": "0.5.0",
   "publisher": "luciaos",
   "license": "UNLICENSED",
   "engines": {
@@ -10,7 +10,7 @@
   },
   "main": "./extension.js",
   "scripts": {
-    "test": "node --test extension.test.js"
+    "test": "node --test"
   },
   "categories": [
     "Programming Languages"
@@ -28,6 +28,7 @@
   },
   "files": [
     "extension.js",
+    "lsp.js",
     "language-configuration.json",
     "syntaxes/luce.tmLanguage.json",
     "README.md"
@@ -73,6 +74,24 @@
           }
         ]
       }
+    },
+    "configuration": {
+      "title": "Luce",
+      "properties": {
+        "luce.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Luce language server for diagnostics."
+        },
+        "luce.lsp.serverPath": {
+          "type": "string",
+          "default": "luce-lsp",
+          "description": "Command for the Luce language server; found on PATH when not absolute."
+        }
+      }
     }
-  }
+  },
+  "activationEvents": [
+    "onLanguage:luce"
+  ]
 }
