@@ -78,13 +78,36 @@ function publishedFor(body, uri) {
   return rows;
 }
 
+/** Where the server lives.  An explicit setting wins; otherwise PATH
+ *  (a development toolchain), and then the installer's default home —
+ *  a GUI-launched editor often has no shell PATH, and the installed
+ *  toolchain should still answer. */
+function findServer(setting) {
+  if (setting && setting !== "luce-lsp") return setting;
+  const path = require("path");
+  const fs = require("fs");
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    try {
+      fs.accessSync(path.join(dir, "luce-lsp"), fs.constants.X_OK);
+      return "luce-lsp";
+    } catch {}
+  }
+  const installed = path.join(require("os").homedir(), ".local", "luce", "bin", "luce-lsp");
+  try {
+    fs.accessSync(installed, fs.constants.X_OK);
+    return installed;
+  } catch {}
+  return "luce-lsp";
+}
+
 /** Start the server and wire one document's diagnostics.  Everything
  *  vscode- and process-shaped lives here so the functions above stay
  *  pure for the tests. */
 function startClient(vscode, context) {
   const configured = vscode.workspace.getConfiguration("luce");
   if (configured.get("lsp.enabled") === false) return;
-  const command = configured.get("lsp.serverPath") || "luce-lsp";
+  const command = findServer(configured.get("lsp.serverPath"));
 
   const { spawn } = require("child_process");
   let server;
@@ -186,4 +209,4 @@ function startClient(vscode, context) {
   for (const document of vscode.workspace.textDocuments) tell(document, "open");
 }
 
-module.exports = { extractFrames, frame, publishedFor, startClient };
+module.exports = { extractFrames, findServer, frame, publishedFor, startClient };

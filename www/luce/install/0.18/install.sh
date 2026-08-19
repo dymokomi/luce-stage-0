@@ -15,7 +15,7 @@ install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
 editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
 profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
-extension_version=0.4.0
+extension_version=0.5.1
 termui_version=0.5.0
 
 system=$(uname -s)
@@ -317,6 +317,22 @@ for tool in luce loom editor; do
         exit 1
     fi
 done
+# The language server ships in the macOS archive today; a Linux
+# archive that predates it installs without one, and the editors
+# simply work without inline diagnostics until the next release.
+case "$platform" in
+    macos-*)
+        if [ ! -x "$release/bin/luce-lsp" ]; then
+            echo "luce: release archive is missing bin/luce-lsp" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        if [ ! -x "$release/bin/luce-lsp" ]; then
+            echo "note: this platform's archive has no language server yet"
+        fi
+        ;;
+esac
 for library in libluce_rt.a libluce_start.a; do
     if [ ! -f "$release/lib/$library" ]; then
         echo "luce: release archive is missing lib/$library" >&2
@@ -348,6 +364,7 @@ done
 extension_source="$release/share/vscode/extensions/$extension_id-$extension_version"
 if [ ! -f "$extension_source/package.json" ] ||
     [ ! -f "$extension_source/extension.js" ] ||
+    [ ! -f "$extension_source/lsp.js" ] ||
     [ ! -f "$extension_source/language-configuration.json" ] ||
     [ ! -f "$extension_source/syntaxes/luce.tmLanguage.json" ]; then
     echo "luce: release archive is missing the VS Code extension" >&2

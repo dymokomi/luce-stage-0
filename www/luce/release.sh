@@ -124,7 +124,7 @@ assemble_archive() {
 
     mkdir -p "$release_tree/bin" "$release_tree/lib" "$extension_tree/syntaxes" \
         "$release_tree/share/licenses/luce" "$release_tree/share/luce"
-    for tool in luce loom editor; do
+    for tool in luce loom editor luce-lsp; do
         if [ ! -x "$prefix/$tool" ]; then
             echo "luce release: $platform prefix is missing $tool" >&2
             exit 1
@@ -197,6 +197,7 @@ assemble_archive() {
     esac
     cp "$extension_source/package.json" "$extension_tree/package.json"
     cp "$extension_source/extension.js" "$extension_tree/extension.js"
+    cp "$extension_source/lsp.js" "$extension_tree/lsp.js"
     cp "$extension_source/language-configuration.json" "$extension_tree/language-configuration.json"
     cp "$extension_source/README.md" "$extension_tree/README.md"
     cp "$extension_source/syntaxes/luce.tmLanguage.json" "$extension_tree/syntaxes/luce.tmLanguage.json"
@@ -213,7 +214,7 @@ verify_macos_minimum() {
         echo "luce release: otool is required to verify the macOS deployment target" >&2
         exit 1
     }
-    for tool in luce loom editor; do
+    for tool in luce loom editor luce-lsp; do
         minimum=$(otool -l "$prefix/$tool" | awk '
             $1 == "cmd" && $2 == "LC_BUILD_VERSION" { in_build = 1; next }
             in_build && $1 == "minos" { print $2; exit }
@@ -259,7 +260,15 @@ cp "$root/LICENSE-ZIG" "$macos_third_party/ZIG-LICENSE.txt"
 verify_macos_minimum "$macos_prefix"
 assemble_archive macos-aarch64 "$macos_prefix"
 
+# `LUCE_RELEASE_SKIP_LINUX=1` refreshes only the macOS archive — for a
+# change that does not touch the Linux binaries — and the publisher is
+# responsible for carrying the existing Linux archives forward.
+skip_linux="${LUCE_RELEASE_SKIP_LINUX:-}"
 for architecture in aarch64 x86_64; do
+    if [ -n "$skip_linux" ]; then
+        echo "==> Linux $architecture skipped (LUCE_RELEASE_SKIP_LINUX)"
+        continue
+    fi
     case "$architecture" in
         aarch64) linux_prefix=$linux_aarch64_prefix_override ;;
         x86_64) linux_prefix=$linux_x86_64_prefix_override ;;
@@ -282,6 +291,10 @@ echo "==> macOS installer smoke"
 "$here/install-smoke.sh" "$release_output" "$release_work/smoke-macos-aarch64"
 
 for architecture in aarch64 x86_64; do
+    if [ -n "$skip_linux" ]; then
+        echo "==> Linux $architecture installer smoke skipped (LUCE_RELEASE_SKIP_LINUX)"
+        continue
+    fi
     case "$architecture" in
         aarch64)
             platform=linux/arm64

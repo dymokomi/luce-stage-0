@@ -114,7 +114,7 @@ archive_tree="$archive_base/luce-$version"
 archive_name="luce-${version}-linux-x86_64.tar.gz"
 mkdir -p "$archive_tree/bin" "$archive_tree/lib/termui-0.5.0" \
     "$archive_tree/share/licenses/third-party" \
-    "$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0/syntaxes" \
+    "$archive_tree/share/vscode/extensions/luciaos.luce-language-0.5.1/syntaxes" \
     "$archive_tree/share/luce"
 printf '%s\n' "$version" >"$archive_tree/VERSION"
 archive_source=0123456789012345678901234567890123456789
@@ -140,9 +140,10 @@ for package_file in luce.yaml termui.luc model.luc input.luc layout.luc \
     constraints.luc widgets.luc canvas.luc view.luc runtime.luc; do
     printf '%s\n' fixture >"$archive_tree/lib/termui-0.5.0/$package_file"
 done
-extension_tree="$archive_tree/share/vscode/extensions/luciaos.luce-language-0.4.0"
+extension_tree="$archive_tree/share/vscode/extensions/luciaos.luce-language-0.5.1"
 printf '%s\n' '{}' >"$extension_tree/package.json"
 printf '%s\n' fixture >"$extension_tree/extension.js"
+printf '%s\n' fixture >"$extension_tree/lsp.js"
 printf '%s\n' fixture >"$extension_tree/language-configuration.json"
 printf '%s\n' '{}' >"$extension_tree/syntaxes/luce.tmLanguage.json"
 ln -s /tmp/luce-installer-outside "$archive_tree/unsafe-link"

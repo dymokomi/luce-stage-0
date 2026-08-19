@@ -87,7 +87,7 @@ printf '%s\n' \
 test "$("$smoke/package_app")" = "│ready   │"
 
 if [ "$(uname -s)" = Linux ]; then
-    for tool in luce loom editor; do
+    for tool in luce loom editor luce-lsp; do
         dependencies=$(ldd "$smoke_install/bin/$tool")
         if printf '%s\n' "$dependencies" | grep -E 'libLLVM|libstdc\+\+|libz3|libxml2|libzstd|libedit|not found' >/dev/null; then
             echo "installer smoke: installed $tool has an unpublished Linux dependency" >&2
