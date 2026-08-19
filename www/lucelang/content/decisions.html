@@ -1,0 +1,44 @@
+<p class="lede">Checked integers need overflow branches. Isolated workers need graph transfer. Separate structs and classes need two storage models. This section follows how each language rule shapes the compiler and runtime.</p>
+
+<h2 id="principles">How decisions affect the system</h2>
+
+<div class="cards">
+  <a class="card" href="@/decisions/explicitness/"><strong>Make representation changes visible</strong><span>Types name widths; conversions, identity, failure, host effects, and worker boundaries are explicit.</span></a>
+  <a class="card" href="@/runtime/"><strong>Share runtime operations</strong><span>Native code and the oracle call the same object, collection, text, worker, and trap implementations.</span></a>
+  <a class="card" href="@/compiler/"><strong>Record decisions by stage</strong><span>Parsing builds syntax, semantics resolves source rules, lowering emits operations, and verification checks MIR.</span></a>
+  <a class="card" href="@/execution/artifacts/"><strong>Check native artifacts</strong><span>Version and identity tags determine whether the loader can use an artifact or should rebuild it.</span></a>
+  <a class="card" href="@/execution/oracle/"><strong>Compare behavior broadly</strong><span>Output, errors, traps, traces, host world, and live objects all count as language behavior.</span></a>
+  <a class="card" href="@/decisions/change-map/"><strong>Update affected layers</strong><span>A feature may change representations, specifications, public pages, and artifact versions.</span></a>
+</div>
+
+<h2 id="architecture">The architecture in four arrows</h2>
+
+<div class="layer-stack">
+  <div class="layer zig"><strong>apps → luce module</strong><span>products consume the language through its public compiler/runtime surface</span></div>
+  <div class="layer zig"><strong>specs → both paths</strong><span>each program runs through native code and the MIR interpreter</span></div>
+  <div class="layer zig"><strong>both paths → runtime</strong><span>ARC and dynamic semantics have one body</span></div>
+  <div class="layer machine"><strong>artifact → host table</strong><span>native code reaches files, clocks, terminals, and other services through a versioned capability interface</span></div>
+</div>
+
+<h2 id="boundaries">How pre-1.0 changes are handled</h2>
+
+<p>Before 1.0, a changed spelling or model replaces its earlier form across source, implementation, tests, and documentation. MIR and native ABI versions make older artifacts fail validation so they can be rebuilt from source.</p>
+
+<div class="decision">
+  <p><strong>Compatibility and correctness are different jobs.</strong> A stale cache can recompile. Preserving two meanings for one pre-release feature would make every later stage and document carry permanent branching complexity.</p>
+</div>
+
+<h2 id="non-goals">Current implementation scope</h2>
+
+<p>The current implementation centers on native code, one shared runtime, explicit numeric conversion, ARC, final classes, isolated worker heaps, and static name and type resolution. New language mechanisms must define their source rule, representation, runtime behavior, and tests across both execution paths.</p>
+
+<h2 id="documents">How to read the repository documents</h2>
+
+<p>Reference documents describe implemented behavior. Plans describe possible future syntax in plain text. Decision records explain established boundaries and the reasons behind them. The document index labels each category.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/CLAUDE.md" data-source="CLAUDE.md">repository architecture</a>
+  <a class="source-link" href="@repo/docs/SOFTWARE_DESIGN.md" data-source="docs/SOFTWARE_DESIGN.md">design discipline</a>
+  <a class="source-link" href="@repo/docs/README.md" data-source="docs/README.md">document categories</a>
+  <a class="source-link" href="@repo/docs/V2.md" data-source="docs/V2.md">product north star</a>
+</div>

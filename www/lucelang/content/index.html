@@ -1,0 +1,103 @@
+<p class="lede">You write functions, names, and <code>if</code> statements. The processor executes instructions such as <code>lsl</code>, <code>cmp</code>, and <code>csel</code>. This site follows how the compiler turns the first form into the second.</p>
+
+<div class="story-opening">
+  <span class="eyebrow">Start with one small program</span>
+  <p>Suppose we double a number and cap the result at ten. The number comes from the command line, so the final machine code performs the calculation while the program runs.</p>
+</div>
+
+<div class="code"><pre><code><span class="k">func</span> <span class="d">clamp_double</span>(value: i64, limit: i64) -&gt; i64:
+    <span class="k">let</span> doubled = value * <span class="n">2</span>
+    <span class="k">if</span> doubled &gt; limit:
+        <span class="k">return</span> limit
+    <span class="k">return</span> doubled
+
+<span class="k">func</span> <span class="d">main</span>(args: list[str]):
+    <span class="b">print</span>(<span class="b">str</span>(clamp_double(<span class="b">len</span>(args), <span class="n">10</span>)))</code></pre></div>
+
+<p>There are two useful ways to read this program. From the top, it is a tiny story about a number. From the bottom, it is a set of storage choices, overflow checks, branches, calls, and cleanup. Luce’s compiler connects those views.</p>
+
+<h2 id="surprise">The machine-code result</h2>
+
+<p>After Luce has checked the program and LLVM has optimized it, the heart of <code>clamp_double</code> becomes these ARM64 instructions:</p>
+
+<div class="code annotated-code"><pre><code><span class="line"><b>mov</b>  x9, #0x4000000000000000 <i>Load the signed safe-half boundary.</i></span>
+<span class="line"><b>cmn</b>  x8, x9                  <i>Can doubling overflow?</i></span>
+<span class="line"><b>b.mi</b> overflow                 <i>If so, take Luce’s trap path.</i></span>
+<span class="line"><b>lsl</b>  x8, x8, #1              <i>Multiply by two with a left shift.</i></span>
+<span class="line"><b>cmp</b>  x8, #0xa                <i>Compare the result with ten.</i></span>
+<span class="line"><b>csel</b> x8, x8, x9, lt          <i>Choose the result or the limit.</i></span></code></pre></div>
+
+<p>LLVM uses a left shift because shifting by one doubles a binary integer. It uses <code>csel</code> because ARM64 can choose the capped result directly from the comparison flags. The preceding <code>cmn</code> and <code>b.mi</code> preserve Luce’s rule that signed overflow raises a trap.</p>
+
+<p><a class="story-link" href="@/execution/walkthrough/">Read the line-by-line journey →</a></p>
+
+<h2 id="four-views">The same program at four stages</h2>
+
+<p>Use the buttons below to move from Luce source to MIR, LLVM IR, and the ARM64 instructions stored in the emitted object. Each low-level tab includes a guide to the operations that appear in that file.</p>
+
+<!-- trace:journey -->
+
+<h2 id="map">Where do you want to zoom in?</h2>
+
+<p>The first row explains the compiler in order. The second row starts from a language feature—such as a class or a worker—and follows that one feature all the way to its runtime and machine-code consequences.</p>
+
+<div class="system-grid route-grid">
+  <a class="system-card" href="@/compiler/"><span class="route-number">01</span><strong>Follow the compiler</strong><span>Bytes → tokens → tree → checked meaning → MIR → LLVM → object code.</span></a>
+  <a class="system-card" href="@/execution/walkthrough/"><span class="route-number">02</span><strong>Follow one program</strong><span>The full story above, with every representation explained side by side.</span></a>
+  <a class="system-card" href="@/language/"><span class="route-number">03</span><strong>Pick a language feature</strong><span>Variables, numbers, text, control flow, functions, structs, classes, interfaces, unions, failure, and collections.</span></a>
+  <a class="system-card" href="@/runtime/"><span class="route-number">04</span><strong>Look under memory</strong><span>ARC, closures, worker heaps, resources, and the host boundary.</span></a>
+  <a class="system-card" href="@/library/"><span class="route-number">05</span><strong>See what is Zig or Luce</strong><span>A file-by-file map of the compiler, runtime, standard library, and packages.</span></a>
+  <a class="system-card" href="@/decisions/"><span class="route-number">06</span><strong>Understand the trade-offs</strong><span>Why Luce checks overflow, separates values from identity, and avoids shared worker heaps.</span></a>
+</div>
+
+<h2 id="pipeline">The big picture</h2>
+
+<p>A compiler reaches assembly through a sequence of representations. Each stage answers a different question and records its answer for the next stage.</p>
+
+<figure class="diagram narrative-pipeline">
+  <figcaption><strong>From what you wrote to what the processor runs</strong><span>Click any stage to go deeper</span></figcaption>
+  <div class="pipeline-map" aria-label="The Luce compiler pipeline">
+    <a href="@/compiler/source/"><span class="stage-no">01</span><b>Source</b><small>Which bytes and files?</small></a>
+    <a href="@/compiler/lexing/"><span class="stage-no">02</span><b>Tokens</b><small>Where do words and blocks end?</small></a>
+    <a href="@/compiler/parsing/"><span class="stage-no">03</span><b>AST</b><small>What is inside what?</small></a>
+    <a href="@/compiler/semantics/"><span class="stage-no">04</span><b>HIR</b><small>What does each thing mean?</small></a>
+    <a href="@/compiler/hir-mir/"><span class="stage-no">05</span><b>MIR</b><small>What exact work must happen?</small></a>
+    <a href="@/compiler/codegen/"><span class="stage-no">06</span><b>LLVM IR</b><small>How does that work fit this target?</small></a>
+    <a href="@/execution/native/"><span class="stage-no">07</span><b>Assembly</b><small>Which native instructions?</small></a>
+    <a href="@/execution/artifacts/"><span class="stage-no">08</span><b>Program</b><small>How is it linked and loaded?</small></a>
+  </div>
+</figure>
+
+<div class="plain-note">
+  <p><strong>AST, HIR, MIR—three names worth keeping straight.</strong> The AST records the grammar you wrote. HIR records resolved names, types, calls, and ownership. MIR is the smaller instruction language handed to the LLVM backend.</p>
+</div>
+
+<h2 id="two-paths">How do we know both views agree?</h2>
+
+<p>People run the native path. The test suite also runs the same MIR through a separate interpreter. It compares output, errors, traps, files touched, and objects left alive. If the assembly path prints the right text but leaks a class, the test still fails.</p>
+
+<figure class="diagram">
+  <figcaption><strong>One checked program, two independent executions</strong><span>The harness compares both records field by field</span></figcaption>
+  <div class="fork-flow">
+    <div class="flow-node wide root"><b>Verified MIR</b><small>one precise program</small></div>
+    <div class="fork" aria-hidden="true">⋔</div>
+    <div class="flow-node owner-machine"><b>LLVM → ARM64</b><small>the path users run</small></div>
+    <div class="flow-node owner-zig"><b>Compare everything</b><small>output, failures, host state, leaks</small></div>
+    <div class="flow-node owner-zig"><b>MIR interpreter</b><small>the independent test path</small></div>
+    <div class="flow-node owner-zig"><b>Shared runtime</b><small>one ARC and container implementation</small></div>
+  </div>
+</figure>
+
+<h2 id="orientation">Who implements each layer</h2>
+
+<p>The compiler and runtime are written in Zig. Most standard-library policy—JSON, paths, HTTP, ZIP, string algorithms—is ordinary Luce. LLVM optimizes and selects native instructions. The operating system links, loads, and supplies optional host services. The <a href="@/library/luce-zig/">Luce ↔ Zig map</a> names the boundary file by file.</p>
+
+<div class="honesty">
+  <p><strong>This site explains the implementation.</strong> To learn how to write and deploy Luce programs, use <a href="https://luce.luciaos.com">luce.luciaos.com</a>.</p>
+</div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/compile.zig" data-source="src/luce/compile.zig">compiler driver</a>
+  <a class="source-link" href="@repo/src/luce/codegen.zig" data-source="src/luce/codegen.zig">LLVM lowering</a>
+  <a class="source-link" href="@repo/docs/PIPELINE.md" data-source="docs/PIPELINE.md">pipeline contract</a>
+</div>

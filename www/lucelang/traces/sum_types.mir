@@ -1,0 +1,46 @@
+union State:
+    idle
+    running(progress: i64)
+func score(state: State) -> i64
+    local %1 (temporary): State
+    local %2 progress: i64
+  b0:
+    r0 = local_get %0
+    local_set %1, r0
+    r2 = local_get %1
+    r3 = variant_tag r2
+    r4 = const 0
+    r5 = equal.i64 r3, r4
+    branch r5, b1, b3
+  b1:
+    r7 = const 0
+    ret r7
+  b2:
+    trap missing_return
+  b3:
+    r9 = local_get %1
+    r10 = variant_field r9, State.running.progress
+    local_set %2, r10
+    r12 = local_get %2
+    ret r12
+func main(args: list[str]) -> None
+    local %1 (temporary): State
+    local %2 state: State
+    local %3 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = variant_make State.running, r1
+    local_set %2, r2
+    r4 = local_get %2
+    r5 = call score, r4
+    r6 = intrinsic str_value, r5
+    local_set %3, r6
+    intrinsic print, r6
+    r9 = local_get %3
+    r10 = intrinsic drop_storage, r9
+    local_set %3, r10
+    r12 = local_get %2
+    r13 = intrinsic drop_storage, r12
+    local_set %2, r13
+    ret

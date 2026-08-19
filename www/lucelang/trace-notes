@@ -1,0 +1,174 @@
+# stage|grep pattern|term shown to the reader|why it appears
+mir|^class |class NAME|Declares a reference type with shared identity. Its fields live in an ARC-managed runtime object.
+mir|^struct |struct NAME|Declares a value type whose fields are copied or retained as one aggregate.
+mir|^interface |interface NAME|Declares a method contract. A conforming value carries a payload and a witness table for these calls.
+mir|^union |union NAME|Declares a tagged value whose active case determines the payload layout and match path.
+mir|^func |func …|Starts one MIR function and lists the source-level parameters with their resolved types.
+mir|^[[:space:]]+local %[0-9]+|local %N|Reserves a typed local slot. The slot gives later blocks a stable place to read or replace.
+mir|^[[:space:]]+b[0-9]+:|b0, b1, …|Names a basic block. Control enters at the label and runs until a branch, jump, trap, or return chooses what happens next.
+mir|r[0-9]+ =|r0, r1, …|Names one typed intermediate result. Each register is assigned once, which makes data flow explicit.
+mir|local_get|local_get|Reads a local slot into a fresh MIR register so this use has a precise value and type.
+mir|local_set|local_set|Writes a register into a local slot. Later blocks read that slot after control-flow paths join.
+mir| const |const|Creates a typed literal such as 2 or 10 inside the instruction stream.
+mir|add\.i64|add.i64|Adds two signed 64-bit integers. The type suffix selects the overflow and representation rules.
+mir|subtract\.i64|subtract.i64|Subtracts signed 64-bit integers under Luce's checked-arithmetic rule.
+mir|multiply\.i64|multiply.i64|Multiplies signed 64-bit integers and carries Luce's overflow behavior into the backend.
+mir|floor_divide\.i64|floor_divide.i64|Computes signed floor division, including the language's zero and overflow checks.
+mir|greater\.i64|greater.i64|Compares two signed 64-bit values and produces a Boolean register for a later branch.
+mir|less\.i64|less.i64|Tests signed less-than and produces a Boolean register.
+mir|less_equal\.i64|less_equal.i64|Tests signed less-than-or-equal and produces a Boolean register.
+mir|equal\.i64|equal.i64|Tests two signed 64-bit values for equality.
+mir|add\.str|add.str|Requests string concatenation. The runtime allocates UTF-8 storage and returns an owned string value.
+mir| intrinsic |intrinsic NAME|Invokes a language operation with runtime rules recorded by the compiler. The name identifies the operation.
+mir|intrinsic len|intrinsic len|Reads the logical length defined by the value's type, such as argument count or Unicode-scalar count.
+mir|intrinsic str_value|intrinsic str_value|Converts a typed value into owned text through Luce's string conversion rules.
+mir|intrinsic print|intrinsic print|Sends text through the installed host output capability.
+mir|intrinsic append_value|intrinsic append_value|Appends a value to a list and applies the element's ownership rule during storage.
+mir|intrinsic index_get|intrinsic index_get|Checks an index and loads the selected element using the collection's value representation.
+mir|intrinsic retain|intrinsic retain|Adds one strong owner before another place begins holding the same reference.
+mir|intrinsic release|intrinsic release|Removes one strong owner and runs destruction when the count reaches zero.
+mir|intrinsic own_storage|intrinsic own_storage|Turns temporary storage into an owned value that can safely outlive the current expression.
+mir|intrinsic drop_storage|intrinsic drop_storage|Releases any reference held by a temporary value and leaves that temporary in its empty state.
+mir|intrinsic raise_error|intrinsic raise_error|Creates the recoverable error path declared by the current function.
+mir|intrinsic errored|intrinsic errored|Checks whether a fallible call returned through its error channel.
+mir|intrinsic task_wait|intrinsic task_wait|Waits for a worker result and transfers the returned value into this runtime.
+mir|intrinsic export_storage|intrinsic export_storage|Moves owned temporary storage across a return boundary so the caller receives responsibility for releasing it.
+mir|intrinsic forget|intrinsic forget|Clears a recoverable error after <code>catch</code> has selected and handled that path.
+mir| call |call NAME|Calls a resolved function directly. MIR already knows the target and argument order.
+mir|call_indirect|call_indirect|Calls through a function value containing code plus an optional captured environment.
+mir|const_function|const_function|Creates a function value for a named function whose code address is known.
+mir|struct_make|struct_make|Builds a value aggregate from fields in declared layout order.
+mir|struct_get|struct_get|Extracts one field from a value aggregate.
+mir|struct_set|struct_set|Replaces one field in a mutable class or value receiver using the field's ownership rule.
+mir|heap_new|heap_new|Allocates a runtime object row for a class or other reference-backed value.
+mir|interface_make|interface_make|Pairs an owned payload with the witness table selected during semantic analysis.
+mir|interface_call|interface_call|Loads the chosen witness slot and calls the implementation for the stored payload.
+mir|variant_make|variant_make|Builds a tagged union value from a case tag and its payload.
+mir|variant_tag|variant_tag|Reads the active union case so control flow can select the matching arm.
+mir|variant_field|variant_field|Reads the payload after the active case has been established.
+mir| spawn |spawn|Copies sendable arguments into a worker runtime and starts the declared function there.
+mir|^[[:space:]]+branch |branch CONDITION, TRUE, FALSE|Chooses one of two basic blocks from a Boolean register.
+mir|^[[:space:]]+jump |jump BLOCK|Continues execution at one known basic block.
+mir|^[[:space:]]+trap |trap|Ends the run with a stable trap code and source position.
+mir|^[[:space:]]+unwind|unwind|Returns through the recoverable-error channel after the error value has been recorded.
+mir|^[[:space:]]+ret|ret|Returns the current function's result to its caller and closes the current control-flow path.
+llvm|^@|@name = …|Defines module data such as text constants, source positions, function records, and the artifact identity tag.
+llvm|^define |define … @name|Begins a generated function. The parameter attributes tell LLVM which pointers are valid, writable, or read-only.
+llvm|^declare |declare … @name|Declares a runtime or LLVM helper whose body is provided elsewhere.
+llvm|^[0-9]+:$|numeric label|Starts an LLVM basic block. Every branch names one of these labels as its destination.
+llvm|%[0-9]+ =|%0, %1, …|Names an SSA value. Each name is assigned once, allowing LLVM to trace definitions and uses directly.
+llvm| alloca |alloca|Reserves a stack slot for a local value, return area, or temporary aggregate.
+llvm| getelementptr |getelementptr|Calculates the address of a field or indexed element while preserving LLVM's type and bounds information.
+llvm| load |load|Copies a typed value from memory into an SSA value.
+llvm| store |store|Copies an SSA value into a stack slot, object field, return area, or runtime structure.
+llvm| icmp |icmp|Compares integers or pointers and produces the one-bit condition consumed by a branch or select.
+llvm|^[[:space:]]+br |br|Transfers control to another block. With an <code>i1</code> operand it chooses between two destinations.
+llvm| select |select|Chooses one of two SSA values from a condition, which can become a branch-free machine instruction.
+llvm| switch |switch|Dispatches an integer tag to several blocks, commonly for a union case or match.
+llvm| call |call|Invokes a generated function, a runtime helper, a host callback, or an LLVM intrinsic.
+llvm| extractvalue |extractvalue|Reads one field from an SSA aggregate, such as the result and overflow bit returned together.
+llvm| insertvalue |insertvalue|Builds an SSA aggregate one field at a time.
+llvm| ptrtoint |ptrtoint|Encodes a pointer as an integer field inside Luce's uniform runtime value representation.
+llvm| inttoptr |inttoptr|Recovers a pointer from the integer field of Luce's uniform runtime value representation.
+llvm| zext |zext|Widens an unsigned value by filling the new high bits with zero.
+llvm| trunc |trunc|Keeps the low bits while converting to a narrower integer representation.
+llvm| lshr |lshr|Shifts bits right and fills the high side with zero; this is useful for unpacking handle fields.
+llvm| and |and|Combines or masks bits, often to inspect a flag in a packed handle or status value.
+llvm| or |or|Sets or combines bits in a packed value.
+llvm| xor |xor|Flips selected bits or combines Boolean conditions.
+llvm| add |add|Adds integer values or address-related offsets under the flags attached to the instruction.
+llvm| sub |sub|Subtracts integer values; the generated entry code also uses it to update the call-depth budget.
+llvm| mul |mul|Multiplies integers after the language-specific checks have been represented.
+llvm| sdiv |sdiv|Performs signed integer division after the required trap conditions are handled.
+llvm| srem |srem|Computes the signed remainder used to implement the language's division rule.
+llvm|^  ret |ret|Returns a status or value and ends the current basic block.
+llvm|@llvm\.smul\.with\.overflow\.i64|@llvm.smul.with.overflow.i64|Returns the signed product and a one-bit overflow result together. Luce branches to its overflow trap when that bit is set.
+llvm|@llvm\.sadd\.with\.overflow\.i64|@llvm.sadd.with.overflow.i64|Returns a signed sum together with the overflow bit required by checked addition.
+llvm|@llvm\.ssub\.with\.overflow\.i64|@llvm.ssub.with.overflow.i64|Returns a signed difference together with the overflow bit required by checked subtraction.
+llvm|@llvm\.memcpy\.inline|@llvm.memcpy.inline|Copies a small fixed-size value representation; LLVM can expand it directly for the target.
+llvm|@luce_rt_open|@luce_rt_open|Creates the per-run runtime state and installs the table used to turn function numbers into source-aware traces.
+llvm|@luce_rt_close|@luce_rt_close|Closes the per-run runtime state after the final status and reports have been collected.
+llvm|@luce_rt_args_list|@luce_rt_args_list|Builds the owned <code>list[str]</code> passed to <code>main</code> from the host's argument callbacks.
+llvm|@luce_rt_status|@luce_rt_status|Combines the generated function result with runtime trap, error, exhaustion, and exit state.
+llvm|@luce_rt_report_error|@luce_rt_report_error|Sends an uncaught recoverable error through the host's error-report callback.
+llvm|@luce_rt_report\(|@luce_rt_report|Sends the completed trap report through the host callback selected by the entry wrapper.
+llvm|@luce_rt_leaked|@luce_rt_leaked|Reads the live-object count used to detect references that remain after program cleanup.
+llvm|@luce_rt_exhaust|@luce_rt_exhaust|Records allocation exhaustion in the current run so the entry wrapper returns the corresponding status.
+llvm|@luce_rt_raise_error|@luce_rt_raise_error|Stores a recoverable error value and source origin for propagation through a fallible call.
+llvm|@luce_rt_forget_error|@luce_rt_forget_error|Clears a recoverable error after generated <code>catch</code> code has handled it.
+llvm|@luce_rt_raise\(|@luce_rt_raise|Records a source-aware trap in the runtime so every execution path reports the same code and location.
+llvm|@luce_rt_unwound|@luce_rt_unwound|Adds one generated function frame while a trap or uncaught error travels toward the entry point.
+llvm|@luce_rt_retain|@luce_rt_retain|Adds a strong owner to a runtime object handle.
+llvm|@luce_rt_release|@luce_rt_release|Removes a strong owner and triggers destruction at zero.
+llvm|@luce_rt_own_storage|@luce_rt_own_storage|Turns temporary storage into an owned runtime value for a destination or result.
+llvm|@luce_rt_export_storage|@luce_rt_export_storage|Transfers owned storage from a callee's temporary into its result value.
+llvm|@luce_rt_drop_storage|@luce_rt_drop_storage|Releases reference-bearing fields in a temporary runtime value.
+llvm|@luce_rt_str\(|@luce_rt_str|Converts a uniform runtime value into owned UTF-8 text.
+llvm|@luce_rt_concat|@luce_rt_concat|Allocates and joins two UTF-8 string values under Luce's text rules.
+llvm|@luce_rt_len|@luce_rt_len|Reads the logical length for the supplied runtime value, including Unicode-scalar length for strings.
+llvm|@luce_rt_append|@luce_rt_append|Appends an element through the runtime's list or builder storage and ownership rules.
+llvm|@luce_rt_new_list|@luce_rt_new_list|Allocates the runtime object that owns a list buffer.
+llvm|@luce_rt_new_builder|@luce_rt_new_builder|Allocates the runtime object used for mutable text accumulation.
+llvm|@luce_rt_struct_make|@luce_rt_struct_make|Builds a value aggregate from typed fields while retaining any reference-bearing fields.
+llvm|@luce_rt_class_make|@luce_rt_class_make|Allocates and initializes storage for a class identity.
+llvm|@luce_rt_class_get|@luce_rt_class_get|Loads a field from class storage after validating the object handle.
+llvm|@luce_rt_class_set|@luce_rt_class_set|Replaces a class field while applying retain-before-release ownership order.
+llvm|@luce_rt_function_make|@luce_rt_function_make|Builds a callable value from a code address and its retained closure environment.
+llvm|@luce_rt_spawn|@luce_rt_spawn|Creates a worker runtime, transfers its arguments, and starts the worker function.
+llvm|@luce_rt_task_wait|@luce_rt_task_wait|Joins a worker task and transfers its result into the waiting runtime.
+llvm|@luce_rt_effects_enter|@luce_rt_effects_enter|Acquires the runtime effect gate before a worker enters a serialized host callback.
+llvm|@luce_rt_effects_leave|@luce_rt_effects_leave|Releases the runtime effect gate after the host callback returns.
+llvm|@luce_rt_files_install|@luce_rt_files_install|Copies file-related callbacks from the host table into the current runtime context.
+llvm|@luce_rt_sockets_install|@luce_rt_sockets_install|Copies network callbacks from the host table into the current runtime context.
+llvm|@luce_rt_graphics_install|@luce_rt_graphics_install|Copies window and graphics callbacks from the host table into the current runtime context.
+llvm|@luce_rt_workers_install|@luce_rt_workers_install|Installs worker callbacks plus the generated worker dispatcher used by <code>spawn</code>.
+llvm|!prof|!prof|Attaches branch-probability metadata so LLVM can place common and failure paths efficiently.
+asm|[[:space:]]mov[[:space:]]|mov|Copies a register value or loads a small constant. Calls also use it to place arguments in the required registers.
+asm|[[:space:]]add[[:space:]]|add|Adds registers or a constant. Address setup and stack restoration frequently use this instruction.
+asm|[[:space:]]sub[[:space:]]|sub|Subtracts registers or a constant. Function prologues use it to reserve stack space.
+asm|[[:space:]]adds[[:space:]]|adds|Adds and updates the negative, zero, carry, and overflow flags for a following conditional instruction.
+asm|[[:space:]]subs[[:space:]]|subs|Subtracts and updates the condition flags for a following branch or select.
+asm|[[:space:]]cmp[[:space:]]|cmp|Performs a subtraction solely to set condition flags; a following branch or select consumes those flags.
+asm|[[:space:]]cmn[[:space:]]|cmn|Performs an addition solely to set condition flags. The checked multiply-by-two path uses it to recognize unsafe inputs.
+asm|[[:space:]]ccmp[[:space:]]|ccmp|Runs a comparison only when an earlier condition holds, allowing several tests to share one later branch.
+asm|[[:space:]]csel[[:space:]]|csel|Selects one of two registers from the current condition flags. The clamp uses it to choose the doubled value or limit.
+asm|[[:space:]]cset[[:space:]]|cset|Writes 1 or 0 according to a condition, producing a Boolean value from processor flags.
+asm|[[:space:]]ldr[[:space:]]|ldr|Loads a register from memory using a scaled address offset.
+asm|[[:space:]]str[[:space:]]|str|Stores one register into memory using a scaled address offset.
+asm|[[:space:]]ldp[[:space:]]|ldp|Loads two adjacent registers, often restoring saved registers or reading neighboring fields.
+asm|[[:space:]]stp[[:space:]]|stp|Stores two adjacent registers, often saving the caller's registers in a function prologue.
+asm|[[:space:]]ldur[[:space:]]|ldur|Loads from an unscaled byte offset, which is useful for stack slots below the frame pointer.
+asm|[[:space:]]stur[[:space:]]|stur|Stores to an unscaled byte offset, which is useful for stack slots below the frame pointer.
+asm|[[:space:]]ldrb[[:space:]]|ldrb|Loads one byte and widens it into a register.
+asm|[[:space:]]strb[[:space:]]|strb|Stores the low byte of a register.
+asm|[[:space:]]ldurb[[:space:]]|ldurb|Loads one byte using an unscaled byte offset.
+asm|[[:space:]]sturb[[:space:]]|sturb|Stores one byte using an unscaled byte offset.
+asm|[[:space:]]strh[[:space:]]|strh|Stores the low 16 bits of a register.
+asm|[[:space:]]sturh[[:space:]]|sturh|Stores 16 bits using an unscaled byte offset.
+asm|[[:space:]]adrp[[:space:]]|adrp|Loads the page address of a symbol. The linker fills in the final page-relative relocation.
+asm|[[:space:]]bl[[:space:]]|bl|Calls a direct target and records the return address in <code>x30</code>.
+asm|[[:space:]]blr[[:space:]]|blr|Calls the function address held in a register, as required for host callbacks and function values.
+asm|[[:space:]]b[[:space:]]|b|Jumps to another instruction address.
+asm|[[:space:]]b\.eq[[:space:]]|b.eq|Branches when the previous comparison reported equality.
+asm|[[:space:]]b\.ne[[:space:]]|b.ne|Branches when the previous comparison reported different values.
+asm|[[:space:]]b\.lt[[:space:]]|b.lt|Branches when the signed left operand was smaller.
+asm|[[:space:]]b\.le[[:space:]]|b.le|Branches when the signed left operand was smaller or equal.
+asm|[[:space:]]b\.ge[[:space:]]|b.ge|Branches when the signed left operand was greater or equal.
+asm|[[:space:]]b\.mi[[:space:]]|b.mi|Branches when the negative flag is set. Here it enters the overflow path after <code>cmn</code> detects an unsafe doubling input.
+asm|[[:space:]]b\.hs[[:space:]]|b.hs|Branches when an unsigned comparison found higher-or-same, represented by a set carry flag.
+asm|[[:space:]]b\.lo[[:space:]]|b.lo|Branches when an unsigned comparison found lower, represented by a clear carry flag.
+asm|[[:space:]]b\.ls[[:space:]]|b.ls|Branches when an unsigned comparison found lower-or-same.
+asm|[[:space:]]b\.vs[[:space:]]|b.vs|Branches when the arithmetic overflow flag is set.
+asm|[[:space:]]b\.vc[[:space:]]|b.vc|Branches when the arithmetic overflow flag is clear.
+asm|[[:space:]]cbz[[:space:]]|cbz|Compares a register with zero and branches when it is zero.
+asm|[[:space:]]cbnz[[:space:]]|cbnz|Compares a register with zero and branches when it contains a nonzero value.
+asm|[[:space:]]tbnz[[:space:]]|tbnz|Tests one selected bit and branches when that bit is set; packed runtime flags use this form.
+asm|[[:space:]]lsl[[:space:]]|lsl|Shifts bits left. A shift by one multiplies by two after the overflow check has established a safe range.
+asm|[[:space:]]lsr[[:space:]]|lsr|Shifts bits right and fills with zero, often extracting the upper field of a packed handle.
+asm|[[:space:]]mul[[:space:]]|mul|Multiplies the low 64-bit operands and writes the low 64-bit result.
+asm|[[:space:]]smulh[[:space:]]|smulh|Returns the upper half of a signed 128-bit product, which helps verify signed multiplication overflow.
+asm|[[:space:]]umaddl[[:space:]]|umaddl|Widens two 32-bit unsigned operands, multiplies them, and adds a 64-bit base address.
+asm|[[:space:]]sdiv[[:space:]]|sdiv|Performs signed integer division after zero and overflow cases have been handled.
+asm|[[:space:]]orr[[:space:]]|orr|Combines bits, commonly setting tag or flag bits in a packed value.
+asm|[[:space:]]and[[:space:]]|and|Masks bits so later code can inspect a packed tag or flag.
+asm|[[:space:]]ret|ret|Returns to the address in <code>x30</code> and ends the current machine function.

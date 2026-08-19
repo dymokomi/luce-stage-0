@@ -1,5 +1,5 @@
-/* core.css — the shared visual language of LuciaOS, Luce, loom and the
- * stats page.  This is the SINGLE source: it is edited here, under
+/* core.css — the shared visual language of LuciaOS, Luce, lucelang, loom
+ * and the stats page.  This is the SINGLE source: it is edited here, under
  * www/shared/, and each site's build copies it verbatim into its own
  * origin (never fetched across hosts — every site still serves it
  * first-party, so nothing loads from anywhere else and file:// preview

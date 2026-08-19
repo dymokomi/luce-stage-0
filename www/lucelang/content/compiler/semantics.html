@@ -1,0 +1,62 @@
+<p class="lede">The parser can tell that <code>value * 2</code> is multiplication. Semantics determines which declaration <code>value</code> refers to, lands <code>2</code> as an <code>i64</code>, chooses checked signed multiplication, and records the overflow rule.</p>
+
+<div class="plain-note"><p><strong>This is where Luce decides language meaning.</strong> Semantic analysis resolves names, types, methods, and failure handling. HIR carries those decisions through lowering so LLVM receives typed operations and control flow.</p></div>
+
+<h2 id="one-subsystem">Why resolution and typing stay together</h2>
+
+<p>Resolving <code>xs.append(value)</code> needs the type of <code>xs</code>; typing the call needs the member that resolution found. Flow narrowing changes the type visible at a later expression; call selection changes the effect a containing function must handle. The implementation keeps these mutually recursive questions in one semantic stage, split into smaller concern modules.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Three simultaneous views of one expression</strong><span>The checked result crosses as plain HIR data</span></figcaption>
+  <div class="scope-grid">
+    <div class="arch-node owner-zig"><strong>Names &amp; scopes</strong><p>Which declaration does this spelling denote? Is it visible? Has it been shadowed or used before initialization?</p></div>
+    <div class="arch-node owner-zig"><strong>Types &amp; shapes</strong><p>What exact representation flows here? Which member, conversion, return shape, or witness applies?</p></div>
+    <div class="arch-node owner-zig"><strong>Flow &amp; effects</strong><p>Is an optional narrowed? Does every path return? Can failure propagate? What must be released on each edge?</p></div>
+  </div>
+</figure>
+
+<h2 id="spines">The two semantic spines</h2>
+
+<div class="comparison">
+  <div><h3>Analyzer</h3><p>Collects modules, declarations, aliases, layouts, constants, signatures, interfaces, defaults, and the entry point. It settles the world in which bodies will be checked.</p></div>
+  <div><h3>FunctionBuilder</h3><p>Checks one body with scopes, narrowing, local state, temporary lifetime, receiver effects, and an HIR recorder.</p></div>
+</div>
+
+<p>Concern files provide small operations over those spines: <code>calls.zig</code> chooses a callable, <code>assign.zig</code> plans a place and replacement, <code>closures.zig</code> plans an environment, <code>initializers.zig</code> verifies class fields, and <code>interfaces.zig</code> constructs witnesses.</p>
+
+<h2 id="recording">Checking and recording happen together</h2>
+
+<p>The check that chooses meaning records that choice immediately into typed HIR. A numeric literal gains its landed width. A method call gains its resolved target and receiver store behavior. A closure gains its capture kinds. An assignment gains its destination place and the releases that replacement requires.</p>
+
+<div class="invariant">
+  <p><strong>Semantics records typed HIR.</strong> One recorder API captures the structured result. HIR lowering later assigns registers, builds basic blocks, places constants, and emits MIR instructions.</p>
+</div>
+
+<h2 id="last-word">Rules checked from source structure</h2>
+
+<p>This is the only stage that can still explain a source mistake. It enforces immutable bindings, explicit numeric conversions, host access, class construction, interface conformance, recursive layout limits, closure cycles, worker sendability, return coverage, optional narrowing, and visibility.</p>
+
+<div class="table"><table>
+  <thead><tr><th>Rule</th><th>Source information used by the check</th></tr></thead>
+  <tbody>
+    <tr><td>A <code>let</code> binding receives one initialization</td><td>The declaration records the binding as immutable.</td></tr>
+    <tr><td>Worker-transfer graphs contain sendable value types</td><td>The static graph may contain a class transitively inside values and containers.</td></tr>
+    <tr><td>A public signature uses types visible at the same boundary</td><td>Visibility is a source-module relation erased before code generation.</td></tr>
+    <tr><td>A stored closure uses a weak edge for a direct <code>self</code> cycle</td><td>The capture plan and destination relationship are clearest at the source expression.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="failure">The result of semantic errors</h2>
+
+<p>Diagnostics are bounded and carry stable codes plus byte spans. When semantic errors exist, analysis returns the diagnostic set. A successful <code>Analyzed</code> value therefore contains resolved names and valid types, allowing later stages to focus on lowering and verification.</p>
+
+<h2 id="files">The concern map</h2>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/semantics.zig" data-source="src/luce/semantics.zig">semantic contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/builder.zig" data-source="src/luce/semantics/builder.zig">function builder</a>
+  <a class="source-link" href="@repo/src/luce/semantics/recorder.zig" data-source="src/luce/semantics/recorder.zig">HIR recorder</a>
+  <a class="source-link" href="@repo/src/luce/semantics/flow.zig" data-source="src/luce/semantics/flow.zig">flow analysis</a>
+  <a class="source-link" href="@repo/src/luce/semantics/ledger.zig" data-source="src/luce/semantics/ledger.zig">temporary ledger</a>
+  <a class="source-link" href="@repo/src/luce/semantics/closures.zig" data-source="src/luce/semantics/closures.zig">capture planning</a>
+</div>

@@ -1,0 +1,61 @@
+<p class="lede">Every <code>.lc</code> contains a Luce artifact record inside its native container. Before loading code, the runner checks the tag format, machine target, host ABI, generator identity, and serialized-program hash.</p>
+
+<h2 id="kinds">Four files, four roles</h2>
+
+<div class="artifact-stack">
+  <div class="artifact-layer"><strong><code>.lcm</code></strong><span>internal deterministic serialized MIR used between the runner, cache, and compiler</span></div>
+  <div class="artifact-layer"><strong><code>.o</code></strong><span>relocatable host-machine object; user can link it with the installed runtime/start archives</span></div>
+  <div class="artifact-layer"><strong><code>.lc</code></strong><span>native loadable library carrying runtime code, <code>luce_main</code>, and an artifact section</span></div>
+  <div class="artifact-layer"><strong>executable</strong><span>native program plus start archive, host construction, and process-status bridge</span></div>
+</div>
+
+<h2 id="tag">The artifact tag</h2>
+
+<p>The tag is a fixed record in a dedicated Mach-O or ELF section. It contains magic, the tag layout version, host ABI version, machine identity, a hash of the serialized program, generator identity, and whether source origins were retained.</p>
+
+<div class="table"><table>
+  <thead><tr><th>Field</th><th>Question it answers</th></tr></thead>
+  <tbody>
+    <tr><td>magic + tag version</td><td>Is this a Luce artifact whose tag layout this loader understands?</td></tr>
+    <tr><td>machine</td><td>Was it built for this architecture, system, and C ABI?</td></tr>
+    <tr><td>host ABI · @abi_version@</td><td>Will generated host-table slots mean what this runner provides?</td></tr>
+    <tr><td>source hash</td><td>Does it contain the exact serialized program requested now?</td></tr>
+    <tr><td>generator</td><td>Was it produced by the current lowering, runtime, build mode, target, and LLVM identity?</td></tr>
+    <tr><td>origins</td><td>Should traces contain source line and column detail?</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="before-loading">Read before <code>dlopen</code></h2>
+
+<p>The loader walks the file's container headers and checks every followed offset against file length before asking the platform loader to map it. This detects truncation on either side of the tag and reports the damaged field while the file is still inert data.</p>
+
+<div class="flow">
+  <div class="flow-node"><b>read bytes</b><small>inspect the file as inert data</small></div>
+  <div class="flow-node"><b>validate container</b><small>all segments and sections bounded</small></div>
+  <div class="flow-node"><b>compare tag</b><small>machine, ABI, content, generator</small></div>
+  <div class="flow-node"><b><code>dlopen</code></b><small>only a believed artifact</small></div>
+</div>
+
+<h2 id="version-seams">Three version/identity seams</h2>
+
+<div class="choice-grid">
+  <div class="choice"><strong>MIR format · @mir_version@</strong><span>Changes when serialized instruction/type/layout meaning changes. Stale modules recompile.</span></div>
+  <div class="choice"><strong>Host ABI · @abi_version@</strong><span>Changes when the published service table or value boundary changes. Stale native artifacts are refused.</span></div>
+  <div class="choice"><strong>Generator identity</strong><span>Computed from codegen/runtime content and build inputs, so an implementation change automatically invalidates older generated code.</span></div>
+  <div class="choice"><strong>Tag format</strong><span>Changes when the loader-readable tag itself changes; it must be understood before the ABI field can be trusted.</span></div>
+</div>
+
+<h2 id="cache">Content identity controls cache reuse</h2>
+
+<p>A cached artifact is reusable when its serialized MIR hash and generator identity match the current request. Identical program bytes can reuse the same artifact regardless of file modification time. Artifacts beside source are visible and removable with it; unwritable or embedded sources use a session-owned temporary location.</p>
+
+<h2 id="portability">Why artifacts carry a machine triple</h2>
+
+<p>A <code>.lc</code> includes the Luce runtime for one machine triple. Cross-compilation requires target runtime libraries, target object emission, and a target-capable platform link. The loader reports the artifact's machine triple when it differs from the current host.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/codegen/artifact.zig" data-source="src/luce/codegen/artifact.zig">artifact tag</a>
+  <a class="source-link" href="@repo/src/apps/native.zig" data-source="src/apps/native.zig">container validation and loading</a>
+  <a class="source-link" href="@repo/src/luce/mir/module.zig" data-source="src/luce/mir/module.zig">MIR serialization</a>
+  <a class="source-link" href="@repo/src/luce/codegen/abi.zig" data-source="src/luce/codegen/abi.zig">host ABI</a>
+</div>

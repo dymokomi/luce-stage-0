@@ -1,0 +1,53 @@
+<p class="lede">Luce removes unreachable declarations and unread pure instructions. LLVM then performs machine-oriented work: inlining <code>clamp_double</code>, turning <code>* 2</code> into a shift, and replacing a small branch with <code>csel</code>.</p>
+
+<div class="plain-note"><p><strong>Two optimizers, two jobs.</strong> Luce knows which language operations have effects and which declarations are unreachable. LLVM knows instruction costs, registers, and the target processor. The boundary keeps each decision with the system that has the facts to make it.</p></div>
+
+<h2 id="passes">Three passes</h2>
+
+<div class="cards">
+  <div class="card"><strong>Reachability prune</strong><span>Starting from the selected entry, follow direct calls, function values, interface witnesses, class deinitializers, and closure edges; remove everything unreachable.</span></div>
+  <div class="card"><strong>Dead instructions</strong><span>Remove unread pure results and the ownership temporaries that became redundant, while respecting runtime effects and destruction order.</span></div>
+  <div class="card"><strong>Register compaction</strong><span>Renumber surviving registers into a dense space and update every use so serialization and downstream lowering stay small.</span></div>
+</div>
+
+<h2 id="reachability">Reachability is more than a call graph</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Edges followed by reachability</strong><span>Stored and lifetime behavior can keep a function reachable</span></figcaption>
+  <div class="scope-grid">
+    <div class="arch-node"><strong>Direct code</strong><p>Calls and selected entry points.</p></div>
+    <div class="arch-node"><strong>Stored behavior</strong><p>Function values, bound methods, closure bodies, and interface witness slots.</p></div>
+    <div class="arch-node"><strong>Lifetime behavior</strong><p>Class <code>deinit</code> functions and layouts referenced by live values.</p></div>
+  </div>
+</figure>
+
+<p>An imported standard module arrives as source, so the initial program may contain many declarations outside the entry’s reachable graph. Pruning removes those declarations and their hosted <code>Builtin</code> effects from the artifact.</p>
+
+<h2 id="effects">Effects keep unread results alive</h2>
+
+<p>A result register may be unread while its instruction still matters. A host call can print. A container mutation can change a shared object. A release can run <code>deinit</code>, close a file, or join a task. The effects table classifies what can disappear and what must stay.</p>
+
+<div class="invariant">
+  <p><strong>Optimization preserves destruction order, resource behavior, traps, and host effects.</strong> A retain/release pair can be removed when those observations stay the same.</p>
+</div>
+
+<h2 id="llvm">Work delegated to LLVM</h2>
+
+<p>Constant folding, inlining, loop transforms, vectorization, instruction selection, register allocation, and target scheduling are LLVM's work. Reimplementing them over MIR would create a second optimizer to maintain and a second place for target-sensitive bugs.</p>
+
+<div class="comparison">
+  <div class="yes"><h3>Luce MIR handles</h3><p>Language reachability, explicit runtime effects, cleanup semantics, and compact protocol.</p></div>
+  <div><h3>LLVM handles</h3><p>General scalar and loop optimization, target instructions, physical registers, and object emission.</p></div>
+</div>
+
+<h2 id="verification">Verify, transform, verify</h2>
+
+<p>The input first passes the MIR verifier. After passes delete blocks and renumber registers, the whole result passes again. An invalid transformation therefore surfaces during the build before native lowering begins.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/optimize.zig" data-source="src/luce/optimize.zig">optimizer barrel</a>
+  <a class="source-link" href="@repo/src/luce/optimize/prune.zig" data-source="src/luce/optimize/prune.zig">reachability</a>
+  <a class="source-link" href="@repo/src/luce/optimize/dead.zig" data-source="src/luce/optimize/dead.zig">dead instructions</a>
+  <a class="source-link" href="@repo/src/luce/optimize/effects.zig" data-source="src/luce/optimize/effects.zig">effect classification</a>
+  <a class="source-link" href="@repo/src/luce/optimize/registers.zig" data-source="src/luce/optimize/registers.zig">register compaction</a>
+</div>

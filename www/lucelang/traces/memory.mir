@@ -1,0 +1,30 @@
+func main(args: list[str]) -> None
+    local %1 (temporary): list[i64]
+    local %2 values: list[i64]
+    local %3 shared: list[i64]
+    local %4 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = heap_new list[i64]
+    intrinsic append_value, r2, r1
+    local_set %2, r2
+    r5 = local_get %2
+    intrinsic retain, r5
+    local_set %3, r5
+    r8 = local_get %3
+    r9 = const 42
+    intrinsic append_value, r8, r9
+    r11 = local_get %2
+    r12 = intrinsic len, r11
+    r13 = intrinsic str_value, r12
+    local_set %4, r13
+    intrinsic print, r13
+    r16 = local_get %4
+    r17 = intrinsic drop_storage, r16
+    local_set %4, r17
+    r19 = local_get %3
+    intrinsic release, r19
+    r21 = local_get %2
+    intrinsic release, r21
+    ret

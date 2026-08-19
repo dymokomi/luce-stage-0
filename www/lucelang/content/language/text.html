@@ -1,0 +1,65 @@
+<p class="lede">The <code>+</code> in <code>"arguments: " + count</code> calls Luce’s text concatenation operation. The runtime allocates valid UTF-8 storage, copies both strings, and returns a new value whose lifetime the compiler tracks.</p>
+
+<h2 id="trace">Follow one string concatenation</h2>
+
+<p>The source is short. MIR names text operations and the drops required for temporary storage. LLVM IR turns those operations into calls through Luce’s runtime ABI. The assembly sets up arguments, calls those runtime functions, checks their results, and cleans up temporary values.</p>
+
+<!-- trace:text -->
+
+<h2 id="types">Four related shapes</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Type</th><th>Meaning</th><th>Index unit</th><th>Mutation</th></tr></thead>
+  <tbody>
+    <tr><td><code>char</code></td><td>One Unicode scalar</td><td>one value</td><td>value is immutable</td></tr>
+    <tr><td><code>str</code></td><td>Valid immutable UTF-8</td><td>Unicode scalar position</td><td>operations return new text</td></tr>
+    <tr><td><code>bytes</code></td><td>Immutable arbitrary binary data</td><td><code>u8</code> byte position</td><td>operations return new bytes</td></tr>
+    <tr><td><code>builder</code></td><td>Mutable text accumulator</td><td>append-oriented</td><td>shared ARC object; <code>build()</code> returns <code>str</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="scalar-indexing">String positions are scalar positions</h2>
+
+<p>Length, indexing, slicing, and iteration over <code>str</code> use Unicode scalars as their unit. Byte APIs expose UTF-8 code units, while grapheme segmentation belongs to higher-level text processing. The same definition applies on every host.</p>
+
+<figure class="diagram">
+  <figcaption><strong>One visible string, two coordinate systems</strong><span>Text APIs use the upper row</span></figcaption>
+  <div class="token-stream">
+    <span class="token literal"><b>L</b><small>scalar 0</small></span>
+    <span class="token literal"><b>u</b><small>scalar 1</small></span>
+    <span class="token literal"><b>c</b><small>scalar 2</small></span>
+    <span class="token literal"><b>é</b><small>scalar 3 · 2 UTF-8 bytes</small></span>
+  </div>
+</figure>
+
+<h2 id="storage">Small text and outside text</h2>
+
+<p>The runtime's C-layout <code>Value</code> is 24 bytes. Short text can live inside that value; longer text points at runtime-owned storage. Generated code reads both forms through documented layout constants, while the runtime remains the owner of allocation, copying, comparison, and release.</p>
+
+<div class="diagram">
+  <div class="diagram-head"><strong>Schematic runtime.Value</strong><span>24 bytes total</span></div>
+  <div class="byte-row">
+    <div class="byte-box tag">tag</div>
+    <div class="byte-box payload">inline UTF-8 bytes · or pointer/length representation</div>
+  </div>
+</div>
+
+<h2 id="conversion">Crossing text and binary</h2>
+
+<p>Raw UTF-8 access and text/byte conversion are explicit. Whole-file text APIs validate UTF-8 in the runtime; byte APIs preserve arbitrary data. The interpreter, standalone executable, and loom therefore share one definition of valid text.</p>
+
+<h2 id="interpolation">Literals and interpolation</h2>
+
+<p>String literals accept a small explicit escape set. An f-string evaluates each hole and renders it through <code>str(...)</code>, using the ordinary conversion path. <code>chr</code> and <code>ord</code> express conversion between a Unicode scalar and its numeric code point.</p>
+
+<h2 id="ownership">Value semantics with managed storage</h2>
+
+<p><code>str</code> and <code>bytes</code> are language values even when their backing storage is outside the 24-byte value. Copy behavior is value behavior; internal storage lifetime is managed by the runtime. A builder is different on purpose: it is a shared reference identity optimized for repeated append.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/STRINGS.md" data-source="docs/STRINGS.md">text contract</a>
+  <a class="source-link" href="@repo/docs/BYTES.md" data-source="docs/BYTES.md">binary contract</a>
+  <a class="source-link" href="@repo/src/luce/runtime/value.zig" data-source="src/luce/runtime/value.zig">value representation</a>
+  <a class="source-link" href="@repo/src/luce/runtime/text.zig" data-source="src/luce/runtime/text.zig">text storage</a>
+  <a class="source-link" href="@repo/src/luce/std/strings.luc" data-source="src/luce/std/strings.luc">string algorithms in Luce</a>
+</div>

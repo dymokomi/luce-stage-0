@@ -1,0 +1,18 @@
+# lucelang.org: the engineering atlas built by www/lucelang/build.sh.
+
+www.lucelang.org {
+	redir https://lucelang.org{uri} permanent
+}
+
+lucelang.org {
+	root * /opt/apps/lucelang_org
+	file_server
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+

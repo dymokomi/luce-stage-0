@@ -1,0 +1,57 @@
+<p class="lede">After MIR, the program becomes ordinary native files: LLVM IR, an object, a linked artifact, and mapped machine code. Start with the full walkthrough, or inspect the file and loader boundaries below.</p>
+
+<p><a class="story-link" href="@/execution/walkthrough/">Follow one program from source to ARM64 →</a></p>
+
+<h2 id="products">Three native products</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Command result</th><th>What it is</th><th>Who finishes it</th><th>How it runs</th></tr></thead>
+  <tbody>
+    <tr><td><code>FILE.o</code></td><td>relocatable native object</td><td>the user or another linker</td><td>serves as input to a linker</td></tr>
+    <tr><td><code>FILE.lc</code></td><td>loadable native library with runtime and artifact tag</td><td><code>luce</code> + platform linker</td><td><code>loom</code> validates, loads, finds <code>luce_main</code>, calls</td></tr>
+    <tr><td><code>FILE</code></td><td>standalone native executable</td><td><code>luce</code> + platform linker + start archive</td><td>the operating system starts <code>main</code>, which calls <code>luce_main</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="path">The artifact run path</h2>
+
+<figure class="diagram">
+  <figcaption><strong>The run path</strong><span>A valid artifact starts at the loader</span></figcaption>
+  <div class="flow">
+    <div class="flow-node wide owner-machine"><b>artifact file</b><small>native segments + tag</small></div>
+    <div class="flow-node wide owner-zig"><b>validate tag</b><small>container bytes before loading</small></div>
+    <div class="flow-node wide owner-machine"><b>OS loader</b><small>map and relocate</small></div>
+    <div class="flow-node wide owner-zig"><b><code>luce_main</code></b><small>install host and runtime</small></div>
+    <div class="flow-node wide owner-machine"><b>machine code</b><small>the program runs</small></div>
+  </div>
+</figure>
+
+<h2 id="cold-warm">Cold compile, warm run</h2>
+
+<p>A cold run compiles source with the compiler, libLLVM, and the platform toolchain. A warm run validates and loads the existing <code>.lc</code>. <code>loom luce NAME.luc</code> keeps the artifact beside writable source and reuses it when its content and generator identities match.</p>
+
+<div class="comparison">
+  <div><h3>Cold</h3><p>compile source → serialize MIR → lower through LLVM → emit object → link <code>.lc</code> → validate and load</p></div>
+  <div><h3>Warm</h3><p>read tag → compare machine, ABI, content, generator → <code>dlopen</code> → symbol lookup → one call</p></div>
+</div>
+
+<h2 id="host">Who supplies the world</h2>
+
+<p><code>loom</code> and standalone executables build the same concrete <code>LuceHost</code> from shared app code. This gives both products the same console, working-directory files, terminal behavior, and other capabilities. The start archive turns run status into process exit status and renders the same trap/error forms.</p>
+
+<h2 id="oracle">The interpreter’s test role</h2>
+
+<p>The specification test target contains a MIR interpreter. Every program specification runs through both this interpreter and the native path, then compares their observable results. Product binaries use the native path described above.</p>
+
+<div class="cards">
+  <a class="card" href="@/execution/native/"><strong>Follow the native path</strong><span>Walk source, MIR, LLVM, object, link, load, and entry step by step.</span></a>
+  <a class="card" href="@/execution/artifacts/"><strong>Open the artifact</strong><span>See tags, compatibility checks, content identity, and why validation precedes loading.</span></a>
+  <a class="card" href="@/execution/oracle/"><strong>Compare the oracle</strong><span>See what every specification records and how independent dispatch catches lowering errors.</span></a>
+</div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/CODEGEN.md" data-source="docs/CODEGEN.md">native backend design</a>
+  <a class="source-link" href="@repo/src/apps/native.zig" data-source="src/apps/native.zig">linking and loading</a>
+  <a class="source-link" href="@repo/src/apps/start.zig" data-source="src/apps/start.zig">standalone entry</a>
+  <a class="source-link" href="@repo/src/apps/loom/runner.zig" data-source="src/apps/loom/runner.zig">loom runner</a>
+</div>

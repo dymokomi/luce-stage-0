@@ -1,0 +1,46 @@
+struct Width:
+    value: i64
+interface Measured:
+    measure: func() -> i64
+func read(value: Measured) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = interface_call r0, Measured.measure
+    ret r1
+func main(args: list[str]) -> None
+    local %1 (temporary): Width
+    local %2 width: Width
+    local %3 (temporary): Measured
+    local %4 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = const 4
+    r3 = add.i64 r1, r2
+    r4 = struct_make Width, r3
+    local_set %2, r4
+    r6 = local_get %2
+    r7 = intrinsic own_storage, r6
+    r8 = interface_make Measured, witness#0, r7
+    local_set %3, r8
+    r10 = call read, r8
+    r11 = intrinsic str_value, r10
+    local_set %4, r11
+    intrinsic print, r11
+    r14 = local_get %4
+    r15 = intrinsic drop_storage, r14
+    local_set %4, r15
+    r17 = local_get %3
+    intrinsic release, r17
+    r19 = local_get %3
+    r20 = intrinsic drop_storage, r19
+    local_set %3, r20
+    r22 = local_get %2
+    r23 = intrinsic drop_storage, r22
+    local_set %2, r23
+    ret
+func Width.measure(self: Width) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = struct_get r0, Width.value
+    ret r1

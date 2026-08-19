@@ -126,6 +126,7 @@ $(tabs "$slug" "$depth")
 </nav>
 <div class="tools">
 <a class="cross" href="https://luce.luciaos.com">Luce</a>
+<a class="cross" href="https://lucelang.org">Engineering</a>
 <a class="cross" href="https://luciaos.com">LuciaOS</a>
 <button id="theme" type="button" aria-label="Switch between light and dark">&#9681;</button>
 </div>
@@ -168,7 +169,7 @@ HEAD
 </div>
 
 <footer>
-<p>loom is part of <a href="https://luciaos.com">LuciaOS</a>, beside <a href="https://luce.luciaos.com">Luce</a>, the language it runs. Everything on these pages describes the binary as it is built from the repository today; <a href="${depth}direction/">Direction</a> is the one page that talks about what is not built yet, and says so.</p>
+<p>loom is part of <a href="https://luciaos.com">LuciaOS</a>, beside <a href="https://luce.luciaos.com">Luce</a>, the language it runs, and its <a href="https://lucelang.org">engineering atlas</a>. Everything on these pages describes the binary as it is built from the repository today; <a href="${depth}direction/">Direction</a> is the one page that talks about what is not built yet, and says so.</p>
 </footer>
 <script src="${depth}assets/site.js" defer></script>
 </body>

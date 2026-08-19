@@ -1,0 +1,61 @@
+<p class="lede">HIR says “this is a valid checked <code>if</code>.” MIR opens that statement up into loads, a comparison, a branch, two numbered destinations, and returns. This is Luce’s last representation before LLVM.</p>
+
+<h2 id="trace">Inspect the MIR</h2>
+
+<p>Switch from Luce to MIR below. <code>clamp_double</code> becomes 12 register-producing instructions across three blocks. In <code>main</code>, the generated <code>drop_storage</code> instruction releases the temporary string created for <code>print</code>.</p>
+
+<!-- trace:journey -->
+
+<h2 id="hir">HIR is the checked version of the source tree</h2>
+
+<p>HIR keeps loops, matching, compound and parallel assignment, optional control, resolved calls, and capture environments. It adds resolved types, store kinds, temporary parks, receiver effects, and source origins.</p>
+
+<div class="fact-grid">
+  <div class="fact"><strong>Structured</strong><span>A loop remains a loop and a match remains a match.</span></div>
+  <div class="fact"><strong>Typed</strong><span>Every expression and place has one resolved type.</span></div>
+  <div class="fact"><strong>Resolved</strong><span>Call targets, captures, ownership, and host effects have concrete representations.</span></div>
+  <div class="fact"><strong>Ready to lower</strong><span>The source-level checks have completed before register and block construction.</span></div>
+</div>
+
+<h2 id="lowering">How structured HIR becomes blocks</h2>
+
+<p><code>hir/lower.zig</code> walks the checked tree and calls the MIR builder. It splits structured control into blocks and expands compound operations using decisions already recorded in HIR. A missing lowering indicates that HIR or the lowering implementation lacks a required case.</p>
+
+<figure class="diagram">
+  <figcaption><strong>A checked conditional becomes blocks</strong><span>Control and cleanup are explicit</span></figcaption>
+  <div class="flow">
+    <div class="flow-node wide"><b>entry</b><small>evaluate condition<br>branch true / false</small></div>
+    <div class="flow-node wide"><b>then block</b><small>typed operations<br>release temporaries</small></div>
+    <div class="flow-node wide"><b>else block</b><small>typed operations<br>release temporaries</small></div>
+    <div class="flow-node wide"><b>join</b><small>settled local state<br>next instruction</small></div>
+  </div>
+</figure>
+
+<h2 id="mir">MIR’s execution vocabulary</h2>
+
+<p>A <code>mir.Program</code> holds declarations, value and heap layouts, constants, functions, typed registers, locals, basic blocks, and source origins. Each block ends in a terminator. Retain, release, and storage-drop instructions carry reference ownership into both execution paths.</p>
+
+<p>Use the instruction guide above the MIR file to follow <code>local_get</code>, <code>local_set</code>, <code>branch</code>, and <code>drop_storage</code>. Together they show where values live, which block runs next, and when temporary storage is released.</p>
+
+<h2 id="verify">What MIR verification checks</h2>
+
+<p>The verifier checks register indices and types, local and layout consistency, block termination, branch targets, call shapes, instruction legality, weak and worker boundaries, ownership claims, and source tables. Generated MIR is verified before and after optimization. Decoded MIR is verified before any engine sees it.</p>
+
+<div class="boundary">
+  <p><strong>The verifier works from MIR facts.</strong> It checks that a <code>retain</code> names a reference register. Binding mutability was already checked from the source declaration and expressed in the generated store sequence.</p>
+</div>
+
+<h2 id="serialization">Why MIR can be saved and loaded</h2>
+
+<p>MIR encodes deterministically as an internal <code>.lcm</code> handoff and cache identity. Its format in the committed source snapshot is <strong>@mir_version@</strong>, read from <code>mir/module.zig</code> at site build time. A format mismatch causes the cache to compile again from source.</p>
+
+<p>Changing an instruction, intrinsic, type tag, trap or error code, encoded layout field, or another wire meaning bumps the format and updates the fingerprint and hostile decoder tests together.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/hir/nodes.zig" data-source="src/luce/hir/nodes.zig">HIR nodes</a>
+  <a class="source-link" href="@repo/src/luce/hir/lower.zig" data-source="src/luce/hir/lower.zig">mechanical lowering</a>
+  <a class="source-link" href="@repo/src/luce/mir/defs.zig" data-source="src/luce/mir/defs.zig">MIR vocabulary</a>
+  <a class="source-link" href="@repo/src/luce/mir/build.zig" data-source="src/luce/mir/build.zig">MIR builder</a>
+  <a class="source-link" href="@repo/src/luce/mir/verify.zig" data-source="src/luce/mir/verify.zig">verifier</a>
+  <a class="source-link" href="@repo/src/luce/mir/module.zig" data-source="src/luce/mir/module.zig">serialization</a>
+</div>

@@ -1,0 +1,50 @@
+<p class="lede">Luce asks you to write a choice when hiding it could change the program: number width, conversion, shared identity, recoverable failure, host access, or a worker boundary. Everything else should stay out of the way.</p>
+
+<h2 id="numbers">Representation changes are calls</h2>
+
+<p>Changing a concrete <code>u16</code> to <code>i64</code>, or an integer to a float, uses the destination type's constructor. The call identifies the new representation at the source location and gives an out-of-range value a defined trap path. Arithmetic width therefore follows the written operands.</p>
+
+<h2 id="conditions">Conditions are Boolean</h2>
+
+<p>The expression controlling <code>if</code>, <code>while</code>, or a Boolean operator has type <code>bool</code>. Programs compare numbers, inspect optional presence, or ask a collection for its length explicitly. The branch condition then states the question that produces <code>true</code> or <code>false</code>.</p>
+
+<h2 id="identity">Value and identity are different declarations</h2>
+
+<p>A struct copies its fields, while a class shares an ARC-managed identity. Class construction uses <code>new</code> and identity comparison uses <code>is</code>. Composition provides reuse, and interfaces describe shared behavior while each concrete type retains its own storage and destruction rules.</p>
+
+<h2 id="failure">Three outcomes use three channels</h2>
+
+<p><code>T?</code> represents presence or absence. <code>T!</code> lets a caller handle a recoverable error. A trap ends the run because an executed operation violated a language rule. Separate channels tell a caller which outcomes belong in ordinary control flow and which one terminates execution.</p>
+
+<h2 id="syntax">Ambiguous expressions require grouping</h2>
+
+<p>Familiar languages assign different trees to chained comparisons and to <code>not</code> directly before a comparison. Luce asks for parentheses or explicit Boolean composition in those positions. The written grouping then determines one syntax tree for the parser and the reader.</p>
+
+<h2 id="effects">The world is a capability</h2>
+
+<p>Standard wrappers request filesystem, time, terminal, process, network, and graphics operations through an optional host table. The installed callbacks define the capabilities available to one run. Requesting an absent callback produces <code>host_unavailable</code>.</p>
+
+<h2 id="workers">Concurrency copies at one visible boundary</h2>
+
+<p><code>spawn</code> is the transfer point. Sendable value graphs are copied into a worker-owned heap. Classes, resources, functions, interfaces, and weak handles remain in their original runtime. Programs coordinate through transferred values and <code>wait()</code>.</p>
+
+<h2 id="costs">The trade-off table</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Language choice</th><th>Programmer action</th><th>Engineering effect</th></tr></thead>
+  <tbody>
+    <tr><td>explicit numeric conversion</td><td>call a constructor when representation changes</td><td>the source fixes arithmetic width and the conversion trap point</td></tr>
+    <tr><td>final classes + interfaces</td><td>state composition and conformance</td><td>each class has one storage layout and destruction path</td></tr>
+    <tr><td>ARC + weak</td><td>choose weak edges for cyclic graphs</td><td>last release gives resources a deterministic cleanup point</td></tr>
+    <tr><td>isolated workers</td><td>copy permitted values at <code>spawn</code> and <code>wait()</code></td><td>each Luce heap is accessed by one thread</td></tr>
+    <tr><td>host table</td><td>install callbacks for permitted services</td><td>each run has an inspectable capability set</td></tr>
+  </tbody>
+</table></div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/LANGUAGE.md" data-source="docs/LANGUAGE.md">language map</a>
+  <a class="source-link" href="@repo/docs/NUMERICS.md" data-source="docs/NUMERICS.md">numeric decisions</a>
+  <a class="source-link" href="@repo/docs/FAILURE.md" data-source="docs/FAILURE.md">failure decisions</a>
+  <a class="source-link" href="@repo/docs/CLASSES.md" data-source="docs/CLASSES.md">class decisions</a>
+  <a class="source-link" href="@repo/docs/THREADS.md" data-source="docs/THREADS.md">worker decisions</a>
+</div>

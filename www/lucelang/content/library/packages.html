@@ -1,0 +1,42 @@
+<p class="lede">A package is versioned Luce source. The loader adds it to the application's ordinary module graph, where the compiler applies the same type, memory, and test rules as project source.</p>
+
+<h2 id="manifest">The project manifest</h2>
+
+<p><code>luce.yaml</code> names the project root and exact package requirements. Root-relative dotted imports map to directories under that identity. Package resolution probes the supported local, store, shelf, and path locations. One unambiguous package with the requested version must be present.</p>
+
+<h2 id="disk">A package on disk</h2>
+
+<div class="artifact-stack">
+  <div class="artifact-layer"><strong><code>luce.yaml</code></strong><span>name, exact version, and dependency requirements</span></div>
+  <div class="artifact-layer"><strong><code>module.luc</code></strong><span>ordinary public/private source files reached by dotted imports</span></div>
+  <div class="artifact-layer"><strong><code>tests/*.luc</code></strong><span>ordinary Luce test declarations discovered by the toolchain</span></div>
+</div>
+
+<h2 id="termui">TermUI stays a package</h2>
+
+<p><code>termui</code> ships with the release as a versioned package. Its components, layout constraints, drawing, event handling, and application lifecycle all pass through normal package loading and language compilation.</p>
+
+<h2 id="programs">Application-scale examples</h2>
+
+<div class="system-grid">
+  <div class="system-card"><strong>Terminal editor</strong><span>Documents, undo history, syntax registries, LSP client, UI components, tests, and a complete application in Luce.</span></div>
+  <div class="system-card"><strong>LSP server</strong><span>Protocol framing, positions, diagnostics, project manifest, and tests in Luce.</span></div>
+  <div class="system-card"><strong>Adventure</strong><span>Several modules combining classes, values, collections, commands, journal state, and narrative logic.</span></div>
+  <div class="system-card"><strong>Algorithms</strong><span>Sorting, word count, cellular life, calculator, BF interpreter, statistics, and zipper examples.</span></div>
+</div>
+
+<h2 id="boundary">The current distribution boundary</h2>
+
+<p>The toolchain consumes exact package versions from configured local locations. Remote publication and compatible-version range selection remain future distribution work. Exact requirements currently make the chosen source identity deterministic.</p>
+
+<h2 id="evidence">Why examples are part of engineering</h2>
+
+<p>Small language specs isolate one behavior. Packages and applications exercise interactions across large branches, UI-model lifetimes, module resolution, test discovery, and public APIs. Running both levels catches local rule errors as well as failures that appear only when features compose.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/PACKAGES.md" data-source="docs/PACKAGES.md">package contract</a>
+  <a class="source-link" href="@repo/packages/termui-0.5.0" data-source="packages/termui-0.5.0">termui package</a>
+  <a class="source-link" href="@repo/examples/editor" data-source="examples/editor">editor program</a>
+  <a class="source-link" href="@repo/examples/lsp" data-source="examples/lsp">LSP program</a>
+  <a class="source-link" href="@repo/src/apps/manifest.zig" data-source="src/apps/manifest.zig">manifest host parser</a>
+</div>

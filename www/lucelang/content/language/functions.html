@@ -1,0 +1,57 @@
+<p class="lede">A function call looks like one operation in Luce. Underneath, arguments need storage, the runtime protects call depth, a result needs a destination, and every exit must clean up what the frame owns.</p>
+
+<h2 id="trace">Follow a recursive call</h2>
+
+<p><code>factorial</code> is useful here because recursion leaves a call in the generated path. MIR shows the recursive target and return blocks. LLVM IR shows Luce’s internal calling convention. The object code shows the frame, depth check, call, and checked multiplication of the returned value.</p>
+
+<!-- trace:functions -->
+
+<h2 id="signatures">The declaration contract</h2>
+
+<p>A signature fixes parameter order, labels, types, trailing folded defaults, result shape, and fallibility. Omitting the result arrow means no result. <code>-> T!</code> declares recoverable failure; <code>-> (A, B)</code> returns several values directly through the call convention.</p>
+
+<h2 id="arguments">Arguments are planned before the call</h2>
+
+<ol class="call-path">
+  <li><strong>Select the callable</strong><span>Named function, static member, bound method, lambda, closure, interface slot, or union constructor.</span></li>
+  <li><strong>Match labels and positions</strong><span>Calls may begin positional and switch once to named arguments; duplicates and omissions are refused.</span></li>
+  <li><strong>Fill defaults</strong><span>Trailing declaration-time constants provide omitted argument values.</span></li>
+  <li><strong>Evaluate in source order</strong><span>Written argument order determines the order of side effects.</span></li>
+  <li><strong>Apply value/reference passing</strong><span>Values copy; references retain the same identity for the callee.</span></li>
+</ol>
+
+<h2 id="function-values">One function-value representation</h2>
+
+<p><code>func(T, ...) -> R</code> describes a function value. A named function carries code. A bound method adds its receiver. A block closure adds an ARC environment. All use the same indirect-call shape and can live in locals, fields, optionals, unions, and supported containers. Their process-local code and environment identity defines the boundary for comparison and worker transfer.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Function value</strong><span>The environment pointer may be absent</span></figcaption>
+  <div class="representation-grid">
+    <div class="representation value"><strong>Code identity</strong><p>Direct function or generated closure body.</p></div>
+    <div class="representation reference"><strong>Environment</strong><p>None, copied receiver, retained class identity, or ARC capture object.</p></div>
+    <div class="representation effect"><strong>Call contract</strong><p>The value type carries parameter and result types. The declaration supplies labels and defaults at direct call sites.</p></div>
+  </div>
+</figure>
+
+<h2 id="methods">Methods and implied self</h2>
+
+<p>An instance method has an implied <code>self</code>. Semantics infers whether it writes the receiver. A class method mutates shared identity through a stable binding. A writing struct method requires a mutable bare local so the changed value can be written back. A static function has no receiver and behaves like a namespaced function.</p>
+
+<h2 id="returns">Several answers are a shape</h2>
+
+<p>Multiple results use a call-boundary convention. A destructuring binding or parallel assignment receives every component, and a discard can ignore one. The compiler can therefore write results directly into caller-provided result slots.</p>
+
+<h2 id="closures">Closures add an environment</h2>
+
+<p><code>(x) -> expression</code> is capture-free. A block <code>func(x):</code> may capture. Immutable values snapshot, references capture strongly, mutable locals share one cell, <code>[weak name]</code> captures a zeroing optional, and <code>[copy = expression]</code> evaluates one creation-time snapshot.</p>
+
+<p><a href="@/runtime/closures/">Open the environment layout and ARC lifecycle →</a></p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/FUNCTIONS.md" data-source="docs/FUNCTIONS.md">function and closure contract</a>
+  <a class="source-link" href="@repo/docs/ARGS.md" data-source="docs/ARGS.md">argument contract</a>
+  <a class="source-link" href="@repo/docs/RETURNS.md" data-source="docs/RETURNS.md">return shapes</a>
+  <a class="source-link" href="@repo/docs/BINDING.md" data-source="docs/BINDING.md">bound methods</a>
+  <a class="source-link" href="@repo/src/luce/semantics/calls.zig" data-source="src/luce/semantics/calls.zig">call selection</a>
+  <a class="source-link" href="@repo/src/luce/semantics/closures.zig" data-source="src/luce/semantics/closures.zig">capture planning</a>
+</div>

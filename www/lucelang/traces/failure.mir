@@ -1,0 +1,48 @@
+func divide(total: i64, count: i64) -> i64!
+  b0:
+    r0 = local_get %1
+    r1 = const 0
+    r2 = equal.i64 r0, r1
+    branch r2, b1, b2
+  b1:
+    r4 = const data#0
+    intrinsic raise_error, r4
+    unwind
+  b2:
+    r7 = local_get %0
+    r8 = local_get %1
+    r9 = floor_divide.i64 r7, r8
+    ret r9
+func main(args: list[str]) -> None
+    local %1 (temporary): i64
+    local %2 (temporary): i64
+    local %3 average: i64
+    local %4 (temporary): str
+  b0:
+    r0 = const 42
+    r1 = local_get %0
+    r2 = intrinsic len, r1
+    r3 = call divide, r0, r2
+    r4 = intrinsic errored, r3
+    local_set %1, r3
+    branch r4, b1, b2
+  b1:
+    intrinsic forget
+    r11 = const -1
+    local_set %2, r11
+    jump b3
+  b2:
+    r7 = local_get %1
+    local_set %2, r7
+    jump b3
+  b3:
+    r14 = local_get %2
+    local_set %3, r14
+    r16 = local_get %3
+    r17 = intrinsic str_value, r16
+    local_set %4, r17
+    intrinsic print, r17
+    r20 = local_get %4
+    r21 = intrinsic drop_storage, r20
+    local_set %4, r21
+    ret

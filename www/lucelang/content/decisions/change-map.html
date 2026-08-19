@@ -1,0 +1,64 @@
+<p class="lede">Adding syntax is rarely just a parser edit. If the feature changes behavior, its meaning must reach HIR, MIR, the runtime or backend, both execution tests, documentation, and sometimes an artifact version.</p>
+
+<h2 id="matrix">Change matrix</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Change</th><th>Required surfaces</th><th>Version consequence</th></tr></thead>
+  <tbody>
+    <tr><td>syntax or keyword</td><td>token vocabulary, lexer, parser/AST, highlighting, positive/refusal specs, Guide/reference</td><td>none unless downstream wire meaning also changes</td></tr>
+    <tr><td>type or semantic rule</td><td>support types, resolver/checker, HIR, MIR/verifier as needed, both-path spec, diagnostics, docs</td><td>MIR bump if encoded types or instructions change</td></tr>
+    <tr><td>dynamic operation</td><td>runtime body/export, MIR instruction or intrinsic, interpreter dispatch, codegen lowering, effect metadata, specs</td><td>MIR bump; ABI only if host-facing table changes</td></tr>
+    <tr><td>MIR tag, trap/error code, layout field</td><td>defs, encoding/decoding, verifier, fingerprint, hostile-input tests, every consumer</td><td>bump MIR format</td></tr>
+    <tr><td>host table field or signature</td><td>ABI struct/slots, generated access, every host, oracle host, stale-artifact tests</td><td>bump host ABI</td></tr>
+    <tr><td>standard module/API</td><td><code>.luc</code> source, embedded roster, specs, host fixture if needed, Library page and coverage audit</td><td>ABI only for a new/changed host primitive</td></tr>
+    <tr><td>public artifact behavior</td><td>CLI, loader/linker, product tests, Guide/Tools/Status, archive and installer smoke</td><td>tag/generator/ABI according to the changed seam</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="example">Example: add one dynamic collection operation</h2>
+
+<ol class="call-path">
+  <li><strong>Surface</strong><span>Decide the signature, element constraints, mutation, result, bounds behavior, and public documentation.</span></li>
+  <li><strong>Meaning</strong><span>Teach semantic call selection and HIR recording the exact receiver/result ownership.</span></li>
+  <li><strong>Protocol</strong><span>Add or reuse a MIR intrinsic, verifier rule, print/encode/decode arm, and format fingerprint.</span></li>
+  <li><strong>One semantic body</strong><span>Implement the operation in <code>runtime/containers.zig</code> with rollback and trap behavior.</span></li>
+  <li><strong>Two callers</strong><span>Dispatch it from the interpreter and lower it to the checked runtime export in LLVM.</span></li>
+  <li><strong>Evidence</strong><span>Compare success, boundaries, trap, element ownership, aliasing, and zero live objects on both paths.</span></li>
+</ol>
+
+<h2 id="versions">Version the representation that changed</h2>
+
+<div class="choice-grid">
+  <div class="choice"><strong>MIR format · @mir_version@</strong><span>Bump when an older decoder would read bytes with a new meaning, including instructions, intrinsic/type tags, codes, or encoded fields.</span></div>
+  <div class="choice"><strong>Host ABI · @abi_version@</strong><span>Bump when the generated artifact ↔ host table contract changes. Internal runtime work leaves this protocol unchanged.</span></div>
+  <div class="choice"><strong>Generator identity</strong><span>Computed automatically from codegen/runtime inputs; it catches implementation changes that leave protocol versions alone.</span></div>
+  <div class="choice"><strong>Release version · @release@</strong><span>User-facing toolchain label; separate from both compatibility protocols.</span></div>
+</div>
+
+<h2 id="tests">Put evidence where its claim lives</h2>
+
+<p>A Luce program's observable behavior belongs in <code>src/luce/specs/</code> and runs on native and oracle paths. Tests of internal structures live beside their implementations. New spec files enter the spec import roster and one owner suite; new language packages enter the language re-export and test rosters.</p>
+
+<h2 id="docs">Documentation is an executable surface</h2>
+
+<p>Repository documentation checks execute current <code>luce</code> snippets and validate expected diagnostics and traps. The public site stores separately generated source, MIR, LLVM, and assembly traces; its build validates the trace inventory, source links, internal links, and standard/compiler rosters. Planned syntax remains plain text. A feature is ready when its implementation, tests, examples, and public reference describe the same behavior.</p>
+
+<h2 id="checklist">Before calling the change complete</h2>
+
+<ul>
+  <li>Can one stage clearly own each new decision?</li>
+  <li>Do both native and oracle paths reach the same runtime semantic?</li>
+  <li>Do tests cover success, the relevant boundary, diagnostic or trap behavior, and cleanup?</li>
+  <li>Do hostile serialized inputs remain reject-or-run-cleanly total?</li>
+  <li>Did each changed protocol receive its corresponding version update?</li>
+  <li>Do the Guide, Library, status boundary, examples, and editor vocabulary agree?</li>
+  <li>Does the repository gate pass after the focused test lanes?</li>
+</ul>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/CLAUDE.md" data-source="CLAUDE.md">change-cost table</a>
+  <a class="source-link" href="@repo/docs/TESTING.md" data-source="docs/TESTING.md">engineering lanes</a>
+  <a class="source-link" href="@repo/tools/test_suites.zig" data-source="tools/test_suites.zig">spec ownership</a>
+  <a class="source-link" href="@repo/tools/doccheck.zig" data-source="tools/doccheck.zig">document checking</a>
+  <a class="source-link" href="@repo/www/luce/src/coverage.zig" data-source="www/luce/src/coverage.zig">public surface audit</a>
+</div>

@@ -1,0 +1,65 @@
+<p class="lede">Two names can refer to the same <code>Counter</code>. Calling <code>next</code> through either name changes the one shared object. That identity is why class code needs allocation, reference counts, generation checks, and deterministic destruction.</p>
+
+<h2 id="trace">Follow one shared Counter</h2>
+
+<p>The example constructs a counter and copies its reference into <code>same</code>. MIR makes object construction and storage explicit. LLVM IR lowers those operations to runtime calls and checked object lookup. ARM64 contains the calls and branches that enforce reference counting and stale-handle checks.</p>
+
+<!-- trace:classes -->
+
+<h2 id="identity">Aliases share one object</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Class identity</strong><span>Two bindings, one mutable object</span></figcaption>
+  <div class="heap-graph">
+    <div class="heap-node"><strong><code>first</code></strong><p>stable binding</p><span class="count">strong owner</span></div>
+    <div class="heap-node"><strong><code>second</code></strong><p>assignment retained</p><span class="count">strong owner</span></div>
+    <div class="heap-node owner-zig"><strong>Counter object</strong><p>identity + fields + class layout</p><span class="count">strong 2</span></div>
+  </div>
+</figure>
+
+<p>Mutation through either alias is visible through the other. <code>is</code> compares class identity. A class may define an ordinary method when its domain needs field-based comparison.</p>
+
+<h2 id="construction">Identity appears last</h2>
+
+<ol class="call-path">
+  <li><strong>Allocate construction state</strong><span>Field storage exists inside the initializer while the object is being built.</span></li>
+  <li><strong>Initialize fields</strong><span>Memberwise construction or one declared <code>init</code> establishes every field on every successful path.</span></li>
+  <li><strong>Keep pre-identity <code>self</code> local</strong><span>The initializer may access stored fields while analysis prevents escape and instance-method calls.</span></li>
+  <li><strong>Publish identity</strong><span>Only a fully initialized object becomes the result of <code>new</code>.</span></li>
+</ol>
+
+<p>A fallible initializer can return through its error channel before identity is published. That path cleans initialized fields. When a class omits a custom initializer, memberwise construction supplies the public surface allowed by field visibility and defaults.</p>
+
+<h2 id="mutation">Stable names, mutable identity</h2>
+
+<p>A <code>let</code> class binding may call writing methods and replace fields because the name still denotes the same identity. Nested places and index operations follow ordinary assignment preparation and release order. A bound method retains its class receiver so it remains callable after the original binding leaves scope.</p>
+
+<h2 id="weak">Weak back-edges break cycles</h2>
+
+<p>Class fields can hold weak optionals to supported ARC targets. The handle includes an object-table generation. Reusing a freed row changes that generation, so a stale weak read returns <code>none</code>. A successful read upgrades to an owned snapshot.</p>
+
+<h2 id="deinit">Last release and deinit</h2>
+
+<p>One bare <code>deinit</code> may perform deterministic cleanup. ARC calls it exactly once before releasing the object's stored fields. It runs on normal scope exit, error cleanup, trap teardown, and worker-local teardown. During <code>deinit</code>, semantic analysis prevents stores that would publish the dying <code>self</code> again.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Destruction order</strong><span>Observable cleanup has one sequence</span></figcaption>
+  <div class="flow">
+    <div class="flow-node"><b>strong 1 → 0</b><small>last release</small></div>
+    <div class="flow-node"><b>deinit</b><small>runs once</small></div>
+    <div class="flow-node"><b>release fields</b><small>contained ownership leaves</small></div>
+    <div class="flow-node"><b>retire row</b><small>weak reads become none</small></div>
+  </div>
+</figure>
+
+<h2 id="limits">The final-class model</h2>
+
+<p>Classes use composition for implementation reuse and interfaces for polymorphic calls. Their object layout, deinitialization, call targets, and ARC behavior are therefore determined from the declared class and its explicit conformances. Worker transfer accepts value graphs and collections, while class identities remain in their owning runtime.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/CLASSES.md" data-source="docs/CLASSES.md">class contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/initializers.zig" data-source="src/luce/semantics/initializers.zig">definite construction</a>
+  <a class="source-link" href="@repo/src/luce/runtime/heap.zig" data-source="src/luce/runtime/heap.zig">ARC object table</a>
+  <a class="source-link" href="@repo/src/luce/specs/classes_spec.zig" data-source="src/luce/specs/classes_spec.zig">class specs</a>
+  <a class="source-link" href="@repo/src/luce/specs/weak_references_spec.zig" data-source="src/luce/specs/weak_references_spec.zig">weak specs</a>
+</div>

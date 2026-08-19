@@ -1,0 +1,86 @@
+<p class="lede">The sample list has two names and one heap object. Luce keeps the object alive while either name can reach it, then destroys it after the last owner goes away. The compiler inserts the required <code>retain</code> and <code>release</code> operations from source scopes and types.</p>
+
+<h2 id="trace">Follow one reference lifetime</h2>
+
+<p>MIR shows where the compiler transfers, retains, and drops reference storage. LLVM turns those into calls to the shared ARC runtime. ARM64 shows those calls and the status branches around the list append and final releases.</p>
+
+<!-- trace:memory -->
+
+<h2 id="classification">Value or reference</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Category</th><th>Examples</th><th>Assignment</th><th>End of lifetime</th></tr></thead>
+  <tbody>
+    <tr><td>Value</td><td>numbers, bool, char, str, bytes, struct, enum, union</td><td>copy representation; retain contained reference fields</td><td>release contained ownership</td></tr>
+    <tr><td>Reference</td><td>class, list, map, array, builder, closure environment</td><td>retain and share identity</td><td>last strong release destroys object</td></tr>
+    <tr><td>Resource reference</td><td>task and std-owned raw handles</td><td>retain and share resource identity</td><td>last release joins, closes, or releases once</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="arc-walk">Walk one ARC lifetime</h2>
+
+<div class="diagram" data-stepper>
+  <div class="diagram-head"><strong>List identity through four events</strong><span>The handle stays stable while aliases enter and leave scope</span></div>
+  <div class="step-controls" role="group" aria-label="ARC lifetime step">
+    <button type="button" data-step-select="create">1 · create</button>
+    <button type="button" data-step-select="alias">2 · alias</button>
+    <button type="button" data-step-select="release">3 · release one</button>
+    <button type="button" data-step-select="destroy">4 · final release</button>
+  </div>
+  <div class="stage-panel" data-step-panel="create">
+    <div class="heap-graph"><div class="heap-node"><strong><code>first</code></strong><p>owns handle #12:g4</p></div><div class="heap-edge">→</div><div class="heap-node owner-zig"><strong>list row #12:g4</strong><p>buffer [1, 2]</p><span class="count">strong 1</span></div></div>
+  </div>
+  <div class="stage-panel" data-step-panel="alias">
+    <div class="heap-graph"><div class="heap-node"><strong><code>first</code> + <code>second</code></strong><p>both carry handle #12:g4</p></div><div class="heap-edge">→</div><div class="heap-node owner-zig"><strong>same list row</strong><p>either alias mutates the buffer</p><span class="count">strong 2</span></div></div>
+  </div>
+  <div class="stage-panel" data-step-panel="release">
+    <div class="heap-graph"><div class="heap-node"><strong><code>second</code></strong><p><code>first</code> left scope</p></div><div class="heap-edge">→</div><div class="heap-node owner-zig"><strong>same list row</strong><p>object remains live</p><span class="count">strong 1</span></div></div>
+  </div>
+  <div class="stage-panel" data-step-panel="destroy">
+    <div class="heap-graph"><div class="heap-node"><strong>no strong binding</strong><p>final owner left</p></div><div class="heap-edge">→</div><div class="heap-node"><strong>row cleared</strong><p>elements released; buffer freed; generation protects stale weak handles</p><span class="count">strong 0</span></div></div>
+  </div>
+</div>
+
+<h2 id="compiler">Where retains and releases come from</h2>
+
+<p>Semantics knows each type, lexical scope, and control-flow edge. It records ownership stores and temporary parks, then HIR lowering emits the corresponding MIR retains and releases. The runtime executes that plan by updating counts and destroying rows at zero.</p>
+
+<div class="flow">
+  <div class="flow-node"><b>static type</b><small>value or reference facts</small></div>
+  <div class="flow-node"><b>HIR plan</b><small>store, temporary, exit</small></div>
+  <div class="flow-node"><b>MIR ops</b><small>retain and release</small></div>
+  <div class="flow-node"><b>runtime row</b><small>count and destroy</small></div>
+</div>
+
+<h2 id="weak">Weak handles and generations</h2>
+
+<p>A weak place stores an object index and the generation observed at assignment. It owns nothing. A read checks that the row is live and the generation still matches; on success it increments the strong count and returns an owned optional snapshot. On failure it returns <code>none</code>.</p>
+
+<p>When a row is reused, its generation changes. A weak handle carrying the former generation returns <code>none</code> instead of resolving to the new occupant. Rows retire before generation wrap could make an old handle match again.</p>
+
+<h2 id="cycles">How strong cycles keep counts above zero</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Strong cycle versus weak back-edge</strong><span>Only ownership arrows contribute to the count</span></figcaption>
+  <div class="comparison">
+    <div class="no"><h3>Strong A ↔ B</h3><p>Each object keeps the other above zero after external roots leave, so both rows remain live.</p></div>
+    <div class="yes"><h3>Strong A → B · weak B ⇢ A</h3><p>A reaches zero, releases B, and both are destroyed. The back-edge upgrades only while A is live.</p></div>
+  </div>
+</figure>
+
+<p>The compiler diagnoses the direct case where a class stores a closure that strongly captures that same <code>self</code>. Indirect application graph cycles still require an intentional weak edge from the program.</p>
+
+<h2 id="destruction">Destruction is observable</h2>
+
+<p>Last release can run class <code>deinit</code>, close a file handle, join an unfinished task, release an interface payload, or tear down a container graph. The optimizer preserves the order of ownership operations whenever a different order would change these effects.</p>
+
+<h2 id="evidence">The zero-object gate</h2>
+
+<p>Every successful differential specification ends with zero live runtime objects. Runtime unit tests additionally assert exact counts and destruction order across error, trap, rollback, worker transfer, and teardown paths.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/MEMORY.md" data-source="docs/MEMORY.md">ARC contract</a>
+  <a class="source-link" href="@repo/src/luce/runtime/heap.zig" data-source="src/luce/runtime/heap.zig">object table and ARC</a>
+  <a class="source-link" href="@repo/src/luce/mir/defs.zig" data-source="src/luce/mir/defs.zig">ownership instructions</a>
+  <a class="source-link" href="@repo/src/luce/specs/weak_references_spec.zig" data-source="src/luce/specs/weak_references_spec.zig">weak specs</a>
+</div>

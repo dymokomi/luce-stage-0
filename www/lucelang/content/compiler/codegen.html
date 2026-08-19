@@ -1,0 +1,68 @@
+<p class="lede">Code generation translates every verified MIR instruction into LLVM IR. For checked multiplication, that means a product plus an overflow bit and an explicit branch to Luce’s trap path.</p>
+
+<h2 id="trace">Compare MIR, LLVM IR, and assembly</h2>
+
+<p>The middle two tabs show the transformation this page explains. MIR says <code>multiply.i64</code>. LLVM expands the check with <code>llvm.smul.with.overflow.i64</code>. The final ARM64 performs the same check with flags and a branch.</p>
+
+<!-- trace:journey -->
+
+<h2 id="pipeline">The backend pipeline</h2>
+
+<figure class="diagram">
+  <figcaption><strong>MIR to relocatable object</strong><span>libLLVM begins at optimization and emission</span></figcaption>
+  <div class="flow">
+    <div class="flow-node wide owner-zig"><b>Verified MIR</b><small>typed instructions and layouts</small></div>
+    <div class="flow-node wide owner-zig"><b>lower.zig</b><small>pure-Zig LLVM builder</small></div>
+    <div class="flow-node wide owner-machine"><b>LLVM bitcode</b><small>IR plus metadata</small></div>
+    <div class="flow-node wide owner-machine"><b>libLLVM</b><small>optimize and emit</small></div>
+    <div class="flow-node wide owner-machine"><b>FILE.o</b><small>native relocatable object</small></div>
+  </div>
+  <div class="legend"><span class="key zig">Zig-controlled lowering</span><span class="key machine">LLVM / native artifact</span></div>
+</figure>
+
+<h2 id="total">Every instruction has an arm</h2>
+
+<p>The lowering switches enumerate every MIR instruction and intrinsic tag. Adding a tag makes those switches incomplete until its LLVM representation is implemented. A target limitation returns a named unsupported result, and malformed MIR fails verification before lowering.</p>
+
+<div class="decision">
+  <p><strong>Why totality matters:</strong> the host language’s exhaustive switch turns a new MIR instruction into a compile error at every backend location that needs its native meaning.</p>
+</div>
+
+<h2 id="calls">Runtime calls and inline work</h2>
+
+<p>Generated code keeps plain scalar control and representation work inline where that is both safe and visible to LLVM. Dynamic language semantics call <code>libluce_rt</code>: ARC, heap resolution, container mutation, text storage, checked operators, workers, resources, and trap construction.</p>
+
+<div class="comparison">
+  <div><h3>Inline LLVM</h3><p>Branches, arithmetic with its trap edge, loads and stores, stack slots, optional tags, direct calls, and indirect calls.</p></div>
+  <div><h3>Runtime boundary</h3><p>Heap identity, reference counts, moving container buffers, UTF-8 storage, host-backed handles, worker transfer, and shared trap state.</p></div>
+</div>
+
+<h2 id="effects">Runtime effect metadata</h2>
+
+<p>LLVM optimizes a call more accurately when it knows which memory the callee reads or writes and whether it returns or unwinds. <code>runtime_effects.zig</code> describes those properties for the C exports. Tests compare the metadata with the Zig declarations and report any divergence.</p>
+
+<h2 id="abi">Runtime services and host services</h2>
+
+<p>Lists, strings, ARC, and arithmetic are language semantics and therefore runtime calls. Console, files, clocks, terminals, processes, sockets, windows, and other outside effects arrive through the versioned <code>LuceHost</code> table. Each optional service fails closed when absent.</p>
+
+<div class="layer-stack">
+  <div class="layer machine"><strong>Generated function</strong><span>calls a stable runtime export or indexes a host slot</span></div>
+  <div class="layer zig"><strong>libluce_rt</strong><span>one semantic implementation linked into the artifact</span></div>
+  <div class="layer zig"><strong>LuceHost</strong><span>capabilities supplied by loom or the standalone start library</span></div>
+  <div class="layer machine"><strong>Operating system</strong><span>file, terminal, clock, process, network, and graphics services</span></div>
+</div>
+
+<h2 id="split">How loom delegates cold compilation</h2>
+
+<p>LLVM IR construction uses a vendored pure-Zig builder, and <code>codegen/emit.zig</code> calls libLLVM. The <code>luce</code> compiler imports that emission module. <code>loom</code> loads existing machine code and invokes the sibling <code>luce</code> binary for a cold compile.</p>
+
+<p><a href="@/execution/native/">Continue through object linking, artifact validation, and <code>luce_main</code> →</a></p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/codegen.zig" data-source="src/luce/codegen.zig">codegen contract</a>
+  <a class="source-link" href="@repo/src/luce/codegen/lower.zig" data-source="src/luce/codegen/lower.zig">MIR lowering</a>
+  <a class="source-link" href="@repo/src/luce/codegen/emit.zig" data-source="src/luce/codegen/emit.zig">libLLVM emission</a>
+  <a class="source-link" href="@repo/src/luce/codegen/runtime_effects.zig" data-source="src/luce/codegen/runtime_effects.zig">runtime effects</a>
+  <a class="source-link" href="@repo/src/luce/codegen/abi.zig" data-source="src/luce/codegen/abi.zig">host ABI</a>
+  <a class="source-link" href="@repo/docs/CODEGEN.md" data-source="docs/CODEGEN.md">backend design</a>
+</div>

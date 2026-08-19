@@ -1,0 +1,54 @@
+<p class="lede"><code>make_adder</code> returns code that still remembers <code>start</code> after the function has returned. That memory lives in a small ARC-managed environment carried beside the code pointer.</p>
+
+<h2 id="trace">Follow one captured value</h2>
+
+<p>MIR separates the closure body from the environment it reads. LLVM gives the environment a concrete layout and calling convention. ARM64 allocates it, stores the captured integer, calls through the function value, and releases the environment when it is no longer reachable.</p>
+
+<!-- trace:closures -->
+
+<h2 id="shape">Code and environment</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Returned closure</strong><span>The environment outlives the creating frame</span></figcaption>
+  <div class="flow">
+    <div class="flow-node wide"><b>function value</b><small>code pointer + environment handle</small></div>
+    <div class="flow-node wide owner-zig"><b>closure object</b><small>layout + capture fields + strong count</small></div>
+    <div class="flow-node wide"><b>captured storage</b><small>values, references, cells, weak handles</small></div>
+  </div>
+</figure>
+
+<h2 id="capture-kinds">Four capture meanings</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Capture</th><th>Environment field</th><th>What the closure observes</th></tr></thead>
+  <tbody>
+    <tr><td>immutable value</td><td>value copy</td><td>creation-time snapshot</td></tr>
+    <tr><td>reference</td><td>retained handle</td><td>same live identity and mutation</td></tr>
+    <tr><td>mutable local</td><td>retained shared cell</td><td>one variable shared by creator and every closure</td></tr>
+    <tr><td><code>[weak name]</code></td><td>non-owning generation handle</td><td>optional owned upgrade on each read</td></tr>
+    <tr><td><code>[copy = expression]</code></td><td>result copied or retained once</td><td>explicit creation-time snapshot</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="cells">Why mutable locals need cells</h2>
+
+<p>A stack slot lasts only until the creating function returns. Moving the slot into one ARC cell gives the original scope and every nested closure access to the same mutable value. Each closure retains the cell, so it remains valid after the creator's stack frame ends. The last release destroys the cell and its current value.</p>
+
+<h2 id="planning">Capture planning is semantic</h2>
+
+<p>The parser records capture syntax. Semantics resolves each referenced name, checks whether it is a value or supported weak target, detects mutation, builds a stable environment layout, and diagnoses illegal transfers or direct <code>self</code> cycles. MIR only sees the settled layout and operations.</p>
+
+<h2 id="cycles">Closure cycles</h2>
+
+<p>A class that stores a closure which strongly captures the same class would create a direct cycle: class → closure environment → class. That shape is diagnosed. A weak capture turns the second arrow non-owning and makes the captured name optional inside the body.</p>
+
+<h2 id="boundaries">Storage and boundaries</h2>
+
+<p>Copying a function value retains its environment. Function values can live in locals, fields, optionals, unions, and supported container slots. Their code identity and environment handles belong to one runtime process, so comparison and worker transfer are outside the function-value model.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/FUNCTIONS.md" data-source="docs/FUNCTIONS.md">closure contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/closures.zig" data-source="src/luce/semantics/closures.zig">capture planner</a>
+  <a class="source-link" href="@repo/src/luce/hir/nodes.zig" data-source="src/luce/hir/nodes.zig">typed capture nodes</a>
+  <a class="source-link" href="@repo/src/luce/specs/closures_spec.zig" data-source="src/luce/specs/closures_spec.zig">closure specs</a>
+</div>

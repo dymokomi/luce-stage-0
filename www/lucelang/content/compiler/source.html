@@ -1,0 +1,66 @@
+<p class="lede">Before <code>func</code> can be a keyword, it is four bytes from a file. The source stage validates UTF-8, gives the file an identity, and records enough position information to point back to a bad character later.</p>
+
+<div class="plain-note"><p><strong>In the running example:</strong> this stage reads <code>journey.luc</code> and its imports. Its output is validated text plus a path and coordinate system. Name resolution begins after parsing.</p></div>
+
+<h2 id="prepare">Preparing one source file</h2>
+
+<ol class="call-path">
+  <li><strong>Bound the input</strong><span>Reject oversized or binary-looking input before later stages allocate structures proportional to it.</span></li>
+  <li><strong>Validate encoding</strong><span>Accept valid UTF-8, ignore a leading UTF-8 BOM, and reject NUL or unsupported encodings.</span></li>
+  <li><strong>Normalize line endings</strong><span>Supported CRLF becomes LF; a stray carriage return produces a source diagnostic.</span></li>
+  <li><strong>Register the file</strong><span>Own its bytes, assign a source identity, and build line indexes used by every later diagnostic and trace.</span></li>
+</ol>
+
+<p>The result combines text, source identity, and a coordinate system. Later stages keep compact byte spans; the source registry converts a span into path, line, and column when it builds a diagnostic or trace.</p>
+
+<h2 id="modules">Loading the module graph</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Breadth-first module loading</strong><span>Standard modules and project modules share one registry</span></figcaption>
+  <div class="scope-grid">
+    <div class="arch-node"><strong>root: main.luc</strong><p><code>import std.math</code><br><code>import model</code></p></div>
+    <div class="arch-node owner-luce"><strong>std.math</strong><p>Embedded source, reached only through the reserved <code>std.</code> namespace.</p></div>
+    <div class="arch-node"><strong>model.luc</strong><p>Loaded by the host-provided loader under the project root identity.</p></div>
+  </div>
+</figure>
+
+<p>A module is loaded once. Imports declare dependencies, while execution begins from the selected entry function. That model allows module graph cycles. Semantic analysis later diagnoses cycles that imply an infinite value layout or recursive constant.</p>
+
+<h2 id="host-seam">The host supplies files; the compiler supplies meaning</h2>
+
+<p>The compiler asks a <code>compile.Loader</code> for source by logical module request. The command-line app answers from a filesystem and manifest, a test can answer from memory, and an editor can answer from its current buffer.</p>
+
+<div class="boundary">
+  <p><strong>Why this matters:</strong> filesystem policy stays in the host application, so the language compiler can serve command-line, test, and editor callers. Request and source identities also let a loading error point to the import that caused it.</p>
+</div>
+
+<h2 id="positions">Positions survive every transformation</h2>
+
+<p>Tokens carry source spans. AST nodes combine them. HIR records the span of the checked operation. MIR origins freeze source, line, and column onto emitted instructions. Debug artifacts retain those origins for traps; release artifacts may strip line detail while keeping function names.</p>
+
+<div class="flow">
+  <div class="flow-node"><b>byte 148</b><small>source registry</small></div>
+  <div class="flow-node"><b>token span</b><small>lexer</small></div>
+  <div class="flow-node"><b>node span</b><small>parser / HIR</small></div>
+  <div class="flow-node"><b>origin</b><small>MIR / trace</small></div>
+</div>
+
+<h2 id="decisions">Decisions kept here</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Question</th><th>Answer</th><th>Reason</th></tr></thead>
+  <tbody>
+    <tr><td>Who opens files?</td><td>The host loader</td><td>The language module stays host-independent.</td></tr>
+    <tr><td>Who normalizes CRLF?</td><td>Source</td><td>Every later stage receives one representation.</td></tr>
+    <tr><td>When does module code run?</td><td>From a called function</td><td>Importing registers declarations; execution begins when the entry path calls one.</td></tr>
+    <tr><td>How is one module recognized?</td><td>Opaque root identity plus resolved path</td><td>Different import spellings converge on the same loaded module.</td></tr>
+  </tbody>
+</table></div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/source.zig" data-source="src/luce/source.zig">source barrel</a>
+  <a class="source-link" href="@repo/src/luce/source/encoding.zig" data-source="src/luce/source/encoding.zig">encoding</a>
+  <a class="source-link" href="@repo/src/luce/source/sources.zig" data-source="src/luce/source/sources.zig">source registry</a>
+  <a class="source-link" href="@repo/src/luce/source/load.zig" data-source="src/luce/source/load.zig">language loading</a>
+  <a class="source-link" href="@repo/src/luce/compile/modules.zig" data-source="src/luce/compile/modules.zig">graph orchestration</a>
+</div>

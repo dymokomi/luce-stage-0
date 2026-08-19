@@ -1,0 +1,57 @@
+<p class="lede"><code>Measured</code> lets a function call <code>measure()</code> through a compiler-built method table. The interface value carries that table alongside an owned struct or class payload.</p>
+
+<h2 id="trace">Follow one interface call</h2>
+
+<p>The example puts a <code>Width</code> struct behind <code>Measured</code>. MIR shows witness construction and dispatch. LLVM IR gives that witness a concrete table and payload shape. The assembly uses an indirect call when several targets remain possible. When LLVM sees one concrete target, it can inline the method body.</p>
+
+<!-- trace:interfaces -->
+
+<h2 id="conformance">Contract matching</h2>
+
+<p>Every required slot checks parameter count and order, parameter and result types, receiver mutation, and fallibility. Requirement parameter names define call labels; a conformer may use different local parameter names. A non-fallible method satisfies a fallible requirement because callers already handle the broader outcome set.</p>
+
+<h2 id="representation">What an interface value carries</h2>
+
+<figure class="diagram">
+  <figcaption><strong>One interface value</strong><span>Payload ownership + static dispatch identity</span></figcaption>
+  <div class="representation-grid">
+    <div class="representation reference"><strong>Owned payload</strong><p>A copied struct value or a retained class identity.</p></div>
+    <div class="representation value"><strong>Witness identity</strong><p>A static table naming the concrete method implementations.</p></div>
+    <div class="representation effect"><strong>Interface type</strong><p>The public set of callable slots and receiver effects.</p></div>
+  </div>
+</figure>
+
+<p>The interface value is self-contained: it owns what it needs to remain valid when returned, captured, stored in an optional, or placed in a collection of different conforming types.</p>
+
+<h2 id="dispatch">Dispatch path</h2>
+
+<ol class="call-path">
+  <li><strong>Static interface check</strong><span>The call is validated against the interface requirement and labels.</span></li>
+  <li><strong>Load witness slot</strong><span>The concrete function identity comes from the value's static witness.</span></li>
+  <li><strong>Pass owned payload</strong><span>The method receives the copied struct or retained class representation.</span></li>
+  <li><strong>Return results or errors</strong><span>Multiple answers, optionals, and allowed error directions use the same ordinary call machinery.</span></li>
+</ol>
+
+<h2 id="mutation">Two kinds of mutation</h2>
+
+<p>A class witness can mutate its shared identity through any interface value that retains it. A value struct witness needs a <code>mutating</code> requirement and a mutable bare local receiver; after the indirect call, the updated payload is written back into that local.</p>
+
+<div class="comparison">
+  <div><h3>Class conformer</h3><p>Payload retains identity. Mutation is visible to every alias of the class.</p></div>
+  <div><h3>Struct conformer</h3><p>Payload is an owned copy. A mutating call writes that value back into a mutable local receiver.</p></div>
+</div>
+
+<h2 id="storage">Where interface values can travel</h2>
+
+<p>Interface values support fields, returns, optionals, closure captures, and heterogeneous lists, maps, and arrays. Their witness contains process-local function identity, so worker sendability excludes them. Weak storage targets reference identities directly, while an interface also contains a witness and owned payload.</p>
+
+<h2 id="limits">The current interface model</h2>
+
+<p>Conformance is nominal and produces a fixed witness table for the declared methods. This model gives the compiler a finite dispatch layout and keeps each type’s opt-in visible at its declaration. Interface inheritance, associated types, and runtime casts would require additional representation and resolution rules.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/INTERFACES.md" data-source="docs/INTERFACES.md">interface contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/interfaces.zig" data-source="src/luce/semantics/interfaces.zig">witness construction</a>
+  <a class="source-link" href="@repo/src/luce/codegen/lower.zig" data-source="src/luce/codegen/lower.zig">indirect lowering</a>
+  <a class="source-link" href="@repo/src/luce/specs/interfaces_spec.zig" data-source="src/luce/specs/interfaces_spec.zig">interface specs</a>
+</div>

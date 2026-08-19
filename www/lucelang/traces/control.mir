@@ -1,0 +1,53 @@
+func main(args: list[str]) -> None
+    local %1 total: i64
+    local %2 (temporary): list[str]
+    local %3 (temporary): i64
+    local %4 argument: str
+    local %5 (temporary): str
+  b0:
+    r0 = const 0
+    local_set %1, r0
+    r2 = local_get %0
+    local_set %2, r2
+    r4 = const 0
+    local_set %3, r4
+    jump b1
+  b1:
+    r7 = local_get %2
+    r8 = intrinsic len, r7
+    r9 = local_get %3
+    r10 = less.i64 r9, r8
+    branch r10, b2, b4
+  b2:
+    r12 = local_get %2
+    r13 = local_get %3
+    r14 = intrinsic index_get, r12, r13
+    local_set %4, r14
+    r16 = local_get %4
+    r17 = intrinsic len, r16
+    r18 = const 2
+    r19 = greater.i64 r17, r18
+    branch r19, b5, b6
+  b3:
+    r27 = local_get %3
+    r28 = const 1
+    r29 = add.i64 r27, r28
+    local_set %3, r29
+    jump b1
+  b4:
+    r32 = local_get %1
+    r33 = intrinsic str_value, r32
+    local_set %5, r33
+    intrinsic print, r33
+    r36 = local_get %5
+    r37 = intrinsic drop_storage, r36
+    local_set %5, r37
+    ret
+  b5:
+    r21 = const 1
+    r22 = local_get %1
+    r23 = add.i64 r22, r21
+    local_set %1, r23
+    jump b6
+  b6:
+    jump b3

@@ -1,0 +1,5 @@
+func main(args: list[str]):
+    var values = [len(args), 2]
+    let same = values
+    same.append(3)
+    print(str(values[len(values) - 1]))

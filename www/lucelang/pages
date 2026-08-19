@@ -1,0 +1,40 @@
+# slug|parent|navigation label|page title|description
+index||Map|How Luce becomes a program|Follow Luce source through MIR and LLVM IR to ARM64 assembly and a running native program.
+compiler||Compiler|The compiler pipeline|Follow the questions Luce answers before LLVM is allowed to choose machine instructions.
+compiler/source|compiler|Source|Source loading and modules|What happens to file bytes, UTF-8, line positions, and imports before lexing starts.
+compiler/lexing|compiler|Lexing|Lexing and layout|How characters and indentation become a flat row of tokens the parser can read.
+compiler/parsing|compiler|Parsing|Parsing and the AST|How flat tokens become the nested source tree for declarations, statements, and expressions.
+compiler/semantics|compiler|Semantics|Semantics and typed HIR|Where names, types, calls, failure, flow, and ownership receive one checked meaning.
+compiler/hir-mir|compiler|HIR → MIR|From checked HIR to MIR|How checked source becomes registers, blocks, calls, branches, retains, releases, and returns.
+compiler/optimization|compiler|Optimize|MIR optimization|How Luce prunes language-level work before LLVM performs target-level optimization.
+compiler/codegen|compiler|Codegen|LLVM code generation|Compare one operation in Luce MIR, textual LLVM IR, and the emitted native object.
+language||Language|The language through an engineer's eyes|Pick a feature and follow a checked example from Luce source to MIR, LLVM IR, and ARM64.
+language/bindings|language|Bindings|Bindings and assignment|How let and var control replacement, and how replacement affects registers and reference lifetime.
+language/numerics|language|Numbers|Numeric values|How exact-width numbers, checked overflow, floats, shifts, and conversions reach machine code.
+language/text|language|Text & bytes|Text, bytes, and builders|How Unicode text, binary bytes, builders, and temporary string storage reach the runtime.
+language/control|language|Control flow|Control flow and matching|How if, loops, match, narrowing, and early exits become blocks, branches, and cleanup.
+language/functions|language|Functions|Functions, methods, and closures|How arguments, returns, methods, indirect calls, recursion, and call frames work underneath.
+language/structures|language|Structs|Structures and value layout|How a struct's fields are laid out, copied, flattened into registers, and written back.
+language/classes|language|Classes|Classes and identity|How shared class identity is allocated, retained, mutated, weakly referenced, and destroyed.
+language/interfaces|language|Interfaces|Interfaces and method tables|What an interface value carries and how its method call reaches concrete code.
+language/sum-types|language|Enums & unions|Enums, unions, and match|How closed alternatives become integer tags, payload storage, checks, and exhaustive branches.
+language/failure|language|Failure|Absence, errors, and traps|How absence, a recoverable error, and a broken rule take three different paths.
+language/collections|language|Collections|Lists, maps, arrays, and builders|How shared collection objects grow, check bounds, retain elements, and cross workers by copy.
+language/modules|language|Modules|Modules, constants, aliases, and visibility|How files and imports become one program before module boundaries disappear during optimization.
+runtime||Runtime|The runtime beneath both execution paths|Why classes, collections, text, workers, resources, and traps call one native Zig runtime.
+runtime/memory|runtime|Memory|Memory management and ARC|Follow a reference from allocation through aliases, weak reads, final release, and destruction.
+runtime/closures|runtime|Closures|Closure environments|How returned code keeps captured values alive in a small reference-counted environment.
+runtime/workers|runtime|Workers|Workers and isolated heaps|How spawn copies data into a separate heap and wait transfers the answer back to the caller.
+runtime/host|runtime|Host boundary|Resources and the host boundary|How print, files, clocks, processes, network, and graphics cross an explicit host table.
+library||Library|Where the library is implemented|See how Luce, Zig, LLVM, and the operating system divide the implementation work.
+library/standard|library|Standard modules|The embedded standard library|Follow an imported .luc module through the same compiler and see when it asks the host for help.
+library/luce-zig|library|Luce ↔ Zig|What is Luce and what is Zig|A file-by-file map of the compiler, runtime, standard modules, packages, LLVM, and host code.
+library/packages|library|Packages|Packages and userland|How versioned packages and complete applications use the same language and module pipeline as project code.
+execution||Execution|From MIR to a running process|How MIR becomes an object, a linked artifact, mapped machine code, and a call to luce_main.
+execution/walkthrough|execution|One program|One program, all the way down|A line-by-line journey from Luce through tokens, HIR, MIR, LLVM IR, ARM64, linking, and loading.
+execution/native|execution|Native path|The native machine-code path|How LLVM selects instructions, the linker resolves symbols, and the native entry starts a run.
+execution/artifacts|execution|Artifacts|Artifacts and compatibility|What .o, .lc, and executable files contain and why stale native code is rejected before loading.
+execution/oracle|execution|Oracle|The differential oracle|How an independent MIR interpreter checks native output, errors, traps, host changes, and leaks.
+decisions||Decisions|The decisions that shape Luce|Why the language checks overflow, separates value from identity, copies workers, and avoids hidden effects.
+decisions/explicitness|decisions|Why these rules|Language rules and their costs|How numeric conversion, conditions, identity, failure, host effects, and workers shape programs and implementation.
+decisions/change-map|decisions|Change map|What a language change costs|Every compiler, runtime, test, document, ABI, and artifact place one language change may need to update.

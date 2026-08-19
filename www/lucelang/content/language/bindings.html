@@ -1,0 +1,62 @@
+<p class="lede"><code>var total</code> accepts later assignments. <code>let answer</code> receives one initialization. That source distinction decides which stores the compiler permits and which old values must be released when a store happens.</p>
+
+<h2 id="trace">Start with one changing name</h2>
+
+<p>The example begins with the unknown command-line count, adds two, then freezes the result under a new name. In MIR, the change is a <code>local_set</code>. In optimized assembly, a scalar local may disappear into a register entirely.</p>
+
+<!-- trace:bindings -->
+
+<h2 id="let-var">Let, var, and the thing they name</h2>
+
+<div class="comparison">
+  <div><h3><code>let</code></h3><p>The binding keeps the same value or object identity. A class or container may still mutate because the binding continues to name that object.</p></div>
+  <div><h3><code>var</code></h3><p>The binding may be replaced. It can carry an annotation, an initializer, or both. When the initializer is omitted, a zeroable type supplies its zero value.</p></div>
+</div>
+
+<figure class="sample">
+  <figcaption class="cap luc">binding and identity</figcaption>
+  <div class="code"><pre><code><span class="k">let</span> names = [<span class="s">"Ada"</span>]
+names.append(<span class="s">"Grace"</span>)   <span class="c"># object mutates; binding is still names</span>
+
+<span class="k">var</span> count: <span class="t">i64</span> = <span class="n">1</span>
+count = count + <span class="n">1</span>      <span class="c"># binding is replaced</span></code></pre></div>
+</figure>
+
+<h2 id="replacement">Replacement is an ownership transaction</h2>
+
+<p>For a reference place, assignment prepares the new value before releasing the old one. That order matters when both names denote the same object, when evaluation can trap, and when last release runs a deinitializer or closes a resource.</p>
+
+<ol class="call-path">
+  <li><strong>Resolve the place</strong><span>Local, field, nested field, index, slice, compound target, or parallel destination.</span></li>
+  <li><strong>Evaluate and retain replacements</strong><span>Every right-side expression and conversion completes first.</span></li>
+  <li><strong>Commit stores</strong><span>A guarded multi-place assignment commits all replacement stores or none.</span></li>
+  <li><strong>Release old ownership</strong><span>Old references leave in the language-defined order; last release may have visible cleanup.</span></li>
+</ol>
+
+<h2 id="places">One assignment subsystem, many places</h2>
+
+<p><code>semantics/assign.zig</code> plans simple, compound, field, index, chained, and parallel assignments. The planner records the destination's mutability, element type, optional guard, and write-back behavior into HIR. A writing value method is another kind of place update: the modified receiver must be stored back into a mutable bare local.</p>
+
+<h2 id="zero">Zero initialization has limits</h2>
+
+<p>Numeric and Boolean values, optionals, and aggregates built from zeroable fields can initialize from their type’s zero. Function and interface values require an initializer or an optional slot. The resolved type determines which case applies.</p>
+
+<h2 id="weak">How weak storage works</h2>
+
+<p>A <code>weak var</code> local or <code>weak</code> field has an explicit optional target type. Assignment stores a generation-checked handle without retaining. Every read attempts an owned strong snapshot and answers <code>none</code> after the target dies.</p>
+
+<div class="invariant">
+  <p><strong>Each weak read is a separate upgrade attempt.</strong> Bind one upgraded snapshot, unwrap that stable value, and use it for the rest of the operation.</p>
+</div>
+
+<h2 id="flow">Every exit closes its scope</h2>
+
+<p><code>return</code>, <code>break</code>, <code>continue</code>, fallible propagation, and ordinary block exit release the locals and statement temporaries they leave. Semantics records those cleanup obligations; MIR makes them explicit on each control-flow edge.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/semantics/assign.zig" data-source="src/luce/semantics/assign.zig">assignment planning</a>
+  <a class="source-link" href="@repo/src/luce/semantics/flow.zig" data-source="src/luce/semantics/flow.zig">flow state</a>
+  <a class="source-link" href="@repo/src/luce/semantics/ledger.zig" data-source="src/luce/semantics/ledger.zig">temporary lifetime</a>
+  <a class="source-link" href="@repo/docs/MEMORY.md" data-source="docs/MEMORY.md">replacement lifetime</a>
+  <a class="source-link" href="@repo/src/luce/specs/weak_references_spec.zig" data-source="src/luce/specs/weak_references_spec.zig">weak behavior specs</a>
+</div>

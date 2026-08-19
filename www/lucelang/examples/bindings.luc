@@ -1,0 +1,5 @@
+func main(args: list[str]):
+    var total = len(args)
+    total += 2
+    let answer = total
+    print(str(answer))

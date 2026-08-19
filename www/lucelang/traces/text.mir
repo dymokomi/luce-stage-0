@@ -1,0 +1,23 @@
+func main(args: list[str]) -> None
+    local %1 (temporary): str
+    local %2 count: str
+    local %3 (temporary): str
+    local %4 message: str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = intrinsic str_value, r1
+    local_set %2, r2
+    r4 = const data#0
+    r5 = local_get %2
+    r6 = add.str r4, r5
+    local_set %4, r6
+    r8 = local_get %4
+    intrinsic print, r8
+    r10 = local_get %4
+    r11 = intrinsic drop_storage, r10
+    local_set %4, r11
+    r13 = local_get %2
+    r14 = intrinsic drop_storage, r13
+    local_set %2, r14
+    ret

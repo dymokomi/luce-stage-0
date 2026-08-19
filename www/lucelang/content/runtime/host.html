@@ -1,0 +1,53 @@
+<p class="lede">Files, clocks, terminals, processes, networks, and graphics belong to the program's host. Luce reaches them through a versioned table of callbacks. A standard-library wrapper requests one named capability, and an absent capability produces <code>host_unavailable</code>.</p>
+
+<h2 id="trace">Follow one host call</h2>
+
+<p><code>print</code> is the smallest visible host effect. MIR names the intrinsic. LLVM loads the print callback from the host table and handles its status. ARM64 performs the indirect call with <code>blr</code>; the operating system work remains outside generated code.</p>
+
+<!-- trace:host -->
+
+<h2 id="layers">From public API to the world</h2>
+
+<figure class="diagram">
+  <figcaption><strong>A hosted operation</strong><span>Files are the example; the same boundary serves terminal, process, network, and graphics capabilities</span></figcaption>
+  <div class="layer-stack">
+    <div class="layer luce"><strong><code>std.files</code></strong><span>public fallible Luce API and <code>File</code> resource class</span></div>
+    <div class="layer luce"><strong><code>Builtin</code></strong><span>synthetic names accepted only inside embedded standard source</span></div>
+    <div class="layer zig"><strong>semantics + MIR</strong><span>host gate, exact service operation, and error/trap behavior</span></div>
+    <div class="layer zig"><strong>runtime channel</strong><span>raw handle object, reads/writes, and ARC last-release close</span></div>
+    <div class="layer zig"><strong><code>LuceHost</code></strong><span>optional function slots installed by loom or standalone start</span></div>
+    <div class="layer machine"><strong>OS service</strong><span>descriptor, terminal, clock, child process, socket, window, or GPU surface</span></div>
+  </div>
+</figure>
+
+<h2 id="builtin">How embedded modules request host operations</h2>
+
+<p>Hosted standard modules use synthetic <code>Builtin.NAME</code> operations. Semantics recognizes those names only while compiling embedded standard-library source and lowers them to specific host-table operations. Project and package code uses the public <code>std</code> API, which keeps callback layout and raw handles behind library types.</p>
+
+<h2 id="capabilities">What happens when a service is absent</h2>
+
+<p>Each effect slot in <code>LuceHost</code> is optional except the channels used to report how a run ended. Calling an absent slot traps <code>host_unavailable</code>. This makes the installed table the complete list of effects available to that run.</p>
+
+<div class="invariant">
+  <p><strong>A host-free run performs pure computation.</strong> Any attempted file, clock, terminal, process, network, or graphics operation reports <code>host_unavailable</code>.</p>
+</div>
+
+<h2 id="resources">Raw handles stay behind library classes</h2>
+
+<p>The standard library represents a native descriptor with a private <code>handle</code>. Programs see <code>files.File</code>, network connections, windows, surfaces, processes, and similar library classes. Their private handle field follows ordinary ARC. The final strong release closes or releases the descriptor exactly once.</p>
+
+<h2 id="answers">Service results have one convention</h2>
+
+<p>Fallible host services distinguish success, an ordinary service refusal, and allocation exhaustion. Returned text is borrowed for the callback only and copied into run-owned storage. A missing optional value clears out-parameters before the call, preventing an absent answer from reading uninitialized stack bytes.</p>
+
+<h2 id="version">How generated code and the host stay compatible</h2>
+
+<p>The host table's current version is <strong>@abi_version@</strong>, inserted from <code>codegen/abi.zig</code>. Field order determines the in-memory layout. Adding, removing, reordering, or changing the meaning or signature of a slot updates every host and generated access together and bumps the version. An artifact carrying an older ABI tag is rebuilt or rejected before it runs.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/codegen/abi.zig" data-source="src/luce/codegen/abi.zig">published host ABI</a>
+  <a class="source-link" href="@repo/src/luce/semantics/builtins.zig" data-source="src/luce/semantics/builtins.zig">private builtin table</a>
+  <a class="source-link" href="@repo/src/luce/runtime/files.zig" data-source="src/luce/runtime/files.zig">file handle runtime</a>
+  <a class="source-link" href="@repo/src/apps/host.zig" data-source="src/apps/host.zig">concrete host</a>
+  <a class="source-link" href="@repo/docs/STD.md" data-source="docs/STD.md">standard/host boundary</a>
+</div>

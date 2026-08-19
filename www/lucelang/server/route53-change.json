@@ -1,0 +1,24 @@
+{
+  "Comment": "Point lucelang.org and www.lucelang.org at the LuciaOS edge",
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "lucelang.org.",
+        "Type": "A",
+        "TTL": 300,
+        "ResourceRecords": [{ "Value": "@ADDRESS@" }]
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "www.lucelang.org.",
+        "Type": "A",
+        "TTL": 300,
+        "ResourceRecords": [{ "Value": "@ADDRESS@" }]
+      }
+    }
+  ]
+}
+

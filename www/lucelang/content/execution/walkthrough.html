@@ -1,0 +1,125 @@
+<p class="lede">Let’s take one eight-line Luce program apart. We will keep asking the same question: what became explicit at this stage that was only implied before?</p>
+
+<h2 id="program">The program</h2>
+
+<p><code>clamp_double</code> doubles a value and caps it at ten. <code>main</code> uses the number of command-line arguments. That number becomes available when the program starts, so the emitted instructions calculate the answer at run time.</p>
+
+<div class="code"><pre><code><span class="k">func</span> <span class="d">clamp_double</span>(value: i64, limit: i64) -&gt; i64:
+    <span class="k">let</span> doubled = value * <span class="n">2</span>
+    <span class="k">if</span> doubled &gt; limit:
+        <span class="k">return</span> limit
+    <span class="k">return</span> doubled
+
+<span class="k">func</span> <span class="d">main</span>(args: list[str]):
+    <span class="b">print</span>(<span class="b">str</span>(clamp_double(<span class="b">len</span>(args), <span class="n">10</span>)))</code></pre></div>
+
+<p>At this point, a reader supplies a lot of meaning automatically: <code>value</code> refers to the first parameter, multiplication happens before assignment, the indented lines belong to the function, and both returns produce an <code>i64</code>. A compiler has to make every one of those facts concrete.</p>
+
+<h2 id="tokens">1. The lexer finds the pieces</h2>
+
+<p>The lexer reads characters and emits a flat list. Words become names or keywords. Punctuation becomes its own tokens. Newlines and indentation become layout tokens, giving the parser explicit block boundaries.</p>
+
+<div class="token-story" aria-label="Tokens for one source line">
+  <span><b>let</b><small>keyword</small></span><span><b>doubled</b><small>name</small></span><span><b>=</b><small>punctuation</small></span><span><b>value</b><small>name</small></span><span><b>*</b><small>operator</small></span><span><b>2</b><small>integer</small></span><span><b>newline</b><small>layout</small></span>
+</div>
+
+<p>At this stage each token carries its kind and source position. Name resolution and type checking happen after the parser has built a tree.</p>
+
+<h2 id="tree">2. The parser finds the shape</h2>
+
+<p>The parser turns the flat tokens into a tree. Multiplication sits inside the initializer; that initializer sits inside the binding; the binding sits inside the function body.</p>
+
+<figure class="diagram compact-diagram">
+  <figcaption><strong>The AST for <code>let doubled = value * 2</code></strong><span>The parser records the nesting</span></figcaption>
+  <ul class="tree">
+    <li><code>let binding: doubled</code><ul><li><code>multiply</code><ul><li><code>name: value</code></li><li><code>integer literal: 2</code></li></ul></li></ul></li>
+  </ul>
+</figure>
+
+<p>This tree records the grammatical reading of the source. The next stage resolves the names and checks whether the operations are valid.</p>
+
+<h2 id="meaning">3. Semantics resolves names and types</h2>
+
+<p>Now the compiler can answer questions that depend on each other. Which <code>value</code> is this? It is the first parameter. What is its type? <code>i64</code>. Can it multiply with the literal <code>2</code>? Yes—the literal can land directly as <code>i64</code>. What type does <code>doubled</code> get? Also <code>i64</code>.</p>
+
+<div class="decision-table">
+  <div><b>Written</b><span><code>value * 2</code></span></div><div><b>Resolved name</b><span>parameter 0 of <code>clamp_double</code></span></div><div><b>Operation</b><span>checked signed 64-bit multiplication</span></div><div><b>Result</b><span>immutable local <code>doubled: i64</code></span></div><div><b>Failure rule</b><span>overflow takes trap code 0</span></div>
+</div>
+
+<p>This checked tree is HIR. It resembles the source and carries the resolved name, integer width, result type, and overflow rule that lowering must preserve.</p>
+
+<h2 id="mir">4. MIR spells out the work</h2>
+
+<p>MIR is Luce’s own intermediate representation—the IR before LLVM. Structured source becomes numbered registers and basic blocks. A block is simply a straight run of instructions ending in a jump, branch, return, error, or trap.</p>
+
+<div class="code annotated-code"><pre><code><span class="line"><b>r0 = local_get %0</b>          <i>load value</i></span>
+<span class="line"><b>r1 = const 2</b>               <i>the literal is now i64</i></span>
+<span class="line"><b>r2 = multiply.i64 r0, r1</b>  <i>checked i64 multiplication</i></span>
+<span class="line"><b>local_set %2, r2</b>          <i>store doubled</i></span>
+<span class="line"><b>r6 = greater.i64 r4, r5</b>   <i>compare doubled and limit</i></span>
+<span class="line"><b>branch r6, b1, b2</b>         <i>choose one return block</i></span></code></pre></div>
+
+<p>MIR records the facts needed for execution: integer widths, registers, block targets, intrinsics, and cleanup of the temporary string in <code>main</code>. Earlier stages have already used indentation, precedence, and name lookup to determine this instruction sequence.</p>
+
+<h2 id="llvm">5. LLVM IR adds the target-facing details</h2>
+
+<p>The backend turns verified MIR into LLVM IR. This is still readable text, but it speaks in target-neutral machine operations and Luce’s runtime ABI. The multiplication becomes LLVM’s checked-overflow intrinsic:</p>
+
+<div class="code annotated-code"><pre><code><span class="line"><b>%12 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %11, i64 2)</b></span>
+<span class="line"><b>%13 = extractvalue { i64, i1 } %12, 0</b> <i>the product</i></span>
+<span class="line"><b>%14 = extractvalue { i64, i1 } %12, 1</b> <i>did it overflow?</i></span>
+<span class="line"><b>br i1 %14, label %19, label %22</b>       <i>trap or continue</i></span></code></pre></div>
+
+<p>The function has more parameters than the source did. Luce passes runtime state, call-depth information, and result storage through a stable internal calling convention. Those details were irrelevant to source typing, but they are necessary once code can call the runtime or report a source-aware trap.</p>
+
+<h2 id="assembly">6. LLVM chooses ARM64 instructions</h2>
+
+<p>LLVM now optimizes the module and selects instructions for the build target. It inlines <code>clamp_double</code> into <code>luce_main</code>, replaces multiplication by two with a left shift, and replaces the two return branches with a conditional select.</p>
+
+<div class="assembly-explainer">
+  <div class="asm-line"><code>mov x9, #0x4000000000000000<br>cmn x8, x9</code><p>Load <code>2⁶²</code>, then add it only to set flags. This is a compact way to test whether doubling a signed 64-bit number would leave its legal range.</p></div>
+  <div class="asm-line"><code>b.mi overflow</code><p>If the sign flags say the input is outside the safe half-range, branch to the code that raises Luce’s integer-overflow trap.</p></div>
+  <div class="asm-line"><code>lsl x8, x8, #1</code><p>Shift left by one bit. For a safe signed integer, this is exactly multiplication by two.</p></div>
+  <div class="asm-line"><code>cmp x8, #0xa</code><p>Compare the doubled value with hexadecimal <code>a</code>, which is decimal ten.</p></div>
+  <div class="asm-line"><code>csel x8, x8, x9, lt</code><p>If the doubled value is less than ten, keep it; otherwise select the register holding ten.</p></div>
+</div>
+
+<p>Luce defines the result and overflow behavior. LLVM then chooses instructions that implement those rules for ARM64. Here a shift performs the multiplication and <code>csel</code> implements the cap from the comparison flags.</p>
+
+<h2 id="exact-files">Read the generated files</h2>
+
+<p>The panel below contains every line from the trace snapshot. Open the instruction guide above each low-level file, then scroll the file or open it in a full browser tab for searching.</p>
+
+<!-- trace:journey -->
+
+<h2 id="object">7. Object, link, load, call</h2>
+
+<p>The assembly lives in a relocatable object file. “Relocatable” means calls and addresses may still contain placeholders. The platform linker joins that object with Luce’s runtime and start code, resolves symbols, and writes either a loadable <code>.lc</code> artifact or a normal executable.</p>
+
+<ol class="story-steps">
+  <li><b>The object carries <code>luce_main</code>.</b><span>That is the one entry the Luce host knows how to call.</span></li>
+  <li><b>The linker supplies runtime functions.</b><span>Text conversion, printing, ARC, traps, collections, and workers live behind ordinary native symbols.</span></li>
+  <li><b>The artifact carries an identity tag.</b><span>The loader checks machine, ABI, generator, and source identity before mapping code.</span></li>
+  <li><b>The operating system maps native pages.</b><span>The artifact already contains processor instructions and links to its runtime services.</span></li>
+  <li><b>The host calls <code>luce_main</code>.</b><span>The command-line list is passed in, the instructions above run, and the runtime releases remaining objects on every exit.</span></li>
+</ol>
+
+<h2 id="reproduce">Reproduce the trace</h2>
+
+<p>The site’s trace-maintenance job runs an inspection compiler in a detached Git worktree. A site-only command prints the LLVM module alongside the public MIR and object outputs.</p>
+
+<div class="code"><pre><code>git worktree add --detach /tmp/luce-traces HEAD
+# Build the temporary inspection compiler inside /tmp/luce-traces.
+LUCELANG_COMPILER=/tmp/luce-traces/build/luce \
+  ./www/lucelang/generate-traces.sh</code></pre></div>
+
+<p>The maintenance script checks each example, prints MIR and LLVM IR, emits an object, disassembles that object, and verifies that all four files describe the same program.</p>
+
+<div class="plain-note"><p><strong>The reading order to remember:</strong> source states the program; HIR records resolved language decisions; MIR lists the language operations; LLVM IR expresses them for a native backend; assembly is the instruction sequence selected for one processor.</p></div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/compile.zig" data-source="src/luce/compile.zig">pipeline driver</a>
+  <a class="source-link" href="@repo/src/luce/hir/lower.zig" data-source="src/luce/hir/lower.zig">HIR → MIR</a>
+  <a class="source-link" href="@repo/src/luce/codegen/lower.zig" data-source="src/luce/codegen/lower.zig">MIR → LLVM</a>
+  <a class="source-link" href="@repo/src/luce/codegen/emit.zig" data-source="src/luce/codegen/emit.zig">LLVM → object</a>
+</div>

@@ -1,0 +1,15 @@
+interface Measured:
+    func measure() -> i64
+
+struct Width: Measured:
+    value: i64
+
+    func measure() -> i64:
+        return self.value
+
+func read(value: Measured) -> i64:
+    return value.measure()
+
+func main(args: list[str]):
+    let width = Width(value = len(args) + 4)
+    print(str(read(width)))

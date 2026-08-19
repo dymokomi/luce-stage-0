@@ -1,0 +1,89 @@
+func main(args: list[str]) -> None
+    local %1 (temporary): str
+    local %2 (temporary): list[str]
+    local %3 parts: list[str]
+    local %4 (temporary): str
+  b0:
+    r0 = const data#0
+    r1 = local_get %0
+    r2 = intrinsic len, r1
+    r3 = intrinsic str_value, r2
+    r4 = heap_new list[str]
+    r5 = intrinsic own_storage, r0
+    intrinsic append_value, r4, r5
+    intrinsic append_value, r4, r3
+    local_set %3, r4
+    r9 = local_get %3
+    r10 = const data#1
+    r11 = call strings.join, r9, r10
+    local_set %4, r11
+    intrinsic print, r11
+    r14 = local_get %4
+    r15 = intrinsic drop_storage, r14
+    local_set %4, r15
+    r17 = local_get %3
+    intrinsic release, r17
+    ret
+func strings.join(parts: list[str], separator: str) -> str
+    local %2 (temporary): builder
+    local %3 out: builder
+    local %4 (temporary): list[str]
+    local %5 (temporary): i64
+    local %6 i: i64
+    local %7 piece: str
+    local %8 (temporary): str
+  b0:
+    r0 = heap_new builder
+    local_set %3, r0
+    r2 = local_get %0
+    local_set %4, r2
+    r4 = const 0
+    local_set %5, r4
+    jump b1
+  b1:
+    r7 = local_get %4
+    r8 = intrinsic len, r7
+    r9 = local_get %5
+    r10 = less.i64 r9, r8
+    branch r10, b2, b4
+  b2:
+    r12 = local_get %5
+    local_set %6, r12
+    r14 = local_get %4
+    r15 = local_get %5
+    r16 = intrinsic index_get, r14, r15
+    r17 = local_get %7
+    r18 = intrinsic drop_storage, r17
+    local_set %7, r18
+    r20 = intrinsic own_storage, r16
+    local_set %7, r20
+    r22 = local_get %6
+    r23 = const 0
+    r24 = greater.i64 r22, r23
+    branch r24, b5, b6
+  b3:
+    r34 = local_get %5
+    r35 = const 1
+    r36 = add.i64 r34, r35
+    local_set %5, r36
+    jump b1
+  b4:
+    r39 = local_get %7
+    r40 = intrinsic drop_storage, r39
+    local_set %7, r40
+    r42 = local_get %3
+    r43 = intrinsic str_value, r42
+    r44 = intrinsic export_storage, r43
+    r45 = local_get %3
+    intrinsic release, r45
+    ret r44
+  b5:
+    r26 = local_get %3
+    r27 = local_get %1
+    intrinsic append_value, r26, r27
+    jump b6
+  b6:
+    r30 = local_get %3
+    r31 = local_get %7
+    intrinsic append_value, r30, r31
+    jump b3

@@ -3,10 +3,10 @@
 #
 #   www/deploy/publish.sh DIRECTORY REMOTE-PATH URL [rsync-option...]
 #
-# All four sites in this tree — luce.luciaos.com, loom.luciaos.com,
-# luciaos.com, and stats.luciaos.com — are one host, one key and one rsync
-# away from being published. That shared operation is written here once,
-# so moving the server is one edit rather than four, and the
+# All five sites in this tree — luce.luciaos.com, lucelang.org,
+# loom.luciaos.com, luciaos.com, and stats.luciaos.com — are one host, one
+# key and one rsync away from being published. That shared operation is
+# written here once, so moving the server is one edit rather than five, and the
 # address of the machine appears in exactly one file.
 #
 # What each site keeps for itself is what it cannot share: how it is
@@ -20,11 +20,9 @@
 #
 # **The default target is a single host** — one machine serving each
 # static root with Caddy, which takes the certificates itself.  There
-# is no infrastructure-as-code for it, no second host
-# and no record of the Caddy configuration in this repository; moving
-# a site means editing the line below and knowing where the
-# certificate comes from.  Written down because it is the one thing
-# about these sites that is not reproducible from the tree.
+# is no second host. The lucelang site keeps the Route 53 change and Caddy
+# block that introduced that origin under its server/ directory; the older
+# origins predate those checked-in records.
 set -e
 
 if [ "$#" -lt 3 ]; then

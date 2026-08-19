@@ -1,0 +1,60 @@
+<p class="lede">This map shows where each part of the system is implemented. It answers which repository directory owns a behavior and which boundary connects it to the next layer.</p>
+
+<h2 id="map">Filter the implementation map</h2>
+
+<div class="diagram" data-owner-map>
+  <div class="diagram-head"><strong>Repository ownership</strong><span>Choose a territory to isolate it</span></div>
+  <div class="owner-controls" role="group" aria-label="Implementation owner filter">
+    <button type="button" data-owner-select="all">All layers</button>
+    <button type="button" data-owner-select="luce">Luce</button>
+    <button type="button" data-owner-select="zig">Zig</button>
+    <button type="button" data-owner-select="machine">Native tools</button>
+  </div>
+  <div class="layer-stack">
+    <div class="layer luce" data-owner="luce"><strong>std/*.luc</strong><span>portable library algorithms and public wrappers</span></div>
+    <div class="layer luce" data-owner="luce"><strong>packages/*.luc</strong><span>termui and maintained userland packages</span></div>
+    <div class="layer luce" data-owner="luce"><strong>examples/*.luc</strong><span>editor, LSP, adventure, algorithms, and complete programs</span></div>
+    <div class="layer zig" data-owner="zig"><strong>source → MIR</strong><span>loading, lexer, parser, semantics, HIR, MIR, verifier, optimizer</span></div>
+    <div class="layer zig" data-owner="zig"><strong>runtime</strong><span>Value, object table, ARC, containers, text, resources, workers, traps</span></div>
+    <div class="layer zig" data-owner="zig"><strong>apps</strong><span>CLI, loom, concrete host, native loader/linker, manifests, streams</span></div>
+    <div class="layer zig" data-owner="zig"><strong>oracle/specs</strong><span>independent MIR dispatch and native-vs-reference comparison</span></div>
+    <div class="layer machine" data-owner="machine"><strong>LLVM</strong><span>general optimization, instruction selection, object emission</span></div>
+    <div class="layer machine" data-owner="machine"><strong>cc + loader</strong><span>platform link, shared-library loading, relocation, process entry</span></div>
+    <div class="layer machine" data-owner="machine"><strong>OS</strong><span>files, terminal, time, threads, process, sockets, windows, GPU</span></div>
+  </div>
+</div>
+
+<h2 id="luce">What is written in Luce</h2>
+
+<p>The standard algorithms for strings, paths, JSON, ZIP/DEFLATE, HTTP, IO loops, list sorting, and much of math are language source. So are the <code>termui</code> package, the terminal editor, the LSP server, and bundled applications. Hosted public APIs remain Luce declarations even when their final primitive crosses to Zig.</p>
+
+<p>The compiler and runtime remain Zig. Standard algorithms, packages, and applications exercise Luce as userland and can evolve through ordinary language source.</p>
+
+<h2 id="zig">Why the compiler and runtime are Zig</h2>
+
+<p>The compiler needs byte-level parsers, arenas, LLVM construction, native object handling, and diagnostic infrastructure. The runtime needs precise C layout, allocators, atomic/thread integration, host callbacks, and platform resource destruction. The apps need filesystem loading, process launch, dynamic loading, and terminal/window adapters.</p>
+
+<h2 id="native">What belongs to native tooling</h2>
+
+<p>LLVM performs target-independent and target-specific optimization, selects machine instructions, assigns physical registers, and emits an object. <code>cc</code> supplies platform startup objects, SDK paths, libraries, and the final link. The OS loader maps the executable or <code>.lc</code>, applies relocations, and exposes the entry symbol.</p>
+
+<h2 id="decision-test">The placement test</h2>
+
+<div class="table"><table>
+  <thead><tr><th>If the behavior...</th><th>It belongs...</th></tr></thead>
+  <tbody>
+    <tr><td>can be expressed portably with current language semantics</td><td>in Luce source</td></tr>
+    <tr><td>defines heap identity, lifetime, representation, or traps</td><td>once in the Zig runtime</td></tr>
+    <tr><td>decides source meaning or emits protocol</td><td>in the owning Zig compiler stage</td></tr>
+    <tr><td>touches platform state</td><td>behind the host table in an app adapter</td></tr>
+    <tr><td>is general machine optimization</td><td>in LLVM, informed by accurate alias, effect, and lifetime metadata</td></tr>
+  </tbody>
+</table></div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/std" data-source="src/luce/std">standard Luce</a>
+  <a class="source-link" href="@repo/packages/termui-0.5.0" data-source="packages/termui-0.5.0">termui in Luce</a>
+  <a class="source-link" href="@repo/examples/editor" data-source="examples/editor">editor in Luce</a>
+  <a class="source-link" href="@repo/src/luce" data-source="src/luce">compiler/runtime in Zig</a>
+  <a class="source-link" href="@repo/src/apps" data-source="src/apps">hosts and products in Zig</a>
+</div>

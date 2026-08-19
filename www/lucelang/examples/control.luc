@@ -1,0 +1,6 @@
+func main(args: list[str]):
+    var total = 0
+    for argument in args:
+        if len(argument) > 2:
+            total += 1
+    print(str(total))

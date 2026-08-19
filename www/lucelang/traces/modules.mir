@@ -1,0 +1,19 @@
+func main(args: list[str]) -> None
+    local %1 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = call trace_math.twice, r1
+    r3 = intrinsic str_value, r2
+    local_set %1, r3
+    intrinsic print, r3
+    r6 = local_get %1
+    r7 = intrinsic drop_storage, r6
+    local_set %1, r7
+    ret
+func trace_math.twice(value: i64) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = const 2
+    r2 = multiply.i64 r0, r1
+    ret r2

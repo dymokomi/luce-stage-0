@@ -1,0 +1,62 @@
+<p class="lede">Tokens are flat; programs are nested. The parser builds that nesting: multiplication belongs inside a binding, the binding belongs inside a function, and the indented returns belong to different branches.</p>
+
+<h2 id="ast">The AST preserves what was written</h2>
+
+<figure class="diagram">
+  <figcaption><strong><code>let total = price + tax * 2</code></strong><span>Precedence shapes the tree</span></figcaption>
+  <ul class="tree">
+    <li><code>binding let total</code>
+      <ul>
+        <li><code>binary +</code>
+          <ul>
+            <li><code>name price</code></li>
+            <li><code>binary *</code>
+              <ul><li><code>name tax</code></li><li><code>integer 2</code></li></ul>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</figure>
+
+<p>The nodes are arena-owned, untyped, and source-spanned. A call node carries the written positional and named arguments. A class node carries fields, methods, <code>init</code>, and <code>deinit</code>. Semantic analysis uses this structure to resolve names and match calls.</p>
+
+<h2 id="pratt">How Pratt parsing handles expressions</h2>
+
+<ol class="call-path">
+  <li><strong>Read a prefix</strong><span>A literal, name, grouped expression, lambda, unary operator, or collection literal starts the left side.</span></li>
+  <li><strong>Read postfix forms</strong><span>Calls, field access, indexing, and slicing bind most tightly and extend the current expression.</span></li>
+  <li><strong>Compare binding power</strong><span>An infix operator joins only when its precedence is high enough for the current parse.</span></li>
+  <li><strong>Recurse for the right side</strong><span>Associativity sets the minimum binding power used for the recursive right-hand parse.</span></li>
+</ol>
+
+<h2 id="refusals">Parentheses resolve two ambiguous forms</h2>
+
+<p>A chained comparison and <code>not</code> directly before a comparison both admit plausible trees to readers from different languages. Luce requires parentheses so the source carries one visible grouping.</p>
+
+<div class="comparison">
+  <div class="yes"><h3>Explicit grouping</h3><p><code>not (a == b)</code><br><code>(a &lt; b) and (b &lt; c)</code></p></div>
+  <div class="no"><h3>Ambiguous grouping</h3><p><code>not a == b</code><br><code>a &lt; b &lt; c</code></p></div>
+</div>
+
+<h2 id="recovery">Recovery follows the reader</h2>
+
+<p>A broken construct reports at the offending token, then resumes at the next line in the same block. If a broken header owns an indented suite, recovery consumes that body with the header to preserve the surrounding block structure. An unclosed list points to its opening bracket, and a missing comma points to the item it separates.</p>
+
+<p>For an unambiguous mistake such as <code>if x = 1:</code>, the recovery stream uses the intended comparison so the body can also be checked. The compile result remains a diagnostic, and the temporary repair improves the rest of that report.</p>
+
+<h2 id="desugaring">The small amount of early sugar</h2>
+
+<p>Most source sugar survives into typed HIR. The parser currently expands two forms early: an f-string becomes concatenation through <code>str(...)</code>, and an <code>elif</code> chain becomes nested conditionals. Moving those expansions into typed lowering would give them access to resolved meaning.</p>
+
+<h2 id="bounds">Robustness is part of the grammar</h2>
+
+<p>Statements, conditions, expression nesting, prefix chains, and type arguments share a recursion budget. Diagnostic volume is capped. When the lexer truncates a structurally excessive stream, the parser recognizes the synthetic tail. The grammar therefore defines recovery and termination for malformed input alongside valid syntax.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/parse.zig" data-source="src/luce/parse.zig">parser contract</a>
+  <a class="source-link" href="@repo/src/luce/parse/ast.zig" data-source="src/luce/parse/ast.zig">AST nodes</a>
+  <a class="source-link" href="@repo/src/luce/parse/grammar.zig" data-source="src/luce/parse/grammar.zig">declarations and recovery</a>
+  <a class="source-link" href="@repo/src/luce/parse/expressions.zig" data-source="src/luce/parse/expressions.zig">Pratt expressions</a>
+</div>

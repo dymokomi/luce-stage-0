@@ -1,0 +1,5 @@
+func square(value: i64) -> i64:
+    return value * value
+
+func main(args: list[str]):
+    print(str(square(len(args) + 1)))

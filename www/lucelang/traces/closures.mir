@@ -1,0 +1,53 @@
+class make_adder.(closure@2.33).(environment):
+    start: i64
+func make_adder(start: i64) -> func(i64) -> i64
+    local %1 (temporary): func(i64) -> i64
+    local %2 add: func(i64) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = struct_make make_adder.(closure@2.33).(environment), r0
+    r2 = const_function make_adder.(closure@2.33) bound r1
+    local_set %2, r2
+    r4 = local_get %2
+    intrinsic retain, r4
+    r6 = intrinsic own_storage, r4
+    r7 = local_get %2
+    intrinsic release, r7
+    r9 = local_get %2
+    r10 = intrinsic drop_storage, r9
+    local_set %2, r10
+    ret r6
+func main(args: list[str]) -> None
+    local %1 (temporary): func(i64) -> i64
+    local %2 add: func(i64) -> i64
+    local %3 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = call make_adder, r1
+    local_set %2, r2
+    r4 = local_get %2
+    r5 = const 2
+    r6 = call_indirect r4 : func(i64) -> i64, r5
+    r7 = intrinsic str_value, r6
+    local_set %3, r7
+    intrinsic print, r7
+    r10 = local_get %3
+    r11 = intrinsic drop_storage, r10
+    local_set %3, r11
+    r13 = local_get %2
+    intrinsic release, r13
+    r15 = local_get %2
+    r16 = intrinsic drop_storage, r15
+    local_set %2, r16
+    ret
+func make_adder.(closure@2.33)($closure: make_adder.(closure@2.33).(environment), value: i64) -> i64
+    local %2 start: i64
+  b0:
+    r0 = local_get %0
+    r1 = struct_get r0, make_adder.(closure@2.33).(environment).start
+    local_set %2, r1
+    r3 = local_get %2
+    r4 = local_get %1
+    r5 = add.i64 r3, r4
+    ret r5

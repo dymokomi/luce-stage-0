@@ -1,0 +1,58 @@
+<p class="lede"><code>spawn square(...)</code> starts native work on another thread. The worker receives copied arguments in a separate Luce runtime, and <code>wait()</code> copies its result back to the caller.</p>
+
+<h2 id="trace">Follow one spawned function</h2>
+
+<p>MIR marks the spawn and wait explicitly. LLVM lowers them to the worker runtime. ARM64 prepares the function identity and copied arguments, calls the spawn service, then joins the task and checks the returned status.</p>
+
+<!-- trace:workers -->
+
+<h2 id="worlds">Two heaps connected by value transfer</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Worker snapshot</strong><span>Graph relationships survive while handles are rebuilt for the destination heap</span></figcaption>
+  <div class="worker-worlds">
+    <div class="world"><h3>caller runtime</h3><div class="heap-node"><strong>list A</strong><p>points twice at nested list B</p><span class="count">handles in table 1</span></div></div>
+    <div class="bridge">⇒<small>graph copy</small></div>
+    <div class="world"><h3>worker runtime</h3><div class="heap-node"><strong>list A′</strong><p>both edges point at one copied B′</p><span class="count">handles in table 2</span></div></div>
+  </div>
+</figure>
+
+<p>The copier preserves aliases and cycles inside the transferred snapshot through a source-to-destination map. The caller retains its independent graph. Each object row belongs to one heap and one thread, which prevents the two copies from participating in the same data race.</p>
+
+<h2 id="crossing">What can cross</h2>
+
+<div class="comparison">
+  <div class="yes"><h3>Sendable</h3><p>Scalars, text/bytes values, structs/enums/unions built from permitted fields, and list/map/array graphs of permitted values.</p></div>
+  <div class="no"><h3>Runtime-local values</h3><p>Classes, resources, tasks, function/interface values, closure environments, weak storage, and values containing any of them stay in their original runtime.</p></div>
+</div>
+
+<p>The check is transitive and static. A struct is sendable when every field eventually reaches only permitted value types. A field that reaches a class or weak handle keeps the containing value in its original runtime.</p>
+
+<h2 id="spawn">The spawn lifecycle</h2>
+
+<ol class="call-path">
+  <li><strong>Check declared target</strong><span><code>spawn</code> starts a declared function, so the copied arguments fully describe the worker's input.</span></li>
+  <li><strong>Create worker runtime</strong><span>Allocate a private heap, nursery entry, and call-depth budget.</span></li>
+  <li><strong>Copy arguments</strong><span>Rebuild the permitted graph with rollback if allocation fails.</span></li>
+  <li><strong>Run and capture outcome</strong><span>Success values, recoverable errors, traps, and exit state are recorded for the task.</span></li>
+  <li><strong>Transfer permitted result</strong><span>The answer is copied back into the waiting runtime under the same boundary.</span></li>
+</ol>
+
+<h2 id="task">Task is an ARC resource</h2>
+
+<p><code>spawn</code> returns a <code>task[...]</code> reference. Aliases share one one-shot result state. <code>wait()</code> observes it once. If the last task reference disappears while the worker is unfinished and unobserved, last release joins it and completes the task lifecycle.</p>
+
+<h2 id="effects">Host effects remain explicit</h2>
+
+<p>A worker can use installed host capabilities through its own run context. The runtime's effect lock serializes the host channel where required. Classes, closures, and resources created by the worker remain in its local heap and are released there before the worker runtime closes.</p>
+
+<h2 id="limits">The programming model created by isolation</h2>
+
+<p>Parallelism begins at <code>spawn</code>. Communication consists of value transfer and task completion, and each heap is accessed by its owning thread. The language therefore exposes <code>spawn</code>, transferred values, and <code>wait()</code> as its concurrency model.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/THREADS.md" data-source="docs/THREADS.md">worker contract</a>
+  <a class="source-link" href="@repo/src/luce/runtime/workers.zig" data-source="src/luce/runtime/workers.zig">worker runtime</a>
+  <a class="source-link" href="@repo/src/luce/semantics/effects.zig" data-source="src/luce/semantics/effects.zig">effect and sendability checks</a>
+  <a class="source-link" href="@repo/src/luce/specs/threads_spec.zig" data-source="src/luce/specs/threads_spec.zig">worker specs</a>
+</div>

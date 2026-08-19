@@ -1,0 +1,6 @@
+luce 0.18
+source development
+target aarch64-macos-none
+optimize ReleaseSafe
+module-format 62
+host-abi 29

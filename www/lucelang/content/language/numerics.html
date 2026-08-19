@@ -1,0 +1,59 @@
+<p class="lede">Luce squares an <code>i64</code> with checked signed 64-bit multiplication. A representable product is returned; an out-of-range product raises the integer-overflow trap.</p>
+
+<h2 id="trace">Follow one multiplication</h2>
+
+<p>This program squares a value that is unknown until launch. Look for <code>multiply.i64</code> in MIR, <code>llvm.smul.with.overflow.i64</code> in LLVM IR, and the multiply-plus-overflow branch in ARM64. Those are three spellings of the same language promise.</p>
+
+<!-- trace:numerics -->
+
+<h2 id="representations">Twelve concrete representations</h2>
+
+<div class="representation-grid">
+  <div class="representation value"><strong>Unsigned integers</strong><p><code>u8 u16 u32 u64</code><br>checked arithmetic over zero and positive values</p></div>
+  <div class="representation value"><strong>Signed integers</strong><p><code>i8 i16 i32 i64</code><br>two-sided ranges, checked arithmetic</p></div>
+  <div class="representation effect"><strong>Floating point</strong><p><code>f16 f32 f64</code><br>their IEEE format and behavior</p></div>
+</div>
+
+<p>An unconstrained integer literal defaults to <code>i64</code>; an unconstrained floating literal defaults to <code>f64</code>. Context may give a fitting literal another numeric representation when semantic analysis first assigns its type.</p>
+
+<h2 id="no-promotion">How numeric representations change</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Context assigns literals; constructors convert values</strong><span>Each concrete value keeps its declared width</span></figcaption>
+  <div class="flow">
+    <div class="flow-node"><b>literal 12</b><small>contextual number</small></div>
+    <div class="flow-node owner-luce"><b><code>u16</code></b><small>landed representation</small></div>
+    <div class="flow-node owner-machine"><b><code>i64(value)</code></b><small>explicit conversion</small></div>
+  </div>
+</figure>
+
+<p>Two concrete operands in one arithmetic operation have the same type. A constructor such as <code>i64(small)</code> marks a representation change and selects its overflow, comparison, and precision behavior.</p>
+
+<h2 id="checked">Checked integers</h2>
+
+<p>Addition, subtraction, multiplication, division, remainder, negation where available, and shifts enforce their type's bounds. Overflow, division by zero, the signed minimum divided by <code>-1</code>, and an invalid shift count each produce a stable trap code.</p>
+
+<div class="comparison">
+  <div class="yes"><h3>Defined</h3><p>Every integer input either produces the exact same-width result or a named trap.</p></div>
+  <div class="no"><h3>Overflow path</h3><p>An out-of-range result branches to the named integer trap for that operation.</p></div>
+</div>
+
+<h2 id="floats">Floats keep their width</h2>
+
+<p>Floating arithmetic follows the chosen IEEE format. A <code>f32</code> operation uses <code>f32</code> precision. Integer/floating constructors perform representation conversion, and an unrepresentable conversion raises its defined trap.</p>
+
+<h2 id="bitwise">Bits are for integers</h2>
+
+<p>Bitwise operators apply to concrete integer types. Shift amount checks are width-aware. Precedence is fixed by the expression parser, and compound forms follow the same checked operation plus assignment transaction as their expanded spelling.</p>
+
+<h2 id="path">The implementation path</h2>
+
+<p>Semantics lands literals, checks same-type operands, and records explicit conversions. MIR carries exact-width types and operation tags. The runtime implements checked operations once; generated code may inline an operation only while preserving the same trap edge. Both paths compare the trap and result in specs.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/NUMERICS.md" data-source="docs/NUMERICS.md">numeric contract</a>
+  <a class="source-link" href="@repo/docs/BITWISE.md" data-source="docs/BITWISE.md">bitwise contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/expressions.zig" data-source="src/luce/semantics/expressions.zig">numeric checking</a>
+  <a class="source-link" href="@repo/src/luce/runtime/operators.zig" data-source="src/luce/runtime/operators.zig">runtime operators</a>
+  <a class="source-link" href="@repo/src/luce/specs/behavior_spec.zig" data-source="src/luce/specs/behavior_spec.zig">behavior specs</a>
+</div>

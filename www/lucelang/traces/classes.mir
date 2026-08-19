@@ -1,0 +1,48 @@
+class Counter:
+    value: i64
+func main(args: list[str]) -> None
+    local %1 (temporary): Counter
+    local %2 counter: Counter
+    local %3 same: Counter
+    local %4 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = call Counter.init, r1
+    local_set %2, r2
+    r4 = local_get %2
+    intrinsic retain, r4
+    local_set %3, r4
+    r7 = local_get %3
+    r8 = call Counter.next, r7
+    r9 = intrinsic str_value, r8
+    local_set %4, r9
+    intrinsic print, r9
+    r12 = local_get %4
+    r13 = intrinsic drop_storage, r12
+    local_set %4, r13
+    r15 = local_get %3
+    intrinsic release, r15
+    r17 = local_get %2
+    intrinsic release, r17
+    ret
+func Counter.next(self: Counter) -> i64
+  b0:
+    r0 = const 1
+    r1 = local_get %0
+    r2 = struct_get r1, Counter.value
+    r3 = add.i64 r2, r0
+    struct_set r1, Counter.value, r3
+    r5 = local_get %0
+    r6 = struct_get r5, Counter.value
+    ret r6
+func Counter.init(start: i64) -> Counter
+    local %1 $init.value: i64
+  b0:
+    r0 = const 0
+    local_set %1, r0
+    r2 = local_get %0
+    local_set %1, r2
+    r4 = local_get %1
+    r5 = struct_make Counter, r4
+    ret r5

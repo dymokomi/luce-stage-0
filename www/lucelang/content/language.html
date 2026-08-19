@@ -1,0 +1,64 @@
+<p class="lede">Choose a feature you already recognize—variables, numbers, classes, errors, or threads. Each chapter starts with a small program, follows it through Luce’s MIR and LLVM IR, and ends at the ARM64 object code.</p>
+
+<div class="story-opening">
+  <span class="eyebrow">How to read this section</span>
+  <p>Read the first few paragraphs for the idea. Open the four-view trace to see its lower-level representation. Continue below it for edge cases, memory behavior, and implementation source.</p>
+</div>
+
+<h2 id="feature-map">Feature map</h2>
+
+<ul class="feature-index">
+  <li><a href="@/language/bindings/">Bindings and assignment</a> — <code>let</code>, <code>var</code>, annotations, zero values, weak places, compound and parallel stores</li>
+  <li><a href="@/language/numerics/">Numbers</a> — explicit widths, contextual literals, checked integers, IEEE floats, bit operations, conversions</li>
+  <li><a href="@/language/text/">Text and bytes</a> — Unicode scalars, UTF-8 strings, binary values, interpolation, builders</li>
+  <li><a href="@/language/control/">Control flow</a> — conditions, loops, matching, narrowing, early exits, recursion</li>
+  <li><a href="@/language/functions/">Functions and methods</a> — named/default arguments, multiple results, receiver effects, values, binding, closures</li>
+  <li><a href="@/language/structures/">Structures</a> — value layout, memberwise construction, defaults, methods, copy behavior</li>
+  <li><a href="@/language/classes/">Classes</a> — final identity, ARC, initialization, shared mutation, weak edges, deinitialization</li>
+  <li><a href="@/language/interfaces/">Interfaces</a> — explicit conformance, method tables, owned payloads, and mutating struct implementations</li>
+  <li><a href="@/language/sum-types/">Enums and unions</a> — closed alternatives, tagged payloads, exhaustive matching, recursive finiteness</li>
+  <li><a href="@/language/failure/">Absence and failure</a> — <code>T?</code>, <code>T!</code>, <code>try</code>, <code>catch</code>, traps, traces</li>
+  <li><a href="@/language/collections/">Collections</a> — lists, maps, arrays, builders, slices, element ownership</li>
+  <li><a href="@/language/modules/">Program structure</a> — modules, imports, packages, visibility, constants, aliases</li>
+  <li><a href="@/runtime/workers/">Concurrency</a> — isolated workers, copied graphs, ARC tasks, structured joins</li>
+  <li><a href="@/runtime/host/">Host effects</a> — entry, console, files, clocks, processes, terminal, network, UI/GPU</li>
+</ul>
+
+<h2 id="cross-section">How to inspect any feature</h2>
+
+<figure class="diagram">
+  <figcaption><strong>A feature cross-section</strong><span>One feature crosses each of these layers</span></figcaption>
+  <div class="pipeline-map" style="grid-template-columns:repeat(7,minmax(8rem,1fr));min-width:64rem">
+    <a href="@/compiler/lexing/"><span class="stage-no">SPELLING</span><b>Tokens</b><small>keywords and punctuation</small></a>
+    <a href="@/compiler/parsing/"><span class="stage-no">SHAPE</span><b>AST</b><small>grammar and source spans</small></a>
+    <a href="@/compiler/semantics/"><span class="stage-no">MEANING</span><b>Checks</b><small>types, names, flow, effects</small></a>
+    <a href="@/compiler/hir-mir/"><span class="stage-no">OPERATIONS</span><b>HIR / MIR</b><small>stores, calls, cleanup</small></a>
+    <a href="@/runtime/"><span class="stage-no">DYNAMICS</span><b>Runtime</b><small>objects and operations</small></a>
+    <a href="@/execution/native/"><span class="stage-no">MACHINE</span><b>LLVM</b><small>ABI and instructions</small></a>
+    <a href="@/execution/oracle/"><span class="stage-no">EVIDENCE</span><b>Specs</b><small>native ↔ oracle agreement</small></a>
+  </div>
+</figure>
+
+<h2 id="memory-rule">The rule beneath the surface</h2>
+
+<blockquote><p>Values copy. References share identity. ARC keeps references alive. Weak references break cycles. Resources close at the last strong release. Workers communicate by copying values between separate heaps.</p></blockquote>
+
+<p>This rule predicts behavior across arguments, returns, fields, optionals, unions, interfaces, closures, containers, and tasks. Each feature applies the same ownership model to a different kind of storage.</p>
+
+<h2 id="static">Static decisions, dynamic consequences</h2>
+
+<div class="comparison">
+  <div><h3>Compile time</h3><p>Every expression has one type. Calls, labels, visibility, conformance, mutation, worker transfer, possible errors, capture kind, and return coverage are decided before MIR.</p></div>
+  <div><h3>Run time</h3><p>Checked arithmetic may trap, references retain and release, virtual interface slots dispatch, containers enforce bounds, resources touch the host, and workers copy graphs.</p></div>
+</div>
+
+<h2 id="non-goals">How the feature set shapes the implementation</h2>
+
+<p>Conversions are explicit calls, conditions use <code>bool</code>, structs carry values, classes carry identity, ARC manages references, and workers exchange copied values. These choices determine the type checker, MIR vocabulary, runtime data structures, and generated checks. The decisions section follows those consequences in detail.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/LANGUAGE.md" data-source="docs/LANGUAGE.md">language map</a>
+  <a class="source-link" href="@repo/docs/TYPES.md" data-source="docs/TYPES.md">type contract</a>
+  <a class="source-link" href="@repo/docs/MEMORY.md" data-source="docs/MEMORY.md">memory contract</a>
+  <a class="source-link" href="@repo/src/luce/specs.zig" data-source="src/luce/specs.zig">executable specification roster</a>
+</div>

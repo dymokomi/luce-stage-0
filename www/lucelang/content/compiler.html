@@ -1,0 +1,66 @@
+<p class="lede">The compiler answers a chain of smaller questions. Where are the words? How are they nested? Which declaration does each name refer to? What work must the program perform? LLVM uses those answers to choose machine instructions.</p>
+
+<h2 id="one-program">Begin with a result you can inspect</h2>
+
+<p>The four views below come from one trace snapshot. Start with the Luce tab, then move right. Look for the facts each stage adds: types, registers, block targets, runtime calls, and processor instructions.</p>
+
+<!-- trace:journey -->
+
+<h2 id="contract">The compiler contract</h2>
+
+<p>The public front end accepts root bytes, an optional module loader, and compile options. It returns either structured diagnostics or one verified <code>mir.Program</code>. The host supplies file bytes through the loader, while the source stage maps logical module names to loader requests.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Representation ladder</strong><span>Each stage adds facts needed by the next</span></figcaption>
+  <div class="layer-stack">
+    <div class="layer zig"><strong>Source registry</strong><span>prepared UTF-8, file identities, byte spans, and line indexes</span></div>
+    <div class="layer zig"><strong>Token stream</strong><span>keywords, literals, punctuation, newline, indent, and dedent</span></div>
+    <div class="layer zig"><strong>AST</strong><span>the exact untyped declaration, statement, and expression shape</span></div>
+    <div class="layer zig"><strong>Typed HIR</strong><span>resolved calls, types, stores, captures, effects, and structured control</span></div>
+    <div class="layer zig"><strong>MIR</strong><span>typed registers, locals, blocks, layouts, retains, releases, and terminators</span></div>
+    <div class="layer machine"><strong>LLVM module</strong><span>platform ABI shapes, runtime calls, metadata, and native control flow</span></div>
+    <div class="layer machine"><strong>Object code</strong><span>relocatable instructions plus symbols and the artifact tag</span></div>
+  </div>
+</figure>
+
+<h2 id="stages">Who decides what</h2>
+
+<div class="cards">
+  <a class="card" href="@/compiler/source/"><strong>Source loading</strong><span>Prepares encoding, line endings, file limits, positions, module identity, and loader requests.</span></a>
+  <a class="card" href="@/compiler/lexing/"><strong>Lexing</strong><span>Recognizes spelling, indentation, token boundaries, unsafe controls, and recovery points.</span></a>
+  <a class="card" href="@/compiler/parsing/"><strong>Parsing</strong><span>Builds declarations, statements, and expressions according to the grammar.</span></a>
+  <a class="card" href="@/compiler/semantics/"><strong>Semantics</strong><span>Resolves names, types, effects, flow, ownership, calls, and source-level errors.</span></a>
+  <a class="card" href="@/compiler/hir-mir/"><strong>HIR and MIR</strong><span>Turn checked meaning into explicit operations, blocks, memory layouts, and cleanup.</span></a>
+  <a class="card" href="@/compiler/optimization/"><strong>Optimization</strong><span>Removes unreachable and unread work while preserving semantic order and cleanup.</span></a>
+  <a class="card" href="@/compiler/codegen/"><strong>Code generation</strong><span>Lowers verified instructions to LLVM IR and emits the native object consumed by the linker.</span></a>
+</div>
+
+<h2 id="seams">What one stage hands to the next</h2>
+
+<p>Data moves forward through the pipeline: the AST feeds semantic analysis, HIR feeds lowering, and verified MIR feeds optimization and code generation. Each handoff has an explicit lifetime, so temporary parser storage can be released before the native backend starts.</p>
+
+<div class="choice-grid">
+  <div class="choice"><strong>AST is scaffolding</strong><span>It lives in a temporary arena and disappears after semantic analysis.</span></div>
+  <div class="choice"><strong>MIR is the front-end product</strong><span>It can be verified on its own, printed deterministically, and serialized before native code generation.</span></div>
+  <div class="choice"><strong>Semantic diagnostics</strong><span>Name, type, flow, and ownership errors are reported while the source structure is still available.</span></div>
+  <div class="choice"><strong>Decoded MIR verification</strong><span>Layouts, types, blocks, ownership claims, and indices are checked before a serialized module can execute.</span></div>
+</div>
+
+<h2 id="failure">How failure is contained</h2>
+
+<p>Lexing and parsing recover so a source file can report several useful mistakes. Semantic analysis accumulates bounded diagnostics and returns no runnable program when any exist. MIR verification failures become an internal-compiler diagnostic on generated programs; decoded modules are simply rejected as damaged or unsupported.</p>
+
+<div class="invariant">
+  <p><strong>The front end has two results.</strong> Valid source produces verified MIR. Invalid source produces structured diagnostics with source locations.</p>
+</div>
+
+<h2 id="entry">Where to start reading</h2>
+
+<p><code>compileProject</code> is the shortest code tour. Its calls appear in stage order, and the comments name the AST arena lifetime, the semantic result, both verifier gates, and the optional optimization pass.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/compile.zig" data-source="src/luce/compile.zig">compiler driver</a>
+  <a class="source-link" href="@repo/src/luce/compile/modules.zig" data-source="src/luce/compile/modules.zig">module graph</a>
+  <a class="source-link" href="@repo/src/luce/support/diagnostics.zig" data-source="src/luce/support/diagnostics.zig">diagnostics</a>
+  <a class="source-link" href="@repo/docs/PIPELINE.md" data-source="docs/PIPELINE.md">pipeline contract</a>
+</div>

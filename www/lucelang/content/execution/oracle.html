@@ -1,0 +1,56 @@
+<p class="lede">A program specification executes the same MIR twice: once as native machine code and once in a MIR interpreter. The test compares a structured record containing output, errors, traps, source traces, host changes, and live objects.</p>
+
+<h2 id="record">What agreement means</h2>
+
+<div class="fact-grid">
+  <div class="fact"><strong>Transcript</strong><span>Printed bytes captured byte for byte, including whitespace and line endings.</span></div>
+  <div class="fact"><strong>Failure</strong><span>Raised error code, message, and origin—or the absence of one.</span></div>
+  <div class="fact"><strong>Trap</strong><span>Stable code, message, call frames, source positions, and dropped-frame count.</span></div>
+  <div class="fact"><strong>World</strong><span>Files and bytes, keys and lines read, clock observations, and other host fixture state.</span></div>
+  <div class="fact"><strong>Lifetime</strong><span>Live-object census after success, error, trap, or explicit exit.</span></div>
+  <div class="fact"><strong>End state</strong><span>Success, uncaught error, trap, exhaustion, or chosen exit status.</span></div>
+</div>
+
+<h2 id="architecture">Independent dispatch, shared semantics</h2>
+
+<figure class="diagram">
+  <figcaption><strong>The agreement harness</strong><span>The World starts identical and must end identical</span></figcaption>
+  <div class="fork-flow">
+    <div class="flow-node wide root"><b>source → MIR</b><small>one compiler result</small></div>
+    <div class="fork">⋔</div>
+    <div class="flow-node owner-machine"><b>LLVM + load</b><small>Capture host</small></div>
+    <div class="flow-node owner-zig"><b>compare records</b><small>every observable field</small></div>
+    <div class="flow-node owner-zig"><b>MIR interpreter</b><small>Reference host</small></div>
+    <div class="flow-node owner-zig"><b>same runtime</b><small>ARC and operations beneath both</small></div>
+  </div>
+</figure>
+
+<p>The interpreter owns instruction dispatch, frames, traceback, and host adaptation. Both paths call the same runtime implementations for containers, ARC, text, and other dynamic operations, so the comparison focuses on compiler lowering and MIR dispatch. Keeping the two dispatch mechanisms independent lets a mismatch reveal an error in either path.</p>
+
+<h2 id="why-not-golden">What the execution record adds</h2>
+
+<p>Printed text covers one observable channel. The execution record also captures leaked objects, trap frames, ownership after a failed store, and mutations to host fixtures. Every program specification receives these checks from the harness automatically.</p>
+
+<h2 id="discipline">The oracle's responsibilities</h2>
+
+<ol class="call-path">
+  <li><strong>Serve the test harness</strong><span>The product build graph leaves the interpreter out of <code>luce</code> and <code>loom</code>.</span></li>
+  <li><strong>Interpret MIR independently</strong><span>Its own instruction switch, register file, and frame stack exercise a second route through the protocol.</span></li>
+  <li><strong>Call shared semantics</strong><span>Dynamic operations go through the runtime used by native code.</span></li>
+  <li><strong>Compare every program specification</strong><span>Continuous use makes a drift visible as soon as the two records differ.</span></li>
+</ol>
+
+<h2 id="test-placement">Why program tests are specifications</h2>
+
+<p>Anything that runs a Luce program makes a claim about observable behavior and therefore belongs under <code>src/luce/specs/</code>, where both paths run. A test that inspects an internal structure—parser node shape, verifier rejection, or interpreter frame storage—lives beside that implementation.</p>
+
+<h2 id="either-can-be-wrong">How a disagreement is resolved</h2>
+
+<p>The interpreter has exposed native lowering bugs, and the native path has exposed a stale-register bug in the interpreter. A mismatch identifies the affected program and every differing field. The source contract and focused structural tests then determine which implementation must change.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/ENGINE.md" data-source="docs/ENGINE.md">oracle design</a>
+  <a class="source-link" href="@repo/src/luce/specs/agree.zig" data-source="src/luce/specs/agree.zig">agreement harness</a>
+  <a class="source-link" href="@repo/src/luce/interpreter/machine.zig" data-source="src/luce/interpreter/machine.zig">independent dispatch</a>
+  <a class="source-link" href="@repo/src/luce/specs/hosts.zig" data-source="src/luce/specs/hosts.zig">shared test world</a>
+</div>

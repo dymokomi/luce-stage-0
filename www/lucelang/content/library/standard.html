@@ -1,0 +1,58 @@
+<p class="lede">Importing <code>std.json</code> loads an embedded <code>.luc</code> file into the program's module graph. The compiler checks that source with the application, keeps reachable functions, and sends them through MIR and LLVM.</p>
+
+<h2 id="trace">Follow one standard-library call</h2>
+
+<p>This program imports <code>std.strings</code> and calls <code>strings.join</code>. Open the MIR tab and search for <code>strings.join</code>: it is an ordinary Luce function. Open assembly and the original module boundary may be gone because LLVM is free to inline it.</p>
+
+<!-- trace:standard -->
+
+<h2 id="modules">The shipped modules</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Import</th><th>Implementation character</th><th>Responsibility</th></tr></thead>
+  <tbody>
+    <tr><td><code>std.io</code></td><td>pure Luce</td><td>Reader/Writer contracts and shared drain/send loops</td></tr>
+    <tr><td><code>std.math</code></td><td>Luce over numeric primitives</td><td>constants, transcendentals, reductions, transforms, deterministic RNG</td></tr>
+    <tr><td><code>std.strings</code></td><td>pure Luce over core text</td><td>search, classes, trim, case, replace, split/join, width, formatting</td></tr>
+    <tr><td><code>std.lists</code></td><td>Luce template routed as method</td><td>stable comparator sorting specialized for element type</td></tr>
+    <tr><td><code>std.paths</code></td><td>pure Luce</td><td>portable parsing, joining, and normalization of path text</td></tr>
+    <tr><td><code>std.files</code></td><td>Luce wrapper + host channel</td><td>path queries, whole-file helpers, directories, ARC File class</td></tr>
+    <tr><td><code>std.os</code></td><td>Luce wrapper + host services</td><td>console, clocks, environment, processes, streams, machine facts</td></tr>
+    <tr><td><code>std.term</code></td><td>Luce API + terminal host</td><td>frames, styles, events, clipboard, dimensions</td></tr>
+    <tr><td><code>std.json</code></td><td>pure Luce</td><td>RFC 8259 tree union, parser, typed access, compact/pretty writer</td></tr>
+    <tr><td><code>std.zip</code></td><td>codec in Luce</td><td>ZIP archive structure, DEFLATE, CRC, extraction and writing</td></tr>
+    <tr><td><code>std.gpu</code></td><td>Luce wrapper + graphics host</td><td>backend-neutral surface operations</td></tr>
+    <tr><td><code>std.network</code></td><td>Luce classes + socket channel</td><td>TCP Connection and Listener resources</td></tr>
+    <tr><td><code>std.http</code></td><td>HTTP/1.1 in Luce</td><td>client, requests, response parsing, JSON/text convenience</td></tr>
+    <tr><td><code>std.ui</code></td><td>Luce class + window host</td><td>window identity and its owned GPU surface</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="embedding">How import becomes source</h2>
+
+<ol class="call-path">
+  <li><strong>Recognize <code>std.name</code></strong><span>The source loader consults the one embedded-module table.</span></li>
+  <li><strong>Register ordinary bytes</strong><span>The <code>.luc</code> file receives a source identity and line table like any project module.</span></li>
+  <li><strong>Check ordinary declarations</strong><span>Public/private rules, types, ARC, failure, interfaces, and calls are unchanged.</span></li>
+  <li><strong>Prune unreachable declarations</strong><span>Only the functions and effects reached by the program survive into native code.</span></li>
+</ol>
+
+<h2 id="hosted">How a standard module asks the host for help</h2>
+
+<p>Pure modules use language operations. Hosted modules invoke synthetic <code>Builtin</code> rows that semantics recognizes for embedded standard source. Reachability records each host operation the selected program can call, so importing a module by itself adds neither an artifact callback requirement nor generated code.</p>
+
+<h2 id="methods">Compiler-routed methods</h2>
+
+<p>Some algorithms read naturally as receiver calls while remaining library source. After <code>std.lists</code> is imported, <code>values.sort_by(before)</code> routes to a type-specialized function defined in <code>lists.luc</code>. Diagnostics name the required import, which makes the method's library dependency visible.</p>
+
+<h2 id="change">What a new module costs</h2>
+
+<p>A module needs one <code>.luc</code> source, one embedded-table row, positive and negative differential specs, explicit host fixtures if hosted, any justified method routing, and a public Library page whose signatures pass the coverage audit. A host-table change may additionally bump the ABI; a pure private helper does not.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/std" data-source="src/luce/std">all standard sources</a>
+  <a class="source-link" href="@repo/src/luce/source/load.zig" data-source="src/luce/source/load.zig">embedded module table</a>
+  <a class="source-link" href="@repo/src/luce/semantics/builtins.zig" data-source="src/luce/semantics/builtins.zig">private hosted rows</a>
+  <a class="source-link" href="@repo/src/luce/specs/std_spec.zig" data-source="src/luce/specs/std_spec.zig">standard specs</a>
+  <a class="source-link" href="@repo/docs/STD.md" data-source="docs/STD.md">integration contract</a>
+</div>

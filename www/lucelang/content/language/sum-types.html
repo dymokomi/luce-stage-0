@@ -1,0 +1,54 @@
+<p class="lede">A union stores two things: which case is active and the data carried by that case. <code>match</code> reads the tag before it is allowed to read the payload.</p>
+
+<h2 id="trace">Follow one tagged value</h2>
+
+<p>The example constructs <code>State.running</code> with a progress value and immediately matches it. MIR records the tag test and payload extraction. LLVM gives both a concrete layout. Optimization may remove the test when the active case is already known.</p>
+
+<!-- trace:sum_types -->
+
+<h2 id="enum">Enums name integer states</h2>
+
+<p>An enum has an explicit or inferred integer backing width. Members are always namespaced. Converting a member to its number is explicit. Constructing from a number returns an optional because the backing representation can contain bit patterns outside the declared members.</p>
+
+<div class="artifact-stack">
+  <div class="artifact-layer"><strong>source</strong><span><code>State.ready</code> — nominal member identity</span></div>
+  <div class="artifact-layer"><strong>semantic type</strong><span><code>State</code> — a distinct type with named members</span></div>
+  <div class="artifact-layer"><strong>runtime bits</strong><span>the selected explicit-width integer representation</span></div>
+</div>
+
+<h2 id="union">Unions carry tagged payloads</h2>
+
+<p>A union member carries either an empty payload or named payload fields. Construction goes through the union namespace. The tag is always present; payload storage is sized and aligned for the alternatives. A <code>match</code> arm establishes the active tag before it receives that member’s fields.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Tagged-union layout</strong><span>Conceptual representation</span></figcaption>
+  <div class="artifact-stack">
+    <div class="artifact-layer"><strong>tag</strong><span>which member is active</span></div>
+    <div class="artifact-layer"><strong>payload area</strong><span>enough aligned storage for the largest member; ownership follows the active member only</span></div>
+  </div>
+</figure>
+
+<h2 id="matching">Exhaustiveness turns change into a diagnostic</h2>
+
+<p>An enum or union match without <code>else</code> must cover every member. Adding a new alternative then finds each incomplete match at compile time. A union arm binds only the named fields of that member, with their exact types and ordinary value/reference lifetime.</p>
+
+<h2 id="recursion">Recursive values need a terminator</h2>
+
+<p>A union needs a finite payload layout. Recursive unions therefore cross an optional or reference boundary: absence can terminate a value chain, and a reference has fixed handle width regardless of the object graph behind it.</p>
+
+<div class="comparison">
+  <div class="yes"><h3>Finite</h3><p>A recursive union member carries an optional next value or a list/class reference.</p></div>
+  <div class="no"><h3>Infinite</h3><p>A union member directly embeds the same union again with no terminating representation.</p></div>
+</div>
+
+<h2 id="behavior">Equality, methods, and containers</h2>
+
+<p>Enums have value equality and may serve as map keys when the exact enum type matches. Union code compares the active tag through <code>match</code> and can compare payload fields whose own types define equality. Both enums and unions can declare methods and static functions; union member constructors are function values.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/ENUMS.md" data-source="docs/ENUMS.md">enum contract</a>
+  <a class="source-link" href="@repo/docs/UNION.md" data-source="docs/UNION.md">union contract</a>
+  <a class="source-link" href="@repo/src/luce/semantics/shapes.zig" data-source="src/luce/semantics/shapes.zig">shape analysis</a>
+  <a class="source-link" href="@repo/src/luce/specs/enums_spec.zig" data-source="src/luce/specs/enums_spec.zig">enum specs</a>
+  <a class="source-link" href="@repo/src/luce/specs/union_spec.zig" data-source="src/luce/specs/union_spec.zig">union specs</a>
+</div>

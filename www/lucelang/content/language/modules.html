@@ -1,0 +1,54 @@
+<p class="lede"><code>import trace_math</code> makes one sibling file available under one qualified name. The compiler loads that file once, resolves <code>trace_math.twice</code>, and then treats the call like any other typed function call.</p>
+
+<h2 id="trace">Follow one import</h2>
+
+<p>The trace was built from two source files. MIR names the imported function, LLVM places both functions in one module, and optimization may inline <code>twice</code> across the original file boundary.</p>
+
+<!-- trace:modules -->
+
+<h2 id="namespaces">Two import namespaces</h2>
+
+<p><code>import std.math</code> selects the compiler's embedded standard table. <code>import math</code> selects the project or sibling loader. The explicit <code>std.</code> prefix keeps the two namespaces stable as either one grows.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Import resolution</strong><span>One spelling chooses one authority</span></figcaption>
+  <div class="fork-flow">
+    <div class="flow-node root"><b>import request</b><small>parsed dotted name</small></div>
+    <div class="fork">⋔</div>
+    <div class="flow-node owner-luce"><b><code>std.name</code></b><small>embedded .luc table</small></div>
+    <div class="flow-node owner-zig"><b>source registry</b><small>loaded exactly once</small></div>
+    <div class="flow-node"><b>project.name</b><small>manifest/root loader</small></div>
+    <div class="flow-node owner-zig"><b>source registry</b><small>opaque root identity</small></div>
+  </div>
+</figure>
+
+<h2 id="binding">What an import binds</h2>
+
+<p>A normal import binds the final module name or an explicit alias. <code>from name import a, b</code> binds selected public declarations bare and leaves the module namespace unbound. Each binding participates in ordinary name-collision rules; imported privacy is checked on the import line.</p>
+
+<h2 id="visibility">Privacy is file-scoped</h2>
+
+<p>Declarations are public unless marked <code>private</code>. Public signatures use publicly nameable types. Struct and class bodies may use visibility regions for fields and members. Privacy controls name lookup; callers can still store and pass an opaque public value returned by a public function.</p>
+
+<h2 id="aliases">Aliases vanish before HIR</h2>
+
+<p><code>alias Name = Type</code> creates another source spelling for the target. It works in type positions, constructors, member namespaces, imports, visibility, and chains. The alias shares the target’s nominal identity and runtime representation. Semantics resolves and erases it while diagnosing cycles, privacy leaks, collisions, and hidden double optionals.</p>
+
+<h2 id="constants">Constants become immutable program roots</h2>
+
+<p>File scope contains declarations and <code>const</code>. Mutable state lives in function locals and object fields. Scalar constants fold once. Supported flat list, map, and rank-one array constants materialize as immutable per-runtime roots, using the ordinary object row with its immutable flag set.</p>
+
+<h2 id="packages">Project and package identity</h2>
+
+<p>A <code>luce.yaml</code> project enables root-relative dotted modules and exact-version package requirements. The current resolver consumes local, store, shelf, and path packages. Package identity is separate from import spelling, so two roots remain distinct modules.</p>
+
+<p><a href="@/library/packages/">See how packages, termui, examples, and the editor live above the language →</a></p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/PACKAGES.md" data-source="docs/PACKAGES.md">package contract</a>
+  <a class="source-link" href="@repo/docs/VISIBILITY.md" data-source="docs/VISIBILITY.md">visibility contract</a>
+  <a class="source-link" href="@repo/docs/ALIASES.md" data-source="docs/ALIASES.md">alias contract</a>
+  <a class="source-link" href="@repo/docs/CONSTANTS.md" data-source="docs/CONSTANTS.md">constant contract</a>
+  <a class="source-link" href="@repo/src/luce/compile/modules.zig" data-source="src/luce/compile/modules.zig">module graph</a>
+  <a class="source-link" href="@repo/src/luce/semantics/constants.zig" data-source="src/luce/semantics/constants.zig">constant folding</a>
+</div>

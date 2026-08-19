@@ -1,0 +1,57 @@
+<p class="lede">The lexer is the first simplifier. It turns characters into a flat row of pieces: <code>func</code>, a name, parentheses, a colon, a newline, and an indent. Parsing and semantic analysis use that row to build and validate the program.</p>
+
+<h2 id="transformation">From source to layout tokens</h2>
+
+<div class="diagram" data-stepper>
+  <div class="diagram-head"><strong>A three-line function</strong><span>Switch representations</span></div>
+  <div class="step-controls" role="group" aria-label="Lexer representation">
+    <button type="button" data-step-select="source">Source</button>
+    <button type="button" data-step-select="tokens">Tokens</button>
+    <button type="button" data-step-select="layout">Layout meaning</button>
+  </div>
+  <div class="stage-panel" data-step-panel="source">
+    <div class="code"><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> answer = <span class="n">40</span> + <span class="n">2</span>
+    <span class="b">print</span>(<span class="b">str</span>(answer))</code></pre></div>
+  </div>
+  <div class="stage-panel" data-step-panel="tokens">
+    <div class="token-stream">
+      <span class="token keyword"><b>func</b><small>keyword</small></span><span class="token name"><b>main</b><small>name</small></span><span class="token"><b>( ) :</b><small>punctuation</small></span><span class="token layout"><b>newline</b><small>layout</small></span><span class="token layout"><b>indent</b><small>layout</small></span><span class="token keyword"><b>let</b><small>keyword</small></span><span class="token name"><b>answer</b><small>name</small></span><span class="token literal"><b>40</b><small>integer</small></span><span class="token"><b>+</b><small>operator</small></span><span class="token literal"><b>2</b><small>integer</small></span><span class="token layout"><b>newline</b><small>layout</small></span><span class="token name"><b>print</b><small>name</small></span><span class="token layout"><b>newline</b><small>layout</small></span><span class="token layout"><b>dedent</b><small>layout</small></span>
+    </div>
+  </div>
+  <div class="stage-panel" data-step-panel="layout">
+    <p>The colon announces a possible suite. Exactly four additional spaces open it. Both body statements remain at that level. End-of-file closes the open suite with <code>dedent</code>.</p>
+  </div>
+</div>
+
+<h2 id="indentation">Indentation is a language rule</h2>
+
+<p>The step is exactly four columns, and a tab produces a diagnostic. Blank and comment-only lines are skipped for layout. Inside parentheses or map-literal braces, a newline acts as spacing. A nesting limit turns deeply generated input into a bounded diagnostic.</p>
+
+<div class="comparison">
+  <div class="yes"><h3>Accepted</h3><p>A block opens exactly four spaces deeper than its parent and returns to an earlier stack entry.</p></div>
+  <div class="no"><h3>Indentation diagnostic</h3><p>Two spaces, a tab, or a dedent to a column that was never an open block.</p></div>
+</div>
+
+<h2 id="security">Source must read the way it runs</h2>
+
+<p>Bidirectional controls are rejected everywhere, including comments and string literals. Raw controls inside text are rejected. Unicode look-alikes for language punctuation are diagnosed with the ASCII character to write. These checks live at the lexical boundary because letting a deceptive spelling become an ordinary token would erase the evidence.</p>
+
+<h2 id="recovery">Reporting several lexical errors</h2>
+
+<p>After a malformed byte, the lexer emits a <code>luce.lex.*</code> diagnostic and continues with the closest usable token stream. A recovery token can stand where a value was clearly intended. Identical diagnostic runs collapse, total reports are capped, and structural truncation marks synthetic closing tokens for the parser.</p>
+
+<div class="decision">
+  <p><strong>Diagnostic ownership:</strong> when the lexer reports a stray character or unterminated string, it marks the recovery position so the parser can continue from the next useful construct.</p>
+</div>
+
+<h2 id="boundary">Information carried into parsing</h2>
+
+<p><code>name</code> and <code>TypeName</code> are identifier tokens. A minus sign and an integer are separate tokens. Parsing turns those tokens into syntax, then semantic analysis resolves declarations, types, visibility, and worker sendability.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/lex.zig" data-source="src/luce/lex.zig">lexing contract</a>
+  <a class="source-link" href="@repo/src/luce/lex/lexer.zig" data-source="src/luce/lex/lexer.zig">scanner and layout</a>
+  <a class="source-link" href="@repo/src/luce/lex/token.zig" data-source="src/luce/lex/token.zig">token vocabulary</a>
+  <a class="source-link" href="@repo/www/luce/content/guide/reference/lexical.md" data-source="www/luce/content/guide/reference/lexical.md">public lexical reference</a>
+</div>

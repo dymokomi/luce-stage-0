@@ -1,0 +1,59 @@
+<p class="lede">Assigning a list to a second name creates another reference to the same growable object. Appending through either name updates the object both names observe.</p>
+
+<h2 id="trace">Follow one list alias</h2>
+
+<p>The example creates a list, shares it, appends through the second name, and reads through the first. MIR spells out the owning reference operations and checked index. LLVM calls the one container runtime. Assembly contains those calls plus the branches for stale objects, bounds, and allocation failure.</p>
+
+<!-- trace:collections -->
+
+<h2 id="four">Four storage purposes</h2>
+
+<div class="table"><table>
+  <thead><tr><th>Type</th><th>Shape</th><th>Primary operation</th><th>Identity</th></tr></thead>
+  <tbody>
+    <tr><td><code>list[T]</code></td><td>growable ordered sequence</td><td>append, insert, remove, slice</td><td>shared ARC object</td></tr>
+    <tr><td><code>map[K,V]</code></td><td>keyed mapping</td><td>put, lookup, remove, keys/values</td><td>shared ARC object</td></tr>
+    <tr><td><code>array[T,_,...]</code></td><td>fixed-shape dense grid, rank 1–4</td><td>indexed read/write, fill, whole-array math</td><td>shared ARC object</td></tr>
+    <tr><td><code>builder</code></td><td>mutable text accumulation</td><td>append then <code>build()</code></td><td>shared ARC object</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="outer-inner">Outer copy, inner ownership</h2>
+
+<p>Assigning a collection retains the same outer identity. A list slice or <code>map.values()</code> creates a new outer list. Each value element copies; each reference element is retained and continues to share its referenced identity. Worker transfer provides recursive graph copying where isolation requires it.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Slicing <code>list[Class]</code></strong><span>New sequence, shared elements</span></figcaption>
+  <div class="worker-worlds">
+    <div class="world"><h3>original list</h3><div class="heap-node"><strong>A · B · C</strong><p>outer identity 1</p></div></div>
+    <div class="bridge">→<small>slice</small></div>
+    <div class="world"><h3>new outer list</h3><div class="heap-node"><strong>B · C</strong><p>elements retained; B and C are the same class identities</p></div></div>
+  </div>
+</figure>
+
+<h2 id="storage">Runtime storage and movement</h2>
+
+<p>The runtime object table owns collection metadata and backing buffers. A stable object handle lets a list grow and move its buffer while every alias continues to resolve the same list. Maps own key/value entries. Arrays keep fixed dimensions and a densely flattened element buffer; index calculation and bounds checks are centralized.</p>
+
+<h2 id="keys">Map keys are intentionally narrow</h2>
+
+<p>Current keys are <code>i64</code>, <code>str</code>, or one exact enum type. Each supported key type has a defined equality and hash operation. Adding another key category would require defining both operations and their lifetime behavior.</p>
+
+<h2 id="arrays">Rank is part of the type</h2>
+
+<p>Each underscore in <code>array[T, _, ...]</code> states one rank. Construction supplies extents; the runtime stores them and flattens indexes with checked arithmetic. Rank and element type are static even though dimensions are runtime values.</p>
+
+<h2 id="lifetime">Mutation retains before replacement</h2>
+
+<p>Storing a reference element retains it before the old slot is released. Removing an element releases its ownership. Clearing or destroying a container walks its live elements exactly once. Whole-array operations remain typed through lowering, preserving element type, trap behavior, and ownership in the runtime call.</p>
+
+<h2 id="workers">Worker transfer builds a snapshot</h2>
+
+<p>Worker transfer recursively rebuilds permitted value and container graphs in another runtime, preserving aliases and cycles inside the snapshot. Separate runtime object tables require new handles for every transferred object.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/runtime/containers.zig" data-source="src/luce/runtime/containers.zig">container runtime</a>
+  <a class="source-link" href="@repo/src/luce/runtime/heap.zig" data-source="src/luce/runtime/heap.zig">object storage</a>
+  <a class="source-link" href="@repo/src/luce/semantics/builtins.zig" data-source="src/luce/semantics/builtins.zig">core operations</a>
+  <a class="source-link" href="@repo/src/luce/specs/behavior_spec.zig" data-source="src/luce/specs/behavior_spec.zig">collection behavior specs</a>
+</div>

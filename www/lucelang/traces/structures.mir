@@ -1,0 +1,51 @@
+struct Point:
+    x: i64
+    y: i64
+func main(args: list[str]) -> None
+    local %1 (temporary): Point
+    local %2 start: Point
+    local %3 (temporary): Point
+    local %4 end: Point
+    local %5 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = const 2
+    r3 = struct_make Point, r1, r2
+    local_set %2, r3
+    r5 = local_get %2
+    r6 = const 3
+    r7 = const 4
+    r8 = call Point.moved, r5, r6, r7
+    local_set %4, r8
+    r10 = local_get %4
+    r11 = struct_get r10, Point.x
+    r12 = local_get %4
+    r13 = struct_get r12, Point.y
+    r14 = add.i64 r11, r13
+    r15 = intrinsic str_value, r14
+    local_set %5, r15
+    intrinsic print, r15
+    r18 = local_get %5
+    r19 = intrinsic drop_storage, r18
+    local_set %5, r19
+    r21 = local_get %4
+    r22 = intrinsic drop_storage, r21
+    local_set %4, r22
+    r24 = local_get %2
+    r25 = intrinsic drop_storage, r24
+    local_set %2, r25
+    ret
+func Point.moved(self: Point, dx: i64, dy: i64) -> Point
+    local %3 (temporary): Point
+  b0:
+    r0 = local_get %0
+    r1 = struct_get r0, Point.x
+    r2 = local_get %1
+    r3 = add.i64 r1, r2
+    r4 = local_get %0
+    r5 = struct_get r4, Point.y
+    r6 = local_get %2
+    r7 = add.i64 r5, r6
+    r8 = struct_make Point, r3, r7
+    ret r8

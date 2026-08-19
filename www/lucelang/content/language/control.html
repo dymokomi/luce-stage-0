@@ -1,0 +1,55 @@
+<p class="lede">A <code>for</code> loop reads like a sentence. A processor needs a test, a body, a step, and an edge back to the test. The compiler builds that graph and places cleanup on every exit edge.</p>
+
+<h2 id="trace">Follow one loop and branch</h2>
+
+<p>This program counts command-line arguments longer than two characters. MIR exposes the loop as numbered blocks and branches. LLVM adds concrete list access and safety checks. ARM64 turns the graph into compare-and-branch instructions.</p>
+
+<!-- trace:control -->
+
+<h2 id="constructs">The control vocabulary</h2>
+
+<p><code>if</code>/<code>elif</code>/<code>else</code>, <code>while</code>, counted <code>for</code>, sequence <code>for</code>, <code>match</code>, <code>break</code>, <code>continue</code>, and <code>return</code> are statements. Conditions accept <code>bool</code>; programs use an explicit comparison or presence check to derive that value from another type.</p>
+
+<h2 id="cfg">Structured source, explicit edges</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Loop control-flow graph</strong><span>Every exit knows which values to release</span></figcaption>
+  <div class="flow">
+    <div class="flow-node"><b>header</b><small>evaluate Boolean condition</small></div>
+    <div class="flow-node"><b>body</b><small>checked statements</small></div>
+    <div class="flow-node"><b>continue</b><small>release body locals</small></div>
+    <div class="flow-node"><b>exit</b><small>continue with agreed local state</small></div>
+  </div>
+</figure>
+
+<p><code>break</code> targets the exit instead; <code>return</code> targets the function epilogue. HIR preserves the loop and its exits. MIR gives each target a basic block and inserts the recorded releases before the branch.</p>
+
+<h2 id="match">Match is typed dispatch</h2>
+
+<p>An enum match dispatches on the closed member set. A union match opens the payload only inside the corresponding arm. Scalar match supports exact integer, <code>char</code>, <code>str</code>, and <code>bool</code> values, several literals per arm, and inclusive ranges for ordered scalar types.</p>
+
+<div class="choice-grid">
+  <div class="choice"><strong>Enum / union</strong><span>May omit <code>else</code> only when every member is covered.</span></div>
+  <div class="choice"><strong>Boolean</strong><span><code>true</code> and <code>false</code> can prove complete scalar coverage.</span></div>
+  <div class="choice"><strong>Other scalar</strong><span>Uses <code>else</code> to cover the values outside the listed literals and ranges.</span></div>
+  <div class="choice"><strong>Float</strong><span>Refused as a scrutinee; NaN and representation edges make literal coverage misleading.</span></div>
+</div>
+
+<h2 id="narrowing">Narrowing is flow state</h2>
+
+<p>A stable optional local or parameter can narrow after a presence check. Branches join conservatively, and a loop keeps only facts that remain valid across mutation. Each weak-storage access performs a fresh upgrade attempt, so its result is narrowed by storing that snapshot in a stable local.</p>
+
+<h2 id="cleanup">Exits are ownership edges</h2>
+
+<p>Every structured exit carries the locals and statement temporaries it leaves. The same cleanup model covers normal fallthrough, early return, loop control, and recoverable-error propagation. Terminal traps unwind through the runtime trace channel under their own contract.</p>
+
+<h2 id="recursion">Recursion is bounded at run time</h2>
+
+<p>Recursive calls are ordinary calls, and each run has a call-depth budget. The budget raises a stable trap with a bounded trace before the host stack is exhausted. Debug artifacts retain source positions; stripped artifacts retain function names.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/semantics/statements.zig" data-source="src/luce/semantics/statements.zig">statement checking</a>
+  <a class="source-link" href="@repo/src/luce/semantics/flow.zig" data-source="src/luce/semantics/flow.zig">narrowing and joins</a>
+  <a class="source-link" href="@repo/src/luce/hir/lower.zig" data-source="src/luce/hir/lower.zig">control lowering</a>
+  <a class="source-link" href="@repo/src/luce/specs/match_spec.zig" data-source="src/luce/specs/match_spec.zig">match specs</a>
+</div>

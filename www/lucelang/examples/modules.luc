@@ -1,0 +1,4 @@
+import trace_math
+
+func main(args: list[str]):
+    print(str(trace_math.twice(len(args))))

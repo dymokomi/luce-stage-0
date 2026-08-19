@@ -1,0 +1,43 @@
+<p class="lede">Open <code>std.json</code> and you are reading Luce. Follow a file read far enough and you reach Zig plus an explicit host callback. This section maps that boundary file by file.</p>
+
+<div class="story-opening"><span class="eyebrow">The rule of thumb</span><p>Write policy and portable algorithms in Luce. Use Zig for compilation, memory representation, native resources, and host adaptation. Use LLVM and the platform linker only after Luce’s meaning is fixed.</p></div>
+
+<h2 id="layers">Four library layers</h2>
+
+<div class="cards">
+  <a class="card" href="@/language/collections/"><strong>Language primitives</strong><span>Indexing, append, length, arithmetic, ARC, and other operations whose representation or trap behavior belongs to the language.</span></a>
+  <a class="card" href="@/library/standard/"><strong>Embedded standard modules</strong><span>Ordinary <code>.luc</code> source imported through <code>std.</code>, including pure algorithms and hosted wrappers.</span></a>
+  <a class="card" href="@/library/packages/"><strong>Maintained packages</strong><span><code>termui</code> and future userland libraries resolved through the ordinary package mechanism.</span></a>
+  <a class="card" href="@/library/luce-zig/"><strong>Implementation machinery</strong><span>Zig runtime and host services for memory representation, native resources, and platform integration.</span></a>
+</div>
+
+<h2 id="test">The test for where code belongs</h2>
+
+<div class="choice-grid">
+  <div class="choice"><strong>Can ordinary Luce express it?</strong><span>Keep the algorithm in a standard module or package so it exercises the language it serves.</span></div>
+  <div class="choice"><strong>Does it need object representation?</strong><span>A minimal runtime primitive may own heap, buffer, UTF-8, or checked-machine behavior.</span></div>
+  <div class="choice"><strong>Does it touch the outside world?</strong><span>Expose a public Luce wrapper over a private, optional host service.</span></div>
+  <div class="choice"><strong>Who needs the API?</strong><span>General bundled APIs belong under <code>std.</code>; independently versioned libraries belong in packages.</span></div>
+</div>
+
+<h2 id="pruning">Reachability determines shipped code</h2>
+
+<p>Standard modules join the ordinary module graph, are type-checked like project code, and produce MIR declarations. Reachability pruning removes functions, constants, builtin operations, and host effects the selected entry never reaches. A large pure module can therefore expose a broad API without forcing every function into every artifact.</p>
+
+<h2 id="verification">Three levels of evidence</h2>
+
+<ol class="call-path">
+  <li><strong>Compiler and differential specs</strong><span>Imports, types, visibility, specialization, effects, ARC, and results agree on native and oracle paths.</span></li>
+  <li><strong>Application-scale tests</strong><span>Packages, the editor, examples, and bundled applications exercise composition across larger programs.</span></li>
+  <li><strong>Public documentation</strong><span>The Luce site compiles examples and audits documented public standard signatures against the embedded source.</span></li>
+</ol>
+
+<h2 id="rule">When an operation becomes a runtime primitive</h2>
+
+<p>Measurements identify algorithms whose cost comes from representation or repeated host crossings. Those operations may receive a runtime primitive while keeping the public Luce wrapper and its behavior tests. The wrapper remains the API, and the primitive handles the narrow work that benefits from runtime access.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/STD.md" data-source="docs/STD.md">standard-library contract</a>
+  <a class="source-link" href="@repo/src/luce/std" data-source="src/luce/std">embedded Luce source</a>
+  <a class="source-link" href="@repo/www/luce/src/coverage.zig" data-source="www/luce/src/coverage.zig">documentation surface audit</a>
+</div>

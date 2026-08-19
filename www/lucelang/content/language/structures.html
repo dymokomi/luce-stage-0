@@ -1,0 +1,54 @@
+<p class="lede">A <code>Point</code> is two integers carried as one value. Copying the point copies its fields, and a method can compile down to arithmetic on those fields.</p>
+
+<h2 id="trace">Follow one Point</h2>
+
+<p>The example constructs a point, calls <code>moved</code>, and adds the result fields. MIR names the structure layout and field operations. LLVM IR chooses concrete aggregate storage. Optimization can then flatten the whole value into registers before ARM64 sees it.</p>
+
+<!-- trace:structures -->
+
+<h2 id="layout">Flattened value layout</h2>
+
+<figure class="diagram">
+  <figcaption><strong>A struct with mixed fields</strong><span>References remain shared even though the outer struct copies</span></figcaption>
+  <div class="artifact-stack">
+    <div class="artifact-layer"><strong><code>origin: Point</code></strong><span>nested value fields flatten into the containing value layout</span></div>
+    <div class="artifact-layer"><strong><code>label: str</code></strong><span>value representation; outside storage follows string lifetime rules</span></div>
+    <div class="artifact-layer"><strong><code>items: list[i64]</code></strong><span>reference field; a copied struct retains and shares this list identity</span></div>
+  </div>
+</figure>
+
+<h2 id="construction">Construction and defaults</h2>
+
+<p>Structures support memberwise construction, named fields, and folded field defaults. A default is checked and folded at the declaration, so every construction reuses one constant value. Private fields can reserve construction for public factory functions in the declaring file.</p>
+
+<h2 id="copy">What a copy does</h2>
+
+<p>Scalar and nested value fields copy. Reference fields retain the same object handle, so a copied struct continues to share those referenced identities. Destruction of the outer value releases each owned reference field when that particular copy leaves its lifetime.</p>
+
+<div class="heap-graph">
+  <div class="heap-node"><strong>struct copy A</strong><p>own scalar fields</p><span class="count">owns one list reference</span></div>
+  <div class="heap-edge" aria-hidden="true">→</div>
+  <div class="heap-node owner-zig"><strong>shared list object</strong><p>one identity, retained by A and B</p><span class="count">strong 2</span></div>
+</div>
+
+<h2 id="methods">Reader and writer methods</h2>
+
+<p><code>self</code> is implied. The compiler infers whether a method writes the value receiver. A reader can run on any value expression. A writer needs a mutable bare local because the modified value has to be stored back into that local when the call returns.</p>
+
+<h2 id="cycles">Value layout must be finite</h2>
+
+<p>Every struct needs a finite byte width. Recursive structures therefore cross an optional or reference boundary, whose representation has a fixed width. Layout analysis detects an unbroken value cycle before HIR.</p>
+
+<h2 id="struct-or-class">Choosing identity</h2>
+
+<div class="comparison">
+  <div><h3>Use a struct when</h3><p>The data is the value, copies should be independent at the outer level, and identity comparison would add nothing.</p></div>
+  <div><h3>Use a class when</h3><p>Aliases must observe the same mutation, deterministic destruction belongs to one identity, or weak graph edges are needed.</p></div>
+</div>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/semantics/layouts.zig" data-source="src/luce/semantics/layouts.zig">layout analysis</a>
+  <a class="source-link" href="@repo/src/luce/semantics/receiver.zig" data-source="src/luce/semantics/receiver.zig">receiver effects</a>
+  <a class="source-link" href="@repo/docs/SELF.md" data-source="docs/SELF.md">method contract</a>
+  <a class="source-link" href="@repo/src/luce/specs/behavior_spec.zig" data-source="src/luce/specs/behavior_spec.zig">value behavior specs</a>
+</div>

@@ -1,0 +1,68 @@
+<p class="lede">A native build moves through five concrete stages: LLVM IR, an optimized object file, a platform link, an artifact identity check, and a call to <code>luce_main</code>.</p>
+
+<h2 id="real-output">Start with the emitted code</h2>
+
+<p>The tabs below contain the same program at the last three code representations. The LLVM tab contains the module Luce hands to LLVM. The ARM64 tab is disassembled from the emitted Mach-O object.</p>
+
+<!-- trace:journey -->
+
+<h2 id="what-changed">What LLVM changed</h2>
+
+<p>Luce’s LLVM IR keeps <code>clamp_double</code> as an internal function with a checked-multiply intrinsic, a comparison, and two returns. During optimization, LLVM inserts the helper into <code>luce_main</code>. It represents multiplication by two as a left shift after preserving the overflow check, then uses a conditional select to choose the capped result.</p>
+
+<div class="comparison code-shape">
+  <div><h3>LLVM IR</h3><p><code>llvm.smul.with.overflow.i64</code><br><code>icmp sgt</code><br><code>br</code> to two return blocks</p></div>
+  <div><h3>ARM64 object</h3><p><code>cmn</code> + <code>b.mi</code><br><code>lsl #1</code><br><code>cmp</code> + <code>csel</code></p></div>
+</div>
+
+<p>Both columns implement the same language rule. Overflow takes the trap path. A valid product returns directly when it is at most the limit, or returns the limit when it is larger.</p>
+
+<h2 id="object">What the linker resolves</h2>
+
+<p>An object file contains native instructions and data, but some addresses are unresolved. A call to the runtime may still say, in effect, “the linker will tell me where this symbol lives.” Relocation records name those places.</p>
+
+<figure class="diagram">
+  <figcaption><strong>The last build steps</strong><span>From relocatable instructions to a loadable program</span></figcaption>
+  <div class="flow">
+    <div class="flow-node wide owner-machine"><b>program.o</b><small>instructions, symbols, relocations, artifact tag</small></div>
+    <div class="flow-node wide owner-machine"><b>platform linker</b><small>joins runtime and resolves addresses</small></div>
+    <div class="flow-node wide owner-machine"><b>program or .lc</b><small>loadable native container</small></div>
+    <div class="flow-node wide owner-zig"><b>artifact check</b><small>machine, ABI, generator, source</small></div>
+    <div class="flow-node wide owner-machine"><b>OS loader</b><small>maps pages and applies dynamic relocations</small></div>
+    <div class="flow-node wide owner-zig"><b>luce_main(host)</b><small>native entry with explicit capabilities</small></div>
+  </div>
+</figure>
+
+<h2 id="linking">Why the platform driver performs the link</h2>
+
+<p>The compiler invokes the platform C driver because it already knows the system startup objects, SDK paths, thread and math libraries, architecture flags, and loader conventions. A standalone executable adds <code>libluce_start.a</code>; a <code>.lc</code> becomes a loadable library; both link <code>libluce_rt.a</code>.</p>
+
+<p>LLVM and the platform linker finish their work during the build. The resulting program starts by loading native pages and entering <code>luce_main</code>.</p>
+
+<h2 id="entry">What <code>luce_main</code> does</h2>
+
+<ol class="story-steps">
+  <li><b>Check the host.</b><span>Terminal errors and traps need a reporting path.</span></li>
+  <li><b>Install runtime capabilities.</b><span>Resources and workers need explicit callbacks for cleanup and host work.</span></li>
+  <li><b>Create program roots.</b><span>Constant containers become objects owned by this run.</span></li>
+  <li><b>Call the generated <code>main</code>.</b><span>Arguments, call depth, errors, and source traces use the internal ABI visible in LLVM IR.</span></li>
+  <li><b>Finish distinctly.</b><span>Success, an uncaught error, a trap, exhaustion, and explicit exit remain different results.</span></li>
+</ol>
+
+<h2 id="assembly-reading">How to read the assembly tab</h2>
+
+<p>The object is optimized, so source functions may be inlined and local names are gone. Start by searching for operations you expect: <code>lsl</code> for doubling, <code>cmp</code> for the cap, and <code>blr</code> or <code>bl</code> for runtime calls. Branches leading away from the happy path often implement Luce’s stale-handle, overflow, bounds, call-depth, or host-service checks.</p>
+
+<div class="plain-note"><p><strong>Addresses such as <code>0x174</code> are object-local.</strong> The linker will relocate calls and data references. Registers and offsets may also change with LLVM version, optimization mode, or target, while Luce’s observable behavior stays the same.</p></div>
+
+<h2 id="loom">Why the runner stays small</h2>
+
+<p><code>loom</code> delegates a cache miss by giving serialized MIR to the sibling <code>luce</code> compiler. On a hit it validates the native artifact, asks the operating system to load it, finds <code>luce_main</code>, and calls it. Running an already-built artifact therefore requires the loader and runtime, while LLVM remains a build-time dependency.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/codegen/lower.zig" data-source="src/luce/codegen/lower.zig">LLVM lowering</a>
+  <a class="source-link" href="@repo/src/luce/codegen/emit.zig" data-source="src/luce/codegen/emit.zig">object emission</a>
+  <a class="source-link" href="@repo/src/apps/luce/object.zig" data-source="src/apps/luce/object.zig">object workflow</a>
+  <a class="source-link" href="@repo/src/apps/native.zig" data-source="src/apps/native.zig">link and load</a>
+  <a class="source-link" href="@repo/src/apps/start.zig" data-source="src/apps/start.zig">standalone start</a>
+</div>

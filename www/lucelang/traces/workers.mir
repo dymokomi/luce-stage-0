@@ -1,0 +1,28 @@
+func square(value: i64) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = local_get %0
+    r2 = multiply.i64 r0, r1
+    ret r2
+func main(args: list[str]) -> None
+    local %1 (temporary): task[i64]
+    local %2 work: task[i64]
+    local %3 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = const 2
+    r3 = add.i64 r1, r2
+    r4 = spawn square, r3
+    local_set %2, r4
+    r6 = local_get %2
+    r7 = intrinsic task_wait, r6
+    r8 = intrinsic str_value, r7
+    local_set %3, r8
+    intrinsic print, r8
+    r11 = local_get %3
+    r12 = intrinsic drop_storage, r11
+    local_set %3, r12
+    r14 = local_get %2
+    intrinsic release, r14
+    ret

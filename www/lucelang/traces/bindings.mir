@@ -1,0 +1,22 @@
+func main(args: list[str]) -> None
+    local %1 total: i64
+    local %2 answer: i64
+    local %3 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    local_set %1, r1
+    r3 = const 2
+    r4 = local_get %1
+    r5 = add.i64 r4, r3
+    local_set %1, r5
+    r7 = local_get %1
+    local_set %2, r7
+    r9 = local_get %2
+    r10 = intrinsic str_value, r9
+    local_set %3, r10
+    intrinsic print, r10
+    r13 = local_get %3
+    r14 = intrinsic drop_storage, r13
+    local_set %3, r14
+    ret

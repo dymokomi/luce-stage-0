@@ -1,0 +1,5 @@
+func main(args: list[str]):
+    let values = [len(args)]
+    let shared = values
+    shared.append(42)
+    print(str(len(values)))

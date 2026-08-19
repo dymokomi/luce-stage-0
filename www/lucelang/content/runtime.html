@@ -1,0 +1,53 @@
+<p class="lede">LLVM can emit scalar arithmetic directly. Lists, class lifetime, worker transfer, text storage, and source-aware traps use the native runtime shared by compiled programs and the test interpreter.</p>
+
+<div class="story-opening"><span class="eyebrow">A useful dividing line</span><p>If an operation depends only on scalar registers, LLVM can often inline it. If it needs Luce’s heap, object table, host capabilities, or error state, generated assembly calls the Zig runtime.</p></div>
+
+<h2 id="position">Where the runtime sits</h2>
+
+<figure class="diagram">
+  <figcaption><strong>Two callers, one semantic library</strong><span>Both execution paths call the same operations</span></figcaption>
+  <div class="layer-stack">
+    <div class="layer machine"><strong>Native code</strong><span>calls the published <code>luce_rt_*</code> C exports</span></div>
+    <div class="layer zig"><strong>Interpreter</strong><span>calls the Zig runtime surface from its MIR dispatch loop</span></div>
+    <div class="layer zig"><strong>libluce_rt</strong><span>one heap, value, container, text, operator, resource, worker, and trap implementation</span></div>
+  </div>
+</figure>
+
+<p>Both execution paths call the same runtime operations for lists, text, objects, workers, and traps. A differential test can then focus on whether native code and MIR dispatch invoke those operations in the same order with the same values.</p>
+
+<h2 id="modules">The runtime modules</h2>
+
+<div class="cards">
+  <a class="card" href="@/runtime/memory/"><strong><code>heap.zig</code> + <code>value.zig</code></strong><span>24-byte values, object rows, generations, strong counts, weak handles, allocation, and trap state.</span></a>
+  <a class="card" href="@/language/collections/"><strong><code>containers.zig</code></strong><span>Lists, maps, arrays, builders, element ownership, bounds, and immutable roots.</span></a>
+  <a class="card" href="@/language/text/"><strong><code>text.zig</code></strong><span>UTF-8 and bytes storage, inline text, validation, conversions, and scalar operations.</span></a>
+  <a class="card" href="@/language/numerics/"><strong><code>operators.zig</code></strong><span>Checked arithmetic, comparison, numeric conversion, parsing, formatting, and math primitives.</span></a>
+  <a class="card" href="@/runtime/host/"><strong>Files, sockets, and graphics</strong><span>Runtime-owned resource handles installed from optional host service channels.</span></a>
+  <a class="card" href="@/runtime/workers/"><strong><code>workers.zig</code></strong><span>Private runtimes, graph transfer, thread nursery, effect lock, task result, and join.</span></a>
+  <a class="card" href="@/language/failure/"><strong><code>trace.zig</code></strong><span>Trap state, bounded call frames, stable locations, and one completed report.</span></a>
+  <a class="card" href="@/execution/native/"><strong><code>exports.zig</code></strong><span>The C ABI that generated objects call and effect metadata verifies.</span></a>
+</div>
+
+<h2 id="value">The 24-byte value passed around the runtime</h2>
+
+<p>Runtime operations exchange a C-layout 24-byte <code>Value</code>. A tag selects the view: scalar bits, inline or outside text, an object handle, absence, a function pair, or another defined representation. Zig callers use a tagged <code>view()</code>; generated code uses constants whose layout is asserted against the Zig struct.</p>
+
+<h2 id="heap">Handles make moving storage safe</h2>
+
+<p>A program holds object-table handles containing an index and generation. This indirection lets a list reallocate its buffer while aliases keep the same handle, prevents an old weak handle from matching a reused row, and lets the runtime inspect all live objects at the end of a run.</p>
+
+<h2 id="errors">Failure at the runtime boundary</h2>
+
+<p>A fallible C export returns a status and writes results through out-pointers. A trap is recorded in the runtime once, then propagated through generated frames. Allocation exhaustion has its own run status. Callers can therefore distinguish a recoverable language error, a program trap, and exhausted machine resources.</p>
+
+<h2 id="independence">The library stands below the compiler</h2>
+
+<p>Dependency arrows point from the compiler and runners toward the runtime. Shared enum vocabulary—trap codes, error codes, operators, and service failures—lives under <code>support/</code>. This keeps front-end parser and analyzer code out of the library linked into every artifact.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/src/luce/runtime.zig" data-source="src/luce/runtime.zig">runtime barrel</a>
+  <a class="source-link" href="@repo/src/luce/runtime/value.zig" data-source="src/luce/runtime/value.zig">runtime value format</a>
+  <a class="source-link" href="@repo/src/luce/runtime/heap.zig" data-source="src/luce/runtime/heap.zig">heap and ARC</a>
+  <a class="source-link" href="@repo/src/luce/runtime/exports.zig" data-source="src/luce/runtime/exports.zig">C exports</a>
+  <a class="source-link" href="@repo/docs/ENGINE.md" data-source="docs/ENGINE.md">single-engine boundary</a>
+</div>

@@ -1,0 +1,32 @@
+func factorial(value: i64) -> i64
+  b0:
+    r0 = local_get %0
+    r1 = const 1
+    r2 = less_equal.i64 r0, r1
+    branch r2, b1, b2
+  b1:
+    r4 = const 1
+    ret r4
+  b2:
+    r6 = local_get %0
+    r7 = local_get %0
+    r8 = const 1
+    r9 = subtract.i64 r7, r8
+    r10 = call factorial, r9
+    r11 = multiply.i64 r6, r10
+    ret r11
+func main(args: list[str]) -> None
+    local %1 (temporary): str
+  b0:
+    r0 = local_get %0
+    r1 = intrinsic len, r0
+    r2 = const 1
+    r3 = add.i64 r1, r2
+    r4 = call factorial, r3
+    r5 = intrinsic str_value, r4
+    local_set %1, r5
+    intrinsic print, r5
+    r8 = local_get %1
+    r9 = intrinsic drop_storage, r8
+    local_set %1, r9
+    ret

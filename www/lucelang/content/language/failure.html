@@ -1,0 +1,59 @@
+<p class="lede">Dividing by a caller-supplied count can fail for an ordinary reason: the count is zero. Luce keeps that recoverable outcome separate from an absent value and from a trap caused by broken program logic.</p>
+
+<h2 id="trace">Follow one handled error</h2>
+
+<p><code>divide</code> either returns an integer or raises an error. <code>catch -1</code> handles that second path. MIR gives success and error separate edges; LLVM carries a status alongside result storage; ARM64 tests the status and branches to the chosen handler.</p>
+
+<!-- trace:failure -->
+
+<h2 id="three">Three channels</h2>
+
+<div class="representation-grid">
+  <div class="representation value"><strong>Absence · <code>T?</code></strong><p>Ordinary data. The value is either absent or carries one <code>T</code>. Narrow or provide an <code>else</code> fallback.</p></div>
+  <div class="representation reference"><strong>Recoverable · <code>T!</code></strong><p>A declared call effect. Handle with <code>catch</code> or propagate with <code>try</code>.</p></div>
+  <div class="representation effect"><strong>Trap</strong><p>A terminal violation: overflow, bounds, invalid conversion, call depth, explicit trap, or unavailable host capability.</p></div>
+</div>
+
+<h2 id="optional">Optional is payload beside presence</h2>
+
+<p><code>T?</code> is the optional type and <code>none</code> is its absent value. One presence bit distinguishes absence from a present payload, including a reference payload whose bits equal the reference type’s zero value.</p>
+
+<figure class="diagram">
+  <figcaption><strong>Conceptual <code>T?</code></strong><span>Presence is independent of the payload bits</span></figcaption>
+  <div class="artifact-stack">
+    <div class="artifact-layer"><strong>present</strong><span>one Boolean fact</span></div>
+    <div class="artifact-layer"><strong>payload</strong><span>ordinary storage for <code>T</code>, owned only when present</span></div>
+  </div>
+</figure>
+
+<h2 id="errors">Errors travel beside results</h2>
+
+<p>A fallible function advertises the effect. Ignoring a fallible result is a compile error. <code>try</code> branches on the outcome and returns the error through the current fallible function; <code>catch</code> converts the error side into a value or block result. Every propagation edge releases the scopes it exits.</p>
+
+<p>A non-fallible interface witness may satisfy a fallible requirement because it implements a subset of the promised outcomes. A non-fallible requirement accepts implementations whose call convention has no recoverable-error outcome.</p>
+
+<h2 id="traps">Traps preserve diagnosis</h2>
+
+<p>A trap carries a stable code, message, and call trace, then ends the run through the runtime trap channel. <code>catch</code> handles the separate recoverable-error channel. Generated code and the interpreter use the same trap path; each unwinding frame contributes its origin before the host receives the finished trace once.</p>
+
+<div class="flow">
+  <div class="flow-node"><b>violation</b><small>runtime records code and words</small></div>
+  <div class="flow-node"><b>unwind</b><small>each frame records origin</small></div>
+  <div class="flow-node"><b>luce_main</b><small>run stops with trap status</small></div>
+  <div class="flow-node"><b>host</b><small>renders one complete report</small></div>
+</div>
+
+<h2 id="cleanup">Cleanup differs by channel</h2>
+
+<p>Recoverable propagation is ordinary structured control and releases every exited local. A terminal trap stops the run and unwinds through the trap protocol; the execution record includes the live-object census. The differential suite compares the reported outcome and the cleanup state.</p>
+
+<h2 id="limits">One recoverable-error channel</h2>
+
+<p><code>T!</code> carries recoverable errors through <code>try</code> and <code>catch</code>. <code>T?</code> carries ordinary absence. Traps end a run after a violated language rule. File-not-found can therefore be optional data or a recoverable I/O event according to the API, while overflow follows the trap path defined by checked arithmetic.</p>
+
+<div class="source-strip">
+  <a class="source-link" href="@repo/docs/FAILURE.md" data-source="docs/FAILURE.md">failure contract</a>
+  <a class="source-link" href="@repo/src/luce/support/vocabulary.zig" data-source="src/luce/support/vocabulary.zig">stable codes</a>
+  <a class="source-link" href="@repo/src/luce/runtime/trace.zig" data-source="src/luce/runtime/trace.zig">trace channel</a>
+  <a class="source-link" href="@repo/src/luce/specs/errors_spec.zig" data-source="src/luce/specs/errors_spec.zig">error and trap specs</a>
+</div>
