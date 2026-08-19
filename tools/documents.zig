@@ -61,6 +61,7 @@ pub const living = [_][]const u8{
 pub const plans = [_][]const u8{
     "docs/V2.md",
     "docs/ROADMAP.md",
+    "docs/BUILD.md",
     "docs/GENERICS.md",
     "docs/VECTOR.md",
 };

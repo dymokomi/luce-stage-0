@@ -77,6 +77,7 @@ selected surface roster is checked during the site build.
 |---|---|
 | [V2.md](V2.md) | The language-first product north star, current userland proof, and intentionally deferred systems work. |
 | [ROADMAP.md](ROADMAP.md) | The dated state-of-language audit and ordered path through post-1.0 generics, native UI, platform work, and the 1.0 lock. |
+| [BUILD.md](BUILD.md) | The build-system plan: bare `luce build` via a manifest `main:`, `luce install` over url+sha256 want rows, and the compiled `std.build` script graph. |
 | [GENERICS.md](GENERICS.md) | The post-1.0 monomorphized generics design, its real library customers, diagnostics, limits, and acceptance matrix. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
 
