@@ -1,0 +1,35 @@
+# Luce, described to the highlighter.
+#
+# The word tables are the language's own words, held against the
+# compiler's tables (`lex/token.zig` keywords, `support/types.zig`
+# builtin types, `semantics/builtins.zig` builtins) by the repository's
+# vocabulary tripwires.
+
+from syntax.definition import Syntax
+
+func syntax() -> Syntax:
+    return Syntax(
+        name = "Luce",
+        line_comment = "#",
+        quotes = ['"'],
+        quote_prefixes = ['f'],
+        keywords = [
+            "alias", "and", "break", "catch", "class", "const", "continue",
+            "deinit", "elif", "else", "enum", "false", "for", "func", "if",
+            "import", "in", "init", "interface", "is", "let", "match",
+            "mutating", "none", "not", "or", "private", "public", "return",
+            "self", "spawn", "static", "struct", "true", "try", "union",
+            "var", "weak", "while",
+        ],
+        types = [
+            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
+            "f16", "f32", "f64", "char", "str", "bytes", "list", "map",
+            "array", "builder", "task",
+        ],
+        builtins = [
+            "abs", "assert", "ceil", "clamp", "error", "exit", "floor",
+            "len", "max", "min", "parse_f64", "parse_i64", "parse_str",
+            "print", "range", "sqrt", "trap", "trunc",
+        ],
+        capitalized_types = true,
+    )

@@ -106,7 +106,11 @@ Cursor. Reload the editor window after installing or updating Luce.
 
 The extension claims `.luc` source files and provides:
 
-- syntax highlighting generated from the compiler's own keyword, type,
+- per-language syntax highlighting: each language is one data file
+  under `syntax/` (Luce, C, Python, Swift, Go ship; a new language is
+  a new file and one registry row), routed by the open file's
+  extension through one generic tokenizer;
+- Luce's own tables generated from the compiler's keyword, type,
   builtin, method, literal, and operator tables;
 - four-space, spaces-only indentation;
 - comment, bracket, folding, and block rules; and

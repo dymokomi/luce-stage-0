@@ -1,0 +1,41 @@
+# Which language a file speaks, by its extension.
+#
+# The registry is the one place a new language plugs in: its sibling
+# file answers `syntax()`, and one row here routes the extensions.  A
+# file nothing claims gets the plain syntax — no words, no comments —
+# which draws as unstyled text.
+
+import std.strings
+from syntax.definition import Syntax
+import syntax.luce
+import syntax.c
+import syntax.python
+import syntax.swift
+import syntax.go
+
+func for_path(path: str) -> Syntax:
+    let lowered = strings.lower(path)
+    if strings.ends_with(lowered, ".luc"):
+        return luce.syntax()
+    if strings.ends_with(lowered, ".c") or strings.ends_with(lowered, ".h"):
+        return c.syntax()
+    if strings.ends_with(lowered, ".py"):
+        return python.syntax()
+    if strings.ends_with(lowered, ".swift"):
+        return swift.syntax()
+    if strings.ends_with(lowered, ".go"):
+        return go.syntax()
+    return plain()
+
+# The syntax of a file nothing claims: every word is plain text.
+func plain() -> Syntax:
+    return Syntax(
+        name = "Plain",
+        line_comment = "",
+        quotes = list[char](),
+        quote_prefixes = list[char](),
+        keywords = list[str](),
+        types = list[str](),
+        builtins = list[str](),
+        capitalized_types = false,
+    )

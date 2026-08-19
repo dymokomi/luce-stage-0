@@ -1286,9 +1286,11 @@ test "the lexical keyword and reserved rosters exactly match the compiler" {
 fn editorWordTable(gpa: Allocator, source: []const u8, declaration: []const u8) !Names {
     var names: Names = .{ .gpa = gpa };
     errdefer names.deinit();
-    const opening = try std.fmt.allocPrint(gpa, "private const {s} = {{", .{declaration});
+    // The Luce syntax file writes its tables as named list arguments:
+    // `keywords = [ "..." ]`.
+    const opening = try std.fmt.allocPrint(gpa, "{s} = [", .{declaration});
     defer gpa.free(opening);
-    const table = between(source, opening, "\n}") orelse return error.EditorWordTableNotFound;
+    const table = between(source, opening, "]") orelse return error.EditorWordTableNotFound;
     try quotedWhere(&names, table, isPlainName);
     return names;
 }
@@ -1302,31 +1304,30 @@ test "the example editor word maps exactly match the compiler" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    // The highlighter's word tables moved out of `editor.luc` into
-    // `highlight.luc` when the editor was split into modules; the tables
-    // are what this test holds to the compiler, so it reads them where
-    // they now live.
-    const editor = try repository.read("examples/editor/highlight.luc");
+    // The word tables live in the per-language syntax data now —
+    // `syntax/luce.luc` — and Luce's are what this test holds to the
+    // compiler, so it reads them where they live.
+    const editor = try repository.read("examples/editor/syntax/luce.luc");
     defer gpa.free(editor);
 
-    var editor_keywords = try editorWordTable(gpa, editor, "keyword_words");
+    var editor_keywords = try editorWordTable(gpa, editor, "keywords");
     defer editor_keywords.deinit();
     var compiler_keywords = try lexerKeywords(repository);
     defer compiler_keywords.deinit();
-    try expectSameNames("examples/editor keyword_words", compiler_keywords, editor_keywords);
+    try expectSameNames("examples/editor syntax/luce keywords", compiler_keywords, editor_keywords);
 
-    var editor_types = try editorWordTable(gpa, editor, "type_words");
+    var editor_types = try editorWordTable(gpa, editor, "types");
     defer editor_types.deinit();
     var compiler_types = try typeNames(repository);
     defer compiler_types.deinit();
-    try expectSameNames("examples/editor type_words", compiler_types, editor_types);
+    try expectSameNames("examples/editor syntax/luce types", compiler_types, editor_types);
 
-    var editor_builtins = try editorWordTable(gpa, editor, "builtin_words");
+    var editor_builtins = try editorWordTable(gpa, editor, "builtins");
     defer editor_builtins.deinit();
     var compiler_builtins = try builtins(repository);
     defer compiler_builtins.deinit();
     try compiler_builtins.add("range");
-    try expectSameNames("examples/editor builtin_words", compiler_builtins, editor_builtins);
+    try expectSameNames("examples/editor syntax/luce builtins", compiler_builtins, editor_builtins);
 }
 
 /// The five word tables `render` classifies against, in class order.

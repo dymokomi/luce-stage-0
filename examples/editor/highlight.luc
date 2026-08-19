@@ -1,18 +1,14 @@
-# Luce syntax highlighting — a source line becomes a list of tokens.
+# Syntax highlighting — a source line becomes a list of tokens.
 #
-# Pure classification: no terminal, no styles. It walks a scalar range
-# and answers what each run *is* (a keyword, a str, a number, a
-# comment, …); `theme` turns a kind into a colour and `paint` turns the
-# tokens into a drawable line.  Keeping the classifier free of colour is
-# what lets a test assert the tokens of a line directly.
-#
-# The word tables are the language's own words, held against the
-# compiler's tables (`lex/token.zig` keywords, `support/types.zig`
-# builtin types, `semantics/builtins.zig` builtins).  A method name
-# is not here: it is only a name after a receiver and a dot, and this
-# highlighter colours words, not receivers.
+# Pure classification: no terminal, no styles.  The engine walks a
+# scalar range and answers what each run *is* (a keyword, a str, a
+# number, a comment, …); `theme` turns a kind into a colour.  Which
+# words mean what belongs to the `Syntax` value handed in — one per
+# language, each a file under `syntax/` — so a new language never
+# changes this file.
 
 from document import next_boundary
+from syntax.definition import Syntax
 
 # --- one character, before anything decides what it means ----------
 
@@ -34,52 +30,21 @@ private func is_word_start(code: char) -> bool:
 private func is_word(code: char) -> bool:
     return is_word_start(code) or is_digit(code)
 
-# Where a quoted str that opens at `opening` closes, bounded by
-# `finish`. A backslash escapes the next scalar.
-private func quoted_end(value: str, finish: i64, opening: i64) -> i64:
+# Where a quoted run that opens at `opening` closes, bounded by
+# `finish`.  A backslash escapes the next scalar.
+private func quoted_end(value: str, finish: i64, opening: i64, quote: char) -> i64:
     var close = opening + 1
     var closed = false
     while close < finish and not closed:
         let code = value[close]
         if code == '\\':
             close = close + 2
-        elif code == '"':
+        elif code == quote:
             closed = true
             close = close + 1
         else:
             close = close + 1
     return min(close, finish)
-
-# --- the word tables -------------------------------------------------
-
-private const keyword_words = {
-    "alias": true, "and": true, "break": true, "catch": true, "class": true,
-    "const": true, "continue": true, "deinit": true, "elif": true, "else": true,
-    "enum": true, "false": true, "for": true, "func": true,
-    "if": true, "import": true, "in": true, "init": true, "interface": true, "is": true,
-    "let": true, "match": true, "mutating": true, "none": true,
-    "not": true, "or": true, "private": true, "public": true,
-    "return": true, "self": true, "spawn": true, "static": true,
-    "struct": true, "true": true, "try": true, "union": true,
-    "var": true, "weak": true, "while": true,
-}
-
-private const type_words = {
-    "bool": true, "u8": true, "u16": true, "u32": true, "u64": true,
-    "i8": true, "i16": true, "i32": true, "i64": true,
-    "f16": true, "f32": true, "f64": true,
-    "char": true, "str": true, "bytes": true,
-    "list": true, "map": true, "array": true,
-    "builder": true, "task": true,
-}
-
-private const builtin_words = {
-    "abs": true, "assert": true, "ceil": true,
-    "clamp": true, "error": true, "exit": true, "floor": true,
-    "len": true, "max": true, "min": true, "parse_f64": true,
-    "parse_i64": true, "parse_str": true, "print": true,
-    "range": true, "sqrt": true, "trap": true, "trunc": true,
-}
 
 # What a run of source is.  A `match` on this in `theme` and `paint`
 # has an arm for every member and no `else`, so a new kind cannot be
@@ -98,37 +63,69 @@ struct Token:
     text: str
     kind: TokenKind
 
-# Which of the four word kinds a word is.  The order is the language's:
-# a reserved word is a keyword before anything else, and a capitalized
-# name is a type before a builtin (no builtin is capitalized).
-private func classify_word(text: str) -> TokenKind:
-    if keyword_words.has(text):
+private func listed(words: list[str], text: str) -> bool:
+    for word in words:
+        if word == text:
+            return true
+    return false
+
+# Which of the four word kinds a word is under `language`.  A reserved
+# word is a keyword before anything else, and where the convention
+# holds, a capitalized name is a type before a builtin.
+private func classify_word(language: Syntax, text: str) -> TokenKind:
+    if listed(language.keywords, text):
         return TokenKind.keyword
-    if type_words.has(text):
+    if listed(language.types, text):
         return TokenKind.type_name
-    if len(text) > 0 and is_upper(text[0]):
+    if language.capitalized_types and len(text) > 0 and is_upper(text[0]):
         return TokenKind.type_name
-    if builtin_words.has(text):
+    if listed(language.builtins, text):
         return TokenKind.builtin
     return TokenKind.plain
 
-# Tokenize the scalar range `[from, to)` of `content`. Whole tokens are
-# produced without clipping — display clipping is the surface's job at
-# draw time — so a token may be wider than the pane it lands in.
-func tokens(content: str, from: i64, to: i64) -> list[Token]:
+# Whether `content` opens a line comment at `at`.
+private func opens_comment(language: Syntax, content: str, at: i64, to: i64) -> bool:
+    let marker = language.line_comment
+    if len(marker) == 0:
+        return false
+    if at + len(marker) > to:
+        return false
+    var offset: i64 = 0
+    while offset < len(marker):
+        if content[at + offset] != marker[offset]:
+            return false
+        offset += 1
+    return true
+
+private func is_quote(language: Syntax, code: char) -> bool:
+    for quote in language.quotes:
+        if code == quote:
+            return true
+    return false
+
+private func is_quote_prefix(language: Syntax, code: char) -> bool:
+    for prefix in language.quote_prefixes:
+        if code == prefix:
+            return true
+    return false
+
+# Tokenize the scalar range `[from, to)` of `content` under
+# `language`.  Whole tokens are produced without clipping — display
+# clipping is the surface's job at draw time.
+func tokens(language: Syntax, content: str, from: i64, to: i64) -> list[Token]:
     var out = list[Token]()
     var at = from
     while at < to:
         let code = content[at]
-        if code == '#':
+        if opens_comment(language, content, at, to):
             out.append(Token(text = content[at:to], kind = TokenKind.comment))
             at = to
-        elif code == 'f' and at + 1 < to and content[at + 1] == '"' and (at == from or not is_word(content[at - 1])):
-            let close = quoted_end(content, to, at + 1)
+        elif is_quote_prefix(language, code) and at + 1 < to and is_quote(language, content[at + 1]) and (at == from or not is_word(content[at - 1])):
+            let close = quoted_end(content, to, at + 1, content[at + 1])
             out.append(Token(text = content[at:close], kind = TokenKind.string_literal))
             at = close
-        elif code == '"':
-            let close = quoted_end(content, to, at)
+        elif is_quote(language, code):
+            let close = quoted_end(content, to, at, code)
             out.append(Token(text = content[at:close], kind = TokenKind.string_literal))
             at = close
         elif is_digit(code):
@@ -160,7 +157,7 @@ func tokens(content: str, from: i64, to: i64) -> list[Token]:
             var stop = at + 1
             while stop < to and is_word(content[stop]):
                 stop = stop + 1
-            out.append(Token(text = content[at:stop], kind = classify_word(content[at:stop])))
+            out.append(Token(text = content[at:stop], kind = classify_word(language, content[at:stop])))
             at = stop
         else:
             var stop = next_boundary(content, at)

@@ -1,0 +1,28 @@
+# What a language looks like, as data.
+#
+# One `Syntax` value carries everything the generic tokenizer needs to
+# classify a line of some language: how a comment starts, how strings
+# are quoted, and which words are keywords, types, and builtins.  Each
+# language is one sibling file answering `syntax()`; the registry maps
+# a file's extension to it.  Adding a language is adding a file — the
+# engine in `highlight.luc` never changes.
+
+struct Syntax:
+    # The language's name, for a status line or a picker.
+    name: str
+    # What opens a line comment; "" for a language without one.
+    line_comment: str
+    # The quotes that open a string; each runs to its match on the
+    # same line, with backslash escaping the next scalar.
+    quotes: list[char]
+    # A quote prefix like Luce's f-strings or Python's f/r-strings:
+    # a word character that may sit immediately before a quote and
+    # belong to the string.  Empty for most languages.
+    quote_prefixes: list[char]
+    # The word tables.  A capitalized word outside every table is
+    # still classified a type when `capitalized_types` says so — the
+    # convention Luce, Swift, and Go share.
+    keywords: list[str]
+    types: list[str]
+    builtins: list[str]
+    capitalized_types: bool

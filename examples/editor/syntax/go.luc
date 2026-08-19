@@ -1,0 +1,28 @@
+# Go, described to the highlighter.
+
+from syntax.definition import Syntax
+
+func syntax() -> Syntax:
+    return Syntax(
+        name = "Go",
+        line_comment = "//",
+        quotes = ['"', '\'', '`'],
+        quote_prefixes = [],
+        keywords = [
+            "break", "case", "chan", "const", "continue", "default",
+            "defer", "else", "fallthrough", "for", "func", "go", "goto",
+            "if", "import", "interface", "map", "package", "range",
+            "return", "select", "struct", "switch", "type", "var",
+            "true", "false", "nil", "iota",
+        ],
+        types = [
+            "bool", "byte", "complex64", "complex128", "error", "float32",
+            "float64", "int", "int8", "int16", "int32", "int64", "rune",
+            "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+        ],
+        builtins = [
+            "append", "cap", "close", "copy", "delete", "len", "make",
+            "new", "panic", "print", "println", "recover",
+        ],
+        capitalized_types = true,
+    )

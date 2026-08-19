@@ -1,0 +1,24 @@
+# Python, described to the highlighter.
+
+from syntax.definition import Syntax
+
+func syntax() -> Syntax:
+    return Syntax(
+        name = "Python",
+        line_comment = "#",
+        quotes = ['"', '\''],
+        quote_prefixes = ['f', 'r', 'b'],
+        keywords = [
+            "and", "as", "assert", "async", "await", "break", "class",
+            "continue", "def", "del", "elif", "else", "except", "finally",
+            "for", "from", "global", "if", "import", "in", "is", "lambda",
+            "nonlocal", "not", "or", "pass", "raise", "return", "try",
+            "while", "with", "yield", "False", "None", "True",
+        ],
+        types = ["bool", "bytes", "dict", "float", "int", "list", "set", "str", "tuple"],
+        builtins = [
+            "abs", "enumerate", "isinstance", "len", "max", "min", "open",
+            "print", "range", "sorted", "sum", "super", "type", "zip",
+        ],
+        capitalized_types = false,
+    )

@@ -1,0 +1,23 @@
+# Swift, described to the highlighter.
+
+from syntax.definition import Syntax
+
+func syntax() -> Syntax:
+    return Syntax(
+        name = "Swift",
+        line_comment = "//",
+        quotes = ['"'],
+        quote_prefixes = [],
+        keywords = [
+            "as", "async", "await", "break", "case", "catch", "class",
+            "continue", "default", "defer", "deinit", "do", "else", "enum",
+            "extension", "fallthrough", "false", "for", "func", "guard",
+            "if", "import", "in", "init", "inout", "internal", "is", "let",
+            "nil", "private", "protocol", "public", "repeat", "return",
+            "self", "static", "struct", "switch", "throw", "throws", "true",
+            "try", "typealias", "var", "weak", "where", "while",
+        ],
+        types = [],
+        builtins = ["print", "assert", "precondition", "fatalError", "min", "max", "abs"],
+        capitalized_types = true,
+    )

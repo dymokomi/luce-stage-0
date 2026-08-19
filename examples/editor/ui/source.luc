@@ -5,6 +5,8 @@ import std.strings
 from termui import View, Surface, Response, Rect, Event, Cursor, Pointer, Line, Span, route
 from termui.widgets import Rows, EventHost, CursorHost
 import highlight
+from syntax.definition import Syntax
+from syntax.registry import for_path
 from model import Model, Focus, Intent
 from ui.keymap import intent_of
 from ui.theme import palette, style_for, in_selection
@@ -21,9 +23,23 @@ class Editor: View:
         return gutter_width + 1
 
     private model: Model
+    private language: Syntax
+    private language_path: str
 
     init(shared: Model):
         self.model = shared
+        self.language_path = shared.document().path
+        self.language = for_path(self.language_path)
+
+    # The active file's language, re-asked only when the file changes:
+    # a Syntax is word lists, and building them per line would make
+    # every frame pay for what only a switch changes.
+    private func current_language() -> Syntax:
+        let path = self.model.document().path
+        if path != self.language_path:
+            self.language_path = path
+            self.language = for_path(path)
+        return self.language
 
     # --- data provider ----------------------------------------------
 
@@ -50,7 +66,7 @@ class Editor: View:
         let sel_hi = clamp(doc.selection_end(), start, finish)
         let has_selection = doc.has_selection() and sel_hi > sel_lo
         var at = start
-        for token in highlight.tokens(doc.content, start, finish):
+        for token in highlight.tokens(self.current_language(), doc.content, start, finish):
             let style = style_for(palette, token.kind)
             let token_end = at + len(token.text)
             if not has_selection or token_end <= sel_lo or at >= sel_hi:

@@ -1,10 +1,11 @@
 # The highlighter classifies a line without drawing it.
 
 import highlight
+import syntax.luce
 
 func test_classifies_the_kinds_on_a_line():
     let line = "let Name = 42  # note"
-    let toks = highlight.tokens(line, 0, len(line))
+    let toks = highlight.tokens(luce.syntax(), line, 0, len(line))
     assert(toks[0].text == "let")
     assert(toks[0].kind == highlight.TokenKind.keyword)
     assert(toks[2].text == "Name")
@@ -18,20 +19,20 @@ func test_classifies_the_kinds_on_a_line():
 
 func test_builtin_types_and_names():
     let line = "print(len(list))"
-    let toks = highlight.tokens(line, 0, len(line))
+    let toks = highlight.tokens(luce.syntax(), line, 0, len(line))
     assert(toks[0].text == "print" and toks[0].kind == highlight.TokenKind.builtin)
     assert(toks[2].text == "len" and toks[2].kind == highlight.TokenKind.builtin)
     assert(toks[4].text == "list" and toks[4].kind == highlight.TokenKind.type_name)
 
 func test_strings_and_fstrings():
     let plain = "x = \"hi\""
-    let a = highlight.tokens(plain, 0, len(plain))
+    let a = highlight.tokens(luce.syntax(), plain, 0, len(plain))
     assert(a[len(a) - 1].kind == highlight.TokenKind.string_literal)
     let fstr = "f\"a{b}\""
-    let b = highlight.tokens(fstr, 0, len(fstr))
+    let b = highlight.tokens(luce.syntax(), fstr, 0, len(fstr))
     assert(b[0].kind == highlight.TokenKind.string_literal)
 
 func test_a_capitalized_word_is_a_type_even_without_a_table():
     let line = "Widget"
-    let toks = highlight.tokens(line, 0, len(line))
+    let toks = highlight.tokens(luce.syntax(), line, 0, len(line))
     assert(toks[0].kind == highlight.TokenKind.type_name)
