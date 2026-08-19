@@ -80,11 +80,27 @@ grep -Fq '1 passed, 0 failed' "$smoke/test-output.txt"
 printf '%s\n' 'name: smoke' 'version: 0.1.0' 'packages:' "  termui: $termui_version" >"$smoke/luce.yaml"
 printf '%s\n' \
     'import termui' \
+    'from termui.widgets import Label, Panel' \
     'func main():' \
-    '    let frame = termui.snapshot(termui.Panel("ok", termui.Label("ready")), 3, 10)' \
+    '    let frame = termui.snapshot(Panel("ok", Label("ready")), 3, 10)' \
     '    print(frame.line(1))' >"$smoke/package_app.luc"
 (cd "$smoke" && . "$smoke_profile" && "$smoke_install/bin/luce" build package_app.luc)
 test "$("$smoke/package_app")" = "│ready   │"
+
+# The language server answers a framed initialize over stdio — the
+# conversation the editors will hold — when the archive carries one.
+if [ -x "$smoke_install/bin/luce-lsp" ]; then
+    lsp_request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+    lsp_answer=$(printf 'Content-Length: %s\r\n\r\n%s' "${#lsp_request}" "$lsp_request" | \
+        "$smoke_install/bin/luce-lsp")
+    case "$lsp_answer" in
+        *'"textDocumentSync":1'*) : ;;
+        *)
+            echo "installer smoke: luce-lsp did not answer the handshake" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 if [ "$(uname -s)" = Linux ]; then
     for tool in luce loom editor luce-lsp; do
