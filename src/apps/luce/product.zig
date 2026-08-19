@@ -320,6 +320,113 @@ test "a bare build compiles the manifest's main, and says what is missing withou
 }
 
 // ---------------------------------------------------------------------------
+// The scripted build: build.luc declares, the tool executes
+// ---------------------------------------------------------------------------
+
+test "a build.luc plan runs its steps in dependency order and governs the bare build" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("luce.yaml",
+        \\name: shop
+        \\version: 0.1.0
+        \\
+    );
+    try tree.write("gen.c",
+        \\int main(void) { return 0; }
+        \\
+    );
+    try tree.write("src/app.luc", greeting);
+    // The tool step must finish before the app compiles — the order
+    // the output lines land in is the proof.
+    try tree.write("build.luc",
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    let tool = b.command("tool", ["cc", "-o", "gen", "gen.c"])
+        \\    var app = b.program("app", "src/app.luc")
+        \\    app.needs(tool)
+        \\    b.default(app)
+        \\    b.emit()
+        \\
+    );
+
+    var ran = try runLuceHere(gpa, &tree, &.{"build"});
+    defer ran.deinit(gpa);
+    try testing.expectEqualStrings("", ran.err);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expectEqualStrings("tool: ran cc\napp: src/app.luc -> src/app\n", ran.out);
+    try testing.expect(tree.exists("gen"));
+    try testing.expect(tree.exists("src/app"));
+    // The compiled script is cached under the project, keyed by hash.
+    try testing.expect(tree.exists(".luce/cache/build"));
+    try testing.expect(tree.exists(".luce/cache/build.hash"));
+
+    // A second run hits the script cache and replays the same plan.
+    var again = try runLuceHere(gpa, &tree, &.{"build"});
+    defer again.deinit(gpa);
+    try testing.expectEqualStrings("", again.err);
+    try testing.expectEqual(@as(u8, 0), again.status);
+    try testing.expectEqualStrings("tool: ran cc\napp: src/app.luc -> src/app\n", again.out);
+
+    // A scripted build takes no options: the script decides everything.
+    var optioned = try runLuceHere(gpa, &tree, &.{ "build", "--release" });
+    defer optioned.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), optioned.status);
+    try testing.expect(optioned.saysErr("a scripted build takes no options"));
+}
+
+test "a plan that fails a step, or chooses nothing, says so and builds nothing" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("luce.yaml",
+        \\name: shop
+        \\version: 0.1.0
+        \\
+    );
+    try tree.write("src/app.luc", greeting);
+    // Two steps and no default: the plan must choose.
+    try tree.write("build.luc",
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    let one = b.program("one", "src/app.luc")
+        \\    var two = b.program("two", "src/app.luc")
+        \\    two.needs(one)
+        \\    b.emit()
+        \\
+    );
+    var undecided = try runLuceHere(gpa, &tree, &.{"build"});
+    defer undecided.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), undecided.status);
+    try testing.expect(undecided.saysErr("no default; choose one"));
+
+    // A command that fails stops the plan before anything after it.
+    try tree.write("build.luc",
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    let tool = b.command("tool", ["cc", "--not-a-flag-cc-takes"])
+        \\    var app = b.program("app", "src/app.luc")
+        \\    app.needs(tool)
+        \\    b.default(app)
+        \\    b.emit()
+        \\
+    );
+    var stopped = try runLuceHere(gpa, &tree, &.{"build"});
+    defer stopped.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), stopped.status);
+    try testing.expect(stopped.saysErr("step tool failed"));
+    try testing.expect(!tree.exists("src/app"));
+}
+
+// ---------------------------------------------------------------------------
 // luce install
 // ---------------------------------------------------------------------------
 

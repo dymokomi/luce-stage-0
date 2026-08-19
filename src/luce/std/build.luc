@@ -1,0 +1,161 @@
+# build — the plan a project's build.luc declares (docs/BUILD.md).
+#
+# A build script is an ordinary compiled Luce program.  It does not
+# build anything itself: it *declares* a plan — a graph of steps — and
+# `emit()` prints that plan as one line of JSON on standard output,
+# which is the whole contract between the script and the `luce` tool
+# that runs it.  The tool compiles the script through the ordinary
+# compile cache, runs it, reads the plan, and executes the steps in
+# dependency order.  Separating declaration from execution is what
+# makes the graph inspectable, orderable, and honest: a script cannot
+# half-build something on the side, because a script has no way to
+# build at all.
+#
+# The module is pure: nothing here touches the host but `print`, and
+# only inside `emit`.  Two step kinds exist, and they are enough
+# because each is a whole world: a `luce` step is one source compiled
+# to one artifact by the tool itself, and a `command` step is one host
+# command — a C compiler, a code generator — run in the project root.
+
+import std.json
+
+# One step of the plan.  Made by the Plan's own constructors, never
+# directly; held by reference, so `needs` edges added after
+# construction are seen by the plan that holds it.
+class Step:
+    private:
+        name: str
+        kind: str
+        source: str
+        emit_kind: str
+        output: str
+        release: bool
+        argv: list[str]
+        wants: list[str]
+
+    init(name: str, kind: str):
+        self.name = name
+        self.kind = kind
+        self.source = ""
+        self.emit_kind = ""
+        self.output = ""
+        self.release = false
+        self.argv = list[str]()
+        self.wants = list[str]()
+
+    # This step runs only after `other` has finished.
+    func needs(other: Step):
+        self.wants.append(other.step_name())
+
+    func step_name() -> str:
+        return self.name
+
+    # The step as a Json object — `emit`'s half, kept beside the
+    # fields it reads.
+    func described() -> json.Json:
+        var fields = map[str, json.Json]()
+        fields["name"] = json.Json.text(value = self.name)
+        fields["kind"] = json.Json.text(value = self.kind)
+        if self.kind == "luce":
+            fields["source"] = json.Json.text(value = self.source)
+            fields["emit"] = json.Json.text(value = self.emit_kind)
+            fields["output"] = json.Json.text(value = self.output)
+            fields["release"] = json.Json.boolean(value = self.release)
+        if self.kind == "command":
+            var argv = list[json.Json]()
+            for word in self.argv:
+                argv.append(json.Json.text(value = word))
+            fields["argv"] = json.Json.array(items = argv)
+        var wants = list[json.Json]()
+        for want in self.wants:
+            wants.append(json.Json.text(value = want))
+        fields["needs"] = json.Json.array(items = wants)
+        return json.Json.object(fields = fields)
+
+    private func fill(source: str, emit_kind: str, output: str, release: bool):
+        self.source = source
+        self.emit_kind = emit_kind
+        self.output = output
+        self.release = release
+
+    private func speak(argv: list[str]):
+        self.argv = argv
+
+# The plan under construction.  Construct one, declare steps, connect
+# them with `needs`, and `emit()` — the tool does the rest.
+#
+#     import std.build
+#
+#     func main():
+#         var b = build.Plan()
+#         let tool = b.command("tool", ["cc", "-o", "gen", "gen.c"])
+#         var app = b.program("app", "src/app.luc")
+#         app.needs(tool)
+#         b.emit()
+class Plan:
+    private:
+        steps: list[Step]
+        chosen: str
+
+    init():
+        self.steps = list[Step]()
+        self.chosen = ""
+
+    # A Luce source compiled to a standalone executable — `luce build
+    # SOURCE`, as a step.  `output` chooses the artifact's path;
+    # empty means the tool's default, the executable named after the
+    # source.  `release` strips source locations exactly as
+    # `--release` does.
+    func program(name: str, source: str, output: str = "", release: bool = false) -> Step:
+        var step = self.claim(name, "luce")
+        step.fill(source, "exe", output, release)
+        return step
+
+    # The same compile, emitting the `.lc` library loom loads.
+    func library(name: str, source: str, output: str = "", release: bool = false) -> Step:
+        var step = self.claim(name, "luce")
+        step.fill(source, "library", output, release)
+        return step
+
+    # The same compile, emitting a relocatable object.
+    func object(name: str, source: str, output: str = "", release: bool = false) -> Step:
+        var step = self.claim(name, "luce")
+        step.fill(source, "object", output, release)
+        return step
+
+    # One host command, run in the project root — a C compiler, a
+    # code generator.  The tool runs it as given: no shell, no
+    # splitting, the argv is the argv.
+    func command(name: str, argv: list[str]) -> Step:
+        var step = self.claim(name, "command")
+        step.speak(argv)
+        return step
+
+    # The step a bare `luce build` builds.  Without a choice, a plan
+    # with exactly one step builds it, and a plan with several refuses
+    # and names them.
+    func default(step: Step):
+        self.chosen = step.step_name()
+
+    # Print the plan, one JSON document on standard output.  The last
+    # thing a build script does.
+    func emit():
+        var fields = map[str, json.Json]()
+        fields["plan"] = json.Json.integer(value = 1)
+        fields["default"] = json.Json.text(value = self.chosen)
+        var steps = list[json.Json]()
+        for step in self.steps:
+            steps.append(step.described())
+        fields["steps"] = json.Json.array(items = steps)
+        print(json.Json.object(fields = fields).write())
+
+    # Every step enters here: one name, one step, said once.
+    private func claim(name: str, kind: str) -> Step:
+        if len(name) == 0:
+            trap("a step needs a name")
+        for step in self.steps:
+            if step.step_name() == name:
+                trap("step " + name + " is declared twice")
+        var step = Step(name, kind)
+        self.steps.append(step)
+        return step

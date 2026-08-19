@@ -79,42 +79,45 @@ A registry — names without URLs, publishing, yanking, scopes — stays in
 PACKAGES.md's "not yet built" list; `url:` rows are the lock-file-honest
 subset that needs no server of ours.
 
-## Phase C — `std.build`: the compiled build script
+## Phase C — `std.build`: the compiled build script (**landed, v1**)
 
 For projects that need more than "compile my entry file" — generated
-sources, C/Zig objects, linking against system libraries — a project may
-hold a `build.luc` beside its `luce.yaml`. The Zig model, deliberately:
+sources, C/Zig helpers, several artifacts — a project holds a
+`build.luc` beside its `luce.yaml`. The Zig model, deliberately:
 
-- **The script is a program.** `luce build` compiles `build.luc` (through
-  the ordinary compile cache, so an unchanged script costs one hash) and
-  runs it. It is ordinary Luce: it can read files, branch on `os`
-  facts, and fail with ordinary errors.
-- **The script declares; the tool executes.** Running the script
-  produces a *plan* — a graph of steps — which the `luce` binary then
-  executes with its own scheduler. The script never spawns the compiler
-  itself: separating declaration from execution is what makes the graph
-  cacheable, parallelizable (workers + `channel[T]`), and honest in
-  `--dry-run`.
-- **`std.build` is the vocabulary** the script uses to build that plan:
-  a `Build` class handed to the script's entry function; step
-  constructors for compiling a Luce program (`b.program(...)`), a C
-  or Zig object (`b.object(...)`), linking objects into an artifact the
-  Luce program links against; dependency edges between steps; install
-  targets. The plan crosses back to the tool as data (the runtime/host
-  seam it crosses is a Phase C design decision to settle first —
-  the candidates are a JSON plan on the script's stdout, or plan
-  intrinsics — and the choice belongs with the effect-lock rules).
+- **The script is a program.** A bare `luce build` compiles `build.luc`
+  through the ordinary compile cache (the executable and its source-hash
+  stamp live under `.luce/cache/`, so an unchanged script costs one
+  hash), runs it in the project root, and reads what it prints.
+- **The script declares; the tool executes.** The seam is **one JSON
+  document on standard output**, versioned by its `plan` field.
+  `std.build` is a *pure Luce* module — `Plan` collects steps,
+  `Step.needs` connects them, `emit()` prints — so the compiler
+  pipeline never learns what a build is: no ABI slot, no intrinsic, no
+  MIR movement. The plan is inspectable by eye, by a spec, or by any
+  other tool, which is what separating declaration from execution buys.
+- **Two step kinds, each a whole world.** A `luce` step is one source
+  compiled to one artifact by the tool itself (`exe`, `library`, or
+  `object`, with `output` and `release`); a `command` step is one host
+  command run in the project root, argv as given — no shell, no
+  splitting — which is how a C compiler or a code generator joins the
+  graph. Only the chosen step's dependency closure runs, in postorder;
+  a cycle, a missing edge, or a failing step stops the plan and names
+  itself.
 - With both `main:` and `build.luc` present, `build.luc` governs; the
-  simple manifest key is the no-script fast path, not a second system.
+  manifest key is the no-script fast path, not a second system. A
+  scripted build takes no options — the script decides everything.
 
-C/C++/Zig compilation shells out to the host toolchain (`LUCE_CC`, the
-driver the test suite already uses), each step's command and inputs
-recorded in the plan so caching can key on them.
+Still ahead, in this order when a customer arrives: parallel step
+execution (workers and `channel[T]` are ready for it), step-level
+caching keyed on content (never on stamps), and linking foreign objects
+into a Luce artifact — which waits on a C FFI design, because a linked
+symbol nothing can call is dead weight.
 
 ## Order and non-goals
 
-A → B → C, each phase landing green with specs and docs before the next
-starts. Non-goals throughout: a registry protocol, version ranges and a
+A → B → C each landed green with specs and docs before the next
+started. Non-goals throughout: a registry protocol, version ranges and a
 solver, build-time network access from `build.luc` (the script reads the
 tree it is in; `install` is the only fetcher), and any interpreter path
 for build scripts — one engine, everywhere.

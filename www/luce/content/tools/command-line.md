@@ -91,12 +91,14 @@ package registry or upload protocol is configured yet.
 `build` accepts a `.luc` source file, a `.lcm` intermediate module, or `-`
 for standard input. Standard input needs `-o` because there is no source
 name from which to derive an output path. With no file at all, `build`
-compiles the project's entry program: the `luce.yaml` governing the working
-directory names it with an optional top-level `main:` key
-(`main: src/atlas.luc`), and the bare form expands to exactly the file
-form, options unchanged. Without a governing manifest, or with a manifest
-that names no `main:`, the bare form refuses and says which of the two to
-add. `check` type-checks without
+builds the project. A `build.luc` beside the governing `luce.yaml` runs as
+the project's build script: it is compiled through the ordinary cache, run
+in the project root, and the plan it declares executes in dependency order
+— see [std.build](/library/build/). Without a script, the manifest's
+optional top-level `main:` key (`main: src/atlas.luc`) names the entry
+program and the bare form expands to exactly the file form, options
+unchanged. Without a governing manifest, or with neither `build.luc` nor
+`main:`, the bare form refuses and says what to add. `check` type-checks without
 writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
 described in [Testing](/tools/testing/).

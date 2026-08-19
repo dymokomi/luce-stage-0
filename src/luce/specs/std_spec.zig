@@ -1108,6 +1108,47 @@ test "files: kind answers each member, and none for a name nothing holds" {
     try testing.expectEqualStrings("file\ndirectory\nother\nnothing\n", session.printed());
 }
 
+test "build: a plan emits its steps as one JSON document, edges and all" {
+    // The JSON is the whole contract between a build script and the
+    // tool (docs/BUILD.md phase C), so the exact bytes are the claim —
+    // insertion order in objects, step order as declared, edges by
+    // name.
+    try agree.prints(
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    let tool = b.command("tool", ["cc", "-o", "gen", "gen.c"])
+        \\    var app = b.program("app", "src/app.luc", release = true)
+        \\    app.needs(tool)
+        \\    var shipped = b.library("shipped", "src/app.luc", output = "out/app.lc")
+        \\    shipped.needs(app)
+        \\    b.default(app)
+        \\    b.emit()
+        \\
+    ,
+        \\{"plan":1,"default":"app","steps":[{"name":"tool","kind":"command","argv":["cc","-o","gen","gen.c"],"needs":[]},{"name":"app","kind":"luce","source":"src/app.luc","emit":"exe","output":"","release":true,"needs":["tool"]},{"name":"shipped","kind":"luce","source":"src/app.luc","emit":"library","output":"out/app.lc","release":false,"needs":["app"]}]}
+        \\
+    );
+}
+
+test "build: a step declared twice traps in the script, where the author is" {
+    var session = try agree.compare(
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    let one = b.command("tool", ["true"])
+        \\    var two = b.command("tool", ["true"])
+        \\    two.needs(one)
+        \\    b.emit()
+        \\
+    , budget);
+    defer session.deinit();
+    try testing.expectEqual(luce.mir.TrapCode.explicit_trap, session.end.trapped);
+    try testing.expectEqualStrings("step tool is declared twice", session.message());
+}
+
 test "files: size and modified are the two stat facts, and a directory has no size" {
     try agree.printsGiven(
         \\import std.files

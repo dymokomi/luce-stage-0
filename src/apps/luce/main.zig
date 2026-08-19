@@ -51,6 +51,7 @@ const native = @import("native");
 const discover = @import("discover.zig");
 const object = @import("object.zig");
 const front = @import("front.zig");
+const plan = @import("plan.zig");
 const streams = @import("streams");
 const suite = @import("suite.zig");
 const package = @import("package");
@@ -159,6 +160,28 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
                 ),
                 .refused => |reason| return refuse(err, "{s}", .{reason}),
                 .governed => |governed| chosen: {
+                    // A build.luc beside the manifest governs the bare
+                    // form (docs/BUILD.md phase C); the `main:` key is
+                    // the no-script fast path, not a second system.
+                    const script = try std.fs.path.join(
+                        arena_state.allocator(),
+                        &.{ governed.root, plan.script_name },
+                    );
+                    const scripted = if (std.Io.Dir.cwd().statFile(io, script, .{})) |told|
+                        told.kind == .file
+                    else |_|
+                        false;
+                    if (scripted) {
+                        if (arguments.len > 2) return refuse(
+                            err,
+                            "a scripted build takes no options; {s} decides everything",
+                            .{plan.script_name},
+                        );
+                        return plan.run(gpa, io, out, err, governed.root, .{
+                            .library_path = library_path,
+                            .driver = environment.get("LUCE_CC"),
+                        });
+                    }
                     const entry = governed.manifest.main orelse return refuse(
                         err,
                         "{s}/luce.yaml names no main:; add one (main: src/NAME.luc) or name a file — luce build FILE",

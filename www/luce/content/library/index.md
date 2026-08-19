@@ -38,6 +38,7 @@ fact at their boundary rather than making every application know the OS API.
 | [`std.network`](/library/network/) | TCP connections and listeners |
 | [`std.http`](/library/http/) | the HTTP/1.1 client |
 | [`std.ui`](/library/ui/) | windows and their drawing surfaces |
+| [`std.build`](/library/build/) | the plan a project's build.luc declares |
 
 Import only what a module needs. A module's public functions are documented
 on its page with signatures and examples; implementation helpers remain

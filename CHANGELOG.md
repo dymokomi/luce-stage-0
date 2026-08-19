@@ -6,6 +6,16 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The build system completes its first shape: a `build.luc` beside
+  `luce.yaml` is the project's build script — an ordinary compiled
+  Luce program that declares a plan with the new pure-Luce `std.build`
+  (`Plan`, steps for Luce artifacts and host commands, `needs` edges,
+  `emit()` printing one versioned JSON document) — and a bare
+  `luce build` compiles the script through the ordinary cache, runs
+  it in the project root, and executes the chosen step's closure in
+  dependency order.  The compiler pipeline never learns what a build
+  is: no ABI slot, no intrinsic, no MIR movement.
+
 - `luce install` fills the package store from the manifest alone: a
   `packages:` row may carry `url:` beside its exact version, a fetched
   row must carry `sha256:` — the same tree hash the resolver already
