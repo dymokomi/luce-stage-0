@@ -1121,15 +1121,49 @@ test "build: a plan emits its steps as one JSON document, edges and all" {
         \\    let tool = b.command("tool", ["cc", "-o", "gen", "gen.c"])
         \\    var app = b.program("app", "src/app.luc", release = true)
         \\    app.needs(tool)
+        \\    app.link("gen.o")
+        \\    app.link("-lm")
         \\    var shipped = b.library("shipped", "src/app.luc", output = "out/app.lc")
         \\    shipped.needs(app)
         \\    b.default(app)
         \\    b.emit()
         \\
     ,
-        \\{"plan":1,"default":"app","steps":[{"name":"tool","kind":"command","argv":["cc","-o","gen","gen.c"],"needs":[]},{"name":"app","kind":"luce","source":"src/app.luc","emit":"exe","output":"","release":true,"needs":["tool"]},{"name":"shipped","kind":"luce","source":"src/app.luc","emit":"library","output":"out/app.lc","release":false,"needs":["app"]}]}
+        \\{"plan":1,"default":"app","steps":[{"name":"tool","kind":"command","argv":["cc","-o","gen","gen.c"],"needs":[]},{"name":"app","kind":"luce","source":"src/app.luc","emit":"exe","output":"","release":true,"links":["gen.o","-lm"],"needs":["tool"]},{"name":"shipped","kind":"luce","source":"src/app.luc","emit":"library","output":"out/app.lc","release":false,"links":[],"needs":["app"]}]}
         \\
     );
+}
+
+test "build: only a program or a library step has a native link" {
+    // A command step runs and an object step stops before linking, so
+    // `link` refuses both in the script, where the author is.
+    var session = try agree.compare(
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    var tool = b.command("tool", ["true"])
+        \\    tool.link("gen.o")
+        \\    b.emit()
+        \\
+    , budget);
+    defer session.deinit();
+    try testing.expectEqual(luce.mir.TrapCode.explicit_trap, session.end.trapped);
+    try testing.expectEqualStrings("step tool has no native link", session.message());
+
+    var stopped = try agree.compare(
+        \\import std.build
+        \\
+        \\func main():
+        \\    var b = build.Plan()
+        \\    var half = b.object("half", "src/app.luc")
+        \\    half.link("gen.o")
+        \\    b.emit()
+        \\
+    , budget);
+    defer stopped.deinit();
+    try testing.expectEqual(luce.mir.TrapCode.explicit_trap, stopped.end.trapped);
+    try testing.expectEqualStrings("step half has no native link", stopped.message());
 }
 
 test "build: a step declared twice traps in the script, where the author is" {

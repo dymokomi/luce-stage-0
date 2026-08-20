@@ -6,6 +6,17 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- A plan's step learns to link: `app.link("gen.o")` on a
+  `std.build` program or library step carries an object, an
+  archive, or a `-lNAME` request into that step's native link,
+  exactly as `luce build --link` spells it — so a command step can
+  compile C and the program step can call it through an extern.  A
+  command step runs and an object step stops before linking, so
+  `link` refuses both in the script, and the executor refuses an
+  object step whose hand-forged plan carries links anyway.  Link
+  inputs are the project's names like source and output; `-l`
+  requests and absolute paths pass through as spoken.
+
 - `std.c` opens the scoped buffer door: `c.with_bytes(buffer, body)`
   hands `body` the address of a `list[u8]`'s bytes as a `foreign`
   token for exactly one call (`with_bytes_foreign` for a callee that

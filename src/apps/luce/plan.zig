@@ -42,6 +42,7 @@ const Step = struct {
     emit: native.Kind = .executable,
     output: []const u8 = "",
     release: bool = false,
+    links: []const []const u8 = &.{},
     argv: []const []const u8 = &.{},
     needs: []const []const u8 = &.{},
     /// The DFS marks: 0 untouched, 1 on the path (a repeat is a
@@ -225,6 +226,18 @@ fn readPlan(arena: Allocator, err: *std.Io.Writer, spoken: []const u8) !?Plan {
                 return sayNot(err, "a luce step's emit is not one of exe, library, object");
             step.output = textOf(fields.get("output")) orelse "";
             step.release = if (fields.get("release")) |held| held == .bool and held.bool else false;
+            if (fields.get("links")) |carried| {
+                const inputs = arrayOf(carried) orelse
+                    return sayNot(err, "a luce step's links are not an array");
+                const words = try arena.alloc([]const u8, inputs.items.len);
+                for (inputs.items, 0..) |input, at| {
+                    words[at] = textOf(input) orelse
+                        return sayNot(err, "a luce step's links hold a value that is not text");
+                }
+                step.links = words;
+            }
+            if (step.emit == .object and step.links.len != 0)
+                return sayNot(err, "an object step has no native link");
         } else if (std.mem.eql(u8, kind, "command")) {
             step.kind = .command;
             const argv = arrayOf(fields.get("argv")) orelse
@@ -394,10 +407,21 @@ fn compileStep(
     };
     const target = try std.fs.path.join(arena, &.{ root, spoken });
 
+    // Link inputs are the project's names, like source and output; a
+    // `-lNAME` request and an absolute path pass through as spoken.
+    const links = try arena.alloc([]const u8, step.links.len);
+    for (step.links, 0..) |input, at| {
+        links[at] = if (std.mem.startsWith(u8, input, "-") or std.fs.path.isAbsolute(input))
+            input
+        else
+            try std.fs.path.join(arena, &.{ root, input });
+    }
+
     switch (try object.build(gpa, io, &tools, &program, .{
         .kind = step.emit,
         .output = target,
         .source_hash = source_hash,
+        .links = links,
     })) {
         .written => {},
         .unsupported => |what| {

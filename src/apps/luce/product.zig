@@ -387,17 +387,33 @@ test "a build.luc plan runs its steps in dependency order and governs the bare b
         \\int main(void) { return 0; }
         \\
     );
-    try tree.write("src/app.luc", greeting);
-    // The tool step must finish before the app compiles — the order
-    // the output lines land in is the proof.
+    try tree.write("helper.c",
+        \\long luce_plan_probe(void) { return 7; }
+        \\
+    );
+    // The app resolves its extern from the object a command step
+    // built: a plan's `links` reach the native link, and an
+    // unresolved symbol would fail this build.
+    try tree.write("src/app.luc",
+        \\extern func luce_plan_probe() -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_plan_probe()))
+        \\
+    );
+    // The tool and helper steps must finish before the app compiles —
+    // the order the output lines land in is the proof.
     try tree.write("build.luc",
         \\import std.build
         \\
         \\func main():
         \\    var b = build.Plan()
         \\    let tool = b.command("tool", ["cc", "-o", "gen", "gen.c"])
+        \\    let helper = b.command("helper", ["cc", "-c", "-o", "helper.o", "helper.c"])
         \\    var app = b.program("app", "src/app.luc")
         \\    app.needs(tool)
+        \\    app.needs(helper)
+        \\    app.link("helper.o")
         \\    b.default(app)
         \\    b.emit()
         \\
@@ -407,7 +423,10 @@ test "a build.luc plan runs its steps in dependency order and governs the bare b
     defer ran.deinit(gpa);
     try testing.expectEqualStrings("", ran.err);
     try testing.expectEqual(@as(u8, 0), ran.status);
-    try testing.expectEqualStrings("tool: ran cc\napp: src/app.luc -> src/app\n", ran.out);
+    try testing.expectEqualStrings(
+        "tool: ran cc\nhelper: ran cc\napp: src/app.luc -> src/app\n",
+        ran.out,
+    );
     try testing.expect(tree.exists("gen"));
     try testing.expect(tree.exists("src/app"));
     // The compiled script is cached under the project, keyed by hash.
@@ -419,7 +438,10 @@ test "a build.luc plan runs its steps in dependency order and governs the bare b
     defer again.deinit(gpa);
     try testing.expectEqualStrings("", again.err);
     try testing.expectEqual(@as(u8, 0), again.status);
-    try testing.expectEqualStrings("tool: ran cc\napp: src/app.luc -> src/app\n", again.out);
+    try testing.expectEqualStrings(
+        "tool: ran cc\nhelper: ran cc\napp: src/app.luc -> src/app\n",
+        again.out,
+    );
 
     // A scripted build takes no options: the script decides everything.
     var optioned = try runLuceHere(gpa, &tree, &.{ "build", "--release" });

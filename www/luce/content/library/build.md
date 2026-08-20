@@ -41,6 +41,7 @@ one method and one question:
 | Method | Meaning |
 |---|---|
 | `needs(other)` | this step runs only after `other` has finished |
+| `link(input: str)` | the native link also carries `input` — an object, an archive, or a `-lNAME` request, as `luce build --link` spells it; only a program or library step links |
 | `step_name() -> str` | the name the step was declared under |
 
 ## A whole build script
@@ -58,7 +59,7 @@ func main():
 ```
 
 ```output
-{"plan":1,"default":"app","steps":[{"name":"tool","kind":"command","argv":["cc","-o","gen","gen.c"],"needs":[]},{"name":"app","kind":"luce","source":"src/app.luc","emit":"exe","output":"","release":false,"needs":["tool"]}]}
+{"plan":1,"default":"app","steps":[{"name":"tool","kind":"command","argv":["cc","-o","gen","gen.c"],"needs":[]},{"name":"app","kind":"luce","source":"src/app.luc","emit":"exe","output":"","release":false,"links":[],"needs":["tool"]}]}
 ```
 
 Run under `luce build`, that plan compiles `gen.c` first and `src/app.luc`

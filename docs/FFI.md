@@ -1,7 +1,8 @@
 # Tier-1 FFI — extern declarations over the C ABI (design draft)
 
-**Status: the core and `--link` are landed (2026-08-20); the scoped
-buffer forms and the build-plan `links` field remain planned.**  The
+**Status: landed (2026-08-20) — the core, `--link`, the scoped
+buffer forms (`std.c` over the std-only `Builtin.buffer_address`),
+and the build-plan `link` step method.**  The
 four open details were ruled under the Zig tiebreaker: the spellings
 below stand; `str` never crosses implicitly (the scoped buffer forms
 are the road); extern parameters take no defaults; symbols resolve at

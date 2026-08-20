@@ -31,6 +31,7 @@ class Step:
         output: str
         release: bool
         argv: list[str]
+        carried: list[str]
         wants: list[str]
 
     init(name: str, kind: str):
@@ -41,11 +42,22 @@ class Step:
         self.output = ""
         self.release = false
         self.argv = list[str]()
+        self.carried = list[str]()
         self.wants = list[str]()
 
     # This step runs only after `other` has finished.
     func needs(other: Step):
         self.wants.append(other.step_name())
+
+    # This step's native link also carries `input` — an object, an
+    # archive, or a `-lNAME` request, exactly as `luce build --link`
+    # spells it.  Only a program or a library step runs a native
+    # link: a command step runs, and an object step stops before
+    # linking, so both refuse here, where the author is.
+    func link(input: str):
+        if self.kind != "luce" or self.emit_kind == "object":
+            trap("step " + self.name + " has no native link")
+        self.carried.append(input)
 
     func step_name() -> str:
         return self.name
@@ -61,6 +73,10 @@ class Step:
             fields["emit"] = json.Json.text(value = self.emit_kind)
             fields["output"] = json.Json.text(value = self.output)
             fields["release"] = json.Json.boolean(value = self.release)
+            var links = list[json.Json]()
+            for input in self.carried:
+                links.append(json.Json.text(value = input))
+            fields["links"] = json.Json.array(items = links)
         if self.kind == "command":
             var argv = list[json.Json]()
             for word in self.argv:
