@@ -35,6 +35,18 @@ from work that is still design. The [Tour](/tour/), [Guide](/guide/), and
 - Isolated workers. Permitted values and container graphs are copied into a
   private runtime while preserving aliases inside the snapshot. Object
   identity is never shared between workers.
+- Bounded `channel[T]` conduits between workers — the one reference a worker
+  boundary admits. Send parks a deep copy and receive rebuilds it, so no
+  identity crosses; blocking, try, and timed forms; close is idempotent and
+  drains before it refuses. Element sendability is checked where the channel
+  is written.
+- Selective imports: `from geo import Point, area` binds named public members
+  bare, with a per-member `as` rename.
+- `match` over integer, character, string, and boolean values with literal,
+  multi-value, range, and constant arms, beside the enumeration and union
+  dispatch it always had.
+- Construction is an ordinary call for every kind of value — `Point(x = 1)`,
+  `Counter()`, `list[i64]()`. There is no `new` keyword.
 
 There is no source-level retain, release, give, copy, free, move, clone, or
 borrow operation. Every successful differential language specification must
@@ -44,10 +56,13 @@ trap or be rejected without a host-language panic.
 ### Toolchain and libraries
 
 `luce build FILE.luc` creates a native executable named after the source by
-default. `luce check`, `luce ir`, and `luce test` provide focused development
-workflows. `loom` loads a compiled `.lc` library when that artifact form is
-useful. The release also contains the terminal editor and a local VS Code or
-Cursor extension. One checked installer publishes that toolchain for macOS 15
+default; a bare `luce build` under a project builds the manifest's `main:` or
+runs the project's compiled `build.luc` plan. `luce install` fills the package
+store from the manifest's own `url:` + `sha256:` rows. `luce check`,
+`luce ir`, `luce query diagnostics`, and `luce test` provide focused
+development workflows. `loom` loads a compiled `.lc` library when that
+artifact form is useful. The release also contains the terminal editor, the
+`luce-lsp` language server, and a local VS Code or Cursor extension. One checked installer publishes that toolchain for macOS 15
 or newer on ARM64 and glibc Linux 2.28+ on ARM64 and x86-64; the compiler
 contains its pinned LLVM and uses the host `cc` only for the final native link.
 `luce --build-info` and `loom --build-info` report the archive's immutable
@@ -56,14 +71,15 @@ Each archive also carries a `BUILD-MANIFEST` with its source timestamp,
 toolchain and bundled-package versions, and reproducible archive format. The
 published SHA-256 file names the exact bytes the installer verifies.
 
-The embedded standard library includes `std.math`, `std.files`,
+The embedded standard library includes `std.io`, `std.math`, `std.files`,
 `std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,
-`std.json`, `std.gpu`, and `std.ui`. The maintained TermUI 0.3 package provides
+`std.json`, `std.gpu`, `std.ui`, `std.network`, `std.http`, and `std.build`.
+The maintained TermUI 0.5 package provides
 declarative terminal applications from panels, stacks, labels, rows, styles,
 events, and one library-owned application loop. The shipped editor uses that
 public surface.
 
-The current serialized-module format is 56 and the host ABI is 24. Loaders
+The current serialized-module format is 64 and the host ABI is 30. Loaders
 refuse incompatible artifacts rather than guessing.
 
 ## The memory model
@@ -78,7 +94,7 @@ The language is organized around one sentence:
 |---|---|---|
 | Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions | copy the value |
 | Reference | classes, lists, maps, arrays, builders, closure environments | retain and share one identity |
-| Resource reference | files, tasks, windows, GPU surfaces | retain and share; clean up at zero |
+| Resource reference | files, sockets, processes, tasks, channels, windows, GPU surfaces | retain and share; clean up at zero |
 
 An interface owns one concrete payload and a static witness identity: a
 structure conformance copies its value and a class conformance retains shared
@@ -104,6 +120,7 @@ bytes
 list[T]
 map[K, V]
 array[T, _, ...]
+channel[T]
 func(T, ...) -> R
 T?
 ```

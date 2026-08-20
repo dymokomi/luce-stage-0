@@ -86,10 +86,12 @@ There is one shipping engine: LLVM-generated machine code linked with
 used by the specification suite. There is no JIT, bytecode VM, handwritten
 emitter, or runtime fallback.
 
-The serialized MIR module format is **57**. The published host ABI is **24**.
-The declarations in `src/luce/mir/module.zig` and
-`src/luce/codegen/abi.zig` are authoritative; never copy the numbers into a
-new compatibility check.
+The serialized MIR module format and the published host ABI are numbers this
+file deliberately does not state: the declarations in
+`src/luce/mir/module.zig` and `src/luce/codegen/abi.zig` are authoritative,
+and every restatement elsewhere has eventually gone stale. Never copy the
+numbers into a new compatibility check or a document that is not rebuilt
+from source.
 
 Luce is pre-1.0 and has no source-compatibility contract. Rename, remove, or
 reshape a feature when that makes the language better; update the whole tree

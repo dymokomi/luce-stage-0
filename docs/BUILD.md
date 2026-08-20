@@ -1,10 +1,13 @@
 # The build system — bare `luce build`, `luce install`, and `std.build`
 
-**Status: plan.** Ratified direction (owner, 2026-08-19): one build
-system, no second engine — a `build.luc` is **compiled and run**, cached
-like any program, never interpreted. This document records the design
-and its phases; nothing here is current reference until it lands and
-moves to [PACKAGES.md](PACKAGES.md) or the Guide.
+**Status: landed; only the named follow-ups remain planned.** All three
+phases below shipped 2026-08-19 (bare `luce build`, `luce install`,
+`std.build`); the user-facing reference now lives in
+[PACKAGES.md](PACKAGES.md), the Library's `std.build` page, and the
+site's command-line page. This document keeps the design reasoning and
+the explicitly deferred follow-ups (parallel steps, content-keyed step
+caching, foreign-object linking behind the FFI design in
+[SELFHOST.md](SELFHOST.md)).
 
 The foundations this stands on are already real: the `luce.yaml`
 manifest with an exact-version want list, the `.luce/packages/` store and
