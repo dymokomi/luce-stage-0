@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 66;
+pub const format_version: u32 = 67;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2304,8 +2304,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 65 -> 66: the FFI arrives (docs/FFI.md): the `foreign` value
     // type joins the wire vocabulary, beside the foreign-function
     // table and its call instruction.
-    try testing.expectEqual(@as(u32, 66), format_version);
-    try testing.expectEqual(@as(u64, 7050559972352879869), hasher.final());
+    // 66 -> 67: `buffer_address` joins — the scoped buffer form's
+    // std-only half.
+    try testing.expectEqual(@as(u32, 67), format_version);
+    try testing.expectEqual(@as(u64, 9000776896423692061), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

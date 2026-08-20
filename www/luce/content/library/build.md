@@ -45,7 +45,7 @@ one method and one question:
 
 ## A whole build script
 
-```luce
+```luce run
 import std.build
 
 func main():

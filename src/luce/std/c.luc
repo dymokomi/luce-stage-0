@@ -1,0 +1,37 @@
+# c — the C boundary's helpers (docs/FFI.md).
+#
+# An extern speaks scalars and opaque tokens; this module is the safe
+# spelling of the two things a program otherwise cannot say: hand a
+# callee the address of some bytes, and hand it text the way C expects
+# text.  The address exists only inside the scope `with_bytes` opens —
+# the buffer is the scope's parameter, so ARC pins it for exactly that
+# long, and a token that escapes the scope is dangling by contract:
+# the docs say so, and Tier 2's borrow rules are a separate design.
+
+import std.strings
+
+# The buffer's address, handed to `body` as a foreign token beside
+# nothing — the callee learns the count some other way, because C
+# does.  Answers whatever `body` answers.
+#
+#     let total = c.with_bytes(data, (p) -> sum_bytes(p, u64(len(data))))
+#
+# The token must not outlive the call, and the buffer must not grow,
+# shrink, or die while it lives.
+func with_bytes(buffer: list[u8], body: func(foreign) -> i64) -> i64:
+    return body(Builtin.buffer_address(buffer))
+
+# The same scope for a callee that answers a token — a constructor
+# taking a name, a parser taking bytes.
+func with_bytes_foreign(buffer: list[u8], body: func(foreign) -> foreign) -> foreign:
+    return body(Builtin.buffer_address(buffer))
+
+# Text the way C expects it: the UTF-8 bytes with one terminating
+# zero.  The list is ordinary and its address is `with_bytes`'s to
+# hand over.
+func zstring(text: str) -> list[u8]:
+    var held = list[u8]()
+    for b in strings.to_bytes(text):
+        held.append(b)
+    held.append(0)
+    return held

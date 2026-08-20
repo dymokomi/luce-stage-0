@@ -217,6 +217,7 @@ pub const Service = enum {
     luce_rt_list_slice,
     luce_rt_append,
     luce_rt_list_extend,
+    luce_rt_buffer_address,
     luce_rt_append_ascii,
     luce_rt_pop,
     luce_rt_insert,
@@ -1027,6 +1028,10 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .run, .value_in, .plain },
         },
         .luce_rt_pop => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_buffer_address => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
         },

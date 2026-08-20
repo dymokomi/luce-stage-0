@@ -119,6 +119,14 @@ export fn luce_ffi_probe_pi() callconv(.c) f64 {
     return 3.5;
 }
 
+export fn luce_ffi_probe_sum_bytes(at: u64, count: u64) callconv(.c) i64 {
+    if (at == 0 or count == 0) return 0;
+    const bytes: [*]const u8 = @ptrFromInt(at);
+    var total: i64 = 0;
+    for (bytes[0..count]) |b| total += b;
+    return total;
+}
+
 test "the shim resolves and calls through every return kind" {
     const add = resolve("luce_ffi_probe_add") orelse return error.TestUnexpectedResult;
     const summed = call(add, &.{ @bitCast(@as(i64, 40)), @bitCast(@as(i64, 2)) }, .integer);

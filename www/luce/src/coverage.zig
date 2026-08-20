@@ -915,6 +915,11 @@ test "each std page names every function and constant its module exports" {
         defer names.deinit();
         try expectDocumented(repository, "library/build.md", names, &.{});
     }
+    {
+        var names = try standardModule(repository, "c");
+        defer names.deinit();
+        try expectDocumented(repository, "library/c.md", names, &.{});
+    }
 }
 
 test "the reference keeps function value and lambda syntax visible" {

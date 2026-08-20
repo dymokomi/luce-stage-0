@@ -1986,6 +1986,9 @@ pub const Machine = struct {
                 try containers.extend(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
                 return .none;
             },
+            .buffer_address => {
+                return containers.bufferAddress(&self.runtime, registers[arguments[0]]);
+            },
             .append_ascii => {
                 try containers.appendAscii(
                     &self.runtime,

@@ -1774,6 +1774,12 @@ fn verifyIntrinsic(
             try expectType(arguments[1], .i64);
             try expectType(result, .none);
         },
+        .buffer_address => {
+            try exactly(arguments, 1);
+            const shape = try heapShape(program, arguments[0]);
+            if (shape != .list or shape.list != .u8) return error.BadIntrinsic;
+            try expectType(result, .foreign);
+        },
         // Both sides are lists of one element type; the whole answer
         // travels in the receiver.
         .extend_list => {

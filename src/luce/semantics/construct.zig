@@ -958,6 +958,18 @@ pub fn lowerIntrinsic(
         .channel_len,
         .channel_cap,
         => unreachable,
+        // The address of a list[u8]'s storage, as the opaque token
+        // (docs/FFI.md).  std-only through the `Builtin.` spelling;
+        // `std.c.with_bytes` is the public door.
+        .buffer_address => {
+            const takes_bytes = blk: {
+                if (arguments[0].value_type != .heap) break :blk false;
+                const shape = self.analyzer.heap_types.items[arguments[0].value_type.heap];
+                break :blk shape == .list and shape.list == .u8;
+            };
+            if (!takes_bytes) return failIntrinsic(self, call, "buffer_address takes a list[u8]");
+            result = .foreign;
+        },
         .abs => {
             if (!arguments[0].value_type.isNumeric()) return failIntrinsic(self, call, "abs takes a number");
             result = arguments[0].value_type;

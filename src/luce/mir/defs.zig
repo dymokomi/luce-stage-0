@@ -381,6 +381,13 @@ pub const Intrinsic = enum {
     /// source's length is read before the first append, so a list
     /// extended with itself gains exactly one round of itself.
     extend_list,
+    /// `Builtin.buffer_address(buffer)` — the address of a `list[u8]`'s
+    /// contiguous storage as a `foreign` token (docs/FFI.md).  A
+    /// std-only spelling: `std.c.with_bytes` is the public door, and
+    /// the scope's parameter is what pins the buffer while the token
+    /// lives.  The token dies with the scope by contract, not by
+    /// enforcement — Tier 2's borrow rules are a separate design.
+    buffer_address,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -537,6 +544,7 @@ pub const Intrinsic = enum {
             .channel_close,
             .channel_len,
             .channel_cap,
+            .buffer_address,
             .key_text,
             // The file runtime locks each host callback (see above).
             .file_read,
@@ -700,6 +708,7 @@ pub const Intrinsic = enum {
             .channel_close,
             .channel_len,
             .channel_cap,
+            .buffer_address,
             .abs,
             .min,
             .max,
@@ -836,6 +845,7 @@ pub const Intrinsic = enum {
             .channel_close,
             .channel_len,
             .channel_cap,
+            .buffer_address,
             .abs,
             .min,
             .max,
@@ -955,6 +965,7 @@ pub const Intrinsic = enum {
             .insert_value => 2,
 
             .extend_list,
+            .buffer_address,
             .abs,
             .min,
             .max,

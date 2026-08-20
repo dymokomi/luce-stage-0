@@ -7990,6 +7990,10 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
+            .buffer_address => try self.callAnswering(register, .luce_rt_buffer_address, &.{
+                rt,
+                try self.boxedRegister(of[0], "buffer"),
+            }),
             .insert_value => try self.callChecked(.luce_rt_insert, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),

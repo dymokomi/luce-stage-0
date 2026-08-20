@@ -244,6 +244,19 @@ pub fn extend(runtime: *Runtime, target: Value, source: Value) Error!void {
     }
 }
 
+/// `Builtin.buffer_address(buffer)` — the address of a `list[u8]`'s
+/// contiguous storage, as the opaque token (docs/FFI.md).  An empty
+/// list answers the null token: there is nothing to point at, and a
+/// callee given count zero must not read anyway.  The token is valid
+/// until the list grows, shrinks, or dies — the scoped `with_bytes`
+/// form is what keeps callers inside that window.
+pub fn bufferAddress(runtime: *Runtime, target: Value) Error!Value {
+    const object = try runtime.resolve(target);
+    if (object.data != .list) return runtime.fail(.not_owned);
+    if (object.elements.count == 0) return Value.ofI64(0);
+    return Value.ofI64(@bitCast(@as(u64, @intFromPtr(object.elements.bytes.ptr))));
+}
+
 /// `b.append_ascii(code)`.  ASCII only: the builder's bytes become a
 /// str, and str is valid UTF-8. Anything wider goes through
 /// chr(), which encodes the codepoint.

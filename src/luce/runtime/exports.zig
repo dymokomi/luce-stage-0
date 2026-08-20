@@ -1983,6 +1983,18 @@ pub export fn luce_rt_list_extend(
     return completed(runtime);
 }
 
+pub export fn luce_rt_buffer_address(
+    runtime: *Runtime,
+    target: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
+    out.* = containers.bufferAddress(runtime, target.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
 pub export fn luce_rt_append_ascii(
     runtime: *Runtime,
     target: [*c]const Value,

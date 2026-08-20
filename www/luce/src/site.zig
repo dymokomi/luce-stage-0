@@ -127,6 +127,8 @@ pub const sections = [_]Section{
             .{ .slug = "ui", .title = "std.ui", .part = "Standard Library", .blurb = "Windows and their drawing surfaces, before a higher-level UI package exists." },
             .{ .slug = "network", .title = "std.network", .part = "Standard Library", .blurb = "TCP connections and listeners: dial a host, open a door, move bytes." },
             .{ .slug = "http", .title = "std.http", .part = "Standard Library", .blurb = "The HTTP/1.1 client, in pure Luce: fetch a page, read the answer, and a status code is data." },
+            .{ .slug = "build", .title = "std.build", .part = "Standard Library", .blurb = "The plan a build.luc declares: programs, libraries, objects, commands, and the edges between them." },
+            .{ .slug = "c", .title = "std.c", .part = "Standard Library", .blurb = "The C boundary's helpers: a buffer's address for the span of one call, and NUL-terminated text." },
             .{ .slug = "termui", .title = "termui", .part = "Maintained Packages", .source = "library/termui.md", .blurb = "Declarative terminal applications built from stacks, panels, rows, events, and one hidden lifecycle." },
         },
     },

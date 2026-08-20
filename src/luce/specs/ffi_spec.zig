@@ -95,3 +95,26 @@ test "the extern declaration's refusals keep the C shape the whole truth" {
         \\
     , "luce.sema.extern");
 }
+
+test "the scoped buffer form hands real memory across and back" {
+    // `zstring` builds the NUL-terminated bytes, `with_bytes` pins
+    // them for the scope and hands over the address, and the C side
+    // reads the actual memory: 'A' + 'B' + 0 = 131 on both engines.
+    try agree.prints(
+        \\import std.c
+        \\
+        \\extern func luce_ffi_probe_sum_bytes(at: foreign, count: u64) -> i64
+        \\
+        \\func main():
+        \\    var data = c.zstring("AB")
+        \\    let total = c.with_bytes(data, (p) -> luce_ffi_probe_sum_bytes(p, 3))
+        \\    print(str(total))
+        \\    var empty = list[u8]()
+        \\    print(str(c.with_bytes(empty, (p) -> luce_ffi_probe_sum_bytes(p, 0))))
+        \\
+    ,
+        \\131
+        \\0
+        \\
+    );
+}

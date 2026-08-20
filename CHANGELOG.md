@@ -6,6 +6,18 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- `std.c` opens the scoped buffer door: `c.with_bytes(buffer, body)`
+  hands `body` the address of a `list[u8]`'s bytes as a `foreign`
+  token for exactly one call (`with_bytes_foreign` for a callee that
+  answers a token), and `c.zstring(text)` builds the NUL-terminated
+  bytes C expects for text.  Underneath is one new std-only
+  intrinsic, `Builtin.buffer_address`, carried by a `buffer_address`
+  MIR instruction the verifier types as `list[u8] -> foreign` and
+  both engines answer through the same runtime — an empty list hands
+  over the null token.  A token that escapes the scope is dangling
+  by contract; the guarantees still end at the boundary.
+  MIR 66 -> 67; the host ABI is untouched.
+
 - The FFI arrives (docs/FFI.md): `extern func name(a: i64) -> i64`
   declares a foreign function's C shape — no body, no defaults, no
   fallibility, at most eight parameters, every type a 32- or 64-bit

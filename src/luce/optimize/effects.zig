@@ -278,6 +278,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .list_slice,
         .append_value,
         .extend_list,
+        .buffer_address,
         .append_ascii,
         .pop_value,
         .insert_value,
@@ -448,6 +449,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .channel_close,
             .channel_len,
             .channel_cap,
+            .buffer_address,
             => false,
             // Scalars and text: no handle is resolved, nothing is
             // attached, nothing is freed.  `str` of a builder reads a
