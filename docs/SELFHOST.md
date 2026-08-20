@@ -7,6 +7,14 @@ by that compiler compiling itself and passing a differential against
 the Zig toolchain — which then retires, gradually, to two jobs: oracle
 and bootstrap seed. Nothing here is current reference until it lands.
 
+**The constitution (owner, 2026-08-20).** Where a design question has
+no Luce-internal answer, the tiebreakers are fixed: **Zig** for
+systems and explicitness questions, **Swift** for ARC and memory
+questions, **Python** for syntax feel — the best of Swift and Zig
+with Python-like syntax. The #24 rulings queue is resolved under this
+rule, and future questions default through it before they become
+deliberations.
+
 Four owner rulings shape this plan (2026-08-19):
 
 1. **Evidence-driven freeze scope.** The v2 front end starts in

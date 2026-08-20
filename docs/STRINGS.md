@@ -84,8 +84,12 @@ func main():
     assert(decoded == "hello")
 ```
 
-There is no byte-literal syntax. That can be added later if binary-heavy code
-shows a real need; the type and validation boundary do not depend on it.
+There is no dedicated byte-literal syntax, and the need it waited for
+arrived with a different answer (the self-host lexer probe, #24 item 13):
+character literals are contextual over integer widths, so `data[at] == '"'`
+and `c >= 'a'` over a `u8` are the spelling — the scalar lands as the
+integer when it fits (docs/TYPES.md). The type and validation boundary
+are unchanged.
 
 ## Rendering values
 

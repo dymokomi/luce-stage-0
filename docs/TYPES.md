@@ -75,6 +75,25 @@ func main():
 An out-of-range literal is rejected at compile time. A runtime conversion
 such as `u8(wide)` traps `conversion_range` when the value does not fit.
 
+Character literals are contextual on exactly the same terms: written
+into an integer place, `'a'` lands as that integer when its Unicode
+scalar fits — `c == '"'` over a `u8`, a `'0' .. '9'` match arm, a
+`const NEWLINE: u8 = '\n'` — and one that does not fit is rejected.
+With no integer context a character literal is a `char`, as it always
+was. Only literals are contextual; a runtime `char` still crosses to a
+number through no conversion, because a scalar is not a number a
+program computed.
+
+```luce
+func classify(c: u8) -> str:
+    if c >= 'a' and c <= 'z':
+        return "letter"
+    return "other"
+
+func main():
+    print(classify(98))
+```
+
 ## Explicit representation changes
 
 Concrete numeric types never widen or narrow implicitly. Literals take a

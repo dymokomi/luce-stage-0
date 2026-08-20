@@ -69,6 +69,59 @@ test "the complete Unicode scalar boundary converts and orders" {
     , "0\n55295\n57344\n1114111\ntrue\ntrue\n");
 }
 
+test "a character literal is contextual over integer widths, and stays char without one" {
+    // The #24 ruling under the constitution (Zig's 'a'-is-a-number,
+    // arrived at through Luce's own contextual-literal rule): an
+    // integer place takes the scalar when it fits — the comparison, the
+    // range pair, the match arm, the annotated const — and a literal
+    // with no integer context is exactly the char it always was.
+    try agree.prints(
+        \\const NEWLINE: u8 = '\n'
+        \\
+        \\func classify(c: u8) -> str:
+        \\    if c == '"':
+        \\        return "quote"
+        \\    if c >= 'a' and c <= 'z':
+        \\        return "letter"
+        \\    match c:
+        \\        '0' .. '9':
+        \\            return "digit"
+        \\        ' ':
+        \\            return "space"
+        \\        else:
+        \\            return "other"
+        \\
+        \\func main():
+        \\    print(classify(34))
+        \\    print(classify(98))
+        \\    print(classify(53))
+        \\    print(classify(32))
+        \\    print(str(NEWLINE))
+        \\    let wide: char = 'é'
+        \\    print(str(wide))
+        \\    let plain = 'q'
+        \\    print(str(plain))
+        \\
+    ,
+        \\quote
+        \\letter
+        \\digit
+        \\space
+        \\10
+        \\é
+        \\q
+        \\
+    );
+}
+
+test "a character literal that does not fit its integer place is refused" {
+    try expectRejected(
+        \\func main():
+        \\    let wide: u8 = '€'
+        \\
+    , "luce.sema.literal");
+}
+
 test "character escapes cover quotes slashes and scalar zero" {
     try agree.prints(
         \\func main():
@@ -285,8 +338,12 @@ test "invalid char and bytes operations are rejected before lowering" {
         "func main():\n    let value = bytes(i64(1))\n",
         "luce.sema.convert",
     );
+    // The literal spelling `i64('a')` stopped being this claim when
+    // character literals became contextual (the scalar lands as the
+    // integer before the conversion looks); the claim is about a
+    // *runtime* char, which still has no conversion route.
     try expectRejected(
-        "func main():\n    let value = i64('a')\n",
+        "func main():\n    let held: char = 'a'\n    let value = i64(held)\n",
         "luce.sema.convert",
     );
     try expectRejected(

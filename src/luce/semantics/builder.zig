@@ -1731,6 +1731,25 @@ pub const FunctionBuilder = struct {
                 };
             },
             .char_literal => |literal| {
+                // A character literal is contextual the way a number is
+                // (docs/TYPES.md D3): written into an integer place it
+                // lands as that integer — `c == '"'` over a `u8` is the
+                // lexer's whole vocabulary — when the scalar fits, and
+                // one that does not fit is refused rather than wrapped.
+                // With no integer context it stays a `char`.
+                if (wanted) |place| {
+                    if (place.isInteger()) {
+                        const bounds = place.integerRange();
+                        if (literal.value < bounds.low or literal.value > bounds.high) {
+                            try self.fail("luce.sema.literal", literal.span, "{s}", .{context.rangeMessage(place)});
+                            return null;
+                        }
+                        return .{
+                            .node = try recorder.recordNode(self, .{ .const_integer = .{ .value = literal.value, .result = place, .span = literal.span } }),
+                            .value_type = place,
+                        };
+                    }
+                }
                 return .{
                     .node = try recorder.recordNode(self, .{ .const_integer = .{ .value = literal.value, .result = .char, .span = literal.span } }),
                     .value_type = .char,

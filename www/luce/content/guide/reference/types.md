@@ -113,6 +113,13 @@ condition; Luce has no truthiness and numbers do not convert to booleans.
 one scalar. `char(integer)` validates a scalar value, `u32(character)` returns
 its code point, and `str(character)` encodes it as UTF-8.
 
+A character literal is contextual the way a numeric literal is: written into
+an integer place it lands as that integer when the scalar fits — `c == '"'`
+over a `u8`, a `'0' .. '9'` match arm, `const NEWLINE: u8 = '\n'` — and one
+that does not fit is a compile error. With no integer context it is a `char`.
+Only literals are contextual; a runtime `char` still reaches a number only
+through `u32(character)`.
+
 `str` is immutable valid UTF-8. Its ordinary sequence unit is `char`:
 `len(text)` counts scalars, indexing answers `char`, slicing uses scalar
 positions, and iteration yields characters.

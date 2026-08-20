@@ -255,7 +255,11 @@ pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool, lands: Type) ?f64
 /// the two must agree about what `2 * 0.1` is (docs/TYPES.md §1).
 pub fn isUntypedNumber(expression: *const ast.Expression) bool {
     return switch (expression.*) {
-        .int_literal, .float_literal => true,
+        // A character literal is contextual too (docs/TYPES.md D3): it
+        // lands on an integer place when its scalar fits, so beside a
+        // typed operand it is a taker of context, not a giver.  With
+        // no integer context the landing rule keeps it a `char`.
+        .int_literal, .float_literal, .char_literal => true,
         .unary => |unary| unary.op == .negate and isUntypedNumber(unary.operand),
         .binary => |binary| switch (binary.op) {
             .add, .subtract, .multiply, .divide, .floor_divide, .modulo => isUntypedNumber(binary.left) and

@@ -691,6 +691,22 @@ pub fn fold(
             return .{ .value = .{ .boolean = literal.value }, .value_type = .boolean };
         },
         .char_literal => |literal| {
+            // Contextual like every other literal (docs/TYPES.md D3):
+            // an integer place takes the scalar as that integer when it
+            // fits — `const QUOTE: u8 = '"'`, a `match` arm over a `u8`
+            // — and a scalar that does not fit is refused.  With no
+            // integer context it stays a `char`.
+            if (wanted) |place| {
+                if (context.literalLandingType(place)) |landed| {
+                    if (landed.isInteger()) {
+                        const bounds = landed.integerRange();
+                        if (literal.value < bounds.low or literal.value > bounds.high) {
+                            return constantError(analyzer, literal.span, "{s}", .{context.rangeMessage(landed)});
+                        }
+                        return .{ .value = .{ .integer = literal.value }, .value_type = landed };
+                    }
+                }
+            }
             return .{ .value = .{ .integer = literal.value }, .value_type = .char };
         },
         .string_literal => |literal| {
