@@ -197,6 +197,8 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         var output_path: []const u8 = "";
         var release = false;
         var emit: Emit = .exe;
+        var links: std.ArrayList([]const u8) = .empty;
+        defer links.deinit(arena_state.allocator());
         var said_output = false;
         var said_release = false;
         var said_emit = false;
@@ -212,6 +214,13 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
                 if (said_release) return refuse(err, "--release was given twice", .{});
                 said_release = true;
                 release = true;
+            } else if (std.mem.eql(u8, argument, "--link")) {
+                // Repeatable on purpose: a link has as many inputs as
+                // it has (docs/FFI.md).  Each value reaches the driver
+                // as written — an object, an archive, or -lNAME.
+                if (index + 1 == arguments.len) return refuse(err, "--link needs an object, archive, or -lNAME after it", .{});
+                index += 1;
+                try links.append(arena_state.allocator(), arguments[index]);
             } else if (std.mem.startsWith(u8, argument, "--emit=")) {
                 if (said_emit) return refuse(err, "--emit was given twice", .{});
                 said_emit = true;
@@ -232,6 +241,9 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             return 1;
         }
 
+        if (links.items.len != 0 and emit == .object) {
+            return refuse(err, "--link belongs to a linked artifact; --emit=object performs no link", .{});
+        }
         return buildNative(gpa, io, err, out, .{
             .path = path,
             .output_path = output_path,
@@ -239,6 +251,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             .kind = emit.kind(),
             .library_directory = library_path,
             .driver = environment.get("LUCE_CC"),
+            .links = links.items,
         });
     }
 
@@ -343,7 +356,7 @@ fn usage(err: *std.Io.Writer) !u8 {
         "usage:\n" ++
             "  luce --version\n" ++
             "  luce --build-info\n" ++
-            "  luce build [FILE] [-o OUT] [--release] [--emit=WHAT]\n" ++
+            "  luce build [FILE] [-o OUT] [--release] [--emit=WHAT] [--link INPUT ...]\n" ++
             "  luce check FILE\n" ++
             "  luce query diagnostics FILE\n" ++
             "  luce ir FILE [--full]\n" ++
@@ -411,6 +424,7 @@ fn buildNative(
         kind: native.Kind,
         library_directory: ?[]const u8,
         driver: ?[]const u8,
+        links: []const []const u8 = &.{},
     },
 ) !u8 {
     var program = switch (try front.compilePath(gpa, io, err, request.path, .{
@@ -448,6 +462,7 @@ fn buildNative(
         .kind = request.kind,
         .output = target,
         .source_hash = source_hash,
+        .links = request.links,
     })) {
         .written => {},
         .unsupported => |what| {

@@ -1,9 +1,20 @@
 # Tier-1 FFI — extern declarations over the C ABI (design draft)
 
-**Status: plan, awaiting owner ratification of the details**
-(docs/SELFHOST.md Phase 2; the direction — ungated Zig-style
-declarations with Swift-style safety visibility — is owner-ratified
-2026-08-19). Nothing here is current behavior.
+**Status: the core and `--link` are landed (2026-08-20); the scoped
+buffer forms and the build-plan `links` field remain planned.**  The
+four open details were ruled under the Zig tiebreaker: the spellings
+below stand; `str` never crosses implicitly (the scoped buffer forms
+are the road); extern parameters take no defaults; symbols resolve at
+link time only.  One implementation tightening beyond the draft:
+**Tier-1 scalars are the 32- and 64-bit widths** (`u32 i32 u64 i64`,
+plus `foreign`; results add `f64` and nothing) — the widths every
+emitted C ABI passes without extension attributes, which keeps the
+boundary correct with no per-parameter attribute machinery and makes
+the oracle's dispatch a literal nine-by-three thunk table instead of
+libffi.  LLVM-C's own `LLVMBool` is an `i32`, so the real customer
+loses nothing — and the probe is real: an extern-declared
+`LLVMContextCreate()` linked against the vendored libLLVM creates and
+disposes a context today.
 
 ## The declaration
 

@@ -63,6 +63,8 @@ pub fn build(
         kind: native.Kind,
         output: []const u8,
         source_hash: u64 = 0,
+        /// Extra link inputs, handed to the driver as written.
+        links: []const []const u8 = &.{},
     },
 ) Error!Result {
     const triple = try emit.hostTriple(gpa);
@@ -83,7 +85,7 @@ pub fn build(
     };
     defer gpa.free(object);
 
-    return switch (try native.write(gpa, io, tools, options.kind, object, options.output)) {
+    return switch (try native.write(gpa, io, tools, options.kind, object, options.output, options.links)) {
         .written => .written,
         .failed => |why| .{ .failed = why },
     };

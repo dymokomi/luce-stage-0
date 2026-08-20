@@ -49,7 +49,7 @@ not load your interactive shell profile.
 ```text
 luce --version
 luce --build-info
-luce build [FILE] [-o OUT] [--release] [--emit=WHAT]
+luce build [FILE] [-o OUT] [--release] [--emit=WHAT] [--link INPUT ...]
 luce check FILE
 luce query diagnostics FILE
 luce ir FILE [--full]
@@ -107,8 +107,14 @@ For a `.luc` source, `build` defaults to a standalone executable named after
 the source: `luce build hello.luc` writes `hello`. `-o` chooses a different
 output path. `--release` removes source locations from runtime traps.
 `--emit=library`, `--emit=object`, and `--emit=exe` choose the artifact shape;
-`exe` is the default. Each option may be given once; a repeated option is
-refused so a typo cannot silently select a different file or artifact kind.
+`exe` is the default. Each option may be given once — except `--link`, which
+repeats because a link has as many inputs as it has: each value reaches the
+C driver as written (an object file, a static archive, or `-lNAME`), placed
+after the program's own object and before the runtime archives, so the
+program's `extern` declarations resolve against them. `--emit=object`
+performs no link and refuses the option. Each other option may be given
+once; a repeated one is refused so a typo cannot silently select a
+different file or artifact kind.
 
 ## The three artifact shapes
 

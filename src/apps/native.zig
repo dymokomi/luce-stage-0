@@ -408,6 +408,10 @@ pub fn write(
     kind: Kind,
     object: []const u8,
     output: []const u8,
+    /// Extra words for the final link, each handed to the driver as
+    /// written (docs/FFI.md): an object path, a static archive, or a
+    /// `-lNAME` request.  Empty for the ordinary build.
+    links: []const []const u8,
 ) LinkError!LinkResult {
     if (kind == .object) {
         // Atomic like the linked kinds below: a half-written object
@@ -440,7 +444,7 @@ pub fn write(
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{object_path}) };
     };
 
-    return link(gpa, io, tools, kind, object_path, output);
+    return link(gpa, io, tools, kind, object_path, output, links);
 }
 
 /// Run the linker over one object.  The result lands at `output`
@@ -453,6 +457,7 @@ pub fn link(
     kind: Kind,
     object_path: []const u8,
     output: []const u8,
+    links: []const []const u8,
 ) LinkError!LinkResult {
     if (tools.runtime.len == 0) return .{ .failed = try std.fmt.allocPrint(
         gpa,
@@ -500,6 +505,11 @@ pub fn link(
     try arguments.append(gpa, "-o");
     try arguments.append(gpa, pending);
     try arguments.append(gpa, object_path);
+    // Foreign link inputs come right after the program's own object,
+    // before the runtime archives, so a foreign symbol the program
+    // calls resolves from them and a runtime symbol still resolves
+    // from the archives that follow.
+    for (links) |request| try arguments.append(gpa, request);
     if (kind == .executable) try arguments.append(gpa, tools.start);
     try arguments.append(gpa, tools.runtime);
     // Apple's linker otherwise gives every C-driver-linked executable a
@@ -971,7 +981,7 @@ test "a link with no runtime library says so instead of running the driver" {
     };
     defer tools.deinit(testing.allocator);
 
-    const result = try link(testing.allocator, testing.io, &tools, .library, "x.o", "x.lc");
+    const result = try link(testing.allocator, testing.io, &tools, .library, "x.o", "x.lc", &.{});
     switch (result) {
         .failed => |why| {
             defer testing.allocator.free(why);
@@ -1252,7 +1262,7 @@ test "a build refuses an occupied intermediate rather than writing over it" {
     };
     defer tools.deinit(gpa);
 
-    switch (try write(gpa, testing.io, &tools, .library, "irrelevant", output)) {
+    switch (try write(gpa, testing.io, &tools, .library, "irrelevant", output, &.{})) {
         .failed => |why| {
             defer gpa.free(why);
             try testing.expect(std.mem.indexOf(u8, why, object_name) != null);

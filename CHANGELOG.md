@@ -6,6 +6,22 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The FFI arrives (docs/FFI.md): `extern func name(a: i64) -> i64`
+  declares a foreign function's C shape — no body, no defaults, no
+  fallibility, at most eight parameters, every type a 32- or 64-bit
+  integer or the new opaque `foreign` token (results add `f64`) — and
+  a call is a direct machine call on the compiled path and a dispatch
+  through the runtime's thunk shim on the oracle, under the effect
+  lock unless the declaration says `blocking`.  `luce build`'s
+  repeatable `--link INPUT` carries objects, archives, and `-lNAME`
+  requests into the native link, so a `cc`-compiled C file is embedded
+  and called through its extern — and an extern-declared
+  `LLVMContextCreate()` against the vendored libLLVM works, which is
+  the self-hosted back end's first breath.  Guarantees end at the
+  boundary and the docs say so.  MIR 65 -> 66; the host ABI is
+  untouched.
+
+
 - Unions gain the one comparison there is — the tag test: `u ==
   Shape.dot` and `!=` against a payload-less member literal ask
   which member this is, and equal tags mean equal values because the

@@ -156,7 +156,7 @@ test "a command line with nothing to do prints usage and fails" {
             for ([_][]const u8{
                 "luce --version",
                 "luce --build-info",
-                "luce build [FILE] [-o OUT] [--release] [--emit=WHAT]",
+                "luce build [FILE] [-o OUT] [--release] [--emit=WHAT] [--link INPUT ...]",
                 "luce check FILE",
                 "luce ir FILE [--full]",
                 "luce test [PATH ...]",
@@ -317,6 +317,56 @@ test "a bare build compiles the manifest's main, and says what is missing withou
     try testing.expectEqualStrings("", emitted.err);
     try testing.expectEqual(@as(u8, 0), emitted.status);
     try testing.expect(tree.exists("src/sums.lc"));
+}
+
+test "--link embeds a C object the program's externs call" {
+    // The FFI's closing loop (docs/FFI.md): cc compiles the C, --link
+    // carries the object into the native link, and the extern is a
+    // direct call into it.
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("helper.c",
+        \\#include <stdint.h>
+        \\int64_t tripled(int64_t x) { return x * 3; }
+        \\
+    );
+    const helper_c = try tree.at(gpa, "helper.c");
+    defer gpa.free(helper_c);
+    const helper_o = try tree.at(gpa, "helper.o");
+    defer gpa.free(helper_o);
+    const compiled = try std.process.run(gpa, io, .{
+        .argv = &.{ "cc", "-c", helper_c, "-o", helper_o },
+    });
+    defer gpa.free(compiled.stdout);
+    defer gpa.free(compiled.stderr);
+    try testing.expect(compiled.term == .exited and compiled.term.exited == 0);
+
+    try tree.write("embed.luc",
+        \\extern func tripled(x: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(tripled(14)))
+        \\
+    );
+    var built = try runLuceHere(gpa, &tree, &.{ "build", "embed.luc", "--link", "helper.o" });
+    defer built.deinit(gpa);
+    try testing.expectEqualStrings("", built.err);
+    try testing.expectEqual(@as(u8, 0), built.status);
+
+    const program = try tree.at(gpa, "embed");
+    defer gpa.free(program);
+    const ran = try std.process.run(gpa, io, .{ .argv = &.{program} });
+    defer gpa.free(ran.stdout);
+    defer gpa.free(ran.stderr);
+    try testing.expectEqualStrings("42\n", ran.stdout);
+
+    // --link on a no-link artifact is refused with the reason.
+    var refused = try runLuceHere(gpa, &tree, &.{ "build", "embed.luc", "--emit=object", "--link", "helper.o" });
+    defer refused.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), refused.status);
+    try testing.expect(refused.saysErr("--emit=object performs no link"));
 }
 
 // ---------------------------------------------------------------------------
