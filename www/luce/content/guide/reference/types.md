@@ -454,8 +454,11 @@ for an explicit one, never less than one. `send` parks a deep copy and
 `receive` rebuilds it in the receiver, so no identity crosses; the
 element type must be sendable, checked where the channel is written
 (`luce.sema.channel`). The methods are `send`, `try_send`, `receive`,
-`try_receive`, `receive_timeout`, `close`, `len`, and `cap`; the
-blocking forms answer the `channel_closed` error rather than trapping.
+`try_receive`, `receive_timeout`, `receive_by`, `close`, `len`, and
+`cap`; the blocking forms answer the `channel_closed` error rather than
+trapping.  `receive_by(expires_ms)` is the deadline form: the moment is
+absolute on `os.clock_ms`'s clock — build it with `os.deadline(ms)` and
+hand `stop.expires` to each call, so one budget spans an exchange.
 A channel cannot be weak, and cannot ride inside another sent value —
 it crosses whole, as a `spawn` argument.
 

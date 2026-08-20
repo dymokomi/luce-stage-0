@@ -2268,6 +2268,13 @@ fn verifyIntrinsic(
             const wanted = types.Type.optionalOf(element) orelse return error.BadIntrinsic;
             if (!result.eql(wanted)) return error.BadIntrinsic;
         },
+        .channel_receive_by => {
+            try exactly(arguments, 2);
+            const element = try channelElement(program, arguments[0]);
+            try expectType(arguments[1], .i64);
+            const wanted = types.Type.optionalOf(element) orelse return error.BadIntrinsic;
+            if (!result.eql(wanted)) return error.BadIntrinsic;
+        },
         .channel_receive_timeout => {
             try exactly(arguments, 2);
             const element = try channelElement(program, arguments[0]);

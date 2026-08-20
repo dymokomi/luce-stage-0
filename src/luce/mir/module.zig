@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 68;
+pub const format_version: u32 = 69;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2310,8 +2310,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // std-only half.
     // 67 -> 68: `indirect union` (docs/UNION.md D20): the variant
     // table carries the indirect byte.
-    try testing.expectEqual(@as(u32, 68), format_version);
-    try testing.expectEqual(@as(u64, 9000776896423692061), hasher.final());
+    // 68 -> 69: `channel_receive_by` joins — the deadline form of
+    // receive (docs/CANCEL.md, ruling A).
+    try testing.expectEqual(@as(u32, 69), format_version);
+    try testing.expectEqual(@as(u64, 2372998594160134084), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

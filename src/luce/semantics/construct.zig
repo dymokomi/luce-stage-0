@@ -954,6 +954,7 @@ pub fn lowerIntrinsic(
         .channel_receive,
         .channel_try_receive,
         .channel_receive_timeout,
+        .channel_receive_by,
         .channel_close,
         .channel_len,
         .channel_cap,

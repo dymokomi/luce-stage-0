@@ -2217,6 +2217,7 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             if (std.mem.eql(u8, name, "send")) break :blk try typeList(self, &.{element});
             if (std.mem.eql(u8, name, "try_send")) break :blk try typeList(self, &.{element});
             if (std.mem.eql(u8, name, "receive_timeout")) break :blk try typeList(self, &.{.i64});
+            if (std.mem.eql(u8, name, "receive_by")) break :blk try typeList(self, &.{.i64});
             if (std.mem.eql(u8, name, "receive") or std.mem.eql(u8, name, "try_receive") or
                 std.mem.eql(u8, name, "close") or std.mem.eql(u8, name, "len") or
                 std.mem.eql(u8, name, "cap")) break :blk &.{};
@@ -2623,7 +2624,7 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
                 try self.fail("luce.sema.method", method.span, "channel has no method {s}; did you mean {s}?", .{ name, closest });
                 return;
             }
-            try self.fail("luce.sema.method", method.span, "channel has no method {s} (has send try_send receive try_receive receive_timeout close len cap)", .{name});
+            try self.fail("luce.sema.method", method.span, "channel has no method {s} (has send try_send receive try_receive receive_timeout receive_by close len cap)", .{name});
             return;
         },
         .list => {
@@ -2768,6 +2769,10 @@ fn objectMethod(
             if (std.mem.eql(u8, name, "receive_timeout")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .channel_receive_timeout, .result = types.Type.optionalOf(element).? };
+            }
+            if (std.mem.eql(u8, name, "receive_by")) {
+                if (!try methodTakes(self, method, arguments, receiver)) return null;
+                return .{ .kind = .channel_receive_by, .result = types.Type.optionalOf(element).? };
             }
             if (std.mem.eql(u8, name, "close")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;

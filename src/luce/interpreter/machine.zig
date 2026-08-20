@@ -1917,12 +1917,23 @@ pub const Machine = struct {
                     },
                 };
             },
-            .channel_receive, .channel_try_receive, .channel_receive_timeout => {
+            .channel_receive, .channel_try_receive, .channel_receive_timeout, .channel_receive_by => {
                 const blocking = operation.kind != .channel_try_receive;
-                const timeout: i64 = if (operation.kind == .channel_receive_timeout)
-                    registers[arguments[1]].asI64()
-                else
-                    -1;
+                const timeout: i64 = switch (operation.kind) {
+                    .channel_receive_timeout => registers[arguments[1]].asI64(),
+                    // The deadline form: what is left of the moment on
+                    // the host's own clock — the clock `os.clock_ms`
+                    // reads, so a deadline built there means the same
+                    // thing here.  Already passed clamps to a poll.
+                    .channel_receive_by => left: {
+                        const host = try self.service();
+                        const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
+                        const now = callback(host.context);
+                        const left = registers[arguments[1]].asI64() -| now;
+                        break :left if (left < 0) 0 else left;
+                    },
+                    else => -1,
+                };
                 const outcome = try channels.receive(
                     &self.runtime,
                     registers[arguments[0]],

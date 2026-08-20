@@ -151,6 +151,7 @@ answer. See [Concurrency](/guide/concurrency/).
 | `receive() -> T` | fallible; blocks while empty; drains a closed channel first, then errors |
 | `try_receive() -> T?` | fallible; `none` when nothing is parked right now |
 | `receive_timeout(ms) -> T?` | fallible; `none` when the wait ran out |
+| `receive_by(expires_ms) -> T?` | fallible; the deadline form — `expires_ms` is a moment on `os.clock_ms`'s clock, and the wait takes what is left of it; `none` once it has passed |
 | `close()` | idempotent; any holder may close |
 | `len() -> i64` | values parked right now — a snapshot |
 | `cap() -> i64` | the bound construction chose |

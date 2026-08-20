@@ -194,3 +194,55 @@ test "channels: a channel element that cannot cross is refused where it is writt
         \\
     , "luce.sema.channel");
 }
+
+test "receive_by: the deadline form takes what is left of one moment" {
+    // docs/CANCEL.md, ruling A: the moment is absolute on the host's
+    // monotonic clock — `os.deadline(ms)` builds it, `stop.expires`
+    // crosses the language boundary as a scalar, and a moment already
+    // passed is a poll answering absence, never a wait.
+    try agree.prints(
+        \\import std.os
+        \\
+        \\func feed(outbox: channel[i64]):
+        \\    outbox.send(42) catch reason:
+        \\        print(reason)
+        \\
+        \\func main() -> !:
+        \\    var inbox = channel[i64](4)
+        \\    let t = spawn feed(inbox)
+        \\    let stop = os.deadline(4000)
+        \\    print(str((try inbox.receive_by(stop.expires)) else -1))
+        \\    t.wait()
+        \\    var empty = channel[i64](4)
+        \\    let lapsed = os.deadline(0)
+        \\    print(str((try empty.receive_by(lapsed.expires)) else -1))
+        \\
+    ,
+        \\42
+        \\-1
+        \\
+    );
+}
+
+test "receive_by: a closed channel answers the error, drained first" {
+    try agree.prints(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    var c = channel[i64](4)
+        \\    try c.send(7)
+        \\    c.close()
+        \\    let stop = os.deadline(4000)
+        \\    print(str((try c.receive_by(stop.expires)) else -1))
+        \\    var said = ""
+        \\    var landed: i64? = none
+        \\    landed = c.receive_by(stop.expires) catch reason:
+        \\        said = reason
+        \\    print(said)
+        \\
+    ,
+        \\7
+        \\the channel is closed
+        \\
+    );
+}

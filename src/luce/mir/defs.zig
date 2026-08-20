@@ -355,6 +355,12 @@ pub const Intrinsic = enum {
     channel_receive,
     channel_try_receive,
     channel_receive_timeout,
+    /// `receive_by(expires_ms)` — the deadline form (docs/CANCEL.md):
+    /// the moment is absolute on the host's monotonic clock, so one
+    /// deadline value spans several calls and each takes what is left.
+    /// The engines read the host clock at the call; without a host the
+    /// call traps `host_unavailable`, the FFI's precedent.
+    channel_receive_by,
     channel_close,
     channel_len,
     channel_cap,
@@ -541,6 +547,7 @@ pub const Intrinsic = enum {
             .channel_receive,
             .channel_try_receive,
             .channel_receive_timeout,
+            .channel_receive_by,
             .channel_close,
             .channel_len,
             .channel_cap,
@@ -702,6 +709,7 @@ pub const Intrinsic = enum {
             .channel_receive,
             .channel_try_receive,
             .channel_receive_timeout,
+            .channel_receive_by,
             => true,
 
             .channel_new,
@@ -830,6 +838,7 @@ pub const Intrinsic = enum {
             .channel_receive,
             .channel_try_receive,
             .channel_receive_timeout,
+            .channel_receive_by,
             // A fresh wrapper is storage its scope must release, like
             // an opened file.
             .channel_new,
@@ -1069,6 +1078,7 @@ pub const Intrinsic = enum {
             .channel_receive,
             .channel_try_receive,
             .channel_receive_timeout,
+            .channel_receive_by,
             .channel_close,
             .channel_len,
             .channel_cap,

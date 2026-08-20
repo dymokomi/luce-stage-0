@@ -8,8 +8,17 @@ the freeze; the socket/listener deadline forms and wake-on-close land
 **post-freeze**, because `std.network` is ordinary Luce over host ABI
 slots the freeze deliberately leaves free to move.  The stage-0
 compiler needs none of this; what lands early lands to fix the
-language surface, not to unblock it.  Nothing below is current
-behavior until its half ships. The pre-freeze audit
+language surface, not to unblock it.
+
+**The channel half is LANDED (2026-08-20, ruling A on the layering):**
+the language primitive is scalar — `c.receive_by(expires_ms) -> T?!`,
+an absolute moment on `os.clock_ms`'s clock — and `os.Deadline` wraps
+the arithmetic in pure Luce (`os.deadline(ms)`, `stop.expires`,
+`stop.remaining_ms()`, `stop.passed()`).  A language method typed by a
+std struct was considered and rejected: the `handle` precedent holds,
+the language piece stays a scalar.  Without a host the call traps
+`host_unavailable`, the FFI's precedent.  The socket/listener half
+below remains post-freeze. The pre-freeze audit
 named the absence of any deadline/cancel story the exclusion most
 likely to force a post-freeze *language* change: a blocked `receive`,
 `accept`, or socket `read` parks a worker forever, so robust servers

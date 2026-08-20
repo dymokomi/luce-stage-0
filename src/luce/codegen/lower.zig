@@ -8491,12 +8491,28 @@ const Body = struct {
                     self.produced[register].value = try self.wip.icmp(.eq, told, try self.module.builder.intValue(.i64, 1), "send.landed");
                 }
             },
-            .channel_receive, .channel_try_receive, .channel_receive_timeout => {
+            .channel_receive, .channel_try_receive, .channel_receive_timeout, .channel_receive_by => {
                 const blocking = called.kind != .channel_try_receive;
-                const timeout: Builder.Value = if (called.kind == .channel_receive_timeout)
-                    self.produced[of[1]].value
-                else
-                    try self.module.builder.intValue(.i64, -1);
+                const timeout: Builder.Value = switch (called.kind) {
+                    .channel_receive_timeout => self.produced[of[1]].value,
+                    // The deadline form: what is left of the moment on
+                    // the host's own clock — the clock `os.clock_ms`
+                    // reads, so a deadline built there means the same
+                    // thing here.  Already passed clamps to a poll.
+                    .channel_receive_by => left: {
+                        const now = try self.callHostNumber(.clock_ms, "deadline.now");
+                        const left = try self.wip.bin(.@"sub nsw", self.produced[of[1]].value, now, "deadline.left");
+                        const lapsed = try self.wip.icmp(.slt, left, try self.module.builder.intValue(.i64, 0), "deadline.lapsed");
+                        break :left try self.wip.select(
+                            .normal,
+                            lapsed,
+                            try self.module.builder.intValue(.i64, 0),
+                            left,
+                            "deadline.clamped",
+                        );
+                    },
+                    else => try self.module.builder.intValue(.i64, -1),
+                };
                 const box = try self.scratch(self.module.value_type, value_alignment, "receive.box");
                 const outcome = try self.scratch(.i64, Builder.Alignment.fromByteUnits(8), "receive.outcome");
                 try self.callChecked(.luce_rt_channel_receive, &.{

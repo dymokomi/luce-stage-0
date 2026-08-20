@@ -1597,3 +1597,25 @@ test "term: a mouse event carries its coordinates, modifiers, and wheel" {
     , provided);
     defer session.deinit();
 }
+
+test "os: a Deadline is one budget, and what is left of it only shrinks" {
+    try agree.prints(
+        \\import std.os
+        \\
+        \\func main():
+        \\    let stop = os.deadline(60000)
+        \\    let first = stop.remaining_ms()
+        \\    print(str(first > 0 and first <= 60000))
+        \\    print(str(stop.remaining_ms() <= first))
+        \\    print(str(stop.passed()))
+        \\    let lapsed = os.deadline(0)
+        \\    print(str(lapsed.remaining_ms()))
+        \\
+    ,
+        \\true
+        \\true
+        \\false
+        \\0
+        \\
+    );
+}

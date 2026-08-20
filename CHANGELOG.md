@@ -6,6 +6,20 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Deadlines arrive at the channel (docs/CANCEL.md, the ratified
+  channel half): `c.receive_by(expires_ms)` waits for what is left
+  of one absolute moment on the monotonic clock and answers absence
+  once it has passed — so one budget spans a whole exchange.  The
+  language primitive is a scalar (ruling A: the `handle` precedent —
+  no std type crosses into a language signature); `os.Deadline` is
+  the pure-Luce wrapper: `os.deadline(ms)` builds the moment,
+  `stop.expires` feeds each call, `remaining_ms()` and `passed()`
+  read what is left.  Both engines read the host's own clock at the
+  call, so a deadline means the same thing everywhere; without a
+  host the call traps `host_unavailable`, the FFI's precedent.
+  `receive_timeout(ms)` stays as the one-step sugar.  MIR 68 -> 69;
+  the host ABI is untouched.
+
 - Recursive unions arrive: `indirect union Expr:` lets a member hold
   the union itself — `add(left: Expr, right: Expr)`, no optional, no
   wrapper class — by moving the payload behind one hidden ARC box

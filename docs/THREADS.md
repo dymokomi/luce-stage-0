@@ -109,6 +109,9 @@ c.try_send(v)                 # bool! — false instead of waiting
 c.receive()                   # T! — blocks while empty; drains, then closed
 c.try_receive()               # T?! — none when nothing is parked now
 c.receive_timeout(ms)         # T?! — none when the wait ran out
+c.receive_by(expires_ms)      # T?! — deadline form (docs/CANCEL.md): a
+                              #   moment on os.clock_ms's clock; takes
+                              #   what is left of it
 c.close()                     # idempotent; any holder may
 c.len()   c.cap()             # parked count (a snapshot), capacity
 ```

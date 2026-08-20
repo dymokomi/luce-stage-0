@@ -24,6 +24,19 @@ qualified APIs on this page cross the OS boundary.
 | `os.epoch_ms() -> i64` | milliseconds since the Unix epoch |
 | `os.sleep_ms(milliseconds: i64)` | waits at least this long; zero and negative durations return immediately |
 
+## Deadlines
+
+| Signature | Meaning |
+|---|---|
+| `os.deadline(after_ms: i64) -> Deadline` | the moment `after_ms` from now, on the monotonic clock |
+| `Deadline.expires` | the moment itself — hand it to a blocking call's deadline form, `inbox.receive_by(stop.expires)` |
+| `Deadline.remaining_ms() -> i64` | what is left of the moment, clamped at zero once it has passed |
+| `Deadline.passed() -> bool` | has the moment passed? |
+
+A `Deadline` is one budget for a whole exchange: build it once and hand
+`expires` to each call, and every call takes what is *left* of the same
+moment (docs/CANCEL.md).
+
 Use `os.clock_ms` only in differences; its epoch is deliberately unspecified.
 Use `os.epoch_ms` for a timestamp. An absent input line or environment value
 is ordinary absence, while a host without the requested channel traps with
