@@ -15,12 +15,11 @@ This is the distinction from a `struct`:
 ## Declaring and constructing a class
 
 A class declares fields, methods, defaults, and visibility with the same
-member grammar as a structure. Construction always writes `new`: the keyword
-marks every expression that creates a reference identity, containers and
-classes alike, while value types construct with a plain call. A bare
-`Counter(...)` is a compile error—a class makes a new identity: write
-`Counter(...)`. Without an `init` body, the construction surface is
-memberwise:
+member grammar as a structure. Construction is an ordinary call —
+`Counter(...)` — the one spelling every kind of value constructs by;
+there is no `new` keyword, and reference identity comes from *what* was
+constructed, never from how the call was written. Without an `init`
+body, the construction surface is memberwise:
 
 ```luce
 class Counter:

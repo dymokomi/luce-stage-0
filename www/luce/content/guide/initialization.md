@@ -42,9 +42,9 @@ or partially initialized storage behind the constructor.
 
 ## Memberwise class construction
 
-A class without `init` uses the same field-named surface behind `new`, the
-keyword that creates every reference identity. A bare `User(...)` call is a
-compile error—a class makes a new identity: write `User(...)`.
+A class without `init` uses the same field-named surface as a structure:
+construction is an ordinary call, `User(name = "ada")`, and the reference
+identity comes from constructing a class — not from any keyword.
 
 ```luce run
 class User:
