@@ -1251,6 +1251,28 @@ fn lowerBinaryOperands(
     return .{ .values = values, .sides = .{ .right_first = left_untyped } };
 }
 
+/// Whether `expression` is written `Union.member`, naming a
+/// payload-less member of exactly the compared union — the one shape
+/// union equality admits (the tag test).  A local shadowing the
+/// union's name wins, as it does everywhere a dotted head resolves.
+fn payloadLessMemberOf(
+    self: *FunctionBuilder,
+    expression: *const ast.Expression,
+    compared: Type,
+) bool {
+    if (compared != .variant) return false;
+    if (expression.* != .field) return false;
+    const field = expression.field;
+    const chain = helpers.dottedChain(field.target) orelse return false;
+    if (chain.count != 1) return false;
+    if (self.findLocal(chain.head()) != null) return false;
+    const variant_index = self.analyzer.variant_names.get(chain.head()) orelse return false;
+    if (variant_index != compared.variant) return false;
+    const declared = self.analyzer.variants.items[variant_index];
+    const member = declared.findMember(field.name) orelse return false;
+    return declared.members[member].fields.len == 0;
+}
+
 pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Error!?Typed {
     switch (binary.op) {
         .logic_and, .logic_or => return lowerShortCircuit(self, binary),
@@ -1436,6 +1458,16 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         );
         return null;
     }
+    // **The one union comparison there is: the tag test.**  `u ==
+    // Shape.dot` where `dot` carries no payload asks only which member
+    // this is, and equal tags mean equal values because the literal
+    // side has no payload to differ — Zig's `u == .dot`, ruled in #24.
+    // Everything else about a union still goes through `match`, and a
+    // union reached through a struct field still refuses below.
+    const tag_test = (binary.op == .equal or binary.op == .not_equal) and
+        operand_type == .variant and
+        (payloadLessMemberOf(self, binary.left, operand_type) or
+            payloadLessMemberOf(self, binary.right, operand_type));
     // **Both refusals below are about the whole compared value, not
     // about its outermost tag.**  A struct's `==` is field-by-field
     // `==` (`runtime/operators.zig`), so a struct whose field is a
@@ -1444,15 +1476,17 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     // BINDING.md D6 refuses — through a wrapper the reader did not
     // think of as a comparison. `incomparablePart` is the one walk
     // that answers for both, and it stops where `==` stops.
-    if (try shapes.incomparablePart(self.analyzer, operand_type)) |found| {
-        try refusals.failIncomparable(
-            self,
-            found,
-            operand_type,
-            context.operatorText(binary.op),
-            binary.span,
-        );
-        return null;
+    if (!tag_test) {
+        if (try shapes.incomparablePart(self.analyzer, operand_type)) |found| {
+            try refusals.failIncomparable(
+                self,
+                found,
+                operand_type,
+                context.operatorText(binary.op),
+                binary.span,
+            );
+            return null;
+        }
     }
     return .{
         .node = try recorder.recordNode(self, .{ .compare = .{

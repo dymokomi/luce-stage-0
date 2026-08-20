@@ -27,6 +27,7 @@
 //! to disagree about.
 
 const std = @import("std");
+const luce = @import("luce");
 const agree = @import("agree.zig");
 
 // ---------------------------------------------------------------------------
@@ -643,6 +644,72 @@ test "S3: an enum-valued call is matched the same way, and nothing is left over"
 // arm.  Wrapping a union no longer buys a comparison it does not have
 // (the refusals are in `errors_spec.zig`); what a program writes
 // instead is here.
+
+test "the tag test: a union compares equal to a payload-less member literal" {
+    // The #24 ruling under the constitution (Zig's `u == .dot`): `==`
+    // and `!=` against a member literal that carries no payload ask
+    // only which member this is, and equal tags mean equal values
+    // because the literal side has no payload to differ.  Everything
+    // else about a union is still `match`'s: two held values, a
+    // payload-carrying literal, and a union inside a struct all keep
+    // their refusals (errors_spec pins those sentences).
+    try agree.prints(
+        \\union Shape:
+        \\    dot
+        \\    circle(radius: f64)
+        \\    square(side: f64)
+        \\
+        \\func main():
+        \\    let a = Shape.dot
+        \\    let b = Shape.circle(radius = 2.0)
+        \\    print(str(a == Shape.dot))
+        \\    print(str(b == Shape.dot))
+        \\    print(str(b != Shape.dot))
+        \\    print(str(Shape.dot == a))
+        \\    if a == Shape.dot:
+        \\        print("tagged")
+        \\
+    ,
+        \\true
+        \\false
+        \\true
+        \\true
+        \\tagged
+        \\
+    );
+}
+
+test "the tag test admits only the payload-less literal side" {
+    // A payload-carrying literal is a call, not a tag: the comparison
+    // would be about the payload, which is match's business.
+    var payloaded = try luce.compile.compile(std.testing.allocator,
+        \\union Shape:
+        \\    dot
+        \\    circle(radius: f64)
+        \\
+        \\func main():
+        \\    let a = Shape.circle(radius = 1.0)
+        \\    print(str(a == Shape.circle(radius = 1.0)))
+        \\
+    , .{});
+    defer payloaded.deinit();
+    try std.testing.expect(payloaded == .failure);
+
+    // Two held values still refuse — the tag test needs a literal.
+    var held = try luce.compile.compile(std.testing.allocator,
+        \\union Shape:
+        \\    dot
+        \\    circle(radius: f64)
+        \\
+        \\func main():
+        \\    let a = Shape.dot
+        \\    let b = Shape.dot
+        \\    print(str(a == b))
+        \\
+    , .{});
+    defer held.deinit();
+    try std.testing.expect(held == .failure);
+}
 
 test "D16: a struct carrying a union is compared by matching what it carries" {
     // The program the refusal sends a reader to write.  Nothing about

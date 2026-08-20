@@ -1912,6 +1912,40 @@ test "returns: T! composes, and try is the only composition there is" {
     );
 }
 
+test "an unbroken while true diverges, and one with a break still owes a return" {
+    // The #24 item arrived already true at head; this pins it.  A
+    // `while true` with no `break` is the function's last word — no
+    // trailing return is owed — and adding a `break` re-opens the
+    // fall-through path, which the compiler then refuses.
+    try agree.prints(
+        \\func serve() -> i64:
+        \\    var count = 0
+        \\    while true:
+        \\        count += 1
+        \\
+        \\func main():
+        \\    print("checked")
+        \\
+    ,
+        \\checked
+        \\
+    );
+    var result = try luce.compile.compile(std.testing.allocator,
+        \\func serve() -> i64:
+        \\    var count = 0
+        \\    while true:
+        \\        count += 1
+        \\        if count > 3:
+        \\            break
+        \\
+        \\func main():
+        \\    print(str(serve()))
+        \\
+    , .{});
+    defer result.deinit();
+    try std.testing.expect(result == .failure);
+}
+
 test "extend appends every element of one list to another, and itself exactly once" {
     // The #24 ruling under the constitution (Zig's appendSlice).  The
     // source is read, never consumed; an element with private storage

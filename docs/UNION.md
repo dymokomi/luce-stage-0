@@ -85,10 +85,31 @@ func main():
 Writing `Json.number` bare where a payload is expected is a construction
 error naming the fields it wants, never a function value.
 
-## match is the only door
+## match is the door to a payload; equality has one tag test
 
-There is no field access on a union value, no tag test, and no way to name
-a payload outside a `match` arm. An arm names a member; a payload arm lists
+There is no field access on a union value and no way to name a payload
+outside a `match` arm. One comparison exists (the #24 ruling under the
+constitution — Zig's `u == .dot`): `==` and `!=` against a **payload-less
+member literal** ask which member this is, and equal tags mean equal
+values because the literal side has no payload to differ.
+
+```luce
+union Shape:
+    dot
+    circle(radius: f64)
+
+func main():
+    let a = Shape.dot
+    if a == Shape.dot:
+        print("tagged")
+```
+
+Everything else stays `match`'s: two held values, a payload-carrying
+literal, and a union reached through a struct field all keep their
+refusals — a comparison that would have to look at a payload is a
+`match` that has not been written yet.
+
+An arm names a member; a payload arm lists
 the fields it wants to bind, each by the field's own name:
 
 ```luce

@@ -6,6 +6,17 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Unions gain the one comparison there is — the tag test: `u ==
+  Shape.dot` and `!=` against a payload-less member literal ask
+  which member this is, and equal tags mean equal values because the
+  literal side has no payload to differ (the #24 ruling — Zig's
+  `u == .dot`).  Everything else stays match's: two held values, a
+  payload-carrying literal, and a union inside a struct keep their
+  refusals.  Also pinned: an unbroken `while true` diverges (no
+  trailing return owed), and one with a `break` still owes its
+  return — already true at head, now specified.
+
+
 - Lists learn `extend`: `xs.extend(ys)` appends every element of
   another list of the same type, in order (the #24 ruling under the
   Zig tiebreaker — appendSlice).  The source is read, never consumed;

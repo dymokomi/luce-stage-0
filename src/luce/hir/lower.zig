@@ -987,9 +987,29 @@ const Replay = struct {
             return self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = absent } }, .boolean);
         }
         const entries = try self.replaySides(comparison.left, comparison.right, comparison.sides);
+        const operand_type = wrappedType(&entries[0]);
+        // The union tag test (docs/UNION.md): stage 4 admits `==` on a
+        // union only when one side is a payload-less member literal, so
+        // equal tags mean equal values — the comparison is the tags'.
+        if (operand_type == .variant) {
+            const left_tag = try self.code.emit(
+                .{ .variant_tag = .{ .target = entries[0].register } },
+                .i64,
+            );
+            const right_tag = try self.code.emit(
+                .{ .variant_tag = .{ .target = entries[1].register } },
+                .i64,
+            );
+            return self.code.emit(.{ .binary = .{
+                .op = comparison.op,
+                .operand_type = .i64,
+                .left = left_tag,
+                .right = right_tag,
+            } }, .boolean);
+        }
         return self.code.emit(.{ .binary = .{
             .op = comparison.op,
-            .operand_type = wrappedType(&entries[0]),
+            .operand_type = operand_type,
             .left = entries[0].register,
             .right = entries[1].register,
         } }, .boolean);
