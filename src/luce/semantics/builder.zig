@@ -992,20 +992,19 @@ pub const FunctionBuilder = struct {
             }
             return null;
         }
-        // A fallible function's `!` is an obligation its call sites
-        // carry, and a function type has nowhere to write one, so
-        // letting one become a value would drop the obligation in
-        // silence (docs/FUNCTIONS.md, As built).
-        if (info.fallible) {
+        const wants = self.analyzer.signatures.items[signature];
+        // The `!` travels with the type now (docs/ERRORS.md R3): a
+        // fallible function fits only a fallible slot, where every
+        // call keeps owing its `try` or `catch`.
+        if (info.fallible and !wants.fallible) {
             try self.fail(
                 "luce.sema.fallible",
                 span,
-                "{s} can fail, and a function type carries no '!'; a fallible function is not a value yet [FUNCTIONS.md]",
-                .{written},
+                "{s} can fail; this place is {s} — write {s}! to keep the obligation [ERRORS.md]",
+                .{ written, try self.analyzer.typeName(.{ .function = signature }), try self.analyzer.typeName(.{ .function = signature }) },
             );
             return null;
         }
-        const wants = self.analyzer.signatures.items[signature];
         if (!self.matchesSignature(info, wants, 0)) {
             try self.fail(
                 "luce.sema.type",
@@ -1186,20 +1185,19 @@ pub const FunctionBuilder = struct {
             );
             return .reported;
         }
-        // A fallible method's `!` is an obligation its call sites
-        // carry, and a function type still has nowhere to write one
-        // (docs/BINDING.md D8, not built).
-        if (info.fallible) {
+        const wants = self.analyzer.signatures.items[signature];
+        // The `!` travels with the type (docs/ERRORS.md R3): a
+        // fallible method binds only into a fallible slot, where the
+        // calls keep owing their `try` or `catch`.
+        if (info.fallible and !wants.fallible) {
             try self.fail(
                 "luce.sema.fallible",
                 field.span,
-                "{s}.{s} can fail, and a function type carries no '!'; " ++
-                    "a fallible method is not a value yet",
-                .{ declared, field.name },
+                "{s}.{s} can fail; this place is {s} — write {s}! to keep the obligation [ERRORS.md]",
+                .{ declared, field.name, try self.analyzer.typeName(.{ .function = signature }), try self.analyzer.typeName(.{ .function = signature }) },
             );
             return .reported;
         }
-        const wants = self.analyzer.signatures.items[signature];
         if (!self.matchesSignature(info, wants, 1)) {
             try self.fail("luce.sema.type", field.span, "this place is {s}, and {s}.{s} bound is {s}", .{
                 try self.analyzer.typeName(.{ .function = signature }),
@@ -1260,6 +1258,9 @@ pub const FunctionBuilder = struct {
         if (info.results.len >= 2) return false;
         if (info.parameter_types.len != wants.parameters.len + first) return false;
         if (!info.return_type.eql(wants.result)) return false;
+        // A non-fallible function converts INTO a fallible slot — it
+        // trivially keeps "may fail" — never the other way (R3).
+        if (info.fallible and !wants.fallible) return false;
         for (
             info.parameter_types[first..],
             wants.parameters,
@@ -1900,7 +1901,7 @@ pub const FunctionBuilder = struct {
                 return expressions.lowerField(self, field);
             },
             .call => |call| return calls.lowerCall(self, call, as_statement, fallible_allowed, shape_position, wanted),
-            .value_call => |written| return calls.lowerValueCallExpression(self, written, as_statement),
+            .value_call => |written| return calls.lowerValueCallExpression(self, written, as_statement, fallible_allowed),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
                 return expressions.lowerBinary(self, binary, wanted);

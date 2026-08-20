@@ -1261,34 +1261,24 @@ pub const Parser = struct {
             .span = .{ .start = start.span.start, .end = closing.span.end },
         };
         if (self.accept(.arrow) != null) {
-            // `-> !` and `-> T!` say a function may fail, and a function
-            // type has nowhere to put that: the obligation `try` and
-            // `catch` carry belongs to a call site, and this is a type.
-            // Refused where it is written rather than dropped
-            // (docs/FUNCTIONS.md, As built).
-            if (self.peekKind() == .bang) {
-                try self.report(
-                    "luce.parse.type",
-                    self.peek().span,
-                    "a function type carries no '!': a fallible function is not a value yet",
-                    .{},
-                );
-                return null;
+            // `-> !` and `-> T!` say a function value may fail
+            // (docs/ERRORS.md R3): the fallibility is part of the
+            // type, and a call through the value owes `try` or
+            // `catch` exactly as a direct call does.
+            if (self.accept(.bang)) |marked| {
+                written.fallible = true;
+                written.span = .{ .start = start.span.start, .end = marked.span.end };
+                return self.optionalSuffix(written);
             }
             const answered = (try self.typeName()) orelse return null;
-            if (self.peekKind() == .bang) {
-                try self.report(
-                    "luce.parse.type",
-                    self.peek().span,
-                    "a function type carries no '!': a fallible function is not a value yet",
-                    .{},
-                );
-                return null;
-            }
             const held = try self.arena.create(ast.TypeName);
             held.* = answered;
             written.result = held;
             written.span = .{ .start = start.span.start, .end = answered.span.end };
+            if (self.accept(.bang)) |marked| {
+                written.fallible = true;
+                written.span = .{ .start = start.span.start, .end = marked.span.end };
+            }
         }
         return self.optionalSuffix(written);
     }

@@ -551,6 +551,11 @@ pub const Signature = struct {
     /// that answers nothing.  A return *shape* is not a type, so a
     /// multi-valued function is not a function value either.
     result: Type,
+    /// `func(...) -> R!` (docs/ERRORS.md R3): a call through the value
+    /// may fail, and the call site owes `try` or `catch`.  Part of the
+    /// type's identity; a non-fallible function converts *into* a
+    /// fallible slot (it trivially keeps the promise), never back.
+    fallible: bool = false,
 
     pub const Parameter = struct {
         value_type: Type,
@@ -558,6 +563,7 @@ pub const Signature = struct {
 
     pub fn eql(self: Signature, other: Signature) bool {
         if (self.parameters.len != other.parameters.len) return false;
+        if (self.fallible != other.fallible) return false;
         if (!self.result.eql(other.result)) return false;
         for (self.parameters, other.parameters) |mine, theirs| {
             if (!mine.value_type.eql(theirs.value_type)) return false;
@@ -978,6 +984,9 @@ fn writeTypeName(
             if (signature.result != .none) {
                 try written.appendSlice(allocator, " -> ");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, signature.result);
+                if (signature.fallible) try written.appendSlice(allocator, "!");
+            } else if (signature.fallible) {
+                try written.appendSlice(allocator, " -> !");
             }
         },
         .optional => |payload| {

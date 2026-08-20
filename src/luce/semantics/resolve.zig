@@ -440,7 +440,11 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
     if (written.result) |answered| {
         result = (try resolveType(self, module, answered.*)) orelse return null;
     }
-    return try internSignature(self, .{ .parameters = parameters, .result = result });
+    return try internSignature(self, .{
+        .parameters = parameters,
+        .result = result,
+        .fallible = written.fallible,
+    });
 }
 
 /// The `?` a function type is told to wear where it stands in a slot.

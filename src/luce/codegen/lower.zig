@@ -7550,13 +7550,20 @@ const Body = struct {
             arguments.items,
             "outcome",
         );
-        if (called.fallible) self.produced[register].outcome = outcome;
-        try self.propagate(try self.wip.icmp(
-            .ne,
-            outcome,
-            try self.module.builder.intValue(.i32, outcome_ok),
-            "trapped",
-        ));
+        if (called.fallible) {
+            // A call through a fallible value keeps its error outcome
+            // in hand for the try/catch beside it; only a trap leaves
+            // here — the direct fallible call's own edge (R3).
+            self.produced[register].outcome = outcome;
+            try self.propagateTrapOnly(outcome);
+        } else {
+            try self.propagate(try self.wip.icmp(
+                .ne,
+                outcome,
+                try self.module.builder.intValue(.i32, outcome_ok),
+                "trapped",
+            ));
+        }
 
         if (result != .none) {
             self.produced[register].value = try self.wip.load(

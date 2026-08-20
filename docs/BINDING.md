@@ -217,10 +217,10 @@ head so an imported union resolves from the reference site's own module.
   requires one bare mutable receiver aliased in place (`docs/SELF.md`);
   binding it would require store-back into that original value. A class writer
   may bind because the function value retains and mutates the shared identity.
-- **A fallible function type does not exist.** `func(T) -> R!` and
-  `func() -> !` are refused where they are written, so a fallible method
-  does not bind and `try EXPR(args)` on a function value is refused by
-  name — a function type carries no `!`.
+- **A fallible function type exists** (docs/ERRORS.md R3, superseding
+  the earlier refusal): `func(T) -> R!` carries the obligation in the
+  type, a fallible method binds into a fallible slot only, and a call
+  through the value owes its `try` or `catch` where it stands.
 - **A function value does not cross a worker boundary**, as a spawned
   function's parameter or as its result, because it may hold a bound receiver
   and callable environments are not part of the worker graph-copy contract

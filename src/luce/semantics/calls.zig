@@ -352,7 +352,7 @@ pub fn lowerCall(
     // one of the reserved names the builtins below answer to.
     if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
         if (self.findLocal(call.callee) != null) {
-            return lowerNamedValueCall(self, call, as_statement);
+            return lowerNamedValueCall(self, call, as_statement, fallible_allowed);
         }
     }
     // Builtins and conversions are bare names and take priority;
@@ -447,6 +447,7 @@ fn lowerValueCall(
     arguments: []const ast.Argument,
     span: Span,
     as_statement: bool,
+    fallible_allowed: bool,
 ) Error!?Typed {
     const callee_type = callee.value_type;
     const written = try calleeSpelling(self, written_at);
@@ -509,6 +510,15 @@ fn lowerValueCall(
         );
         return null;
     }
+    if (signature.fallible and !fallible_allowed) {
+        try self.fail(
+            "luce.sema.fallible",
+            span,
+            "{s} can fail: write 'try {s}(…)' to pass the error on, or '{s}(…) catch …' to handle it",
+            .{ written, written, written },
+        );
+        return null;
+    }
     // The residual hazard copy-on-store leaves open (docs/STRINGS.md),
     // asked of the **callee**: it may be a borrow of an element's or a
     // field's two-slot run, and an argument still to come could free
@@ -558,22 +568,24 @@ fn lowerValueCall(
         try self.fail("luce.sema.call", span, "{s} returns nothing", .{written});
         return null;
     }
-    return .{
-        .node = try recorder.recordCallNode(
-            self,
-            .{ .indirect = .{
-                .callee = callee_value.node,
-                .signature = callee_type.function,
-                .borrow_copy = callee_copy,
-            } },
-            entries,
-            entries.len,
-            false,
-            signature.result,
-            span,
-        ),
-        .value_type = signature.result,
-    };
+    const node = try recorder.recordCallNode(
+        self,
+        .{ .indirect = .{
+            .callee = callee_value.node,
+            .signature = callee_type.function,
+            .borrow_copy = callee_copy,
+        } },
+        entries,
+        entries.len,
+        signature.fallible,
+        signature.result,
+        span,
+    );
+    // A call through a fallible value owes what a direct fallible
+    // call owes (docs/ERRORS.md R3): the same opening, the same
+    // `try`/`catch` sentence at the same place.
+    if (signature.fallible) return try self.openFallible(signature.result, node, span);
+    return .{ .node = node, .value_type = signature.result };
 }
 
 /// `EXPRESSION(arguments)` — the call suffix (docs/FUNCTIONS.md).
@@ -586,9 +598,10 @@ pub fn lowerValueCallExpression(
     self: *FunctionBuilder,
     written: ast.ValueCall,
     as_statement: bool,
+    fallible_allowed: bool,
 ) Error!?Typed {
     const callee = (try self.lowerExpression(written.callee, false)) orelse return null;
-    return lowerValueCall(self, callee, written.callee, written.arguments, written.span, as_statement);
+    return lowerValueCall(self, callee, written.callee, written.arguments, written.span, as_statement, fallible_allowed);
 }
 
 /// `f(a, b)` where `f` is a local holding a function value — the same
@@ -600,11 +613,12 @@ fn lowerNamedValueCall(
     self: *FunctionBuilder,
     call: ast.Call,
     as_statement: bool,
+    fallible_allowed: bool,
 ) Error!?Typed {
     const name = try self.arena().create(ast.Expression);
     name.* = .{ .name = .{ .text = call.callee, .span = call.span } };
     const callee = (try self.lowerExpression(name, false)) orelse return null;
-    return lowerValueCall(self, callee, name, call.arguments, call.span, as_statement);
+    return lowerValueCall(self, callee, name, call.arguments, call.span, as_statement, fallible_allowed);
 }
 
 /// What a diagnostic calls the thing in front of a call suffix.

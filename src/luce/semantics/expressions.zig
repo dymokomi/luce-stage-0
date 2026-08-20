@@ -550,14 +550,17 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
         break :unified meeting;
     };
-    for (elements, literal.elements) |element, expression| {
-        if (!element.value_type.eql(element_type)) {
+    for (elements, literal.elements) |*element, expression| {
+        // `fit`, not bare equality: a present value lands in an
+        // optional element implicitly, which is what lets a bare
+        // function name fill a `(func(...) -> R)?` slot.
+        element.* = (try self.fit(element.*, element_type)) orelse {
             try self.fail("luce.sema.type", expression.span(), "container elements are all {s}, got {s}", .{
                 try self.analyzer.typeName(element_type),
                 try self.analyzer.typeName(element.value_type),
             });
             return null;
-        }
+        };
     }
     const object_type = expected_container orelse
         try resolve.internHeapType(self.analyzer, .{ .list = element_type });

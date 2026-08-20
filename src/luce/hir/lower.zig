@@ -679,7 +679,14 @@ const Replay = struct {
             .new_object => |made| try self.replayNewObject(made),
             .spawn => |worker| try self.replaySpawn(worker),
             .function_value => |named| try self.code.emit(
-                .{ .const_function = .{ .function = named.function } },
+                .{
+                    .const_function = .{
+                        .function = named.function,
+                        // The value's own fallibility (docs/ERRORS.md R3):
+                        // the declared function's, whatever slot it fills.
+                        .fallible = self.deps.functions[named.function].fallible,
+                    },
+                },
                 named.result,
             ),
             .lambda_ref => |made| closure: {
@@ -695,6 +702,7 @@ const Replay = struct {
                 break :closure try self.code.emit(.{ .const_function = .{
                     .function = made.function,
                     .receiver = receiver,
+                    .fallible = self.deps.functions[made.function].fallible,
                 } }, made.result);
             },
             .bound_method => |bound| bind: {
@@ -709,6 +717,7 @@ const Replay = struct {
                 break :bind try self.code.emit(.{ .const_function = .{
                     .function = bound.function,
                     .receiver = held.register,
+                    .fallible = self.deps.functions[bound.function].fallible,
                 } }, bound.result);
             },
         };

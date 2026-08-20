@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const luce = @import("luce");
+const agree = @import("agree.zig");
 
 const compile_mod = luce.compile;
 const types = luce.types;
@@ -1592,7 +1593,7 @@ test "luce.sema.type: a bind whose shape does not fit the place is refused" {
     );
 }
 
-test "luce.sema.fallible: a fallible method does not bind yet (BINDING.md D8)" {
+test "luce.sema.fallible: a fallible method binds only into a fallible slot (ERRORS.md R3)" {
     try expectSaying(
         \\struct Reader:
         \\    at: i64
@@ -1611,7 +1612,7 @@ test "luce.sema.fallible: a fallible method does not bind yet (BINDING.md D8)" {
         \\
     ,
         "luce.sema.fallible",
-        "a fallible method is not a value yet",
+        "keep the obligation",
     );
 }
 
@@ -7588,10 +7589,9 @@ test "luce.sema.type: a named function of the wrong shape is refused by shape" {
     , "luce.sema.type", "func(i64) -> i64");
 }
 
-test "luce.sema.fallible: a fallible function is not a value yet" {
-    // Its `!` is an obligation its call sites carry, and a function
-    // type has nowhere to write one — so letting one become a value
-    // would drop the obligation in silence.
+test "luce.sema.fallible: a fallible function fits only a fallible slot (ERRORS.md R3)" {
+    // The `!` travels with the type: the one-way door refuses the
+    // slot that would drop the obligation, and names the fix.
     try expectHostSaying(
         \\import std.files
         \\
@@ -7604,10 +7604,13 @@ test "luce.sema.fallible: a fallible function is not a value yet" {
         \\func main():
         \\    print(apply(risky, "a.txt"))
         \\
-    , "luce.sema.fallible", "a function type carries no '!'");
+    , "luce.sema.fallible", "keep the obligation");
 }
 
-test "luce.parse.type: a function type carries no bang" {
+test "luce.sema.fallible: a call through a fallible value owes its try" {
+    // `func(str) -> str!` parses now (ERRORS.md R3), and the
+    // obligation lands where a direct fallible call's does: at the
+    // call through the value.
     try expectHostSaying(
         \\func apply(f: func(str) -> str!, x: str) -> str:
         \\    return f(x)
@@ -7615,7 +7618,7 @@ test "luce.parse.type: a function type carries no bang" {
         \\func main():
         \\    print("hi")
         \\
-    , "luce.parse.type", "a function type carries no '!'");
+    , "luce.sema.fallible", "can fail");
 }
 
 test "luce.sema.type: a slot holds the optional form of a function value" {
@@ -9081,4 +9084,91 @@ test "class: deinit cannot create a new strong self reference" {
         \\    let resource = Resource()
         \\
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+}
+
+// ---------------------------------------------------------------------------
+// ERRORS.md R3 — fallible function values
+// ---------------------------------------------------------------------------
+
+test "R3: fallible functions are stored, tried, and caught through values" {
+    // The stage-0 shape that ratified the ruling: a pass pipeline in
+    // a container, `try` through the value, `catch` receiving the
+    // reason — on both engines.
+    try agree.prints(
+        \\func check_positive(n: i64) -> !:
+        \\    if n < 0:
+        \\        error("negative: " + str(n))
+        \\
+        \\func check_small(n: i64) -> !:
+        \\    if n > 100:
+        \\        error("too big: " + str(n))
+        \\
+        \\func main() -> !:
+        \\    let passes: list[(func(i64) -> !)?] = [check_positive, check_small]
+        \\    for held in passes:
+        \\        if held != none:
+        \\            try held(7)
+        \\    print("all passed")
+        \\    let one: func(i64) -> ! = check_positive
+        \\    var said = ""
+        \\    one(-3) catch reason:
+        \\        said = reason
+        \\    print(said)
+        \\
+    ,
+        \\all passed
+        \\negative: -3
+        \\
+    );
+}
+
+test "R3: a value that answers may fail, and a non-fallible function fits the slot" {
+    // `func(i64) -> i64!` carries both the answer and the obligation;
+    // a function that never fails converts into the slot (the one-way
+    // door's open side) and its calls simply always succeed.
+    try agree.prints(
+        \\func halve(n: i64) -> i64!:
+        \\    if n == 0:
+        \\        error("nothing to halve")
+        \\    return n // 2
+        \\
+        \\func double(n: i64) -> i64!:
+        \\    return n * 2
+        \\
+        \\func main() -> !:
+        \\    let steps: list[(func(i64) -> i64!)?] = [halve, double]
+        \\    var held = 20
+        \\    for step in steps:
+        \\        if step != none:
+        \\            held = try step(held)
+        \\    print(str(held))
+        \\    let bad: func(i64) -> i64! = halve
+        \\    print(str(bad(0) catch 0 - 1))
+        \\
+    ,
+        \\20
+        \\-1
+        \\
+    );
+}
+
+test "R3: a bare function name fills an optional element implicitly" {
+    // The fit the ruling's probe exposed as missing: a present value
+    // lands in an optional element, function values included.
+    try agree.prints(
+        \\func double(n: i64) -> i64:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let steps: list[(func(i64) -> i64)?] = [double, none]
+        \\    var total = 0
+        \\    for held in steps:
+        \\        if held != none:
+        \\            total = total + held(21)
+        \\    print(str(total))
+        \\
+    ,
+        \\42
+        \\
+    );
 }

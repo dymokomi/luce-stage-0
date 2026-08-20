@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 69;
+pub const format_version: u32 = 70;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -325,6 +325,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
             try writer.valueType(parameter.value_type);
         }
         try writer.valueType(signature.result);
+        try writer.int(u8, @intFromBool(signature.fallible));
     }
 
     try writer.int(u32, @intCast(program.interface_witnesses.len));
@@ -734,6 +735,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         }
         signature.parameters = parameters;
         signature.result = try reader.valueType();
+        signature.fallible = (try reader.int(u8)) != 0;
     }
     program.signatures = signatures;
 
@@ -2312,8 +2314,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // table carries the indirect byte.
     // 68 -> 69: `channel_receive_by` joins — the deadline form of
     // receive (docs/CANCEL.md, ruling A).
-    try testing.expectEqual(@as(u32, 69), format_version);
-    try testing.expectEqual(@as(u64, 2372998594160134084), hasher.final());
+    // 69 -> 70: function types carry fallibility (docs/ERRORS.md R3):
+    // the signature table gains the fallible byte.
+    try testing.expectEqual(@as(u32, 70), format_version);
+    try testing.expectEqual(@as(u64, 7485189790178981958), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

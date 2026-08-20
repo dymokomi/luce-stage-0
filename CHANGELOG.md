@@ -6,6 +6,22 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Function types carry fallibility (docs/ERRORS.md R3): `func(i64)
+  -> i64!` and `func(i64) -> !` are types, so failing functions are
+  stored, passed, and called through values — a pass pipeline is a
+  list at last.  The obligation travels with the type: a call
+  through a fallible value owes `try` or `catch` exactly as a
+  direct call does, a trap still unwinds immediately, and the door
+  is one-way — a non-fallible function converts into a fallible
+  slot (it trivially keeps the promise), while a fallible function
+  refuses a non-fallible slot with the fix in the sentence.  Bound
+  methods follow the same rule.  Along the way the probe exposed
+  and fixed an old gap: a bare function name now lands in an
+  optional container element implicitly, so the prescribed
+  `[(func(i64) -> !)?]` spelling really works.  MIR 69 -> 70 (the
+  signature table gains the fallible byte); the host ABI is
+  untouched.
+
 - A match arm names its captures itself: `word(bound)` binds the
   member's field by **position** under the arm's own name (Swift's
   shape, docs/UNION.md D21) — so two nested matches on one member no

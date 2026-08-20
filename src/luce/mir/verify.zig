@@ -907,6 +907,9 @@ fn expectSignature(
 ) VerifyError!void {
     const callee = program.functions[named.function];
     if (callee.fallible != named.fallible) return error.TypeMismatch;
+    // R3's one-way door: a fallible function may not wear a
+    // non-fallible signature; the reverse conversion is free.
+    if (callee.fallible and !signature.fallible) return error.TypeMismatch;
     if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
     if (callee.locals.len < callee.parameter_count) return error.BadLocal;
     const bound: u32 = if (named.receiver == null) 0 else 1;

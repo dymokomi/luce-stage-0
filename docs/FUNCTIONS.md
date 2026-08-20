@@ -28,8 +28,11 @@ func main():
 ```
 
 A call through a value is positional. The type has no parameter names, so
-named arguments are unavailable at that boundary. Function types do not carry
-fallibility; a fallible declaration cannot become a function value.
+named arguments are unavailable at that boundary. Function types carry
+fallibility (docs/ERRORS.md R3): `func(i64) -> i64!` and `func(i64) -> !`
+are types, a call through such a value owes `try` or `catch` exactly as a
+direct call does, and a non-fallible function converts *into* a fallible
+slot — never the reverse.
 
 ## Expression lambdas
 

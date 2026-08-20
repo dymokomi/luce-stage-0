@@ -173,8 +173,11 @@ values because `func(str) -> i64?` answers an optional integer, while
 
 ## Function values {#function}
 
-`func(T, ...) -> R` is a non-fallible function type. It contains parameter
-types, not names or defaults. For example, `func(i64, i64) -> bool`:
+`func(T, ...) -> R` is a function type; a trailing `!` — `func(i64) -> i64!`,
+`func(i64) -> !` — says calls through the value may fail and owe `try` or
+`catch`. A non-fallible function converts into a fallible slot (it trivially
+keeps the promise), never the reverse. The type contains parameter types, not
+names or defaults. For example, `func(i64, i64) -> bool`:
 
 ```text
 func(i64, i64) -> bool
