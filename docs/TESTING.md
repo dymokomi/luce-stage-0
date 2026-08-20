@@ -241,6 +241,19 @@ census; a structural test pins an exact MIR invariant; a runtime test attacks
 allocation, malformed values, or graph depth directly. Counting all three as
 interchangeable “tests” would hide what is actually proved.
 
+### A step that speaks says what it will say
+
+Zig's build runner prints whatever a step's child wrote to standard
+error and follows it with the command that ran, and it does not clear
+that command when the step succeeded — so a step whose child speaks
+while nothing is wrong reads as a failure with no diagnostic. A step
+that expects output must therefore say so. The editor's two `luce
+build` steps are the tree's only case: the editor draws termui from a
+`LUCE_LIB` shelf, a shelf resolution is announced on standard error
+every build (`docs/PACKAGES.md`), and the steps hold that announcement to
+its exact text and an exit code of zero. Anything else the compile says
+fails the step and is printed whole.
+
 ### Automatic platform gate
 
 Every push to `main` and every pull request runs the complete gate on macOS 15
