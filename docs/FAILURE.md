@@ -129,6 +129,21 @@ func main() -> !:
 be fallible. On success the value flows through; on failure the current
 function unwinds with the same error.
 
+`try` is an expression prefix and is legal in any expression position —
+an operand, a list element, an argument. Three rules make a compound
+expression predictable, and the behavior specification pins each:
+
+- **It binds to the tightest following fallible call**, tighter than any
+  binary operator: `try f(8) + try f(4)` tries each call, never the sum.
+- **Operands still evaluate left to right**, and the first failure
+  abandons the whole enclosing statement — later operands never run.
+- **A tried call is a handled call.** `try` consumes that call's
+  fallibility, so a statement whose fallible calls are all tried has
+  nothing left for a statement `catch` to guard, and the compiler says
+  so rather than leaving a handler that could never fire. To observe a
+  compound expression's first failure, move the expression into its own
+  fallible function and `catch` at that call.
+
 ### catch
 
 `catch` handles a failure. It comes in two forms.

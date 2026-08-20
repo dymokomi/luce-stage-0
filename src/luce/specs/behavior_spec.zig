@@ -1912,6 +1912,56 @@ test "returns: T! composes, and try is the only composition there is" {
     );
 }
 
+test "try in a subexpression binds tight, runs left to right, and stops at the first error" {
+    // The ruling issue #11 asked for, written as behavior (docs/FAILURE.md):
+    // `try` is an expression prefix legal in any expression position; it
+    // binds to the tightest following fallible call, tighter than any
+    // binary operator; operands still evaluate left to right; and the
+    // first error abandons the whole enclosing statement — later
+    // operands never run, which the printed trace is the proof of.
+    try agree.prints(
+        \\func noted(tag: str, value: i64) -> i64!:
+        \\    if value < 0:
+        \\        error("refused " + tag)
+        \\    print("ran " + tag)
+        \\    return value
+        \\
+        \\func chain() -> i64!:
+        \\    return (try noted("f", 5)) + (try noted("g", -1)) + (try noted("h", 9))
+        \\
+        \\func main() -> !:
+        \\    # Tighter than +: each try takes one call, not the sum.
+        \\    let total = try noted("a", 4) + try noted("b", 2)
+        \\    print(str(total))
+        \\    # Legal inside a list literal and an argument position.
+        \\    let held = [try noted("c", 7), try noted("d", 1)]
+        \\    print(str(len(held) + (try noted("e", 0))))
+        \\    # Left to right, stopping at the first error: "f" runs,
+        \\    # "g" raises, "h" never runs.  The catch lives one call
+        \\    # out, because try already consumed each call's
+        \\    # fallibility — a statement whose errors are all tried has
+        \\    # nothing left for a catch to guard, and says so.
+        \\    var landed = -1
+        \\    landed = chain() catch reason:
+        \\        print(reason)
+        \\    assert(landed == -1)
+        \\    print("after")
+        \\
+    ,
+        \\ran a
+        \\ran b
+        \\6
+        \\ran c
+        \\ran d
+        \\ran e
+        \\2
+        \\ran f
+        \\refused g
+        \\after
+        \\
+    );
+}
+
 test "returns: T? is an ordinary element of a shape" {
     // Absence *is* a value, so a `T?` among the elements needs no rule
     // at all — while `-> (i64, i64)?` is refused, because there the
