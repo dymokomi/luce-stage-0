@@ -54,8 +54,9 @@ visible wherever a value enters the program.
 
 ## Match the whole shape
 
-An arm binds every payload field by its declared name, or binds none by
-writing `member:`. A match without `else` must cover every member. That
+An arm binds every payload field in declaration order, under names the
+arm itself chooses — `circle(r)` binds the radius to `r` — or binds none
+by writing `member:`. A match without `else` must cover every member. That
 combination makes adding a new member a visible compile-time change at every
 caller that needs to decide what it means.
 
@@ -85,8 +86,9 @@ func main():
 ```
 
 Do not match only the fields you happen to need. If an arm should ignore a
-payload, write `circle:` or `rect:`. The field names in a binding list are
-part of the type, not local aliases chosen for convenience.
+payload, write `circle:` or `rect:`. Binding names are the arm's own —
+usually the field's name, because that reads best, but a nested match on
+the same member is free to pick another.
 
 Use `else` only when every remaining member intentionally has the same
 behavior. An exhaustive match is often better for domain policy because

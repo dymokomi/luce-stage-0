@@ -446,7 +446,7 @@ test "every Luce sample in every catalogued document compiles" {
     // Written down rather than derived: a document list that empties
     // itself passes vacuously, which is exactly the failure this guard
     // exists to prevent.
-    try testing.expectEqual(@as(usize, 48), documents.len);
+    try testing.expectEqual(@as(usize, 49), documents.len);
     try testing.expect(census.found >= 40);
     // Living reference and plans are always checked strictly. A record may
     // use the explicit historical exemption, so stop before that section;

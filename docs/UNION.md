@@ -434,3 +434,15 @@ an absence that cannot happen. Swift's `indirect enum` is the shape:
   immediately before `union`, and stays an ordinary identifier
   everywhere else. MIR format 67 -> 68 (the variant table carries
   the indirect byte); the host ABI is untouched.
+
+## D21 — positional arm captures (2026-08-21)
+
+Ruled from the stage-0 readiness probe (issue #24): requiring an arm's
+capture to spell the field's own name made two nested matches on one
+member collide ("text is already declared"), and parser code nests
+token matches constantly. Swift's shape lands: the n-th written name
+binds the n-th payload field, and the name is the arm's own choice —
+`word(bound)` binds `word`'s one field to `bound`. An arm still binds
+every field or none, a name may not repeat inside one arm, and the
+tree-wide audit found zero arms whose field-named captures were out of
+declaration order, so every existing arm keeps its exact meaning.

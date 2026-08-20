@@ -2011,18 +2011,21 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
         \\            return
         \\
     , "luce.sema.match");
-    // A binding must name a field of the arm's member.
+    // D21: a binding is positional and the arm names it itself, so
+    // `circle(diameter)` binds the radius under the arm's own name —
+    // what the by-name rule refused is now the rename the specs pin.
+    // What stays refused is a name repeated inside one arm.
     try expectRejected(
         \\union Shape:
         \\    empty
-        \\    circle(radius: f64)
+        \\    rect(width: f64, height: f64)
         \\
         \\func main():
         \\    let s = Shape.empty
         \\    match s:
         \\        empty:
         \\            return
-        \\        circle(diameter):
+        \\        rect(side, side):
         \\            return
         \\
     , "luce.sema.match");

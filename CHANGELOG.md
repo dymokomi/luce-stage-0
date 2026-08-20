@@ -6,6 +6,14 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- A match arm names its captures itself: `word(bound)` binds the
+  member's field by **position** under the arm's own name (Swift's
+  shape, docs/UNION.md D21) — so two nested matches on one member no
+  longer collide over the field's name.  An arm still binds every
+  field in order or none, a name may not repeat inside one arm, and
+  no existing arm changes meaning: the audit found every field-named
+  capture in the tree already in declaration order.
+
 - Deadlines arrive at the channel (docs/CANCEL.md, the ratified
   channel half): `c.receive_by(expires_ms)` waits for what is left
   of one absolute moment on the monotonic clock and answers absence

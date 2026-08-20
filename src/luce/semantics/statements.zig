@@ -790,10 +790,12 @@ fn lowerVariantMatch(
 }
 
 /// One arm's binding list against its member's field list
-/// (docs/UNION.md D5): every listed name a field, none twice, and
-/// all of them or none — a partial list is refused naming the
-/// missing fields the way struct construction already does.
-/// False after reporting.
+/// (docs/UNION.md D5, amended by the R1 ruling): bindings are
+/// **positional** — the n-th name binds the n-th payload field, and
+/// the name is the arm's own choice (Swift's shape), which is what
+/// lets two nested matches on one member pick different names.  All
+/// of them or none: a partial list is refused naming what is
+/// missing.  False after reporting.
 fn checkArmBindings(
     self: *FunctionBuilder,
     declared: types.VariantType,
@@ -811,50 +813,19 @@ fn checkArmBindings(
         );
         return false;
     }
-    const bound = try self.temporary().alloc(bool, member.fields.len);
-    defer self.temporary().free(bound);
-    @memset(bound, false);
-    for (arm.bindings) |binding| {
-        const field_index = member.findField(binding.text) orelse {
-            var suggestion = helpers.Suggestion.init(binding.text);
-            for (member.fields) |field| suggestion.offer(field.name);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.match", binding.span, "{s} is not a field of {s}.{s}; did you mean {s}?", .{
-                    binding.text,
-                    declared.name,
-                    member.name,
-                    closest,
-                });
-                return false;
-            }
-            try self.fail("luce.sema.match", binding.span, "{s} is not a field of {s}.{s}", .{
-                binding.text,
-                declared.name,
-                member.name,
-            });
-            return false;
-        };
-        if (bound[field_index]) {
-            try self.fail("luce.sema.match", binding.span, "field {s} bound twice", .{binding.text});
+    for (arm.bindings, 0..) |binding, at| {
+        for (arm.bindings[0..at]) |earlier| {
+            if (!std.mem.eql(u8, earlier.text, binding.text)) continue;
+            try self.fail("luce.sema.match", binding.span, "{s} bound twice", .{binding.text});
             return false;
         }
-        bound[field_index] = true;
     }
-    for (bound) |given| {
-        if (given) continue;
-        var left_out: std.ArrayList(u8) = .empty;
-        defer left_out.deinit(self.temporary());
-        try context.writeMissingFields(
-            &left_out,
-            self.temporary(),
-            .{ .name = member.name, .fields = member.fields },
-            bound,
-        );
+    if (arm.bindings.len != member.fields.len) {
         try self.fail(
             "luce.sema.match",
             arm.span,
-            "this arm of {s}.{s} is missing {s}; an arm binds every field, or write '{s}:' to bind none",
-            .{ declared.name, member.name, left_out.items, arm.name },
+            "{s}.{s} carries {d} field(s) and this arm names {d}; an arm binds every field in order, or write '{s}:' to bind none",
+            .{ declared.name, member.name, member.fields.len, arm.bindings.len, arm.name },
         );
         return false;
     }
@@ -886,11 +857,10 @@ fn lowerVariantArm(
     var bindings_recorded = true;
     try self.pushScope();
     for (member.fields, 0..) |field, field_index| {
-        // The binding's own span, for "already declared" messages
-        // pointing at the name the reader wrote.
-        const declared_at = for (arm.bindings) |binding| {
-            if (std.mem.eql(u8, binding.text, field.name)) break binding.span;
-        } else arm.name_span;
+        // Positional (R1): the n-th written name takes the n-th
+        // payload field, whatever either is called.
+        const written = arm.bindings[field_index];
+        const declared_at = written.span;
         // The scrutinee read is a local reload of the held slot,
         // and its node says so; the payload read hangs off it.
         const scrutinee = try recorder.recordNode(self, .{ .local_get = .{
@@ -912,7 +882,7 @@ fn lowerVariantArm(
             .value_type = field.field_type,
         };
         const local = (try self.declareLocal(
-            field.name,
+            written.text,
             field.field_type,
             false,
             declared_at,

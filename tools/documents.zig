@@ -64,6 +64,7 @@ pub const plans = [_][]const u8{
     "docs/SELFHOST.md",
     "docs/FFI.md",
     "docs/CANCEL.md",
+    "docs/ERRORS.md",
     "docs/BUILD.md",
     "docs/GENERICS.md",
     "docs/VECTOR.md",

@@ -977,3 +977,65 @@ test "D20: 'indirect' modifies a union and nothing else" {
         \\
     , "luce.parse.expected");
 }
+
+test "D21: an arm names its captures itself, bound by position" {
+    // The R1 ruling (Swift's shape): the n-th name binds the n-th
+    // payload field, whatever either is called — which is what lets
+    // two nested matches on one member pick different names.
+    try agree.prints(
+        \\union Token:
+        \\    word(text: str)
+        \\    pair(first: i64, second: i64)
+        \\
+        \\func main():
+        \\    match Token.word(text = "outer"):
+        \\        word(head):
+        \\            match Token.word(text = "inner"):
+        \\                word(bound):
+        \\                    print(head + " " + bound)
+        \\                pair(a, b):
+        \\                    print(str(a + b))
+        \\        pair(left, right):
+        \\            print(str(left * right))
+        \\    match Token.pair(first = 40, second = 2):
+        \\        word(anything):
+        \\            print(anything)
+        \\        pair(low, high):
+        \\            print(str(low + high))
+        \\
+    ,
+        \\outer inner
+        \\42
+        \\
+    );
+}
+
+test "D21: an arm binds every field in order, or none" {
+    try expectRefused(
+        \\union Token:
+        \\    pair(first: i64, second: i64)
+        \\    finish
+        \\
+        \\func main():
+        \\    match Token.pair(first = 1, second = 2):
+        \\        pair(only):
+        \\            print(str(only))
+        \\        finish:
+        \\            print("finish")
+        \\
+    , "luce.sema.match");
+
+    try expectRefused(
+        \\union Token:
+        \\    pair(first: i64, second: i64)
+        \\    finish
+        \\
+        \\func main():
+        \\    match Token.pair(first = 1, second = 2):
+        \\        pair(a, a):
+        \\            print(str(a))
+        \\        finish:
+        \\            print("finish")
+        \\
+    , "luce.sema.match");
+}
