@@ -1416,7 +1416,12 @@ pub fn build(b: *std.Build) void {
         wants_termui: bool = false,
     }{
         .{ .name = "hello" },
-        .{ .name = "editor", .wants_termui = true },
+        // The editor's modules are the roster the whole tree compiles
+        // it from, minus the root that is the file argument itself.
+        // Naming them here is what makes editing one recompile the
+        // installed `.lc`; without it the artifact this lane proves is
+        // whichever one the cache still holds.
+        .{ .name = "editor", .deps = editor_modules[1..], .wants_termui = true },
         .{ .name = "sort" },
         .{ .name = "bf" },
         .{ .name = "wordcount" },
