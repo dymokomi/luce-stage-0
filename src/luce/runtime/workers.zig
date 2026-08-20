@@ -508,7 +508,7 @@ fn take(joiner: *Runtime, task: Value) heap.Error!*Worker {
         },
         // The verifier admits only a task here; IR that arrived some
         // other way is refused rather than reinterpreted.
-        .instance, .list, .map, .array, .builder, .file, .channel => return joiner.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .variant_box, .file, .channel => return joiner.fail(.not_owned),
     }
 }
 

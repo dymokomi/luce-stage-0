@@ -394,6 +394,7 @@ pub fn settleTypeShapes(self: *Analyzer) Error!void {
     @memset(cyclic, false);
     try settleStructGraph(self, cyclic);
     try reportStructCycles(self, cyclic);
+    try refuseIndirectZeroCycles(self);
 
     for (0..self.structs.items.len) |index| {
         if (self.interfaceForLayout(@intCast(index)) != null) continue;
@@ -448,6 +449,60 @@ const ChainStep = struct { node: u32, member: u32, field: u32 };
 /// line that gets edited.  A struct that is too wide from its own
 /// scalar fields has no such field to name, and gets the shorter
 /// sentence rather than a misleading one.
+/// A union's zero is its first member with every payload field at its
+/// own zero (docs/UNION.md D13) — which is a *construction*, and for
+/// an indirect union it recurses into the first member's fields.  A
+/// first member that reaches its own union again through value fields
+/// would make that construction infinite, so it is refused here, with
+/// the fix in the sentence: a leaf member first.  Only the zero graph
+/// is walked — a struct expands every field, a union only its first
+/// member — because only the zero construction recurses that way.
+fn refuseIndirectZeroCycles(self: *Analyzer) Error!void {
+    const count = self.structs.items.len + self.variants.items.len;
+    if (count == 0) return;
+    const visiting = try self.temporary.alloc(u8, count);
+    defer self.temporary.free(visiting);
+    for (self.variants.items, 0..) |declared, index| {
+        if (!declared.indirect) continue;
+        @memset(visiting, 0);
+        if (!zeroWalkCycles(self, @intCast(self.structs.items.len + index), visiting)) continue;
+        const info = self.variant_decls.items[index];
+        self.diagnostics.scope = self.modules[info.module].file;
+        try self.fail(
+            "luce.sema.union",
+            info.declaration.span,
+            "union {s}'s first member holds the union itself, and the first member is the union's zero; declare a leaf member first",
+            .{declared.name},
+        );
+    }
+    self.diagnostics.scope = source_mod.root_file;
+}
+
+/// True when the zero construction rooted at `node` re-enters a node
+/// already on the walk.  0 unvisited, 1 on the path, 2 done.
+fn zeroWalkCycles(self: *const Analyzer, node: u32, visiting: []u8) bool {
+    if (visiting[node] == 1) return true;
+    if (visiting[node] == 2) return false;
+    visiting[node] = 1;
+    defer visiting[node] = 2;
+    if (node < self.structs.items.len) {
+        for (self.structs.items[node].fields) |field| {
+            if (graphNode(self, field.field_type)) |held| {
+                if (zeroWalkCycles(self, held, visiting)) return true;
+            }
+        }
+        return false;
+    }
+    const declared = self.variants.items[node - self.structs.items.len];
+    if (declared.members.len == 0) return false;
+    for (declared.members[0].fields) |field| {
+        if (graphNode(self, field.field_type)) |held| {
+            if (zeroWalkCycles(self, held, visiting)) return true;
+        }
+    }
+    return false;
+}
+
 fn reportStructTooWide(self: *Analyzer, index: u32) Error!void {
     const layout = self.structs.items[index];
 
@@ -817,7 +872,13 @@ fn containedNodeAt(self: *const Analyzer, step: *GraphStep) ?u32 {
         }
         return null;
     }
-    const members = self.variants.items[step.node - self.structs.items.len].members;
+    const declared = self.variants.items[step.node - self.structs.items.len];
+    // An indirect union's payloads live behind a box (docs/UNION.md
+    // D20): any containment chain entering one is finite, so it
+    // contributes no edges — which is exactly what lets a member hold
+    // the union itself.
+    if (declared.indirect) return null;
+    const members = declared.members;
     while (step.member < members.len) {
         const fields = members[step.member].fields;
         while (step.field < fields.len) {
@@ -861,6 +922,10 @@ fn sumShape(self: *const Analyzer, layout: u32) StructShape {
 /// member a value holds — and the expansion is 1 for the tag plus
 /// the *largest* member's, because only one member is ever live.
 fn sumVariantShape(self: *const Analyzer, index: u32) StructShape {
+    // An indirect value is [tag, box] whatever its members hold, and
+    // the box is an object reference, so the value always carries.
+    if (self.variants.items[index].indirect)
+        return .{ .values = 2, .carries = true };
     var shape: StructShape = .{ .values = 0 };
     var widest: u32 = 0;
     for (self.variants.items[index].members) |member| {

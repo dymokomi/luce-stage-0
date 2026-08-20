@@ -805,3 +805,175 @@ test "D16: a container of unions is searched by what identifies the member" {
         \\
     , "true\n0\n");
 }
+
+// ---------------------------------------------------------------------------
+// D20: indirect unions — the payload behind a box, recursion made finite
+// ---------------------------------------------------------------------------
+
+fn expectRefused(source: []const u8, code: []const u8) !void {
+    var result = try luce.compile.compile(std.testing.allocator, source, .{ .allow_host = true });
+    defer result.deinit();
+    switch (result) {
+        .success => return error.TestUnexpectedResult,
+        .failure => |diagnostics| {
+            for (0..diagnostics.count()) |index| {
+                if (std.mem.eql(u8, diagnostics.at(index).?.code, code)) return;
+            }
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
+test "D20: an indirect union holds itself, builds a tree, and matches it apart" {
+    // The probe that ratified the ruling: a member holds the union
+    // itself with no optional and no wrapper class, the tree builds
+    // bottom-up, and match walks it back down — on both engines, with
+    // the leak census holding the boxes to zero.
+    try agree.prints(
+        \\indirect union Expr:
+        \\    literal(value: i64)
+        \\    binary(op: str, left: Expr, right: Expr)
+        \\
+        \\func evaluate(e: Expr) -> i64:
+        \\    match e:
+        \\        literal(value):
+        \\            return value
+        \\        binary(op, left, right):
+        \\            let a = evaluate(left)
+        \\            let b = evaluate(right)
+        \\            if op == "+":
+        \\                return a + b
+        \\            return a * b
+        \\
+        \\func main():
+        \\    let e = Expr.binary(op = "+", left = Expr.literal(value = 2), right = Expr.binary(op = "*", left = Expr.literal(value = 3), right = Expr.literal(value = 4)))
+        \\    print(str(evaluate(e)))
+        \\
+    ,
+        \\14
+        \\
+    );
+}
+
+test "D20: an indirect union's zero is its first member, D13 unchanged" {
+    // `var e: Expr` still starts at the first member with zeroed
+    // payload — the zero is a real construction now, and observably
+    // identical to the inline rule.
+    try agree.prints(
+        \\indirect union Expr:
+        \\    literal(value: i64)
+        \\    binary(op: str, left: Expr, right: Expr)
+        \\
+        \\func main():
+        \\    var e: Expr
+        \\    match e:
+        \\        literal(value):
+        \\            print(str(value))
+        \\        binary(op, left, right):
+        \\            print(op)
+        \\
+    ,
+        \\0
+        \\
+    );
+}
+
+test "D20: the tag test and copies work on an indirect union" {
+    // The tag stays inline — slot 0 either way — so `u == E.leaf`
+    // reads no box; and a copied value shares the payload box, which
+    // is observably identical to a deep copy because payloads are
+    // immutable.
+    try agree.prints(
+        \\indirect union Tree:
+        \\    empty
+        \\    node(value: i64, rest: Tree)
+        \\
+        \\func total(t: Tree) -> i64:
+        \\    match t:
+        \\        empty:
+        \\            return 0
+        \\        node(value, rest):
+        \\            return value + total(rest)
+        \\
+        \\func main():
+        \\    let held = Tree.node(value = 5, rest = Tree.node(value = 6, rest = Tree.empty))
+        \\    let copied = held
+        \\    print(str(held == Tree.empty))
+        \\    print(str(total(copied) + total(held)))
+        \\
+    ,
+        \\false
+        \\22
+        \\
+    );
+}
+
+test "D20: an indirect union crosses a worker by deep copy" {
+    // The box is not identity: the graph rebuilds in the receiver,
+    // exactly as a list crosses (docs/THREADS.md).
+    try agree.prints(
+        \\indirect union Tree:
+        \\    empty
+        \\    node(value: i64, rest: Tree)
+        \\
+        \\func total(t: Tree) -> i64:
+        \\    match t:
+        \\        empty:
+        \\            return 0
+        \\        node(value, rest):
+        \\            return value + total(rest)
+        \\
+        \\func carry(t: Tree) -> i64:
+        \\    return total(t)
+        \\
+        \\func main():
+        \\    let held = Tree.node(value = 40, rest = Tree.node(value = 2, rest = Tree.empty))
+        \\    let t = spawn carry(held)
+        \\    print(str(t.wait()))
+        \\
+    ,
+        \\42
+        \\
+    );
+}
+
+test "D20: a value union still refuses to contain itself, and the words hold" {
+    // The refusal and its `T?` remedy are unchanged for value unions;
+    // `indirect` is the other remedy, and only the declaration asks
+    // for it.
+    try expectRefused(
+        \\union Expr:
+        \\    literal(value: i64)
+        \\    binary(left: Expr, right: Expr)
+        \\
+        \\func main():
+        \\    pass
+        \\
+    , "luce.sema.union");
+}
+
+test "D20: an indirect union whose first member holds itself is refused" {
+    // The first member is the union's zero (D13), and a zero that
+    // recurses forever is a construction that never finishes — the
+    // sentence names the fix.
+    try expectRefused(
+        \\indirect union Bad:
+        \\    pair(left: Bad, right: Bad)
+        \\    leaf(value: i64)
+        \\
+        \\func main():
+        \\    pass
+        \\
+    , "luce.sema.union");
+}
+
+test "D20: 'indirect' modifies a union and nothing else" {
+    try expectRefused(
+        \\indirect struct Point:
+        \\    x: i64
+        \\
+        \\func main():
+        \\    pass
+        \\
+    , "luce.parse.expected");
+}

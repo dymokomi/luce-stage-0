@@ -115,12 +115,42 @@ construction when the payload must be an independent list. See [Memory and
 ARC](/guide/memory/) for the value/reference boundary and deterministic
 resource cleanup.
 
-## Recursive data needs an indirection
+## Recursive data: `indirect`
 
 A union is a value, so it cannot contain itself unconditionally: that would
-require an infinite-sized value. Put recursion behind an optional, where
-absence terminates the chain, or behind an owning container, whose reference
-has a fixed size:
+require an infinite-sized value. When the shape really is recursive — an
+expression tree, a linked chain — declare the union `indirect`, and a member
+may hold the union itself:
+
+```luce run
+indirect union Expr:
+    literal(value: i64)
+    add(left: Expr, right: Expr)
+
+func evaluate(e: Expr) -> i64:
+    match e:
+        literal(value):
+            return value
+        add(left, right):
+            return evaluate(left) + evaluate(right)
+
+func main():
+    let e = Expr.add(left = Expr.literal(value = 40), right = Expr.literal(value = 2))
+    print(str(evaluate(e)))
+```
+
+```output
+42
+```
+
+The payload lives behind a hidden reference the runtime owns, so the value
+stays finite and copies stay cheap; nothing about construction, `match`, or
+the tag test changes. One rule guards the zero value: the first member is
+what a bare `var e: Expr` starts at, so the first member may not hold the
+union itself — declare a leaf member first.
+
+Recursion can also stay behind an optional, where absence terminates the
+chain, or behind an owning container, whose reference has a fixed size:
 
 ```text
 union Json:

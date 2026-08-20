@@ -6,6 +6,20 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Recursive unions arrive: `indirect union Expr:` lets a member hold
+  the union itself — `add(left: Expr, right: Expr)`, no optional, no
+  wrapper class — by moving the payload behind one hidden ARC box
+  (docs/UNION.md D20, Swift's `indirect enum` under the constitution).
+  The tag stays inline so match dispatch and the tag test read no
+  box; a payload-less member allocates nothing; copies retain the box,
+  which payload immutability makes observably identical to a deep
+  copy; workers and channels deep-copy the graph with aliases
+  preserved.  The first member is still the union's zero, so it may
+  not hold the union itself — refused with the fix in the sentence —
+  and a value union that contains itself keeps its refusal and its
+  `T?` remedy.  The word is contextual like `blocking`.  MIR 67 -> 68;
+  the host ABI is untouched.
+
 - A plan's step learns to link: `app.link("gen.o")` on a
   `std.build` program or library step carries an object, an
   archive, or a `-lNAME` request into that step's native link,

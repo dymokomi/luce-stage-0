@@ -244,6 +244,17 @@ pub const Object = struct {
         /// runtime; the wrapper's last release lowers the row's holder
         /// count, and the last holder anywhere closes and frees it.
         channel: i64,
+        /// The payload of one `indirect union` value (docs/UNION.md
+        /// D20): the member's field run, each slot a self-describing
+        /// `Value`, behind the one ARC reference the [tag, box] pair
+        /// carries in its second slot.  Not an `instance`: members of
+        /// one union give the same slot different types, so no single
+        /// layout could honestly describe the run — and none is
+        /// needed, because each slot describes itself.  Payloads are
+        /// immutable once constructed, which is why copying the
+        /// surrounding value retains this box instead of duplicating
+        /// it: the two are observably identical.
+        variant_box: []Value,
         /// A running worker (docs/THREADS.md D3).
         ///
         /// A resource on exactly the terms `file` is one, and the same
@@ -664,6 +675,10 @@ pub const Object = struct {
             .instance => |*instance| {
                 allocator.free(instance.fields);
                 instance.fields = &.{};
+            },
+            .variant_box => |*run| {
+                allocator.free(run.*);
+                run.* = &.{};
             },
             .list => self.elements.deinit(allocator),
             .map => |*map| {
@@ -1242,6 +1257,7 @@ pub const Runtime = struct {
     fn sweep(self: *Runtime, object: *Object) void {
         switch (object.data) {
             .instance => |instance| for (instance.fields) |field| self.dropStorage(field),
+            .variant_box => |run| for (run) |slot| self.dropStorage(slot),
             // Only a `Value` element can be holding storage; a packed
             // cell owns nothing (docs/BYTES.md R1).
             .list, .array => if (object.elements.kind == .value) {
@@ -1604,6 +1620,49 @@ pub const Runtime = struct {
         if (instance.layout != layout_index) return self.fail(.not_owned);
         if (field >= instance.fields.len) return self.fail(.index_bounds);
         return instance.fields[field];
+    }
+
+    /// One whole indirect union value (docs/UNION.md D20): box the
+    /// member's payload behind a fresh reference and answer the
+    /// [tag, box] pair.  Consumes the slots exactly as `makeStruct`
+    /// consumes fields; a payload-less member passes an empty run and
+    /// allocates nothing — its box slot is `none`.
+    pub fn makeIndirectVariant(self: *Runtime, member: i64, slots: []const Value) Error!Value {
+        const box = if (slots.len == 0) Value.none else box: {
+            for (slots) |slot| {
+                if (!slot.hasValidRepresentation()) return self.fail(.not_owned);
+            }
+            const stored = self.objects.alloc(Value, slots.len) catch |mistake| {
+                for (slots) |slot| self.freeValue(slot);
+                return mistake;
+            };
+            @memcpy(stored, slots);
+            break :box self.attach(.{ .data = .{ .variant_box = stored } }) catch |mistake| {
+                for (stored) |slot| self.freeValue(slot);
+                self.objects.free(stored);
+                return mistake;
+            };
+        };
+        const pair = [2]Value{ Value.ofI64(member), box };
+        return self.makeStruct(&pair) catch |mistake| {
+            self.freeValue(box);
+            return mistake;
+        };
+    }
+
+    /// One payload slot of an indirect union value, read through its
+    /// box — a borrow, exactly as `classField` answers one: the box
+    /// outlives the read because the union value holding it does.
+    pub fn variantPayload(self: *Runtime, held: Value, index: usize) Error!Value {
+        if (!held.hasValidRepresentation() or held.tag != .object)
+            return self.fail(.not_owned);
+        const object = try self.resolve(held);
+        const run = switch (object.data) {
+            .variant_box => |run| run,
+            else => return self.fail(.not_owned),
+        };
+        if (index >= run.len) return self.fail(.index_bounds);
+        return run[index];
     }
 
     /// Replace one class field in place and consume `to`. Every alias sees
@@ -2325,6 +2384,10 @@ pub const Runtime = struct {
                     self.releaseValue(field, pending);
                     self.dropStorage(field);
                 },
+                .variant_box => |run| for (run) |slot| {
+                    self.releaseValue(slot, pending);
+                    self.dropStorage(slot);
+                },
                 // Only a `Value` element can hold an object; a `f64`,
                 // an `i64` or a byte cell owns nothing and has nothing
                 // to walk.
@@ -2452,6 +2515,7 @@ pub const Runtime = struct {
     fn discardCopiedObject(self: *Runtime, storage: *Object) void {
         switch (storage.data) {
             .instance => unreachable, // classes preserve identity and are never deep-copied
+            .variant_box => |run| for (run) |slot| self.freeValue(slot),
             .list, .array => if (storage.elements.kind == .value) {
                 for (storage.elements.cells(Value)) |item| self.freeValue(item);
             },
@@ -2680,6 +2744,14 @@ pub const Runtime = struct {
                         try copied.appendSlice(self.objects, builder.items);
                         break :blk .{ .data = .{ .builder = copied } };
                     },
+                    // An indirect payload crosses like a value list:
+                    // shell of `none` slots now, children by task, so
+                    // aliases inside the payload land once.
+                    .variant_box => |run| blk: {
+                        const copied = try self.objects.alloc(Value, run.len);
+                        @memset(copied, Value.none);
+                        break :blk .{ .data = .{ .variant_box = copied } };
+                    },
                     // A second handle on a file or task would create a
                     // second owner of a resource; the analyzer refuses
                     // both and this is the runtime backstop.
@@ -2714,6 +2786,15 @@ pub const Runtime = struct {
                 const source_after = source.liveObject(handle) orelse unreachable;
                 switch (source_after.data) {
                     .instance => unreachable,
+                    .variant_box => |run| {
+                        const copied_run = destination.data.variant_box;
+                        for (run, 0..) |slot, at| {
+                            try tasks.append(self.objects, .{
+                                .source = slot,
+                                .destination = &copied_run[at],
+                            });
+                        }
+                    },
                     .list, .array => if (source_after.elements.kind == .value) {
                         const cells = destination.elements.cells(Value);
                         for (source_after.elements.cells(Value), 0..) |item, at| {

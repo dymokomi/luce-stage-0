@@ -208,8 +208,7 @@ the object it names stays alive for as long as any copy does.
 A union may name itself indirectly through a reference-typed container,
 which is how a recursive shape like a JSON tree is written. The recursion
 travels through the container's single reference, so the type is finite by
-construction and completed ARC frees the tree at its last reference — no boxing
-keyword, no arena, no tracing collector:
+construction and completed ARC frees the tree at its last reference:
 
 ```luce
 union Json:
@@ -408,3 +407,30 @@ compared on prints, traps, traces, and the leak census, so a missed release
 or a double free of a payload shows up as a number in the spec suite rather
 than in a program.
 </content>
+
+## D20 — `indirect union`: recursion behind an invisible box (2026-08-20)
+
+Ruled with the owner from the self-host parser probe (issue #24): a
+recursive AST written with `Expr?` forced every consumer to branch on
+an absence that cannot happen. Swift's `indirect enum` is the shape:
+
+- `indirect union Expr:` declares that the payload run lives behind
+  one hidden ARC box. A member may then hold the union itself, and
+  the value stays finite.
+- The tag stays inline — a value is `[tag, box]`, so `variant_tag`,
+  the tag test, and match dispatch read no box. A payload-less
+  member's box is absent and allocates nothing.
+- Payloads are immutable once constructed, so copying the value
+  retains the box instead of duplicating it — observably identical
+  to a deep copy, which is why "a union is a value" survives.
+- Workers and channels deep-copy the box graph, aliases preserved;
+  no identity crosses.
+- The first member is the union's zero (D13), so it may not reach
+  the union itself through value fields — refused with "declare a
+  leaf member first". Auto-inferring indirection was rejected (it
+  hides an allocation); boxing every union was rejected (a small
+  union stays an inline value).
+- The word is contextual like `blocking`: `indirect` is claimed only
+  immediately before `union`, and stays an ordinary identifier
+  everywhere else. MIR format 67 -> 68 (the variant table carries
+  the indirect byte); the host ABI is untouched.

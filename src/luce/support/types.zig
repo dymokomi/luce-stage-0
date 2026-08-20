@@ -651,6 +651,13 @@ pub const VariantMember = struct {
 pub const VariantType = struct {
     name: []const u8, // arena-owned by the program
     members: []VariantMember,
+    /// `indirect union` (docs/UNION.md D20): the payload run lives
+    /// behind one hidden ARC box, so a member may hold the union
+    /// itself and the value stays finite.  The tag stays inline —
+    /// slot 0 either way — and only the payload moves; a value of an
+    /// indirect union is [tag, box], where the box is absent for a
+    /// payload-less member and nothing was allocated.
+    indirect: bool = false,
 
     pub fn findMember(self: VariantType, name: []const u8) ?u32 {
         for (self.members, 0..) |member, index| {
@@ -669,9 +676,18 @@ pub const VariantType = struct {
     /// slots, which own nothing, copy as themselves, and free nothing
     /// (docs/UNION.md D8, D12).
     pub fn runLength(self: VariantType) usize {
+        if (self.indirect) return 2; // [tag, payload box]
         var widest: usize = 0;
         for (self.members) |member| widest = @max(widest, member.fields.len);
         return 1 + widest;
+    }
+
+    /// How many slots the payload box of one member carries — the
+    /// indirect representation's other number.  The member's own
+    /// arity, not the widest: the box is allocated when the member is
+    /// known and read only behind a tag dispatch.
+    pub fn boxLength(self: VariantType, member: u32) usize {
+        return self.members[member].fields.len;
     }
 };
 

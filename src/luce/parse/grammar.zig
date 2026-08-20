@@ -526,6 +526,14 @@ pub const Parser = struct {
         defer externs.deinit(self.arena);
 
         while (self.peekKind() != .end_of_file) {
+            if (self.atIndirectUnion()) {
+                if (try self.indirectUnion()) |declaration| {
+                    try unions.append(self.arena, declaration);
+                } else {
+                    self.recover();
+                }
+                continue;
+            }
             switch (self.peekKind()) {
                 .newline => _ = self.advance(),
                 // Layout tokens at file scope mean the file itself
@@ -571,7 +579,7 @@ pub const Parser = struct {
                     }
                 },
                 .keyword_union => {
-                    if (try self.unionDecl()) |declaration| {
+                    if (try self.unionDecl(false)) |declaration| {
                         try unions.append(self.arena, declaration);
                     } else {
                         self.recover();
@@ -708,6 +716,16 @@ pub const Parser = struct {
         const marker = self.advance();
         const visibility: ast.Visibility =
             if (marker.kind == .keyword_private) .private else .public;
+        if (self.atIndirectUnion()) {
+            if (try self.indirectUnion()) |declaration| {
+                var marked = declaration;
+                marked.visibility = visibility;
+                try unions.append(self.arena, marked);
+            } else {
+                self.recover();
+            }
+            return;
+        }
         switch (self.peekKind()) {
             .colon => {
                 try self.report(
@@ -807,7 +825,7 @@ pub const Parser = struct {
                 }
             },
             .keyword_union => {
-                if (try self.unionDecl()) |declaration| {
+                if (try self.unionDecl(false)) |declaration| {
                     var marked = declaration;
                     marked.visibility = visibility;
                     try unions.append(self.arena, marked);
@@ -2025,7 +2043,7 @@ pub const Parser = struct {
     /// (R2 — the enum is declared separately and matched on), no
     /// `= value` on a member (a member is not a number, D1), and no
     /// positional payload (a field is named, always).
-    fn unionDecl(self: *Parser) Error!?ast.UnionDecl {
+    fn unionDecl(self: *Parser, indirect: bool) Error!?ast.UnionDecl {
         const start = self.advance(); // union
         const name = (try self.expect(.identifier, "a union name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -2082,7 +2100,42 @@ pub const Parser = struct {
             .name_span = name.span,
             .members = try members.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+            .indirect = indirect,
             .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// The contextual `indirect` at a declaration position: claimed
+    /// only when the very next token is `union`, so the word stays an
+    /// ordinary identifier everywhere else (the `blocking` rule).
+    fn indirectUnion(self: *Parser) Error!?ast.UnionDecl {
+        _ = self.advance(); // indirect
+        if (self.peekKind() != .keyword_union) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "'indirect' modifies a union declaration: write 'indirect union NAME:'",
+                .{},
+            );
+            return null;
+        }
+        return self.unionDecl(true);
+    }
+
+    fn atIndirectUnion(self: *const Parser) bool {
+        if (self.peekKind() != .identifier) return false;
+        if (!std.mem.eql(u8, self.text(self.peek()), "indirect")) return false;
+        // Claimed before any declaration keyword — a following union
+        // parses, and anything else gets the teaching refusal in
+        // `indirectUnion` instead of the generic file-scope sentence.
+        return switch (self.tokens[self.index + 1].kind) {
+            .keyword_union,
+            .keyword_struct,
+            .keyword_class,
+            .keyword_enum,
+            .keyword_interface,
+            => true,
+            else => false,
         };
     }
 

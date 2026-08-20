@@ -204,6 +204,8 @@ pub const Service = enum {
 
     // -- struct values ------------------------------------------------
     luce_rt_struct_make,
+    luce_rt_variant_make,
+    luce_rt_variant_payload,
     luce_rt_struct_set,
     /// A function value's run — the same allocation `struct_make`
     /// makes, under the tag that says its objects are borrowed
@@ -950,6 +952,14 @@ pub fn describe(service: Service) Effect {
         .luce_rt_struct_make, .luce_rt_function_make => .{
             .memory = touches_text,
             .parameters = &.{ .run, .values_in, .plain, .value_out },
+        },
+        .luce_rt_variant_make => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .values_in, .plain, .value_out },
+        },
+        .luce_rt_variant_payload => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_out },
         },
         .luce_rt_struct_set => .{
             .memory = touches_text,

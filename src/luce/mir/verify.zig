@@ -588,7 +588,12 @@ fn containedLayoutAt(program: *const Program, step: *GraphStep) ?u32 {
         }
         return null;
     }
-    const members = program.variants[step.layout - program.structs.len].members;
+    const declared = program.variants[step.layout - program.structs.len];
+    // An indirect union's payloads live behind a box (docs/UNION.md
+    // D20): chains entering one are finite, so it contributes no
+    // edges — the same exemption the analyzer's graph makes.
+    if (declared.indirect) return null;
+    const members = declared.members;
     while (step.member < members.len) {
         const fields = members[step.member].fields;
         while (step.field < fields.len) {

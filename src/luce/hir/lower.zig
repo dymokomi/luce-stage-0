@@ -256,6 +256,9 @@ const Replay = struct {
                 return false;
             },
             .variant => |layout| {
+                // An indirect value carries its payload box whatever
+                // the payloads hold (docs/UNION.md D20).
+                if (self.code.variants[layout].indirect) return true;
                 if (seen_variants[layout]) return false;
                 seen_variants[layout] = true;
                 for (self.code.variants[layout].members) |member| {

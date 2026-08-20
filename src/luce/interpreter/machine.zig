@@ -1200,18 +1200,30 @@ pub const Machine = struct {
                     // that own nothing (`types.VariantType.runLength`).
                     .variant_make => |make| {
                         const declared = self.program.variants[make.variant];
-                        const span = declared.runLength();
-                        self.field_scratch.clearRetainingCapacity();
-                        try self.field_scratch.ensureTotalCapacity(self.arena, span);
-                        self.field_scratch.appendAssumeCapacity(.ofI64(make.member));
-                        for (make.fields) |field_register| {
-                            self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                        if (declared.indirect) {
+                            self.field_scratch.clearRetainingCapacity();
+                            try self.field_scratch.ensureTotalCapacity(self.arena, make.fields.len);
+                            for (make.fields) |field_register| {
+                                self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                            }
+                            registers[item] = self.runtime.makeIndirectVariant(
+                                make.member,
+                                self.field_scratch.items,
+                            ) catch |mistake| return self.caught(mistake);
+                        } else {
+                            const span = declared.runLength();
+                            self.field_scratch.clearRetainingCapacity();
+                            try self.field_scratch.ensureTotalCapacity(self.arena, span);
+                            self.field_scratch.appendAssumeCapacity(.ofI64(make.member));
+                            for (make.fields) |field_register| {
+                                self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                            }
+                            while (self.field_scratch.items.len < span) {
+                                self.field_scratch.appendAssumeCapacity(.none);
+                            }
+                            registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                                return self.caught(mistake);
                         }
-                        while (self.field_scratch.items.len < span) {
-                            self.field_scratch.appendAssumeCapacity(.none);
-                        }
-                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
-                            return self.caught(mistake);
                     },
                     .weak_struct_set => |set| {
                         const weak = self.runtime.weaken(registers[set.value]) catch |mistake|
@@ -1236,7 +1248,14 @@ pub const Machine = struct {
                         registers[item] = registers[tag.target].asStruct()[0];
                     },
                     .variant_field => |get| {
-                        registers[item] = registers[get.target].asStruct()[1 + get.field];
+                        if (self.program.variants[get.variant].indirect) {
+                            registers[item] = self.runtime.variantPayload(
+                                registers[get.target].asStruct()[1],
+                                get.field,
+                            ) catch |mistake| return self.caught(mistake);
+                        } else {
+                            registers[item] = registers[get.target].asStruct()[1 + get.field];
+                        }
                     },
                     .heap_new => |new| {
                         registers[item] = self.allocateObject(new, registers) catch |mistake|

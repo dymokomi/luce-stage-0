@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 67;
+pub const format_version: u32 = 68;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -305,6 +305,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     try writer.int(u32, @intCast(program.variants.len));
     for (program.variants) |declared| {
         try writer.blob(declared.name);
+        try writer.int(u8, @intFromBool(declared.indirect));
         try writer.int(u32, @intCast(declared.members.len));
         for (declared.members) |member| {
             try writer.blob(member.name);
@@ -705,6 +706,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     const variants = try arena.alloc(types.VariantType, variant_count);
     for (variants) |*declared| {
         declared.name = try arena.dupe(u8, try reader.blob());
+        declared.indirect = (try reader.int(u8)) != 0;
         const member_count = try reader.count();
         const members = try arena.alloc(types.VariantMember, member_count);
         for (members) |*member| {
@@ -2306,7 +2308,9 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // table and its call instruction.
     // 66 -> 67: `buffer_address` joins — the scoped buffer form's
     // std-only half.
-    try testing.expectEqual(@as(u32, 67), format_version);
+    // 67 -> 68: `indirect union` (docs/UNION.md D20): the variant
+    // table carries the indirect byte.
+    try testing.expectEqual(@as(u32, 68), format_version);
     try testing.expectEqual(@as(u64, 9000776896423692061), hasher.final());
 }
 

@@ -600,6 +600,10 @@ pub const UnionDecl = struct {
     members: []UnionMember,
     functions: []FuncDecl,
     visibility: Visibility = .none,
+    /// `indirect union`: the payload lives behind a hidden ARC box, so
+    /// a member may name the union itself and the value stays finite
+    /// (docs/UNION.md D20).  The word is contextual, like `blocking`.
+    indirect: bool = false,
     span: Span,
 };
 

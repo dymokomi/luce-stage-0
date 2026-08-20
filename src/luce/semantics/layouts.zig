@@ -300,6 +300,7 @@ fn collectUnionName(
     try self.variants.append(self.arena, .{
         .name = try self.arena.dupe(u8, qualified),
         .members = try members.toOwnedSlice(self.arena),
+        .indirect = declaration.indirect,
     });
 }
 

@@ -318,7 +318,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
             into_object.elements
         else
             return runtime.fail(.not_owned),
-        .instance, .list, .map, .builder, .file, .task, .channel => return runtime.fail(.not_owned),
+        .instance, .list, .map, .builder, .variant_box, .file, .task, .channel => return runtime.fail(.not_owned),
     };
     var filled: i64 = 0;
     const cells = into.cells(u8);
@@ -344,7 +344,7 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
             from_object.elements
         else
             return runtime.fail(.not_owned),
-        .instance, .list, .map, .builder, .file, .task, .channel => return runtime.fail(.not_owned),
+        .instance, .list, .map, .builder, .variant_box, .file, .task, .channel => return runtime.fail(.not_owned),
     };
     const cells = from.cells(u8);
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
@@ -411,7 +411,7 @@ fn byteResourceOf(runtime: *Runtime, held: Value) Error!heap.Object.File {
             .file, .socket => held_file,
             .window, .surface, .listener => runtime.fail(.not_owned),
         },
-        .instance, .list, .map, .array, .builder, .task, .channel => return runtime.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .variant_box, .task, .channel => return runtime.fail(.not_owned),
     };
 }
 
@@ -431,7 +431,7 @@ pub fn pathOf(runtime: *Runtime, held: Value) []const u8 {
     const object = runtime.resolve(held) catch return "";
     return switch (object.data) {
         .file => |held_file| held_file.path,
-        .instance, .list, .map, .array, .builder, .task, .channel => "",
+        .instance, .list, .map, .array, .builder, .variant_box, .task, .channel => "",
     };
 }
 

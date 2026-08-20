@@ -207,8 +207,10 @@ is exhaustive, so adding a member finds every unhandled use.
 A `union` is a tagged choice whose members may carry named fields. Members are
 constructed through the union namespace, and `match` is the only door to a
 payload. Each arm binds only the fields of that member. A recursive value
-layout must pass through absence or a reference. [UNION.md](UNION.md) is the
-complete contract.
+layout passes through absence, a reference, or an `indirect union`, whose
+members may hold the union itself behind a hidden ARC box (D20); the first
+member stays the type's zero and may not recurse. [UNION.md](UNION.md) is
+the complete contract.
 
 ### Interfaces
 

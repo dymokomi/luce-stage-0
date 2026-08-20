@@ -251,7 +251,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         },
         .object => switch ((try runtime.resolve(held)).data) {
             .builder => |builder| return runtime.ownValue(Value.ofStr(builder.items)),
-            .instance, .list, .map, .array, .file, .task, .channel => return runtime.fail(.not_owned),
+            .instance, .list, .map, .array, .variant_box, .file, .task, .channel => return runtime.fail(.not_owned),
         },
         else => return runtime.fail(.not_owned),
     }
@@ -272,7 +272,7 @@ pub fn bytes(runtime: *Runtime, held: Value) Error!Value {
             switch (object.data) {
                 .list => {},
                 .array => if (object.dims.len != 1) return runtime.fail(.not_owned),
-                .instance, .map, .builder, .file, .task, .channel => return runtime.fail(.not_owned),
+                .instance, .map, .builder, .variant_box, .file, .task, .channel => return runtime.fail(.not_owned),
             }
             if (object.elements.kind != .u8) return runtime.fail(.not_owned);
             break :blk object.elements.cells(u8);

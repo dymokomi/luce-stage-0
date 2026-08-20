@@ -1688,6 +1688,43 @@ pub export fn luce_rt_struct_make(
     return completed(runtime);
 }
 
+/// One indirect union value: the member's payload run boxed behind a
+/// fresh reference, answered as the [tag, box] pair (docs/UNION.md
+/// D20).  Consumes the run's values, like `luce_rt_struct_make`.
+pub export fn luce_rt_variant_make(
+    runtime: *Runtime,
+    member: i64,
+    slots: [*c]const Value,
+    count: i64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    const slot_count = checkedCount(runtime, count) catch |mistake|
+        return failed(runtime, mistake);
+    if (slot_count != 0 and !requireValueInput(runtime, slots)) return raised_trap;
+    const empty: [0]Value = .{};
+    const passed: []const Value = if (slot_count == 0) &empty else slots[0..slot_count];
+    out.* = runtime.makeIndirectVariant(member, passed) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+/// One payload slot of an indirect union value, through its box — a
+/// borrowed answer, like `luce_rt_class_get`'s.
+pub export fn luce_rt_variant_payload(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    index: i64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    const slot = std.math.cast(usize, index) orelse return rejected(runtime, .index_bounds);
+    out.* = runtime.variantPayload(held.*, slot) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
 /// A function value's run: `count` consecutive `Value`s under the tag
 /// that says the objects inside are **borrowed** (docs/BINDING.md D4).
 /// Its own entry point rather than a flag on `struct_make`, because

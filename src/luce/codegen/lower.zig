@@ -5950,6 +5950,23 @@ const Body = struct {
             // `struct_get` reads one — the verifier has already proven
             // the member and the field against `Program.variants`.
             .variant_field => |get| {
+                if (self.module.program.variants[get.variant].indirect) {
+                    // The box is slot 1 of the pair; the payload slot
+                    // is read through it, a borrow like `class_get`.
+                    const box = try self.wip.gep(
+                        .inbounds,
+                        self.module.value_type,
+                        self.produced[get.target].value,
+                        &.{try self.module.builder.intValue(.i64, 1)},
+                        "box.at",
+                    );
+                    try self.callAnswering(register, .luce_rt_variant_payload, &.{
+                        self.runtime,
+                        box,
+                        try self.module.builder.intValue(.i64, get.field),
+                    });
+                    return;
+                }
                 const member = self.module.program.variants[get.variant].members[get.member];
                 const address = try self.wip.gep(
                     .inbounds,
@@ -6433,6 +6450,24 @@ const Body = struct {
         fields: []const mir.Register,
     ) Error!void {
         const declared = self.module.program.variants[variant];
+        if (declared.indirect) {
+            const run = try self.scratchRun(
+                self.module.value_type,
+                fields.len,
+                value_alignment,
+                "payload",
+            );
+            for (fields, 0..) |field, index| {
+                try self.storedAt(run, index, field);
+            }
+            try self.callAnswering(register, .luce_rt_variant_make, &.{
+                self.runtime,
+                try self.module.builder.intValue(.i64, member),
+                run,
+                try self.module.builder.intValue(.i64, fields.len),
+            });
+            return;
+        }
         const span = declared.runLength();
         const run = try self.scratchRun(
             self.module.value_type,
