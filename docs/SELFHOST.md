@@ -53,11 +53,14 @@ The pre-freeze audit's punch list, unchanged in substance:
   story that channels, sockets, and `receive_timeout` compose with,
   written as its own design doc and ratified before implementation.
 
-## Phase 1 — ratified language work up front
+## Phase 1 — ratified language work up front (**already satisfied**)
 
-Non-capturing lambdas (#27), exactly as ratified 2026-08-07. The one
-feature that enters without waiting for compiler evidence, because its
-ruling already happened.
+Non-capturing lambdas (#27), exactly as ratified 2026-08-07 — verified
+at head during the Phase 0 night run: the arrow form passes as a
+function value, `xs.sort_by((a, b) -> …)` works end to end, and method
+references are refused with the ratified teaching diagnostic. The
+feature had landed during an earlier run; the issue is closed with the
+verification.
 
 ## Phase 2 — Tier-1 FFI (design doc first: docs/FFI.md)
 
