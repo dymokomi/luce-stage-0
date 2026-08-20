@@ -118,3 +118,21 @@ test "the scoped buffer form hands real memory across and back" {
         \\
     );
 }
+
+test "a blocking extern answers outside the effect lock on both engines" {
+    // `blocking` is the declaration's opt-out of the effect lock — the
+    // callee promises its own thread-safety and may park the thread.
+    // The answer is the same either way; what this pins is that the
+    // unlocked path executes at all, on both engines, and stays a
+    // per-declaration fact rather than a call-site one.
+    try agree.prints(
+        \\extern blocking func luce_ffi_probe_add(a: i64, b: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_add(20, 22)))
+        \\
+    ,
+        \\42
+        \\
+    );
+}
