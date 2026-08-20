@@ -1,7 +1,15 @@
 # Deadlines and cancellation — design draft for ratification
 
-**Status: plan, awaiting owner ratification** (docs/SELFHOST.md Phase 0,
-owner ruling 4). Nothing here is current behavior. The pre-freeze audit
+**Status: RATIFIED 2026-08-20, with the freeze split.**  The owner
+accepted the design and cut it along the language/library boundary:
+the deadline value and the channel deadline forms land **pre-freeze**,
+because `channel[T]` is language and its final shape must be fixed at
+the freeze; the socket/listener deadline forms and wake-on-close land
+**post-freeze**, because `std.network` is ordinary Luce over host ABI
+slots the freeze deliberately leaves free to move.  The stage-0
+compiler needs none of this; what lands early lands to fix the
+language surface, not to unblock it.  Nothing below is current
+behavior until its half ships. The pre-freeze audit
 named the absence of any deadline/cancel story the exclusion most
 likely to force a post-freeze *language* change: a blocked `receive`,
 `accept`, or socket `read` parks a worker forever, so robust servers
