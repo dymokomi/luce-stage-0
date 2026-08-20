@@ -9,9 +9,8 @@ release is a complete toolchain rather than a compatibility promise.
 - Character literals are contextual over integer widths, on the same
   terms as numeric literals: written into an integer place, `'a'`
   lands as that integer when its Unicode scalar fits — `c == '"'`
-  over a `u8`, a `'0' .. '9'` match arm, `const NEWLINE: u8 = '
-'`
-  — and one that does not fit is a compile error.  With no integer
+  over a `u8`, a `'0' .. '9'` match arm, a newline-escape constant —
+  and one that does not fit is a compile error.  With no integer
   context a character literal is a `char`, unchanged.  Only literals
   are contextual; a runtime `char` still reaches a number only through
   `u32(character)`.  (The self-host lexer probe's magic-number
