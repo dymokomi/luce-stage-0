@@ -622,3 +622,12 @@ pub const LoopFrame = struct {
     /// Temporary depth when the loop body began.
     temps_depth: usize,
 };
+
+/// One declared extern (docs/FFI.md), as semantics carries it: the
+/// bare symbol, the resolved Tier-1 shape, and the lock flag.
+pub const ForeignDeclInfo = struct {
+    symbol: []const u8,
+    parameters: []const types.Type,
+    result: types.Type,
+    blocking: bool,
+};

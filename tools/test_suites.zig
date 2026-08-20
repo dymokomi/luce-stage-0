@@ -50,6 +50,7 @@ pub const definitions = [_]Definition{
             "specs.constants_spec.",
             "specs.threads_spec.",
             "specs.channels_spec.",
+            "specs.ffi_spec.",
             "specs.modules_spec.",
             "specs.optimize_spec.",
             "specs.format_spec.",

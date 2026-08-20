@@ -1242,6 +1242,48 @@ pub const Machine = struct {
                         registers[item] = self.allocateObject(new, registers) catch |mistake|
                             return self.caught(mistake);
                     },
+                    // The FFI boundary (docs/FFI.md): resolve in this
+                    // process — link-time symbols live in whatever
+                    // carries the oracle — and dispatch through the
+                    // runtime shim, under the effect lock unless the
+                    // row says blocking.  A symbol nothing carries is
+                    // the host refusing, and says so.
+                    .call_foreign => |called| {
+                        const row = self.program.foreign_functions[called.foreign];
+                        var symbol_buffer: [256]u8 = undefined;
+                        if (row.name.len >= symbol_buffer.len) return self.trap(.host_unavailable);
+                        @memcpy(symbol_buffer[0..row.name.len], row.name);
+                        symbol_buffer[row.name.len] = 0;
+                        const target = runtime.ffi.resolve(symbol_buffer[0..row.name.len :0]) orelse
+                            return self.trap(.host_unavailable);
+                        var words: [runtime.ffi.max_parameters]u64 = undefined;
+                        for (called.arguments, 0..) |argument, index| {
+                            words[index] = switch (row.parameters[index]) {
+                                .u32 => registers[argument].asU32(),
+                                .i32 => @as(u32, @bitCast(registers[argument].asI32())),
+                                .u64 => registers[argument].asU64(),
+                                .i64, .foreign => @bitCast(registers[argument].asI64()),
+                                else => return self.trap(.host_unavailable),
+                            };
+                        }
+                        const kind: runtime.ffi.ReturnKind = switch (row.result) {
+                            .none => .none,
+                            .f64 => .real,
+                            else => .integer,
+                        };
+                        if (!row.blocking) self.runtime.enterEffects();
+                        const answer = runtime.ffi.call(target, words[0..called.arguments.len], kind);
+                        if (!row.blocking) self.runtime.leaveEffects();
+                        registers[item] = switch (row.result) {
+                            .none => .none,
+                            .f64 => .ofF64(answer.real),
+                            .u32 => .ofU32(@truncate(answer.integer)),
+                            .i32 => .ofI32(@bitCast(@as(u32, @truncate(answer.integer)))),
+                            .u64 => .ofU64(answer.integer),
+                            .i64, .foreign => .ofI64(@bitCast(answer.integer)),
+                            else => return self.trap(.host_unavailable),
+                        };
+                    },
                     .call => |called| {
                         // Reused scratch, not a fresh arena slice per
                         // call: pushFrame copies it into the callee's

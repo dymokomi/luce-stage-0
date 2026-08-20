@@ -67,6 +67,14 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const ffi = @import("ffi.zig");
+// The FFI probe exports live in ffi.zig; referencing the module is
+// what carries them into libluce_rt, where both engines and the
+// differential specs can resolve them (docs/FFI.md).
+comptime {
+    _ = ffi;
+}
+
 const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const files = @import("files.zig");

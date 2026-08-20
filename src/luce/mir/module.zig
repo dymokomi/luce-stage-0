@@ -334,6 +334,15 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         for (witness.methods) |method| try writer.int(u32, method);
     }
 
+    try writer.int(u32, @intCast(program.foreign_functions.len));
+    for (program.foreign_functions) |foreign| {
+        try writer.blob(foreign.name);
+        try writer.int(u32, @intCast(foreign.parameters.len));
+        for (foreign.parameters) |parameter| try writer.valueType(parameter);
+        try writer.valueType(foreign.result);
+        try writer.int(u8, @intFromBool(foreign.blocking));
+    }
+
     try writer.int(u32, @intCast(program.functions.len));
     for (program.functions) |*function| try writer.function(function);
     try writer.int(u32, program.entry_function);
@@ -560,6 +569,10 @@ const Writer = struct {
                 try self.int(u32, call.function);
                 try self.registers(call.arguments);
             },
+            .call_foreign => |call| {
+                try self.int(u32, call.foreign);
+                try self.registers(call.arguments);
+            },
             .call_inout => |call| {
                 try self.int(u32, call.function);
                 try self.int(u32, call.receiver);
@@ -733,6 +746,19 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         witness.methods = methods;
     }
     program.interface_witnesses = witnesses;
+
+    const foreign_count = try reader.count();
+    const foreigns = try arena.alloc(mir.ForeignFunction, foreign_count);
+    for (foreigns) |*foreign| {
+        foreign.name = try arena.dupe(u8, try reader.blob());
+        const parameter_count = try reader.count();
+        const parameters = try arena.alloc(types.Type, parameter_count);
+        for (parameters) |*parameter| parameter.* = try reader.valueType();
+        foreign.parameters = parameters;
+        foreign.result = try reader.valueType();
+        foreign.blocking = (try reader.int(u8)) != 0;
+    }
+    program.foreign_functions = foreigns;
 
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
@@ -1050,6 +1076,10 @@ const Reader = struct {
             } },
             .call => .{ .call = .{
                 .function = try self.int(u32),
+                .arguments = try self.registers(arena),
+            } },
+            .call_foreign => .{ .call_foreign = .{
+                .foreign = try self.int(u32),
                 .arguments = try self.registers(arena),
             } },
             .call_inout => .{ .call_inout = .{
@@ -2275,7 +2305,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // type joins the wire vocabulary, beside the foreign-function
     // table and its call instruction.
     try testing.expectEqual(@as(u32, 66), format_version);
-    try testing.expectEqual(@as(u64, 7505579708002730786), hasher.final());
+    try testing.expectEqual(@as(u64, 7050559972352879869), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

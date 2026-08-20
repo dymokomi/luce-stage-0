@@ -399,6 +399,13 @@ pub fn lowerCall(
     if (self.analyzer.variant_names.get(resolved)) |variant_index| {
         return construct.failVariantAsCallee(self, call.callee, variant_index, call.span);
     }
+    // A declared extern answers before the unknown-name refusal
+    // (docs/FFI.md): positional scalars in, one scalar out, never
+    // fallible — C reports failure in its return value, and the
+    // wrapper is where `!` lives.
+    if (self.analyzer.foreign_names.get(resolved)) |foreign_index| {
+        return lowerForeignCall(self, foreign_index, call, as_statement);
+    }
     const function_index = self.analyzer.function_names.get(resolved) orelse {
         try refusals.failUnknownFunction(self, call.callee, call.span);
         return null;
@@ -2991,4 +2998,60 @@ fn sequenceMethod(
     // `failNoObjectMethod`'s, so the landing says the same one.
     try failNoObjectMethod(self, method, self.analyzer.heapOf(receiver).?);
     return null;
+}
+
+/// One extern call (docs/FFI.md): the C boundary has no argument
+/// names, no defaults, no fallibility, and every operand is a Tier-1
+/// scalar — so the whole check is arity, order, and exact types.
+fn lowerForeignCall(
+    self: *FunctionBuilder,
+    foreign_index: u32,
+    call: ast.Call,
+    as_statement: bool,
+) Error!?Typed {
+    const row = self.analyzer.foreigns.items[foreign_index];
+    for (call.arguments) |argument| {
+        if (argument.name != null) {
+            try self.fail(
+                "luce.sema.extern",
+                argument.span,
+                "an extern call is positional; the C shape promises no argument names",
+                .{},
+            );
+            return null;
+        }
+    }
+    if (call.arguments.len != row.parameters.len) {
+        try self.fail(
+            "luce.sema.extern",
+            call.span,
+            "{s} takes {d} arguments and was given {d}",
+            .{ call.callee, row.parameters.len, call.arguments.len },
+        );
+        return null;
+    }
+    const entries = try self.arena().alloc(recorder.RecordedOperand, call.arguments.len);
+    for (call.arguments, 0..) |argument, index| {
+        const fitted = (try self.lowerTyped(
+            argument.value,
+            row.parameters[index],
+            argument.span,
+            "an extern argument",
+        )) orelse return null;
+        entries[index] = .{ .node = fitted.value.node, .slot = @intCast(index) };
+    }
+    if (row.result == .none and !as_statement) {
+        try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{call.callee});
+        return null;
+    }
+    const node = try recorder.recordCallNode(
+        self,
+        .{ .foreign = foreign_index },
+        entries,
+        entries.len,
+        false,
+        row.result,
+        call.span,
+    );
+    return .{ .node = node, .value_type = row.result };
 }

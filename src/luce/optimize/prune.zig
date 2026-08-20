@@ -125,6 +125,9 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
 fn functionSlot(instruction: *Instruction) ?*u32 {
     return switch (instruction.*) {
         .call, .spawn => |*call| &call.function,
+        // A foreign call names a symbol, not a row of the function
+        // table; renumbering does not touch it.
+        .call_foreign => null,
         .call_inout => |*call| &call.function,
         // **Naming a function reaches it.**  A function value is a call
         // that has not happened yet, and the call that will happen is a
@@ -177,6 +180,7 @@ const ConstantSlot = union(enum) { container: *u32, str: *u32 };
 fn constantSlot(instruction: *Instruction) ?ConstantSlot {
     return switch (instruction.*) {
         .const_container => |*index| .{ .container = index },
+        .call_foreign => null,
         .const_str => |*index| .{ .str = index },
         // A container's own contents name strings too, but they are
         // reached through the row rather than through an instruction

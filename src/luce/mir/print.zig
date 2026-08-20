@@ -293,6 +293,10 @@ fn printInstruction(
             try appendPrint(text, allocator, "call {s}", .{program.functions[call.function].name});
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
+        .call_foreign => |call| {
+            try appendPrint(text, allocator, "call_foreign {s}", .{program.foreign_functions[call.foreign].name});
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
         .call_inout => |call| {
             try appendPrint(text, allocator, "call_inout {s}, &%{d}", .{
                 program.functions[call.function].name,

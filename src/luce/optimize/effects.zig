@@ -150,6 +150,7 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 
         .local_set,
         .call,
+        .call_foreign,
         .call_inout,
         .interface_call,
         .interface_call_inout,
@@ -428,7 +429,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .heap_new => false,
         // A callee may do any of the three, whether it was named at the
         // call or reached through a value.
-        .call, .call_inout, .interface_call, .interface_call_inout, .call_indirect => false,
+        .call, .call_foreign, .call_inout, .interface_call, .interface_call_inout, .call_indirect => false,
         // A spawn attaches the task's row, moves every object argument
         // out of this runtime, and hands the table to a second thread.
         // Nothing resolved before it can be believed after it

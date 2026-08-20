@@ -857,6 +857,8 @@ pub const Lowered = struct {
     /// Static interface conformances. Runtime values carry a one-based row
     /// index and one payload; method functions stay here in program metadata.
     interface_witnesses: []defs.InterfaceWitness = &.{},
+    /// The declared externs, whole (docs/FFI.md).
+    foreign_functions: []defs.ForeignFunction = &.{},
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
     /// Constant containers in declaration order.  Unlike strings,
@@ -908,6 +910,7 @@ pub fn build(
     program.variants = lowered.variants;
     program.signatures = lowered.signatures;
     program.interface_witnesses = lowered.interface_witnesses;
+    program.foreign_functions = lowered.foreign_functions;
     program.functions = functions;
     program.constants = lowered.constants;
     const container_constants = try arena.alloc(defs.ContainerConstant, lowered.container_constants.len);

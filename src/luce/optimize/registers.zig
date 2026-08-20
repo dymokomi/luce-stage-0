@@ -70,6 +70,7 @@ pub fn mapOperands(
         .variant_tag => |*tag| tag.target = map[tag.target],
         .variant_field => |*get| get.target = map[get.target],
         .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
+        .call_foreign => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_inout => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .interface_call => |*call| {
             call.receiver = map[call.receiver];
@@ -147,6 +148,9 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             used[call.callee] = true;
             for (call.arguments) |argument| used[argument] = true;
         },
+        .call_foreign => |call| for (call.arguments) |argument| {
+            used[argument] = true;
+        },
         .call, .spawn => |call| for (call.arguments) |argument| {
             used[argument] = true;
         },
@@ -217,6 +221,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .call,
         .interface_call,
         .spawn,
+        .call_foreign,
         .call_indirect,
         .intrinsic,
         .heap_new,

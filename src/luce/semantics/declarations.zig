@@ -222,6 +222,13 @@ pub const Analyzer = struct {
     variant_shapes: std.ArrayList(StructShape) = .empty,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The declared externs (docs/FFI.md): symbol, Tier-1 shape, and
+    /// the lock flag — copied whole into `Program.foreign_functions`
+    /// by stage 6.  Keys in `foreign_names` are the qualified call
+    /// spelling; the row's `symbol` is the bare declared name the
+    /// linker resolves.
+    foreigns: std.ArrayList(context.ForeignDeclInfo) = .empty,
+    foreign_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// Which row the runtime starts, once `entry.settle` has decided:
     /// the declared `main`, or the one the compiler wrote for `luce
     /// test`.  Null until then, and on a program that has no entry at
@@ -274,6 +281,8 @@ pub const Analyzer = struct {
         self.variant_names.deinit(self.temporary);
         self.variant_shapes.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
+        self.foreigns.deinit(self.temporary);
+        self.foreign_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
         self.constant_names.deinit(self.temporary);
@@ -371,6 +380,15 @@ pub const Analyzer = struct {
             };
         }
 
+        const foreign_rows = try self.arena.alloc(mir.ForeignFunction, self.foreigns.items.len);
+        for (self.foreigns.items, foreign_rows) |declared, *row| {
+            row.* = .{
+                .name = try self.arena.dupe(u8, declared.symbol),
+                .parameters = try self.arena.dupe(types.Type, declared.parameters),
+                .result = declared.result,
+                .blocking = declared.blocking,
+            };
+        }
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
@@ -379,6 +397,7 @@ pub const Analyzer = struct {
             .enums = try self.enums.toOwnedSlice(self.arena),
             .variants = try self.variants.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
+            .foreign_functions = foreign_rows,
             .constants = try self.pool.items.toOwnedSlice(self.arena),
             .container_constants = try self.pool.containers.toOwnedSlice(self.arena),
             .entry_function = entry_index,

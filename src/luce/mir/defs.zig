@@ -1168,6 +1168,12 @@ pub const Instruction = union(enum) {
     /// zero is marked `inout` and aliases this local on both the normal
     /// and errored edges.
     call_inout: InoutCall,
+    /// A direct call through the FFI boundary (docs/FFI.md): the
+    /// symbol is `foreign_functions[foreign]`'s, the arguments are the
+    /// Tier-1 scalars the shape declares, and guarantees end at the
+    /// boundary — the callee is machine code the language never saw.
+    /// Runs under the effect lock unless its row says `blocking`.
+    call_foreign: ForeignCall,
     /// Dispatch through an interface value. The read form accepts any value;
     /// the inout form names the mutable local whose existential payload may
     /// be replaced by a `mutating` requirement.
@@ -1226,6 +1232,7 @@ pub const Instruction = union(enum) {
     };
     pub const Call = struct { function: u32, arguments: []Register };
     pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
+    pub const ForeignCall = struct { foreign: u32, arguments: []Register };
     pub const InterfaceMake = struct { layout: u32, witness: u32, receiver: Register };
     pub const InterfaceCall = struct {
         receiver: Register,
@@ -1371,6 +1378,22 @@ pub const Function = struct {
     source: []const u8 = "",
 };
 
+/// One declared extern (docs/FFI.md): the symbol, its Tier-1 shape,
+/// and its lock contract.
+pub const ForeignFunction = struct {
+    /// The symbol as the linker sees it — the declared name, exactly.
+    name: []const u8,
+    /// The parameter types, all integer-class in Tier 1 (integers,
+    /// bool, foreign), at most eight of them.
+    parameters: []types.Type = &.{},
+    /// What the call answers: an integer-class scalar, `f64`, or
+    /// `.none` for a C void.
+    result: types.Type = .none,
+    /// Runs outside the effect lock; the callee must be thread-safe
+    /// (the socket slots' contract).
+    blocking: bool = false,
+};
+
 pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     structs: []StructLayout = &.{},
@@ -1394,6 +1417,11 @@ pub const Program = struct {
     signatures: []types.Signature = &.{},
     interface_witnesses: []InterfaceWitness = &.{},
     functions: []Function = &.{},
+    /// One row per declared extern (docs/FFI.md): the symbol the
+    /// linker resolves, the C shape the author wrote, and whether the
+    /// call runs outside the effect lock.  What `call_foreign`
+    /// indexes; the Tier-1 vocabulary is the verifier's to hold.
+    foreign_functions: []ForeignFunction = &.{},
     constants: []const []const u8 = &.{},
     /// Constant-container declarations after reachability pruning.
     /// Rows deliberately retain declaration identity; equal contents

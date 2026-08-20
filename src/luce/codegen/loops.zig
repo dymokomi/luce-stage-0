@@ -332,6 +332,7 @@ fn collect(
                 .variant_tag,
                 .variant_field,
                 .call,
+                .call_foreign,
                 .interface_call,
                 .spawn,
                 .call_indirect,

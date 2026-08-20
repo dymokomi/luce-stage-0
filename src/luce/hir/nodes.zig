@@ -725,6 +725,8 @@ pub const Expression = union(enum) {
 pub const ResolvedCallee = union(enum) {
     /// A declared function or method, by function table index.
     function: u32,
+    /// A declared extern, by foreign table index (docs/FFI.md).
+    foreign: u32,
     /// A call **through a function value** (docs/FUNCTIONS.md D2, D5):
     /// the expression that answers the value, and the interned
     /// signature the call was checked against.
@@ -1191,6 +1193,8 @@ pub fn provenance(expression: *const Expression) Provenance {
             // A function's result is the caller's (S16): fresh storage
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
             .function, .indirect, .interface => .fresh,
+            // An extern answers a Tier-1 scalar: nothing owned.
+            .foreign => .plain,
             .intrinsic => |kind| ofIntrinsic(kind),
             // `str(x)` allocates its text; the numeric conversions
             // answer scalars.
@@ -1264,6 +1268,7 @@ pub fn freshObject(expression: *const Expression) bool {
         .slice, .spawn => true,
         .call => |payload| switch (payload.callee) {
             .function, .indirect, .interface => true,
+            .foreign => false,
             .intrinsic => |kind| freshObjectIntrinsic(kind),
             .conversion, .enum_name, .variant_name => false,
         },
@@ -1390,7 +1395,7 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
         // The callee expression is lowered in this frame beside the
         // arguments, so a branch inside it is this call's own.
         .indirect => |through| splitsBlocks(through.callee, declared),
-        .function, .interface, .intrinsic, .conversion => false,
+        .function, .foreign, .interface, .intrinsic, .conversion => false,
     };
 }
 

@@ -63,6 +63,9 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
             const qualified = try naming.qualify(self, module.prefix, declaration.name);
             try collectFunction(self, declaration, qualified, module_index, true, null, .ordinary);
         }
+        for (module.tree.externs) |*declaration| {
+            try collectExtern(self, declaration, module.prefix, module_index);
+        }
         for (module.tree.structs) |*declaration| {
             const owner = self.struct_names.get(
                 try naming.qualify(self, module.prefix, declaration.name),
@@ -672,4 +675,82 @@ pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
     const layout = self.structs.items[of.strukt];
     if (layout.name.len == 0 or layout.name[0] != '(') return null;
     return layout;
+}
+
+/// One extern declaration (docs/FFI.md): resolve the shape, refuse
+/// what falls outside Tier 1 with the reason, and register the row
+/// under its qualified call spelling — the bare declared name stays
+/// the symbol the linker resolves.
+fn collectExtern(
+    self: *Analyzer,
+    declaration: *const ast.ExternDecl,
+    prefix: []const u8,
+    module: usize,
+) Error!void {
+    const qualified = try naming.qualify(self, prefix, declaration.name);
+    if (self.function_names.get(qualified) != null or self.foreign_names.get(qualified) != null) {
+        try self.fail(
+            "luce.sema.extern",
+            declaration.name_span,
+            "{s} is already declared; an extern shares the function namespace",
+            .{declaration.name},
+        );
+        return;
+    }
+    if (declaration.parameters.len > 8) {
+        try self.fail(
+            "luce.sema.extern",
+            declaration.name_span,
+            "an extern takes at most eight parameters (docs/FFI.md)",
+            .{},
+        );
+        return;
+    }
+    var parameters: std.ArrayList(Type) = .empty;
+    defer parameters.deinit(self.temporary);
+    for (declaration.parameters) |parameter| {
+        const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
+        if (!tierOneParameter(resolved)) {
+            try self.fail(
+                "luce.sema.extern",
+                parameter.type_name.span,
+                "an extern parameter is a 32- or 64-bit integer or foreign; nothing else crosses the boundary (docs/FFI.md)",
+                .{},
+            );
+            return;
+        }
+        try parameters.append(self.temporary, resolved);
+    }
+    var result: Type = .none;
+    if (declaration.returns) |written| {
+        const resolved = (try resolve.resolveType(self, module, written)) orelse return;
+        if (!(resolved == .f64 or tierOneParameter(resolved))) {
+            try self.fail(
+                "luce.sema.extern",
+                written.span,
+                "an extern answers a 32- or 64-bit integer, foreign, f64, or nothing (docs/FFI.md)",
+                .{},
+            );
+            return;
+        }
+        result = resolved;
+    }
+    const index: u32 = @intCast(self.foreigns.items.len);
+    try self.foreigns.append(self.temporary, .{
+        .symbol = declaration.name,
+        .parameters = try self.arena.dupe(Type, parameters.items),
+        .result = result,
+        .blocking = declaration.blocking,
+    });
+    try self.foreign_names.put(self.temporary, qualified, index);
+}
+
+/// The Tier-1 parameter vocabulary (docs/FFI.md), in semantic terms:
+/// the widths every emitted C ABI passes without extension
+/// attributes, and the opaque token.
+fn tierOneParameter(of: Type) bool {
+    return switch (of) {
+        .u32, .i32, .u64, .i64, .foreign => true,
+        else => false,
+    };
 }

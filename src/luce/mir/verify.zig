@@ -1238,6 +1238,26 @@ fn verifyInstruction(
             }
             if (!result.eql(callee.return_type)) return error.TypeMismatch;
         },
+        // The FFI boundary (docs/FFI.md): the row must exist, the
+        // shape must stay inside the Tier-1 vocabulary — a decoded
+        // module gets no benefit of the doubt — and the arguments must
+        // be exactly the declared scalars.
+        .call_foreign => |call| {
+            if (call.foreign >= program.foreign_functions.len) return error.BadFunction;
+            const callee = program.foreign_functions[call.foreign];
+            if (callee.name.len == 0) return error.BadFunction;
+            if (callee.parameters.len > 8) return error.BadFunction;
+            if (call.arguments.len != callee.parameters.len) return error.BadFunction;
+            for (callee.parameters) |parameter| {
+                if (!foreignParameter(parameter)) return error.BadFunction;
+            }
+            if (!foreignResult(callee.result)) return error.BadFunction;
+            for (call.arguments, 0..) |argument, index| {
+                const value = try operandType(function, defined, argument);
+                try expectType(value, callee.parameters[index]);
+            }
+            if (!result.eql(callee.result)) return error.TypeMismatch;
+        },
         .call_inout => |call| {
             if (call.function >= program.functions.len) return error.BadFunction;
             if (call.receiver >= function.locals.len) return error.BadLocal;
@@ -1417,6 +1437,26 @@ fn verifyInstruction(
 /// `catch`.  This used to keep its own copy of that list, both guarded
 /// by an `else`, so a seventh fallible intrinsic added to one and not
 /// the other was silent in both directions.
+/// The Tier-1 parameter vocabulary (docs/FFI.md): 32- and 64-bit
+/// integers and the opaque token — the widths the C ABI passes
+/// without extension attributes on every target this compiler emits,
+/// which is what keeps the boundary correct with no per-parameter
+/// attribute machinery.  Narrower widths, bool, and floats wait for
+/// evidence; str and bytes cross only through the scoped buffer
+/// forms.  (LLVM-C's own `LLVMBool` is an `i32`.)
+fn foreignParameter(of: Type) bool {
+    return switch (of) {
+        .u32, .i32, .u64, .i64, .foreign => true,
+        else => false,
+    };
+}
+
+/// What an extern may answer: a Tier-1 parameter type, `f64` (one
+/// float register is ABI-uniform), or nothing for a C void.
+fn foreignResult(of: Type) bool {
+    return of == .none or of == .f64 or foreignParameter(of);
+}
+
 fn raisesError(program: *const Program, function: *const Function, register: Register) bool {
     return switch (function.instructions[register]) {
         .call => |call| call.function < program.functions.len and

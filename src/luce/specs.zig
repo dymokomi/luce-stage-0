@@ -41,6 +41,7 @@ pub const unions = @import("specs/union_spec.zig");
 /// the integers, char, str, and bool.
 pub const match = @import("specs/match_spec.zig");
 pub const channels = @import("specs/channels_spec.zig");
+pub const ffi = @import("specs/ffi_spec.zig");
 /// What the compiler must refuse, by stable diagnostic code.  The one
 /// spec that runs nothing: a program that does not compile has no
 /// engine to disagree about.
@@ -119,6 +120,7 @@ comptime {
         _ = unions;
         _ = match;
         _ = channels;
+        _ = ffi;
         _ = errors;
         _ = functions;
         _ = closures;

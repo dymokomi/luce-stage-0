@@ -275,6 +275,11 @@ const Module = struct {
     /// One LLVM function per Luce function, parallel to
     /// `program.functions`.
     functions: []Builder.Function.Index = &.{},
+    /// One LLVM declaration per extern the program actually calls,
+    /// declared on first use with external linkage — the linker
+    /// resolves the symbol, which is what link-time-only means
+    /// (docs/FFI.md).
+    foreigns: std.AutoHashMapUnmanaged(u32, Builder.Function.Index) = .empty,
     /// The pointer table a call through a function value dispatches
     /// through, and the name table `str(f)` reads — both built on
     /// first use and null in a program that makes no function value
@@ -370,6 +375,7 @@ const Module = struct {
     };
 
     fn deinit(self: *Module) void {
+        self.foreigns.deinit(self.gpa);
         self.gpa.free(self.spawned);
         self.gpa.free(self.entries);
         self.gpa.free(self.functions);
@@ -653,6 +659,32 @@ const Module = struct {
             self.builder,
         );
         self.services.put(which, declared);
+        return declared;
+    }
+
+    /// The declared LLVM form of one extern (docs/FFI.md).  The C
+    /// shape is exactly the declared scalars — 32/64-bit widths need
+    /// no extension attributes on any emitted target — and the result
+    /// is void for a C void.
+    fn foreignFunction(self: *Module, index: u32) Error!Builder.Function.Index {
+        if (self.foreigns.get(index)) |found| return found;
+        const row = self.program.foreign_functions[index];
+        var parameters: std.ArrayList(Builder.Type) = .empty;
+        defer parameters.deinit(self.gpa);
+        for (row.parameters) |parameter| {
+            try parameters.append(self.gpa, try self.valueType(parameter));
+        }
+        const result: Builder.Type = if (row.result == .none)
+            .void
+        else
+            try self.valueType(row.result);
+        const declared = try self.builder.addFunction(
+            try self.builder.fnType(result, parameters.items, .normal),
+            try self.builder.strtabString(row.name),
+            .default,
+        );
+        declared.setLinkage(.external, self.builder);
+        try self.foreigns.put(self.gpa, index, declared);
         return declared;
     }
 
@@ -3280,6 +3312,7 @@ const Body = struct {
                 .weak_local_get,
                 .weak_local_set,
                 .spawn,
+                .call_foreign,
                 .call_indirect,
                 .binary,
                 .unary,
@@ -5967,6 +6000,7 @@ const Body = struct {
                 }
             },
             .call => |called| try self.emitCall(register, called),
+            .call_foreign => |called| try self.emitForeignCall(register, called),
             .call_inout => |called| try self.emitInoutCall(register, called),
             .interface_call => |called| try self.emitInterfaceCall(
                 register,
@@ -6956,6 +6990,38 @@ const Body = struct {
 
     fn emitCall(self: *Body, register: mir.Register, called: mir.Instruction.Call) Error!void {
         try self.emitDirectCall(register, called.function, .none, called.arguments);
+    }
+
+    /// One extern call (docs/FFI.md): the declared scalars in, the
+    /// declared scalar out, under the effect lock unless the row says
+    /// `blocking` — the socket slots' contract, taken on by the
+    /// declaration.  Guarantees end at the boundary; nothing here
+    /// checks what the callee did.
+    fn emitForeignCall(
+        self: *Body,
+        register: mir.Register,
+        called: mir.Instruction.ForeignCall,
+    ) Error!void {
+        const gpa = self.module.gpa;
+        const row = self.module.program.foreign_functions[called.foreign];
+        const target = try self.module.foreignFunction(called.foreign);
+        var arguments: std.ArrayList(Builder.Value) = .empty;
+        defer arguments.deinit(gpa);
+        for (called.arguments) |argument| {
+            try arguments.append(gpa, self.produced[argument].value);
+        }
+        if (!row.blocking) try self.enterEffects();
+        const answer = try self.wip.call(
+            .normal,
+            .ccc,
+            .none,
+            target.typeOf(self.module.builder),
+            target.toValue(self.module.builder),
+            arguments.items,
+            if (row.result == .none) "" else "foreign",
+        );
+        if (!row.blocking) try self.leaveEffects();
+        if (row.result != .none) self.produced[register].value = answer;
     }
 
     fn emitInoutCall(

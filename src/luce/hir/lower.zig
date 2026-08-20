@@ -1106,6 +1106,7 @@ const Replay = struct {
     fn replayCall(self: *Replay, called: nodes.Expression.Call) Error!Register {
         switch (called.callee) {
             .function => |index| return self.replayDirectCall(called, index),
+            .foreign => |index| return self.replayForeignCall(called, index),
             .indirect => |through| return self.replayIndirectCall(called, through),
             .interface => |through| return self.replayInterfaceCall(called, through),
             .intrinsic => |kind| return self.replayIntrinsicCall(called, kind),
@@ -1166,6 +1167,22 @@ const Replay = struct {
             } }, signature.result);
         if (through.writing) try self.finishWritingReceiver(writing);
         return self.finishFallible(call, called, .fresh);
+    }
+
+    /// A foreign call replays like a direct call with everything a C
+    /// boundary cannot have removed: no defaults, no receiver, no
+    /// owned storage — every operand is a Tier-1 scalar (docs/FFI.md).
+    fn replayForeignCall(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
+        const batch = called.operands;
+        const entries = try self.replayWrittenOperands(batch);
+        defer self.scratch().free(entries);
+        for (entries) |*entry| try self.applyWrappers(entry);
+        const registers = try self.arena().alloc(Register, batch.operands.len);
+        for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
+        return self.code.emit(
+            .{ .call_foreign = .{ .foreign = index, .arguments = registers } },
+            called.result,
+        );
     }
 
     fn replayDirectCall(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
