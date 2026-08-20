@@ -313,7 +313,7 @@ func main(args: list[str]) -> !:
 ## Opening files
 
 For streaming — reading or writing a file a chunk at a time rather than
-whole — a program constructs a `File` with `new`, and the fallible
+whole — a program constructs a `File` by ordinary call, and the fallible
 `init(path: str, mode: Mode = Mode.read) -> !` asks the world for the
 descriptor. `files.Mode` names the three doors instead of numbering
 them:

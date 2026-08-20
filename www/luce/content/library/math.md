@@ -51,8 +51,12 @@ func main():
 
 ## Arrays and statistics
 
-These functions take `array[f64, _]`. Reductions visit elements from
-left to right. An empty array has sum `0.0`; functions whose answer would
+These functions take `array[f64, _]`. **The order a floating reduction
+combines its elements in is unspecified**: two Luce versions — or two
+build modes of one version — may associate a `sum` or `dot` differently
+and answer differently in the last bits, so a program must not depend on
+one grouping. What is promised is the set of elements visited, exactly
+once each. An empty array has sum `0.0`; functions whose answer would
 not exist return `none`.
 
 | Signature | Behavior |

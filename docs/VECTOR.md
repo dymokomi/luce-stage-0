@@ -26,8 +26,12 @@ Every implementation must preserve all of these facts:
   program;
 - the interpreter and compiled path receive the same verified MIR and agree on
   output, traps, host effects, and the final ARC census; and
-- floating reductions keep source order. Reassociation would change IEEE
-  results and is outside this plan.
+- floating reduction order is **unspecified and stays unspecified**
+  (issue #21): the library pages say so, so no program may rely on the
+  current left-to-right association, and this plan — or a later fusion —
+  is free to reassociate. Checked *integer* reductions are different:
+  their traps are observable at an exact element, so their order is part
+  of their meaning and does not change.
 
 The exact trap point rules out a late range check. A sum can leave a type's
 range and later return to it; checking only the final value would miss the
