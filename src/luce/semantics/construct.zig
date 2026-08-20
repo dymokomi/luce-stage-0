@@ -1068,6 +1068,7 @@ pub fn lowerIntrinsic(
         .string_byte,
         .string_find_byte,
         .append_value,
+        .extend_list,
         .append_ascii,
         .pop_value,
         .insert_value,

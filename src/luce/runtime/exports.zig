@@ -1961,6 +1961,20 @@ pub export fn luce_rt_append(
     return completed(runtime);
 }
 
+/// Neither list is consumed: the receiver grows, the source is read,
+/// and each element crossing is retained — see `containers.extend`.
+pub export fn luce_rt_list_extend(
+    runtime: *Runtime,
+    target: [*c]const Value,
+    source: [*c]const Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, target) or !requireValueInput(runtime, source)) return raised_trap;
+    if (!requireObjectInput(runtime, target) or !requireObjectInput(runtime, source)) return raised_trap;
+    containers.extend(runtime, target.*, source.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
 pub export fn luce_rt_append_ascii(
     runtime: *Runtime,
     target: [*c]const Value,

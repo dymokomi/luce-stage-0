@@ -375,6 +375,11 @@ pub const Intrinsic = enum {
     path_modified,
     dir_remove,
     tree_remove,
+    /// `xs.extend(ys)` — every element of one list appended to
+    /// another in order (Zig's appendSlice, ruled in #24).  The
+    /// source's length is read before the first append, so a list
+    /// extended with itself gains exactly one round of itself.
+    extend_list,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -592,6 +597,7 @@ pub const Intrinsic = enum {
             .index_set,
             .list_slice,
             .append_value,
+            .extend_list,
             .append_ascii,
             .pop_value,
             .insert_value,
@@ -720,6 +726,7 @@ pub const Intrinsic = enum {
             .index_set,
             .list_slice,
             .append_value,
+            .extend_list,
             .append_ascii,
             .pop_value,
             .insert_value,
@@ -859,6 +866,7 @@ pub const Intrinsic = enum {
             .index_set,
             .list_slice,
             .append_value,
+            .extend_list,
             .append_ascii,
             .insert_value,
             .remove_entry,
@@ -945,6 +953,7 @@ pub const Intrinsic = enum {
             .append_value => 1,
             .insert_value => 2,
 
+            .extend_list,
             .abs,
             .min,
             .max,

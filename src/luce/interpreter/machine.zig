@@ -1939,6 +1939,10 @@ pub const Machine = struct {
                 try containers.append(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
                 return .none;
             },
+            .extend_list => {
+                try containers.extend(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
+                return .none;
+            },
             .append_ascii => {
                 try containers.appendAscii(
                     &self.runtime,

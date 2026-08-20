@@ -6,6 +6,15 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Lists learn `extend`: `xs.extend(ys)` appends every element of
+  another list of the same type, in order (the #24 ruling under the
+  Zig tiebreaker — appendSlice).  The source is read, never consumed;
+  an element with private storage lands as the target's own copy; and
+  a list extended with itself gains exactly one round of itself,
+  because the count is read before the first append.  MIR format
+  64 -> 65.
+
+
 - Character literals are contextual over integer widths, on the same
   terms as numeric literals: written into an integer place, `'a'`
   lands as that integer when its Unicode scalar fits — `c == '"'`

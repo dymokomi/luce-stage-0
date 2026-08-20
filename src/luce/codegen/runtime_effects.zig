@@ -216,6 +216,7 @@ pub const Service = enum {
     luce_rt_index_set,
     luce_rt_list_slice,
     luce_rt_append,
+    luce_rt_list_extend,
     luce_rt_append_ascii,
     luce_rt_pop,
     luce_rt_insert,
@@ -1012,7 +1013,7 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
             .willreturn = false,
         },
-        .luce_rt_append, .luce_rt_array_fill => .{
+        .luce_rt_append, .luce_rt_list_extend, .luce_rt_array_fill => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_in },
         },

@@ -2259,6 +2259,10 @@ fn sequenceParameters(
 ) Error!?[]const Type {
     if (growable) {
         if (std.mem.eql(u8, name, "append")) return try typeList(self, &.{element});
+        if (std.mem.eql(u8, name, "extend")) {
+            const same = try resolve.internHeapType(self.analyzer, .{ .list = element });
+            return try typeList(self, &.{same});
+        }
         if (std.mem.eql(u8, name, "insert")) return try typeList(self, &.{ .i64, element });
         if (std.mem.eql(u8, name, "remove")) return try typeList(self, &.{.i64});
         if (std.mem.eql(u8, name, "pop")) return &.{};
@@ -2923,6 +2927,10 @@ fn sequenceMethod(
         if (std.mem.eql(u8, name, "append")) {
             if (!try methodTakes(self, method, arguments, receiver)) return null;
             return .{ .kind = .append_value, .result = .none };
+        }
+        if (std.mem.eql(u8, name, "extend")) {
+            if (!try methodTakes(self, method, arguments, receiver)) return null;
+            return .{ .kind = .extend_list, .result = .none };
         }
         if (std.mem.eql(u8, name, "insert")) {
             if (!try methodTakes(self, method, arguments, receiver)) return null;

@@ -1912,6 +1912,55 @@ test "returns: T! composes, and try is the only composition there is" {
     );
 }
 
+test "extend appends every element of one list to another, and itself exactly once" {
+    // The #24 ruling under the constitution (Zig's appendSlice).  The
+    // source is read, never consumed; an element with private storage
+    // lands as the target's own copy; and a list extended with itself
+    // gains one round of itself, because the count is read before the
+    // first append.  The census proves every copy is given back.
+    try agree.prints(
+        \\import std.strings
+        \\
+        \\struct Note:
+        \\    words: str
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let ys = [3, 4, 5]
+        \\    xs.extend(ys)
+        \\    print(str(len(xs)) + " " + str(xs[4]) + " " + str(len(ys)))
+        \\    var names = ["a"]
+        \\    names.extend(names)
+        \\    print(names.join(","))
+        \\    var empty = list[i64]()
+        \\    xs.extend(empty)
+        \\    print(str(len(xs)))
+        \\    var held = [Note(words = "kept")]
+        \\    var landed = list[Note]()
+        \\    landed.extend(held)
+        \\    held.clear()
+        \\    print(landed[0].words)
+        \\
+    ,
+        \\5 5 3
+        \\a,a
+        \\5
+        \\kept
+        \\
+    );
+}
+
+test "extend takes exactly a list of the receiver's element type" {
+    var result = try luce.compile.compile(std.testing.allocator,
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    xs.extend(["three"])
+        \\
+    , .{});
+    defer result.deinit();
+    try std.testing.expect(result == .failure);
+}
+
 test "try in a subexpression binds tight, runs left to right, and stops at the first error" {
     // The ruling issue #11 asked for, written as behavior (docs/FAILURE.md):
     // `try` is an expression prefix legal in any expression position; it

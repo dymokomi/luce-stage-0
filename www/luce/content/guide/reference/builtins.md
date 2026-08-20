@@ -72,6 +72,7 @@ else supplied by a host is namespaced:
 | Method | Meaning |
 |---|---|
 | `append(value)` | adds one element |
+| `extend(other)` | appends every element of another list of the same type, in order; the source is unchanged, and a list extended with itself gains exactly one round of itself |
 | `insert(index, value)` | inserts before `index` |
 | `remove(index)` | removes the element and releases references it held |
 | `pop() -> T` | removes and returns the last element; traps when empty |

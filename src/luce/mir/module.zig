@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 64;
+pub const format_version: u32 = 65;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2268,8 +2268,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 63 -> 64: the filesystem completes — `path_size`,
     // `path_modified`, `dir_remove`, and `tree_remove` join after the
     // channel intrinsics (docs/FILESYSTEM.md).
-    try testing.expectEqual(@as(u32, 64), format_version);
-    try testing.expectEqual(@as(u64, 3044606533018278722), hasher.final());
+    // 64 -> 65: `extend_list` joins at the end (the #24 ruling:
+    // Zig's appendSlice as `xs.extend(ys)`).
+    try testing.expectEqual(@as(u32, 65), format_version);
+    try testing.expectEqual(@as(u64, 14365741767081459941), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

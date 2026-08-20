@@ -221,6 +221,29 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     }
 }
 
+/// `xs.extend(ys)` — every element of `source` appended to `target`
+/// in order, each one retained the way reading it into a binding
+/// would retain it.  The count is read before the first append and
+/// the room is reserved up front, so extending a list with itself
+/// appends exactly one round of it and never chases its own growth.
+pub fn extend(runtime: *Runtime, target: Value, source: Value) Error!void {
+    const into = try runtime.resolve(target);
+    const from = try runtime.resolve(source);
+    if (into.data != .list or from.data != .list) return runtime.fail(.not_owned);
+    try runtime.requireMutable(into);
+    const count = from.elements.count;
+    try into.elements.ensureCapacity(runtime.objects, into.elements.count + count);
+    var at: usize = 0;
+    while (at < count) : (at += 1) {
+        // `copyValue`, not a bare retain: an element with private
+        // storage (a str, a struct run) must land as the target's own
+        // copy, exactly as reading it into a binding would.
+        const held = try runtime.copyValue(from.elements.at(at));
+        errdefer runtime.freeValue(held);
+        try into.elements.append(runtime.objects, held);
+    }
+}
+
 /// `b.append_ascii(code)`.  ASCII only: the builder's bytes become a
 /// str, and str is valid UTF-8. Anything wider goes through
 /// chr(), which encodes the codepoint.

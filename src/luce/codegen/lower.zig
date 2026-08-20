@@ -7899,6 +7899,11 @@ const Body = struct {
                     try self.storageOf(of[1]),
                 });
             },
+            .extend_list => try self.callChecked(.luce_rt_list_extend, &.{
+                rt,
+                try self.boxedRegister(of[0], "target"),
+                try self.boxedRegister(of[1], "source"),
+            }),
             .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),

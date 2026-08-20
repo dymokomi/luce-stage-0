@@ -1733,6 +1733,16 @@ fn verifyIntrinsic(
             try expectType(arguments[1], .i64);
             try expectType(result, .none);
         },
+        // Both sides are lists of one element type; the whole answer
+        // travels in the receiver.
+        .extend_list => {
+            try exactly(arguments, 2);
+            const target = try heapShape(program, arguments[0]);
+            if (target != .list) return error.BadIntrinsic;
+            const source = try heapShape(program, arguments[1]);
+            if (source != .list or !source.list.eql(target.list)) return error.BadIntrinsic;
+            try expectType(result, .none);
+        },
         .pop_value => {
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {

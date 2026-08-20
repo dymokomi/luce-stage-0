@@ -276,6 +276,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .index_set,
         .list_slice,
         .append_value,
+        .extend_list,
         .append_ascii,
         .pop_value,
         .insert_value,
@@ -530,7 +531,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // Grow a container's own buffer.  That buffer is not the
             // table and not an array's, but a list's elements are
             // read through the same row, so this stays conservative.
-            .append_value, .append_ascii, .insert_value, .map_place => false,
+            .append_value, .extend_list, .append_ascii, .insert_value, .map_place => false,
 
             // Effects.  A host service reaches the outside world and
             // the run's arena; it has no way to touch the object
