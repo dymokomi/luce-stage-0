@@ -549,7 +549,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f32 => .f32,
         .f64 => .f64,
         .char => .u32,
-        .boolean, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => null,
+        .boolean, .str, .bytes, .foreign, .list, .map, .array, .builder, .handle, .task, .channel => null,
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
@@ -690,7 +690,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .foreign, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered above
     };
     // The identity again: nothing emitted, the operand's value and
     // node pass through whole (the section comment above).
@@ -740,7 +740,7 @@ fn lowerEnumToNumber(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered by the caller
+        .boolean, .char, .str, .bytes, .foreign, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered by the caller
     };
     return .{
         // The same node shape as the numeric constructors: one

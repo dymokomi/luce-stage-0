@@ -286,6 +286,7 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         // otherwise pass a crafted `.lcm` straight through `decode`.
         .none,
         .boolean,
+        .foreign,
         .u8,
         .u16,
         .u32,
@@ -699,7 +700,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .f64 => true,
         .f32 => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .f16 => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
+        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
     };
 }
 
@@ -2321,6 +2322,7 @@ fn typeCanOwnStorage(of: Type) bool {
         .optional => |payload| typeCanOwnStorage(payload.asType()),
         .none,
         .boolean,
+        .foreign,
         .u8,
         .u16,
         .u32,
@@ -2425,6 +2427,7 @@ fn typeCarriesWorker(
             .char,
             .str,
             .bytes,
+            .foreign,
             .enumeration,
             => {},
         }

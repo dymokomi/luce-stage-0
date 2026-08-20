@@ -15,7 +15,7 @@ func syntax() -> Syntax:
         quote_prefixes = ['f'],
         keywords = [
             "alias", "and", "break", "catch", "class", "const", "continue",
-            "deinit", "elif", "else", "enum", "false", "for", "func", "if",
+            "deinit", "elif", "else", "enum", "extern", "false", "for", "func", "if",
             "import", "in", "init", "interface", "is", "let", "match",
             "mutating", "none", "not", "or", "private", "public", "return",
             "self", "spawn", "static", "struct", "true", "try", "union",
@@ -24,7 +24,7 @@ func syntax() -> Syntax:
         types = [
             "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
             "f16", "f32", "f64", "char", "str", "bytes", "list", "map",
-            "array", "builder", "task", "channel",
+            "array", "builder", "task", "channel", "foreign",
         ],
         builtins = [
             "abs", "assert", "ceil", "clamp", "error", "exit", "floor",

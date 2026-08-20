@@ -689,6 +689,21 @@ pub const ConstDecl = struct {
     span: Span,
 };
 
+/// `extern func read_fd(fd: i32, at: foreign, count: u64) -> i64` — a
+/// foreign function's declared shape, with no body (docs/FFI.md).  The
+/// author writes the C shape and owns its truth; `blocking` opts the
+/// call out of the effect lock and takes on the socket slots'
+/// thread-safety contract.  No defaults, no fallibility, at most one
+/// return: the C shape is the whole truth.
+pub const ExternDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    parameters: []Parameter,
+    returns: ?TypeName = null,
+    blocking: bool = false,
+    span: Span,
+};
+
 pub const Program = struct {
     imports: []Import,
     aliases: []AliasDecl = &.{},
@@ -698,4 +713,5 @@ pub const Program = struct {
     enums: []EnumDecl = &.{},
     unions: []UnionDecl = &.{},
     functions: []FuncDecl,
+    externs: []ExternDecl = &.{},
 };

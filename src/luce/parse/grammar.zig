@@ -522,6 +522,8 @@ pub const Parser = struct {
         defer unions.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
+        var externs: std.ArrayList(ast.ExternDecl) = .empty;
+        defer externs.deinit(self.arena);
 
         while (self.peekKind() != .end_of_file) {
             switch (self.peekKind()) {
@@ -587,6 +589,13 @@ pub const Parser = struct {
                 .keyword_func => {
                     if (try self.funcDecl()) |declaration| {
                         try functions.append(self.arena, declaration);
+                    } else {
+                        self.recover();
+                    }
+                },
+                .keyword_extern => {
+                    if (try self.externDecl()) |declaration| {
+                        try externs.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
@@ -677,6 +686,7 @@ pub const Parser = struct {
             .enums = try enums.toOwnedSlice(self.arena),
             .unions = try unions.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+            .externs = try externs.toOwnedSlice(self.arena),
         };
     }
 
@@ -2281,6 +2291,77 @@ pub const Parser = struct {
         };
     }
 
+    /// `extern func name(a: T, ...) -> R`, with an optional `blocking`
+    /// between the two keywords (docs/FFI.md).  No body — the shape is
+    /// the whole declaration — no defaults, no fallibility mark, and
+    /// at most one return: the C shape is the whole truth, and every
+    /// refusal here says so.
+    fn externDecl(self: *Parser) Error!?ast.ExternDecl {
+        const start = self.advance(); // extern
+        var blocking = false;
+        if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "blocking")) {
+            _ = self.advance();
+            blocking = true;
+        }
+        if ((try self.expect(.keyword_func, "func after extern")) == null) return null;
+        const name = (try self.expect(.identifier, "a foreign function's name")) orelse return null;
+        try self.refuseWildcardName(name);
+        const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse
+            return null;
+        const parameters = (try self.parameterList(opener)) orelse return null;
+        for (parameters) |parameter| {
+            if (parameter.default != null) {
+                try self.report(
+                    "luce.parse.extern",
+                    parameter.span,
+                    "an extern parameter takes no default; the C shape is the whole truth",
+                    .{},
+                );
+                return null;
+            }
+        }
+        var returns: ?ast.TypeName = null;
+        if (self.accept(.arrow) != null) {
+            if (self.peekKind() == .left_paren) {
+                try self.report(
+                    "luce.parse.extern",
+                    self.peek().span,
+                    "an extern answers at most one value; a C function has no return shape",
+                    .{},
+                );
+                return null;
+            }
+            if (self.peekKind() == .bang) {
+                try self.report(
+                    "luce.parse.extern",
+                    self.peek().span,
+                    "an extern is not fallible; C reports failure in its return value, and the wrapper is where ! lives",
+                    .{},
+                );
+                return null;
+            }
+            returns = (try self.typeName()) orelse return null;
+            if (self.peekKind() == .bang) {
+                try self.report(
+                    "luce.parse.extern",
+                    self.peek().span,
+                    "an extern is not fallible; C reports failure in its return value, and the wrapper is where ! lives",
+                    .{},
+                );
+                return null;
+            }
+        }
+        if ((try self.expect(.newline, "end of line after an extern declaration")) == null) return null;
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .parameters = parameters,
+            .returns = returns,
+            .blocking = blocking,
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
     /// The one parameter grammar shared by functions and class
     /// initializers. The opener has already been consumed.
     fn parameterList(self: *Parser, opener: Token) Error!?[]ast.Parameter {
@@ -3489,6 +3570,7 @@ pub fn describe(kind: Kind) []const u8 {
 
         .identifier => "a name",
         .keyword_func => "the keyword 'func'",
+        .keyword_extern => "the keyword 'extern'",
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
         .keyword_class => "the keyword 'class'",

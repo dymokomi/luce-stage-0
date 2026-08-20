@@ -1172,7 +1172,7 @@ fn foldConvertAs(
         .f16 => .f16,
         .f32 => .f32,
         .f64 => .f64,
-        .boolean, .char, .str, .bytes, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered above
+        .boolean, .char, .str, .bytes, .foreign, .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered above
     };
     if (operand.value_type == .char) {
         if (target != .u32) {

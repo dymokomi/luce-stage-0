@@ -1230,6 +1230,10 @@ test "the reference names every conversion constructor" {
         // And `channel` is a resource constructed by call, not a
         // conversion of anything; the types reference owns it.
         "channel",
+        // `foreign` converts nothing and nothing converts to it: only
+        // an extern's answer produces one.  The types reference owns
+        // it (docs/FFI.md).
+        "foreign",
     });
 }
 

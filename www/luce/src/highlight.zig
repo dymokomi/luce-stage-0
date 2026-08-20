@@ -37,7 +37,7 @@ pub const keywords = [_][]const u8{
     "enum",  "union",  "match",  "const",  "let",     "var",       "if",       "elif",
     "else",  "while",  "for",    "in",     "return",  "break",     "continue", "and",
     "or",    "not",    "is",     "true",   "false",   "import",    "none",     "try",
-    "catch", "self",   "static", "public", "private", "weak",
+    "catch", "self",   "static", "public", "private", "weak",      "extern",
 };
 
 /// The words that make a reference — a heap object, or a worker holding
@@ -55,9 +55,10 @@ pub const type_names = [_][]const u8{
     // `handle` is absent deliberately: it is the standard library's
     // private descriptor spelling, and colouring it as language in a
     // user-facing sample would be a lie about the vocabulary.
-    "bool",  "u8",   "u16", "u32",   "u64",     "i8",   "i16",
-    "i32",   "i64",  "f16", "f32",   "f64",     "char", "str",
-    "bytes", "list", "map", "array", "builder", "task", "channel",
+    "bool",    "u8",   "u16", "u32",   "u64",     "i8",   "i16",
+    "i32",     "i64",  "f16", "f32",   "f64",     "char", "str",
+    "bytes",   "list", "map", "array", "builder", "task", "channel",
+    "foreign",
 };
 
 /// Everything callable by name on its own: the small public prelude and

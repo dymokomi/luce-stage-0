@@ -166,7 +166,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     // the type-name half of the `Builtin.NAME` gate.  Falling through
     // here, rather than failing, is what lets a program own the word.
     if (naming.visibleBuiltin(self, module, written.name)) |builtin| switch (builtin) {
-        .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => {
+        .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes, .foreign => {
             if (written.arguments.len != 0 or written.wildcards != 0) {
                 try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
                 return null;
@@ -187,6 +187,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 .char => .char,
                 .str => .str,
                 .bytes => .bytes,
+                .foreign => .foreign,
                 .list, .map, .array, .builder, .handle, .task, .channel => unreachable, // answered by the outer switch
             };
         },

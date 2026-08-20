@@ -400,6 +400,7 @@ const Module = struct {
         return switch (of) {
             .none => .void,
             .boolean => .i1,
+            .foreign => .i64,
             .u8, .i8 => .i8,
             .u16, .i16 => .i16,
             .u32, .i32, .char => .i32,
@@ -668,6 +669,7 @@ const Module = struct {
             .u64,
             .i64,
             .f64,
+            .foreign,
             .str,
             .bytes,
             .strukt,
@@ -1031,6 +1033,7 @@ const Module = struct {
         const tag: runtime.Tag, const bits: Builder.Constant = switch (of) {
             .none => .{ .none, try self.builder.intConst(.i64, 0) },
             .boolean => .{ .boolean, try self.builder.intConst(.i64, 0) },
+            .foreign => .{ .i64, try self.builder.intConst(.i64, 0) },
             .u8 => .{ .u8, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
             .u16 => .{ .u16, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
             .u32 => .{ .u32, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
@@ -1577,6 +1580,7 @@ const Module = struct {
             // row's container call takes.
             .none,
             .boolean,
+            .foreign,
             .u8,
             .u16,
             .u32,
@@ -2434,7 +2438,7 @@ const Module = struct {
             .u16, .i16, .f16 => 2,
             .u32, .i32, .f32, .char => 4,
             // A function value travels as the pointer to its run.
-            .u64, .i64, .f64, .strukt, .variant, .function, .heap => 8,
+            .u64, .i64, .f64, .foreign, .strukt, .variant, .function, .heap => 8,
             // `{ ptr, i64 }` — how a str travels.
             .str, .bytes => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
@@ -2443,6 +2447,7 @@ const Module = struct {
             // and `dereferenceable` must not claim more than the
             // caller's `alloca` provides.
             .optional => |payload| switch (payload.asType().storage()) {
+                .foreign => 16,
                 .boolean, .u8, .i8 => 2,
                 // {i16, i1} and {half, i1} align to 2, so four.
                 .u16, .i16, .f16 => 4,
@@ -3437,6 +3442,7 @@ const Body = struct {
         const of = written;
         return switch (of) {
             .boolean => .false,
+            .foreign => try self.module.builder.intValue(.i64, 0),
             .u8, .i8 => try self.module.builder.intValue(.i8, 0),
             .u16, .i16 => try self.module.builder.intValue(.i16, 0),
             .u32, .i32, .char => try self.module.builder.intValue(.i32, 0),
@@ -3679,7 +3685,7 @@ const Body = struct {
             .none => try self.module.builder.intValue(.i64, 0),
             .boolean => try self.wip.cast(.zext, held, .i64, "box.bits"),
             // A handle already *is* the `bits` word `Value` carries.
-            .u64, .i64, .heap => held,
+            .u64, .i64, .foreign, .heap => held,
             .f64 => try self.wip.cast(.bitcast, held, .i64, "box.bits"),
             // A narrow scalar sits in the low half of the word,
             // zero-extended: `asI32` reads it back by truncating, so
@@ -3718,6 +3724,7 @@ const Body = struct {
         return switch (of) {
             .none,
             .boolean,
+            .foreign,
             .u8,
             .u16,
             .u32,
@@ -3880,7 +3887,7 @@ const Body = struct {
         const of = written.storage();
         const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
-            .u64, .i64, .heap => bits,
+            .u64, .i64, .foreign, .heap => bits,
             .u8, .i8 => try self.wip.cast(.trunc, bits, .i8, name),
             .u16, .i16 => try self.wip.cast(.trunc, bits, .i16, name),
             .u32, .i32, .char => try self.wip.cast(.trunc, bits, .i32, name),
@@ -4168,7 +4175,7 @@ const Body = struct {
         // An enum is a number in a cell, so it writes in place like one
         // (docs/ENUMS.md D9).
         return switch (written.storage()) {
-            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => true,
+            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => true,
             .none, .str, .bytes, .strukt, .variant, .function, .heap, .optional => false,
             .enumeration => unreachable, // answered by storage() above
         };
@@ -4421,7 +4428,7 @@ const Body = struct {
         const element = written.storage();
         return switch (element) {
             .f64 => .double,
-            .u64, .i64 => .i64,
+            .u64, .i64, .foreign => .i64,
             .f32 => .float,
             .u32, .i32, .char => .i32,
             .f16 => .half,
@@ -4447,6 +4454,7 @@ const Body = struct {
             .u64,
             .i64,
             .f64,
+            .foreign,
             .str,
             .bytes,
             .strukt,
@@ -4476,7 +4484,7 @@ const Body = struct {
             .boolean, .u8, .i8 => 1,
             .u16, .i16, .f16 => 2,
             .u32, .i32, .f32, .char => 4,
-            .u64, .i64, .f64 => 8,
+            .u64, .i64, .f64, .foreign => 8,
             // The boxed slot, whose size is `runtime.Value`'s and is
             // asserted against it by `runtime/test.zig`.
             .none, .str, .bytes, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
@@ -4739,7 +4747,7 @@ const Body = struct {
     fn loadCell(self: *Body, written: types.Type, address: Builder.Value) Error!Builder.Value {
         const element = written.storage();
         return switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => try self.cellLoad(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => try self.cellLoad(
                 self.cellType(element),
                 address,
                 cellAlignment(element),
@@ -4777,7 +4785,7 @@ const Body = struct {
     ) Error!void {
         const element = written.storage();
         switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char => try self.cellStore(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => try self.cellStore(
                 held,
                 address,
                 cellAlignment(element),
@@ -6444,6 +6452,7 @@ const Body = struct {
             .none,
             .boolean,
             .char,
+            .foreign,
             .strukt,
             // A union is compared by match and nothing else
             // (docs/UNION.md D16): the analyzer refuses every operator
@@ -6805,13 +6814,13 @@ const Body = struct {
         }
 
         const condition: Builder.IntegerCondition = switch (operation.operand_type) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char => switch (operation.op) {
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .foreign => switch (operation.op) {
                 .equal => .eq,
                 .not_equal => .ne,
-                .less => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ult else .slt,
-                .less_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ule else .sle,
-                .greater => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .ugt else .sgt,
-                .greater_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char) .uge else .sge,
+                .less => if (operation.operand_type.isUnsigned() or operation.operand_type == .char or operation.operand_type == .foreign) .ult else .slt,
+                .less_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char or operation.operand_type == .foreign) .ule else .sle,
+                .greater => if (operation.operand_type.isUnsigned() or operation.operand_type == .char or operation.operand_type == .foreign) .ugt else .sgt,
+                .greater_equal => if (operation.operand_type.isUnsigned() or operation.operand_type == .char or operation.operand_type == .foreign) .uge else .sge,
                 .add,
                 .subtract,
                 .multiply,
@@ -6924,6 +6933,7 @@ const Body = struct {
                 },
                 .none,
                 .boolean,
+                .foreign,
                 .u8,
                 .u16,
                 .u32,
@@ -7598,6 +7608,7 @@ const Body = struct {
             .f32,
             .f64,
             .char,
+            .foreign,
             .strukt,
             .variant,
             .heap,
@@ -8742,6 +8753,7 @@ const Body = struct {
             .none,
             .boolean,
             .char,
+            .foreign,
             .str,
             .bytes,
             .strukt,

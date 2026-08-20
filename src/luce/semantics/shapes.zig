@@ -201,6 +201,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
             .char,
             .str,
             .bytes,
+            .foreign,
             .enumeration,
             => {},
         }
@@ -311,6 +312,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
             .char,
             .str,
             .bytes,
+            .foreign,
             .enumeration,
             => {},
         }

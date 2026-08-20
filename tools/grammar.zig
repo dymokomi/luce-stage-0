@@ -155,6 +155,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_const,
         .keyword_let,
         .keyword_var,
+        // `extern` declares a foreign function's shape beside `func`,
+        // and wears the declaration class (docs/FFI.md).
+        .keyword_extern,
         => .storage,
 
         .keyword_public,

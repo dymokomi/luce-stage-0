@@ -267,6 +267,7 @@ fn writesPlainElement(
         .f64,
         .char,
         .str,
+        .foreign,
         => true,
         .none, .bytes, .strukt, .variant, .heap, .optional => false,
         .enumeration => unreachable, // answered by storage() above

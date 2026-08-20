@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 65;
+pub const format_version: u32 = 66;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -803,6 +803,7 @@ const Reader = struct {
         return switch (tag) {
             .none => .none,
             .boolean => .boolean,
+            .foreign => .foreign,
             .u8 => .u8,
             .u16 => .u16,
             .u32 => .u32,
@@ -2270,8 +2271,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // channel intrinsics (docs/FILESYSTEM.md).
     // 64 -> 65: `extend_list` joins at the end (the #24 ruling:
     // Zig's appendSlice as `xs.extend(ys)`).
-    try testing.expectEqual(@as(u32, 65), format_version);
-    try testing.expectEqual(@as(u64, 14365741767081459941), hasher.final());
+    // 65 -> 66: the FFI arrives (docs/FFI.md): the `foreign` value
+    // type joins the wire vocabulary, beside the foreign-function
+    // table and its call instruction.
+    try testing.expectEqual(@as(u32, 66), format_version);
+    try testing.expectEqual(@as(u64, 7505579708002730786), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

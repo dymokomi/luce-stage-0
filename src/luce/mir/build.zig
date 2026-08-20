@@ -442,6 +442,7 @@ pub const Lowering = struct {
             .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => try self.emit(.{ .const_integer = 0 }, of),
             .f16, .f32, .f64 => try self.emit(.{ .const_float = 0.0 }, of),
             .char => try self.emit(.{ .const_integer = 0 }, .char),
+            .foreign => try self.emit(.{ .const_integer = 0 }, .foreign),
             // **An enum's zero is its first declared member.**  Zero
             // itself would be a value no member holds — the one thing
             // an enum promises is that every value of it is a member,

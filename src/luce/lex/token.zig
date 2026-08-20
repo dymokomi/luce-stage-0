@@ -107,6 +107,11 @@ pub const Kind = enum {
     /// keyword rather than a name, so nothing can shadow it and no
     /// declaration can call something else `self`.
     keyword_self,
+    /// `extern func name(...) -> R` — a foreign function's declared
+    /// shape, with no body (docs/FFI.md).  A keyword rather than a
+    /// contextual word, so the boundary is greppable and nothing can
+    /// shadow it.
+    keyword_extern,
     /// `a catch b`, and `EXPR catch:` opening a handler block.  A
     /// keyword rather than a reuse of `else`, because the two are
     /// different acts: `else` says "no value here, use this instead",
@@ -244,6 +249,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "self", .kind = .keyword_self },
     .{ .word = "public", .kind = .keyword_public },
     .{ .word = "private", .kind = .keyword_private },
+    .{ .word = "extern", .kind = .keyword_extern },
 };
 
 /// The same table, arranged for lookup.  `keywords` stays the

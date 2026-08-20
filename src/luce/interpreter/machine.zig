@@ -1640,6 +1640,7 @@ pub const Machine = struct {
         return switch (of) {
             .none => .none,
             .boolean => .ofBoolean(false),
+            .foreign => .ofI64(0),
             .u8 => .ofU8(0),
             .u16 => .ofU16(0),
             .u32 => .ofU32(0),

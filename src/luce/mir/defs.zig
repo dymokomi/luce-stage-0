@@ -39,6 +39,7 @@ pub fn boxTag(of: Type) ?value.Tag {
         .char => .char,
         .str => .str,
         .bytes => .bytes,
+        .foreign => .i64,
         .strukt => .strukt,
         // A union value is a struct value whose field 0 is the tag
         // (docs/UNION.md D8): to the runtime it is a field run, so it

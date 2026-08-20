@@ -86,7 +86,7 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array[i64, _]); a bindi
 
 ```
 alias    and      break    catch    class    const    continue deinit
-elif     else     enum     false    for      func     if       import
+elif     else     enum     extern   false    for      func     if       import
 in       init     interface is     let      match    mutating none
 not      or       private  public  return   self     spawn    static
 struct   true     try      union   var      weak     while
@@ -97,7 +97,8 @@ region labels (`private:` and `public:`). `self` is the receiver of a
 method. `static` marks a namespace function declared inside a struct,
 enum, or union. `const` declares a file-scope constant; `let` and `var`
 are function-scope bindings. `weak` qualifies non-owning storage. `spawn`
-starts a worker call.
+starts a worker call. `extern` declares a foreign function's C shape, with
+no body.
 
 `static` belongs immediately before `func`.
 

@@ -129,6 +129,16 @@ bytes, indexing answers `u8`, slicing answers `bytes`, and iteration yields
 bytes. `bytes(text)` encodes UTF-8; `parse_str(data) -> str?` validates binary
 data as text. Mutable binary buffers use `list[u8]` or `array[u8, _]`.
 
+## `foreign` {#foreign}
+
+`foreign` is the opaque token the FFI boundary speaks: what an `extern`
+function hands back and takes — a library's handle, a pinned buffer's
+address inside a scope. It is a value type the width of a pointer; it
+supports `==` and `!=` and nothing else, its zero value is the null
+token, and what it points at is the foreign library's to manage. No
+conversion constructs one: only an extern's answer and the scoped buffer
+forms produce a `foreign`.
+
 ```luce run
 func main():
     let text = "A👋é"

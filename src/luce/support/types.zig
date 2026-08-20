@@ -86,6 +86,12 @@ pub const Type = union(enum) {
     str,
     /// Immutable binary data with no text invariant.
     bytes,
+    /// An opaque foreign token (docs/FFI.md): what an extern hands
+    /// back and takes — an `LLVMValueRef`, a pinned buffer's address
+    /// inside a scope.  A value type the width of a pointer, carried
+    /// as an `i64` at runtime; it supports `==`/`!=` and nothing else,
+    /// and what it points at is the foreign library's to manage.
+    foreign,
     strukt: u32,
     heap: u32,
     /// A set of named constants at one integer width (docs/ENUMS.md).
@@ -186,6 +192,7 @@ pub const Type = union(enum) {
     /// write a second.
     pub const Payload = union(enum) {
         boolean,
+        foreign,
         u8,
         u16,
         u32,
@@ -226,6 +233,7 @@ pub const Type = union(enum) {
         pub fn asType(self: Payload) Type {
             return switch (self) {
                 .boolean => .boolean,
+                .foreign => .foreign,
                 .u8 => .u8,
                 .u16 => .u16,
                 .u32 => .u32,
@@ -328,7 +336,7 @@ pub const Type = union(enum) {
             .u16, .i16, .f16 => 16,
             .u32, .i32, .f32 => 32,
             .u64, .i64, .f64 => 64,
-            .none, .boolean, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
+            .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
         };
     }
 
@@ -348,7 +356,7 @@ pub const Type = union(enum) {
             .i16 => .{ .low = std.math.minInt(i16), .high = std.math.maxInt(i16) },
             .i32 => .{ .low = std.math.minInt(i32), .high = std.math.maxInt(i32) },
             .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
-            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
+            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
         };
     }
 
@@ -419,6 +427,7 @@ pub const Type = union(enum) {
             // written spelling's business; here it is one more payload.
             .function => |index| .{ .optional = .{ .function = index } },
             .boolean => .{ .optional = .boolean },
+            .foreign => .{ .optional = .foreign },
             .u8 => .{ .optional = .u8 },
             .u16 => .{ .optional = .u16 },
             .u32 => .{ .optional = .u32 },
@@ -761,6 +770,9 @@ pub const Builtin = enum {
     /// `channel[i64](64)` for an explicit capacity — and the one
     /// reference a worker boundary lets through.
     channel,
+    /// An opaque foreign token (docs/FFI.md): what an extern hands
+    /// back and takes.  A value type; `==`/`!=` and nothing else.
+    foreign,
 };
 
 /// The builtin a name spells, or null when it names nothing builtin —
@@ -795,6 +807,7 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "char", .is = .char },
     .{ .name = "str", .is = .str },
     .{ .name = "bytes", .is = .bytes },
+    .{ .name = "foreign", .is = .foreign },
     .{ .name = "list", .is = .list },
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
@@ -834,7 +847,7 @@ pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .str, .bytes => builtin,
-        .boolean, .list, .map, .array, .builder, .handle, .task, .channel => null,
+        .boolean, .list, .map, .array, .builder, .handle, .task, .channel, .foreign => null,
     };
 }
 
@@ -883,6 +896,7 @@ fn writeTypeName(
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
         .boolean => try written.appendSlice(allocator, "bool"),
+        .foreign => try written.appendSlice(allocator, "foreign"),
         .u8 => try written.appendSlice(allocator, "u8"),
         .u16 => try written.appendSlice(allocator, "u16"),
         .u32 => try written.appendSlice(allocator, "u32"),
