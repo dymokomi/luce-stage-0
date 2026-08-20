@@ -1439,7 +1439,7 @@ pub fn build(b: *std.Build) void {
             compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }
         linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_archive);
-        if (program.wants_termui) addTermuiPackage(b, compile_program, runtime_directory, program.name);
+        if (program.wants_termui) addTermuiPackage(b, compile_program, runtime_directory, program.name, .standard_error);
         const install_program = b.addInstallFile(
             artifact_file,
             b.fmt("examples/{s}/{s}.lc", .{ program.name, program.name }),
@@ -1525,7 +1525,7 @@ pub fn build(b: *std.Build) void {
         test_editor.addFileInput(b.path(b.fmt("examples/editor/tests/{s}_test.luc", .{one})));
     }
     linkAgainstRuntime(test_editor, install_runtime, runtime_directory, runtime_archive);
-    addTermuiPackage(b, test_editor, runtime_directory, "editor");
+    addTermuiPackage(b, test_editor, runtime_directory, "editor", .transcript);
     test_editor_product_step.dependOn(&test_editor.step);
 
     // The language server's own suites run the same way: pure userland
@@ -1586,7 +1586,7 @@ pub fn build(b: *std.Build) void {
     const install_lsp = b.addInstallFile(lsp_executable, "luce-lsp");
     b.getInstallStep().dependOn(&install_lsp.step);
     linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_archive);
-    addTermuiPackage(b, compile_editor, runtime_directory, "editor");
+    addTermuiPackage(b, compile_editor, runtime_directory, "editor", .standard_error);
     const install_editor = b.addInstallFile(editor_executable, "editor");
     const install_editor_example = b.addInstallFile(editor_executable, "examples/editor/editor");
     b.getInstallStep().dependOn(&install_editor.step);
@@ -1662,14 +1662,39 @@ fn addSpecificationSuite(
     return step;
 }
 
-/// Give one `luce build` run what it needs to link: the installed
+/// Where one run's shelf announcement lands, which decides whether the
+/// build step has to expect it.
+///
+/// A package resolved from a `LUCE_LIB` shelf prints one line, every
+/// build, because those bytes are outside the project's control
+/// (docs/PACKAGES.md).  `luce build` prints it to standard error, and
+/// the step that runs it writes an artifact and so has its output
+/// captured.  `luce test` prints it into the transcript on standard
+/// output, in order with the file it belongs to, and the step that
+/// runs it writes no artifact — it inherits both streams, so the
+/// announcement reaches the terminal without ever being captured.
+const ShelfAnnouncement = enum { standard_error, transcript };
+
 /// Let one `luce` run resolve the termui package: `packages/` joins
 /// the runtime's directory on `LUCE_LIB`, which is a search path
 /// serving both of its meanings — where `libluce_rt.a` is, and which
-/// shelves hold packages (docs/PACKAGES.md D3).  The program's
+/// shelves hold packages (docs/PACKAGES.md).  The program's
 /// manifest is what makes the shelf answer at all, and every file the
 /// dependency contributes is an input, so editing one recompiles the
 /// programs that draw with it.
+///
+/// **The announcement is expected, not merely tolerated.**  Zig's build
+/// runner prints whatever a step wrote to standard error and follows it
+/// with the command it ran — and it never clears that command on
+/// success, so a step that says anything at all reads as a failure with
+/// no diagnostic.  These are the only captured steps in the tree whose
+/// child speaks when nothing is wrong, and they were read as an
+/// intermittent silent crash of the editor build (issue #32): the steps
+/// are cached, so the line surfaces only in the gates where `luce` was
+/// relinked.  Expecting the exact line is what separates the two: it
+/// holds the resolution to the wording and the one stream the document
+/// promises, it keeps a working build quiet, and a compile that says
+/// anything else fails with everything it wrote.
 ///
 /// Call this *after* `linkAgainstRuntime`, whose `LUCE_LIB` this
 /// widens.
@@ -1678,18 +1703,37 @@ fn addTermuiPackage(
     run: *std.Build.Step.Run,
     runtime_directory: []const u8,
     program: []const u8,
+    announcement: ShelfAnnouncement,
 ) void {
+    const shelf = b.pathFromRoot("packages");
     run.setEnvironmentVariable("LUCE_LIB", b.fmt("{s}{c}{s}", .{
         runtime_directory,
         std.fs.path.delimiter,
-        b.pathFromRoot("packages"),
+        shelf,
     }));
     run.addFileInput(b.path(b.fmt("examples/{s}/luce.yaml", .{program})));
     for (termui_modules) |module| {
         run.addFileInput(b.path(b.fmt("packages/termui-{s}/{s}.luc", .{ termui_version, module })));
     }
+    switch (announcement) {
+        .transcript => {},
+        .standard_error => {
+            run.expectStdErrEqual(b.fmt(
+                "package termui {s}: resolved outside the project, from LUCE_LIB shelf {s}{c}termui-{s}\n",
+                .{ termui_version, shelf, std.fs.path.sep, termui_version },
+            ));
+            // Checked standard I/O checks nothing else on its own, and
+            // the run steps around this one still owe the gate a failed
+            // compile — or a child killed by a signal — reported as
+            // one.  Ordered after the line so an ordinary compile
+            // failure is diagnosed by its diagnostics rather than by
+            // its exit code.
+            run.expectExitCode(0);
+        },
+    }
 }
 
+/// Give one `luce build` run what it needs to link: the installed
 /// runtime library on `LUCE_LIB`, the install ordered before the
 /// compile, and the library itself as an input so the cached result is
 /// thrown away when the runtime changes.
