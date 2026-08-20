@@ -134,7 +134,7 @@ fn planText(
         })) {
             .written => {},
             .unsupported => |what| {
-                try err.print("{s}: the LLVM backend has no lowering for {s} yet\n", .{ script, what });
+                try err.print("{s}: damaged IR reached the backend ({s}); recompile from source and report this\n", .{ script, what });
                 return null;
             },
             .failed => |why| {
@@ -401,7 +401,7 @@ fn compileStep(
     })) {
         .written => {},
         .unsupported => |what| {
-            try err.print("{s}: the LLVM backend has no lowering for {s} yet\n", .{ step.source, what });
+            try err.print("{s}: damaged IR reached the backend ({s}); recompile from source and report this\n", .{ step.source, what });
             return true;
         },
         .failed => |why| {

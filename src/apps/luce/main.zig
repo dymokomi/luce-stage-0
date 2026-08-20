@@ -452,7 +452,7 @@ fn buildNative(
         .written => {},
         .unsupported => |what| {
             try err.print(
-                "{s}: the LLVM backend has no lowering for {s} yet\n",
+                "{s}: damaged IR reached the backend ({s}); recompile from source and report this\n",
                 .{ request.path, what },
             );
             // Its own exit code: this is about the program, not about

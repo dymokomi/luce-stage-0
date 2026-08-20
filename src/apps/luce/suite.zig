@@ -217,7 +217,7 @@ fn runFile(
     })) {
         .written => {},
         .unsupported => |what| {
-            try out.print("  luce: the LLVM backend has no lowering for {s} yet\n", .{what});
+            try out.print("  luce: damaged IR reached the backend ({s}); recompile from source and report this\n", .{what});
             tally.unrun += 1;
             return;
         },

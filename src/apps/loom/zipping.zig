@@ -412,9 +412,11 @@ test "Info-ZIP's own zip and unzip agree with zipper, where the machine has them
     defer if (system_unzip) |path| gpa.free(path);
 
     if (system_zip == null or system_unzip == null) {
-        // A skip that says so.  These rows are a cross-check and never
-        // the proof: the archives above are Info-ZIP's bytes whatever
-        // this machine has installed, and they run unconditionally.
+        // A skip that says so — and *counts* as one: a plain return
+        // here tallied as a pass, which slightly overstated what the
+        // machine proved.  These rows are a cross-check and never the
+        // proof: the archives above are Info-ZIP's bytes whatever this
+        // machine has installed, and they run unconditionally.
         std.debug.print(
             "\n  skipped: Info-ZIP's zip{s} and unzip{s} are not on PATH; " ++
                 "the embedded-archive rows still ran\n",
@@ -423,7 +425,7 @@ test "Info-ZIP's own zip and unzip agree with zipper, where the machine has them
                 if (system_unzip == null) " (missing)" else "",
             },
         );
-        return;
+        return error.SkipZigTest;
     }
 
     var yard = try Yard.open(gpa);

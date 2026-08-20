@@ -203,10 +203,18 @@ const Nursery = struct {
             .arena = owned.arena.allocator(),
             .objects = self.base,
         });
+        // Exhaustion here is exhaustion, not a missing host: give the
+        // worker no runtime rather than one whose channel use would
+        // misreport OOM as host_unavailable.
         if (runtime.channels.Registry.create(self.base)) |registry| {
             owned.runtime.channels = registry;
             owned.runtime.owns_channels = true;
-        } else |_| {}
+        } else |_| {
+            owned.runtime.deinit();
+            owned.arena.deinit();
+            self.base.destroy(owned);
+            return null;
+        }
         return &owned.runtime;
     }
 
@@ -2921,7 +2929,10 @@ test "an interpreter worker marks arena exhaustion before it returns" {
     defer program.deinit();
     program.functions = &functions;
 
-    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 1 });
+    // Two allocations let `open` finish whole — the Owned frame and the
+    // worker's channel registry (a refused registry now refuses the
+    // open, honestly) — so the exhaustion under test is the *run's*.
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 2 });
     var nursery: Nursery = .{ .program = &program, .host = null, .base = objects.allocator() };
     const worker = Nursery.open(&nursery) orelse return error.OutOfMemory;
     var answer: RuntimeValue = .none;
