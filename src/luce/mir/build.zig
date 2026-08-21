@@ -157,6 +157,8 @@ pub const Lowering = struct {
     return_type: Type,
     /// Written `-> T!` or `-> !` (docs/FAILURE.md).
     fallible: bool = false,
+    /// What it fails with (docs/ERRORS.md R2); `.str` for bare `!`.
+    error_type: Type = .str,
     /// Stage 1's registry entry every origin offset indexes.  `build`
     /// turns the offsets into lines and columns through it, and names
     /// the function's file from it for tracebacks.
@@ -639,6 +641,16 @@ pub const Lowering = struct {
         );
     }
 
+    /// The raised *value*, an owned copy the binding's store adopts
+    /// (docs/ERRORS.md R2); emitted before the `forget` that releases
+    /// the channel's own hold.
+    pub fn errorValue(self: *Lowering, of: Type) Error!Register {
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .error_value, .arguments = &.{} } },
+            of,
+        );
+    }
+
     /// `catch` handled it: the error and its words are discarded.
     pub fn forget(self: *Lowering) Error!void {
         _ = try self.emit(
@@ -895,6 +907,7 @@ pub fn build(
             .parameter_count = lowering.parameter_count,
             .return_type = lowering.return_type,
             .fallible = lowering.fallible,
+            .error_type = lowering.error_type,
             .locals = try lowering.locals.toOwnedSlice(arena),
             .instructions = try lowering.instructions.toOwnedSlice(arena),
             .result_types = try lowering.result_types.toOwnedSlice(arena),

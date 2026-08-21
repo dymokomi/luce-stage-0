@@ -157,6 +157,9 @@ pub const ClosureDestination = struct {
 /// A fallible call awaiting the `try` or `catch` written in front
 /// of it.
 const Opened = struct {
+    /// What the call fails with (docs/ERRORS.md R2): the type the
+    /// `catch` binds and the `try` must pass on unchanged.
+    error_type: Type = .str,
     /// How many statement temporaries existed when the call's
     /// branch was taken.  Anything parked after it belongs to the
     /// side where the call *returned*, and releasing it on the
@@ -311,6 +314,9 @@ pub const FunctionBuilder = struct {
     /// Whether the declaration wrote `!` — what `raise` and the
     /// try-pass-through check against (docs/FAILURE.md).
     fallible: bool = false,
+    /// What this function fails with (docs/ERRORS.md R2): the union
+    /// `error(...)` must be given and `try` must match, or `.str`.
+    error_type: Type = .str,
     /// True only while checking a class's hidden `deinit:` function.
     lifecycle: context.Lifecycle = .ordinary,
     /// A tightly scoped permission for the bare `self` borrow. Callers save
@@ -2092,6 +2098,19 @@ pub const FunctionBuilder = struct {
         origin: nodes.NodeRef,
         span: Span,
     ) Error!Typed {
+        return self.openFallibleWith(result_type, .str, origin, span);
+    }
+
+    /// `openFallible` with the callee's declared error type riding
+    /// along (docs/ERRORS.md R2) — what the `catch` binds and the
+    /// `try` must match.
+    pub fn openFallibleWith(
+        self: *FunctionBuilder,
+        result_type: Type,
+        error_type: Type,
+        origin: nodes.NodeRef,
+        span: Span,
+    ) Error!Typed {
         const storage = shapes.ownsStorage(self.analyzer, result_type);
         const objects = shapes.carriesObjects(self.analyzer, result_type);
 
@@ -2100,11 +2119,11 @@ pub const FunctionBuilder = struct {
         // is taken now either way — the failing side releases what the
         // statement owned *before* the call.
         if (result_type == .none) {
-            self.opened = .{ .temps_floor = self.temps.items.len };
+            self.opened = .{ .temps_floor = self.temps.items.len, .error_type = error_type };
             return .{ .node = origin, .value_type = .none };
         }
         const carried = try recorder.recordLocal(self, null, result_type, storage, span);
-        self.opened = .{ .temps_floor = self.temps.items.len };
+        self.opened = .{ .temps_floor = self.temps.items.len, .error_type = error_type };
 
         // The node says what the reload is in the tree's vocabulary —
         // a `carried_get` whose origin is the call — built before the
@@ -2210,6 +2229,19 @@ pub const FunctionBuilder = struct {
                 attempt.span,
                 "try hands the error to the caller, and {s} does not say it can fail; write '-> !' (or '-> T!') on its signature, or handle it with catch",
                 .{self.name},
+            );
+            return null;
+        }
+        // The error passes up unchanged, so the types must agree
+        // (docs/ERRORS.md R2): a different error is caught and
+        // re-raised as this function's own, where the conversion is
+        // visible.
+        if (!attempted.opened.error_type.eql(self.error_type)) {
+            try self.fail(
+                "luce.sema.fallible",
+                attempt.span,
+                "try passes a {s} error on, and {s} fails with {s}; catch it and raise your own",
+                .{ try self.analyzer.typeName(attempted.opened.error_type), self.name, try self.analyzer.typeName(self.error_type) },
             );
             return null;
         }

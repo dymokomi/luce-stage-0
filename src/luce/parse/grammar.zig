@@ -1268,6 +1268,7 @@ pub const Parser = struct {
             if (self.accept(.bang)) |marked| {
                 written.fallible = true;
                 written.span = .{ .start = start.span.start, .end = marked.span.end };
+                try self.functionErrorType(&written, start);
                 return self.optionalSuffix(written);
             }
             const answered = (try self.typeName()) orelse return null;
@@ -1278,6 +1279,7 @@ pub const Parser = struct {
             if (self.accept(.bang)) |marked| {
                 written.fallible = true;
                 written.span = .{ .start = start.span.start, .end = marked.span.end };
+                try self.functionErrorType(&written, start);
             }
         }
         return self.optionalSuffix(written);
@@ -1778,6 +1780,7 @@ pub const Parser = struct {
         const parameters = (try self.parameterList(opener)) orelse return null;
 
         var fallible = false;
+        var error_type: ?*ast.TypeName = null;
         if (self.accept(.arrow) != null) {
             if (self.accept(.bang) == null) {
                 try self.report(
@@ -1789,12 +1792,19 @@ pub const Parser = struct {
                 return null;
             }
             fallible = true;
+            if (self.peekKind() == .identifier) {
+                const failing = (try self.typeName()) orelse return null;
+                const held = try self.arena.create(ast.TypeName);
+                held.* = failing;
+                error_type = held;
+            }
         }
         const body = (try self.block("init")) orelse return null;
         return .{
             .name = "init",
             .name_span = marker.span,
             .parameters = parameters,
+            .error_type = error_type,
             .fallible = fallible,
             .body = body,
             .span = marker.span,
@@ -2095,6 +2105,17 @@ pub const Parser = struct {
         };
     }
 
+    /// The `! E` a fallible function type may carry (docs/ERRORS.md
+    /// R2): a type name straight after the `!`, when one follows.
+    fn functionErrorType(self: *Parser, written: *ast.TypeName, start: Token) Error!void {
+        if (self.peekKind() != .identifier) return;
+        const failing = (try self.typeName()) orelse return;
+        const held = try self.arena.create(ast.TypeName);
+        held.* = failing;
+        written.error_type = held;
+        written.span = .{ .start = start.span.start, .end = failing.span.end };
+    }
+
     /// The contextual `indirect` at a declaration position: claimed
     /// only when the very next token is `union`, so the word stays an
     /// ordinary identifier everywhere else (the `blocking` rule).
@@ -2313,6 +2334,7 @@ pub const Parser = struct {
         var returns: std.ArrayList(ast.TypeName) = .empty;
         defer returns.deinit(self.arena);
         var fallible = false;
+        var error_type: ?*ast.TypeName = null;
         if (self.accept(.arrow) != null) {
             if (self.peekKind() == .left_paren) {
                 if (!try self.returnShape(&returns)) return null;
@@ -2321,6 +2343,15 @@ pub const Parser = struct {
                 try returns.append(self.arena, only);
             }
             fallible = self.accept(.bang) != null;
+            // `! E` (docs/ERRORS.md R2): the type the function fails
+            // with.  Only after a `!`, and only when a type follows —
+            // the block's `:` ends the signature either way.
+            if (fallible and self.peekKind() == .identifier) {
+                const failing = (try self.typeName()) orelse return null;
+                const held = try self.arena.create(ast.TypeName);
+                held.* = failing;
+                error_type = held;
+            }
         }
         const body = (try self.block("func")) orelse return null;
         return .{
@@ -2328,6 +2359,7 @@ pub const Parser = struct {
             .name_span = name.span,
             .parameters = parameters,
             .returns = try returns.toOwnedSlice(self.arena),
+            .error_type = error_type,
             .fallible = fallible,
             .body = body,
             .span = .{ .start = start.span.start, .end = name.span.end },

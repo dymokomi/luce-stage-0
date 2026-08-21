@@ -556,6 +556,9 @@ pub const Signature = struct {
     /// type's identity; a non-fallible function converts *into* a
     /// fallible slot (it trivially keeps the promise), never back.
     fallible: bool = false,
+    /// What it fails with (docs/ERRORS.md R2): a union, or `.str` for
+    /// the bare `!`.  Part of the identity when `fallible`.
+    error_type: Type = .str,
 
     pub const Parameter = struct {
         value_type: Type,
@@ -564,6 +567,7 @@ pub const Signature = struct {
     pub fn eql(self: Signature, other: Signature) bool {
         if (self.parameters.len != other.parameters.len) return false;
         if (self.fallible != other.fallible) return false;
+        if (self.fallible and !self.error_type.eql(other.error_type)) return false;
         if (!self.result.eql(other.result)) return false;
         for (self.parameters, other.parameters) |mine, theirs| {
             if (!mine.value_type.eql(theirs.value_type)) return false;

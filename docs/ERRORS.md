@@ -1,6 +1,7 @@
 # Typed errors and fallible function values — design for the freeze
 
-**Status: ratified 2026-08-21 (owner), implementation in flight.**
+**Status: ratified 2026-08-21 (owner); R3 landed 2026-08-21, R2's
+language half landed 2026-08-22 — the std sweep remains.**
 Extends docs/FAILURE.md; that file's three-way rule (absence / error /
 trap) is untouched. Two rulings land here:
 

@@ -1919,8 +1919,6 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
 
     const succeeded = try flow.narrowSave(self);
     defer self.temporary().free(succeeded);
-
-    _ = opened;
     try flow.narrowRestore(self, entry);
 
     // The binding lives in a scope of its own, wrapped around the
@@ -1963,7 +1961,10 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     var error_local: ?LocalId = null;
     if (guarded.binding) |binding| {
         try self.pushScope();
-        if (try self.declareLocal(binding.text, .str, false, binding.span)) |local| {
+        // The binding wears what the call fails with (docs/ERRORS.md
+        // R2): the bare `!`'s str, or the declared union `match`
+        // reads apart.
+        if (try self.declareLocal(binding.text, opened.error_type, false, binding.span)) |local| {
             error_local = local;
         }
         try lowerBlock(self, guarded.handler);

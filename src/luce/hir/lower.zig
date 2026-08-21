@@ -2788,9 +2788,13 @@ const Replay = struct {
         self.code.switchTo(opened.handler);
         if (guarded.error_local) |expected| {
             try self.pushScope();
-            const words = try self.code.errorMessage();
+            const bound_type = self.body.locals[expected].local_type;
+            const words = if (bound_type == .str)
+                try self.code.errorMessage()
+            else
+                try self.code.errorValue(bound_type);
             const local = self.takeRecordedSlot(expected);
-            try self.storeOwned(local, words, .str, .plain, null);
+            try self.storeOwned(local, words, bound_type, .plain, null);
             try self.noteOwned(local);
             _ = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .forget, .arguments = &.{} } },

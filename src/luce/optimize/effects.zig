@@ -222,7 +222,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // that matters is `error_message` before `forget`, which stage
         // 4 emits and LLVM keeps because both take the runtime pointer
         // and one of them writes through it.
-        .errored, .error_message, .forget, .raise_error => .impure,
+        .errored, .error_message, .error_value, .forget, .raise_error => .impure,
 
         // Text.  A string is a value, so these read nothing another
         // instruction can change.  The parsers answer absence rather
@@ -493,6 +493,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // The error channel is not the object table.
             .errored,
             .error_message,
+            .error_value,
             .forget,
             .raise_error,
             => true,

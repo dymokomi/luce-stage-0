@@ -6,6 +6,22 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- Errors are typed, and they are unions (docs/ERRORS.md R2): a
+  fallible function may declare what it fails *with* — `-> i64 !
+  ParseError`, where `ParseError` is an ordinary union — and
+  `error(ParseError.unexpected(found = t, line = 3))` raises the
+  value, `catch reason:` binds it, and `match` reads it apart with
+  payload captures.  `try` passes the same error type up unchanged;
+  a different one is caught and re-raised where the conversion is
+  visible, never merged silently.  The bare `!` stays exactly the
+  `str` message form it always was, so every existing program and
+  signature keeps its meaning; the channel deep-copies the raised
+  value so the unwind releases the frame's own, and `catch`'s
+  binding adopts an owned copy.  Function types carry the same
+  spelling: `func(str) -> Ast ! ParseError`.  MIR 70 -> 71
+  (functions and signatures say what they fail with, `error_value`
+  joins); the host ABI is untouched.
+
 - Function types carry fallibility (docs/ERRORS.md R3): `func(i64)
   -> i64!` and `func(i64) -> !` are types, so failing functions are
   stored, passed, and called through values — a pass pipeline is a

@@ -344,6 +344,24 @@ fn collectFunction(
     // is being lowered against a snapshot of it.
     const return_type: Type = if (channel.items.len == 1) channel.items[0] else .none;
 
+    // `! E` (docs/ERRORS.md R2): what the function fails with — a
+    // union the catch will read apart, or the bare `!`'s str.
+    var error_type: Type = .str;
+    if (declaration.error_type) |written| {
+        if (try resolve.resolveType(self, module, written.*)) |resolved| {
+            if (resolved == .variant or resolved == .str) {
+                error_type = resolved;
+            } else {
+                try self.fail(
+                    "luce.sema.fallible",
+                    written.span,
+                    "a function fails with a union (or the bare !'s str); {s} is neither [ERRORS.md]",
+                    .{try self.typeName(resolved)},
+                );
+            }
+        }
+    }
+
     const index: u32 = @intCast(self.functions.items.len);
     try self.function_names.put(self.temporary, name, index);
     try self.functions.append(self.arena, .{
@@ -358,6 +376,7 @@ fn collectFunction(
         .channel = try channel.toOwnedSlice(self.arena),
         .return_type = return_type,
         .fallible = declaration.fallible,
+        .error_type = error_type,
         .is_entry = is_entry,
         .lifecycle = lifecycle,
     });

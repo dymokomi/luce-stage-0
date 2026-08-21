@@ -1893,6 +1893,11 @@ pub const Machine = struct {
                 const raised = self.runtime.raised orelse return .ofStr("");
                 return .ofStr(raised.message);
             },
+            // The raised value, an owned copy for the catch binding
+            // (docs/ERRORS.md R2).
+            .error_value => {
+                return self.runtime.errorValue();
+            },
             .forget => {
                 self.runtime.forget();
                 return .none;
@@ -1964,8 +1969,11 @@ pub const Machine = struct {
             .raise_error => {
                 // `raise` takes the copy that outlives the releases
                 // the unwind is about to emit — one implementation of
-                // that rule, and both engines reach it.
-                self.runtime.raise(
+                // that rule, and both engines reach it.  A declared
+                // `! E` raises the value; the bare `!` the words.
+                if (self.program.functions[site.function].error_type != .str) {
+                    self.runtime.raiseValue(registers[arguments[0]], self.placeOf(site));
+                } else self.runtime.raise(
                     .user_error,
                     registers[arguments[0]].asStr(),
                     self.placeOf(site),

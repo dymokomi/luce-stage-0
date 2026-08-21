@@ -440,10 +440,25 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
     if (written.result) |answered| {
         result = (try resolveType(self, module, answered.*)) orelse return null;
     }
+    var error_type: Type = .str;
+    if (written.error_type) |failing| {
+        const resolved = (try resolveType(self, module, failing.*)) orelse return null;
+        if (resolved != .variant and resolved != .str) {
+            try self.fail(
+                "luce.sema.fallible",
+                failing.span,
+                "a function type fails with a union (or the bare !'s str); {s} is neither [ERRORS.md]",
+                .{try self.typeName(resolved)},
+            );
+            return null;
+        }
+        error_type = resolved;
+    }
     return try internSignature(self, .{
         .parameters = parameters,
         .result = result,
         .fallible = written.fallible,
+        .error_type = error_type,
     });
 }
 

@@ -1703,6 +1703,12 @@ fn verifyIntrinsic(
             try exactly(arguments, 0);
             try expectType(result, .str);
         },
+        .error_value => {
+            // The raised value's reader (docs/ERRORS.md R2): what it
+            // answers is a declared error type — a union, or str.
+            try exactly(arguments, 0);
+            if (result != .variant and result != .str) return error.BadIntrinsic;
+        },
         .forget => {
             try exactly(arguments, 0);
             try expectType(result, .none);
@@ -1710,7 +1716,9 @@ fn verifyIntrinsic(
         .raise_error => {
             if (!function.fallible) return error.NotFallible;
             try exactly(arguments, 1);
-            try expectType(arguments[0], .str);
+            // The raised value is what the function declared it fails
+            // with (docs/ERRORS.md R2) — str for the bare `!`.
+            try expectType(arguments[0], function.error_type);
             try expectType(result, .none);
         },
         .own_storage, .drop_storage, .export_storage => {

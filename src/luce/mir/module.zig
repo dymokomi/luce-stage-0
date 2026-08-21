@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 70;
+pub const format_version: u32 = 71;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -326,6 +326,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         }
         try writer.valueType(signature.result);
         try writer.int(u8, @intFromBool(signature.fallible));
+        try writer.valueType(signature.error_type);
     }
 
     try writer.int(u32, @intCast(program.interface_witnesses.len));
@@ -459,6 +460,7 @@ const Writer = struct {
         try self.int(u32, of.parameter_count);
         try self.valueType(of.return_type);
         try self.int(u8, @intFromBool(of.fallible));
+        try self.valueType(of.error_type);
 
         try self.int(u32, @intCast(of.locals.len));
         for (of.locals) |local| {
@@ -736,6 +738,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         signature.parameters = parameters;
         signature.result = try reader.valueType();
         signature.fallible = (try reader.int(u8)) != 0;
+        signature.error_type = try reader.valueType();
     }
     program.signatures = signatures;
 
@@ -954,6 +957,7 @@ const Reader = struct {
         out.parameter_count = try self.int(u32);
         out.return_type = try self.valueType();
         out.fallible = (try self.int(u8)) != 0;
+        out.error_type = try self.valueType();
 
         const local_count = try self.count();
         const locals = try arena.alloc(mir.Local, local_count);
@@ -2316,8 +2320,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // receive (docs/CANCEL.md, ruling A).
     // 69 -> 70: function types carry fallibility (docs/ERRORS.md R3):
     // the signature table gains the fallible byte.
-    try testing.expectEqual(@as(u32, 70), format_version);
-    try testing.expectEqual(@as(u64, 7485189790178981958), hasher.final());
+    // 70 -> 71: typed errors (docs/ERRORS.md R2): functions and
+    // signatures carry what they fail with, `error_value` joins.
+    try testing.expectEqual(@as(u32, 71), format_version);
+    try testing.expectEqual(@as(u64, 11074610861243835665), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

@@ -140,6 +140,8 @@ pub const Service = enum {
     luce_rt_raise_error,
     luce_rt_raise_io,
     luce_rt_error_message,
+    luce_rt_error_value,
+    luce_rt_raise_value,
     luce_rt_forget_error,
     luce_rt_report_error,
 
@@ -552,6 +554,14 @@ pub fn describe(service: Service) Effect {
         .luce_rt_error_message => .{
             .memory = touches_run,
             .parameters = &.{ .run, .value_out },
+        },
+        .luce_rt_error_value => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .value_out },
+        },
+        .luce_rt_raise_value => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .value_in, .plain, .plain },
         },
         // One store: the channel is empty again.
         .luce_rt_forget_error => .{

@@ -63,6 +63,11 @@ pub const Raised = struct {
     code: vocabulary.ErrorCode,
     message: []const u8,
     origin: trace.Frame,
+    /// The raised *value* when the raiser declared `! E`
+    /// (docs/ERRORS.md R2): a union the catch binds, owned by the
+    /// channel — released by `forget`, or rendered and released when
+    /// nothing catches it.  `none` for the bare `!`'s message form.
+    value: Value = Value.none,
 };
 
 pub const MapEntry = struct { key: Value, value: Value };
@@ -1413,10 +1418,36 @@ pub const Runtime = struct {
     }
 
     /// `catch`: the error is handled, so the channel is empty again.
-    /// The words go back with the arena at the end of the run; there
-    /// is nothing to free here and nothing that outlives it.
+    /// The words go back with the arena at the end of the run; a
+    /// raised *value* is the channel's own reference, released here.
     pub fn forget(self: *Runtime) void {
+        if (self.raised) |raised| self.freeValue(raised.value);
         self.raised = null;
+    }
+
+    /// `error(E-value)` (docs/ERRORS.md R2): the channel keeps its
+    /// own deep copy — the unwind that follows releases the frame's,
+    /// exactly as the message form copies its words — owned until
+    /// `forget`, or rendered and released when nothing catches it.
+    /// A copy the allocator refuses degrades to the message alone
+    /// rather than losing the error.
+    pub fn raiseValue(self: *Runtime, held: Value, origin: trace.Frame) void {
+        if (self.raised) |raised| self.freeValue(raised.value);
+        self.raised = .{
+            .code = .user_error,
+            .message = "an error value was raised and nothing caught it",
+            .origin = origin,
+            .value = self.copyValue(held) catch Value.none,
+        };
+    }
+
+    /// The raised value, a **borrow** of the channel's own reference —
+    /// `error_message`'s exact shape (docs/ERRORS.md R2): the binding's
+    /// store is what copies, and it stands before the `forget` that
+    /// releases this.
+    pub fn errorValue(self: *const Runtime) Value {
+        const raised = self.raised orelse return Value.none;
+        return raised.value;
     }
 
     /// Where instruction `instruction` of function `function` was

@@ -34,6 +34,10 @@ pub const TypeName = struct {
     /// so nothing else can wear this shape.  Its parameter types are
     /// `arguments`, because that is what they are.
     result: ?*TypeName = null,
+    /// `func(...) -> R ! E` (docs/ERRORS.md R2): what a call through
+    /// the value fails with.  Only on a fallible function type; null
+    /// for the bare `!`, whose error is a `str` message.
+    error_type: ?*TypeName = null,
     span: Span,
 };
 
@@ -631,6 +635,10 @@ pub const FuncDecl = struct {
     /// — which is a shape a signature has and not a type a program
     /// can name (docs/RETURNS.md).
     returns: []TypeName = &.{},
+    /// `-> T ! E` (docs/ERRORS.md R2): what the function fails
+    /// *with* — a union, read apart by the `catch` that binds it.
+    /// Null for the bare `!`, whose error is a `str` message.
+    error_type: ?*TypeName = null,
     /// Written `-> T!` or `-> !`.  Fallibility is an attribute of the
     /// function, never part of what it returns: there is no `T!` type
     /// to resolve, so nothing downstream of here grows a case for one

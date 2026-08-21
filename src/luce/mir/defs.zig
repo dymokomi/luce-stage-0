@@ -145,6 +145,11 @@ pub const Intrinsic = enum {
     /// know how long a forgotten error's words stay readable.
     errored,
     error_message,
+    /// `error_value` reads the raised *value* out of the channel —
+    /// what `catch NAME:` binds when the callee declared `! E`
+    /// (docs/ERRORS.md R2) — and answers an owned copy the binding's
+    /// store adopts; `forget` still releases the channel's own hold.
+    error_value,
     forget,
     /// `error("…")` — record `user_error` and the program's own words
     /// in the channel.  Not a terminator: the `unwind` that follows it
@@ -607,6 +612,7 @@ pub const Intrinsic = enum {
             .optional_unwrap,
             .errored,
             .error_message,
+            .error_value,
             .forget,
             .raise_error,
             .index_get,
@@ -738,6 +744,7 @@ pub const Intrinsic = enum {
             .optional_unwrap,
             .errored,
             .error_message,
+            .error_value,
             .forget,
             .raise_error,
             .index_get,
@@ -880,6 +887,7 @@ pub const Intrinsic = enum {
             .optional_unwrap,
             .errored,
             .error_message,
+            .error_value,
             .forget,
             .raise_error,
             .index_get,
@@ -996,6 +1004,7 @@ pub const Intrinsic = enum {
             .optional_unwrap,
             .errored,
             .error_message,
+            .error_value,
             .forget,
             .raise_error,
             .index_get,
@@ -1381,6 +1390,10 @@ pub const Function = struct {
     name: []const u8,
     parameter_count: u32,
     return_type: Type,
+    /// What a fallible function fails *with* (docs/ERRORS.md R2): a
+    /// union the `catch` binds, or `.str` — the bare `!`'s message
+    /// form and the default.  Meaningful only when `fallible`.
+    error_type: Type = .str,
     /// Written `-> T!` or `-> !`: this function may come back errored
     /// instead of returning, and every caller has to say which of
     /// `try` and `catch` it means (docs/FAILURE.md).

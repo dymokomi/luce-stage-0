@@ -1111,12 +1111,22 @@ pub fn lowerIntrinsic(
             result = .none;
         },
         .raise_error => {
-            if (arguments[0].value_type != .str)
-                return failIntrinsic(self, call, "error takes a str message");
+            // The raised value is what this function declared it
+            // fails with (docs/ERRORS.md R2): the bare `!`'s str, or
+            // the declared union — checked here, where it is written.
+            if (!arguments[0].value_type.eql(self.error_type)) {
+                try self.fail(
+                    "luce.sema.fallible",
+                    call.span,
+                    "{s} fails with {s}, and this error is {s}",
+                    .{ self.name, try self.analyzer.typeName(self.error_type), try self.analyzer.typeName(arguments[0].value_type) },
+                );
+                return .failed;
+            }
             result = .none;
         },
         // Emitted by `try` and `catch`; never written by a reader.
-        .errored, .error_message, .forget => unreachable,
+        .errored, .error_message, .error_value, .forget => unreachable,
         .print, .term_write, .term_copy => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "this builtin takes a str");

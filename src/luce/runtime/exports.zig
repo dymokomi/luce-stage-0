@@ -359,6 +359,26 @@ pub export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
     runtime.forget();
 }
 
+/// The raised value, an owned copy for the catch binding
+/// (docs/ERRORS.md R2).
+pub export fn luce_rt_error_value(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
+    if (!requireValueOut(runtime, out)) return;
+    out.* = runtime.errorValue();
+}
+
+/// `error(E-value)`: the channel takes its own copy of the raised
+/// value (docs/ERRORS.md R2).  Mirrors `luce_rt_raise_error`'s shape;
+/// the unwind that follows is generated code's.
+pub export fn luce_rt_raise_value(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void {
+    if (!requireValueInput(runtime, held)) return;
+    runtime.raiseValue(held.*, runtime.frameAt(function, instruction));
+}
+
 /// Hand the host an uncaught error: its code, its words, and the one
 /// position it carries.  Called once, from `luce_main`, and only when
 /// the entry function came back errored.

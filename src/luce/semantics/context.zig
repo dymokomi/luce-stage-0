@@ -363,6 +363,9 @@ pub const FunctionDeclInfo = struct {
     /// `catch`, which is what makes a swallowed failure unwritable
     /// (docs/FAILURE.md).
     fallible: bool,
+    /// What it fails with (docs/ERRORS.md R2): a union, or `.str` for
+    /// the bare `!`.  Meaningful only when `fallible`.
+    error_type: Type = .str,
     is_entry: bool,
     /// Ordinary function, class construction body, or ARC finalizer. All
     /// three use one function representation; this tag fixes the lifecycle

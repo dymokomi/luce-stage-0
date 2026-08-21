@@ -9172,3 +9172,128 @@ test "R3: a bare function name fills an optional element implicitly" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// ERRORS.md R2 — typed errors: what a function fails WITH
+// ---------------------------------------------------------------------------
+
+test "R2: a declared error union is raised, caught, and matched apart" {
+    try agree.prints(
+        \\union ParseError:
+        \\    unexpected(found: str, line: i64)
+        \\    ended_early(wanted: str)
+        \\
+        \\func read_number(text: str) -> i64 ! ParseError:
+        \\    if text == "":
+        \\        error(ParseError.ended_early(wanted = "a number"))
+        \\    if text == "x":
+        \\        error(ParseError.unexpected(found = text, line = 3))
+        \\    return 42
+        \\
+        \\func main():
+        \\    let good = read_number("42") catch reason:
+        \\        return
+        \\    print(str(good))
+        \\    read_number("x") catch reason:
+        \\        match reason:
+        \\            unexpected(found, line):
+        \\                print("unexpected " + found + " on line " + str(line))
+        \\            ended_early(wanted):
+        \\                print("wanted " + wanted)
+        \\    read_number("") catch reason:
+        \\        match reason:
+        \\            unexpected(found, line):
+        \\                print("unexpected " + found)
+        \\            ended_early(wanted):
+        \\                print("wanted " + wanted)
+        \\
+    ,
+        \\42
+        \\unexpected x on line 3
+        \\wanted a number
+        \\
+    );
+}
+
+test "R2: try passes the same error type up, and a mismatch is refused" {
+    // The same E flows through try untouched — both engines agree —
+    // and a different E is caught and re-raised, never merged.
+    try agree.prints(
+        \\union Wrong:
+        \\    off_by(amount: i64)
+        \\
+        \\func inner(n: i64) -> i64 ! Wrong:
+        \\    if n < 0:
+        \\        error(Wrong.off_by(amount = 0 - n))
+        \\    return n
+        \\
+        \\func outer(n: i64) -> i64 ! Wrong:
+        \\    return try inner(n)
+        \\
+        \\func main():
+        \\    outer(-7) catch reason:
+        \\        match reason:
+        \\            off_by(amount):
+        \\                print(str(amount))
+        \\
+    ,
+        \\7
+        \\
+    );
+
+    try expectSaying(
+        \\union Wrong:
+        \\    off_by(amount: i64)
+        \\
+        \\func inner(n: i64) -> i64 ! Wrong:
+        \\    return n
+        \\
+        \\func outer(n: i64) -> i64!:
+        \\    return try inner(n)
+        \\
+        \\func main():
+        \\    print(str(outer(1) catch 0))
+        \\
+    , "luce.sema.fallible", "catch it and raise your own");
+}
+
+test "R2: the raised value wears the declared type, and E is a union or str" {
+    try expectSaying(
+        \\union Wrong:
+        \\    off_by(amount: i64)
+        \\
+        \\func f() -> ! Wrong:
+        \\    error("just words")
+        \\
+        \\func main():
+        \\    f() catch reason:
+        \\        return
+        \\
+    , "luce.sema.fallible", "fails with");
+
+    try expectSaying(
+        \\func f() -> ! i64:
+        \\    error("nope")
+        \\
+        \\func main():
+        \\    f() catch reason:
+        \\        return
+        \\
+    , "luce.sema.fallible", "a function fails with a union");
+}
+
+test "R2: bare ! stays the str message form, unchanged" {
+    try agree.prints(
+        \\func risky(n: i64) -> !:
+        \\    if n < 0:
+        \\        error("negative: " + str(n))
+        \\
+        \\func main():
+        \\    risky(-3) catch reason:
+        \\        print(reason)
+        \\
+    ,
+        \\negative: -3
+        \\
+    );
+}

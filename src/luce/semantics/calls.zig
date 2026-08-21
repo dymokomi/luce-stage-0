@@ -584,7 +584,7 @@ fn lowerValueCall(
     // A call through a fallible value owes what a direct fallible
     // call owes (docs/ERRORS.md R3): the same opening, the same
     // `try`/`catch` sentence at the same place.
-    if (signature.fallible) return try self.openFallible(signature.result, node, span);
+    if (signature.fallible) return try self.openFallibleWith(signature.result, signature.error_type, node, span);
     return .{ .node = node, .value_type = signature.result };
 }
 
@@ -1039,7 +1039,7 @@ fn lowerUserCall(
         info.return_type,
         span,
     );
-    if (info.fallible) return try self.openFallible(info.return_type, node, span);
+    if (info.fallible) return try self.openFallibleWith(info.return_type, info.error_type, node, span);
     // A function's result is the caller's (S16): fresh storage.
     return .{ .node = node, .value_type = info.return_type };
 }
@@ -1967,7 +1967,7 @@ fn lowerReceiverCall(
         method.span,
     );
     const answered: Typed = if (info.fallible)
-        try self.openFallible(info.return_type, node, method.span)
+        try self.openFallibleWith(info.return_type, info.error_type, node, method.span)
     else
         // A function's result is the caller's (S16): fresh storage.
         .{ .node = node, .value_type = info.return_type };
@@ -2610,7 +2610,7 @@ fn callUser(
         info.return_type,
         span,
     );
-    if (info.fallible) return try self.openFallible(info.return_type, node, span);
+    if (info.fallible) return try self.openFallibleWith(info.return_type, info.error_type, node, span);
     // A function's result is the caller's (S16): fresh storage.
     return .{ .node = node, .value_type = info.return_type };
 }

@@ -7801,24 +7801,45 @@ const Body = struct {
                 _ = try self.callRuntime(.luce_rt_error_message, .void, &.{ rt, out }, "");
                 self.produced[register].value = try self.unboxed(.str, out, "catch.reason");
             },
+            // The raised *value*, an owned copy the binding's store
+            // adopts (docs/ERRORS.md R2).
+            .error_value => {
+                const made = self.function.result_types[register];
+                const out = try self.scratch(self.module.value_type, value_alignment, "catch.value");
+                _ = try self.callRuntime(.luce_rt_error_value, .void, &.{ rt, out }, "");
+                self.produced[register].value = try self.unboxed(made, out, "catch.value");
+                self.produced[register].box = out;
+            },
             .forget => {
                 _ = try self.callRuntime(.luce_rt_forget_error, .void, &.{rt}, "");
             },
             .raise_error => {
-                // The pointer this hands over may address *this frame*:
-                // short text lives in the value it was read out of
-                // (docs/STRINGS.md).  Sound only because `raise` copies
-                // before it returns, which it must anyway — the unwind
-                // that follows releases what the words were read from.
-                const words, const length = try self.textParts(of[0], "words");
-                _ = try self.callRuntime(.luce_rt_raise_error, .void, &.{
-                    rt,
-                    try self.module.builder.intValue(.i32, @intFromEnum(mir.ErrorCode.user_error)),
-                    words,
-                    length,
-                    try self.module.builder.intValue(.i32, self.index),
-                    try self.module.builder.intValue(.i32, self.current),
-                }, "");
+                // A declared `! E` raises the *value* — the channel
+                // consumes it (docs/ERRORS.md R2).  The bare `!`
+                // raises the words, as ever.
+                if (self.function.error_type != .str) {
+                    _ = try self.callRuntime(.luce_rt_raise_value, .void, &.{
+                        rt,
+                        try self.boxedRegister(of[0], "raised"),
+                        try self.module.builder.intValue(.i32, self.index),
+                        try self.module.builder.intValue(.i32, self.current),
+                    }, "");
+                } else {
+                    // The pointer this hands over may address *this frame*:
+                    // short text lives in the value it was read out of
+                    // (docs/STRINGS.md).  Sound only because `raise` copies
+                    // before it returns, which it must anyway — the unwind
+                    // that follows releases what the words were read from.
+                    const words, const length = try self.textParts(of[0], "words");
+                    _ = try self.callRuntime(.luce_rt_raise_error, .void, &.{
+                        rt,
+                        try self.module.builder.intValue(.i32, @intFromEnum(mir.ErrorCode.user_error)),
+                        words,
+                        length,
+                        try self.module.builder.intValue(.i32, self.index),
+                        try self.module.builder.intValue(.i32, self.current),
+                    }, "");
+                }
             },
 
             // -- scalar math, generated here --------------------------

@@ -536,6 +536,7 @@ pub const Analyzer = struct {
             .results = info.results,
             .return_type = info.return_type,
             .fallible = info.fallible,
+            .error_type = info.error_type,
             .lifecycle = info.lifecycle,
             .static_member = info.lifecycle == .ordinary and info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
@@ -637,6 +638,7 @@ pub const Analyzer = struct {
                 .parameter_count = @intCast(info.parameter_types.len),
                 .return_type = info.return_type,
                 .fallible = info.fallible,
+                .error_type = info.error_type,
                 .file = self.modules[info.module].file,
                 .origin = @intCast(info.declaration.span.start),
             };
