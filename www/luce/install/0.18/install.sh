@@ -304,8 +304,14 @@ if ! printf '%s\n' "$source_commit" | awk \
     exit 1
 fi
 for tool in luce-0 loom; do
+    # The installed name carries the stage suffix; the binary reports
+    # its product identity unsuffixed.
+    case "$tool" in
+        luce-0) product=luce ;;
+        *) product=$tool ;;
+    esac
     if ! build_info=$("$release/bin/$tool" --build-info 2>/dev/null) ||
-        ! printf '%s\n' "$build_info" | grep -Fxq "$tool $version" ||
+        ! printf '%s\n' "$build_info" | grep -Fxq "$product $version" ||
         ! printf '%s\n' "$build_info" | grep -Fxq "source $source_commit"; then
         echo "luce: release archive has mismatched $tool build identity" >&2
         exit 1
