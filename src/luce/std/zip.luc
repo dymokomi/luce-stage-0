@@ -51,6 +51,31 @@
 import std.files
 import std.strings
 
+# --- what a refusal is -----------------------------------------------
+
+# What the archive path fails with (docs/ERRORS.md R2).  Three members
+# for three different kinds of news: `Damaged` is bytes that do not
+# hold what they claim to, `Unsupported` is a conforming archive
+# asking for a capability this module does not have (a compression
+# method, encryption, Zip64), and `Io` is the host refusing a file —
+# `zip.read` and `zip.write` catch the `std.files` sentence and carry
+# it here, so one union covers the whole module.
+union ZipError:
+    Damaged(reason: str)
+    Unsupported(reason: str)
+    Io(reason: str)
+
+# The refusal as one sentence, for the caller that prints rather than
+# reads the members apart.
+func describe(failed: ZipError) -> str:
+    match failed:
+        Damaged(reason):
+            return "zip: " + reason
+        Unsupported(reason):
+            return "zip: " + reason
+        Io(reason):
+            return "zip: " + reason
+
 # --- bytes and text --------------------------------------------------
 #
 # **This section used to be the module's biggest workaround, and it is
@@ -127,18 +152,18 @@ func crc32(data: list[u8]) -> i64:
 # every field in every structure below goes in and comes out this way,
 # and nothing in an archive is signed.
 
-private func read_u16(data: list[u8], at: i64) -> i64!:
+private func read_u16(data: list[u8], at: i64) -> i64 ! ZipError:
     if at < 0 or at + 2 > len(data):
-        error("zip: the archive is truncated")
+        error(ZipError.Damaged(reason = "the archive is truncated"))
     return i64(data[at]) | i64(data[at + 1]) << 8
 
 # **The widths are written out here, and they have to be.** A `u8`
 # computes at its own width, while these fields are assembled into an
 # `i64` used by the archive API. Each byte crosses that boundary before
 # shifting, so no bit is discarded.
-private func read_u32(data: list[u8], at: i64) -> i64!:
+private func read_u32(data: list[u8], at: i64) -> i64 ! ZipError:
     if at < 0 or at + 4 > len(data):
-        error("zip: the archive is truncated")
+        error(ZipError.Damaged(reason = "the archive is truncated"))
     return i64(data[at]) | i64(data[at + 1]) << 8 | i64(data[at + 2]) << 16 | i64(data[at + 3]) << 24
 
 private func put_u16(out: list[u8], value: i64):
@@ -223,10 +248,10 @@ struct Entry:
 # exactly the end of the archive.  Searching backwards finds the last
 # candidate first, which is the outer one when a comment contains a
 # whole archive.
-private func end_record(archive: list[u8]) -> i64!:
+private func end_record(archive: list[u8]) -> i64 ! ZipError:
     let total = len(archive)
     if total < 22:
-        error("zip: not an archive (only " + str(total) + " bytes)")
+        error(ZipError.Damaged(reason = "not an archive (only " + str(total) + " bytes)"))
     var at = total - 22
     var earliest = total - 22 - 65535
     if earliest < 0:
@@ -238,7 +263,7 @@ private func end_record(archive: list[u8]) -> i64!:
             if at + 22 + comment == total:
                 return at
         at -= 1
-    error("zip: not an archive (no end-of-central-directory record)")
+    error(ZipError.Damaged(reason = "not an archive (no end-of-central-directory record)"))
 
 # An opened archive: the bytes, and the table its central directory
 # lists.  `try Archive(data)` parses the directory once, so a
@@ -249,7 +274,7 @@ class Archive:
         data: list[u8]
         found: list[Entry]
 
-    init(archive: list[u8]) -> !:
+    init(archive: list[u8]) -> ! ZipError:
         self.data = archive
         self.found = try scan(archive)
 
@@ -269,21 +294,21 @@ class Archive:
     # right.  So an entry written by a program that could not seek
     # reads like any other, and the data descriptor behind the data
     # is never looked at.
-    func extract(entry: Entry) -> list[u8]!:
+    func extract(entry: Entry) -> list[u8] ! ZipError:
         let archive = self.data
         let at = entry.header_at
         let signature = try read_u32(archive, at)
         if signature != 0x0403_4B50:
-            error("zip: " + entry.path + " has no local header")
+            error(ZipError.Damaged(reason = entry.path + " has no local header"))
         let name_length = try read_u16(archive, at + 26)
         let extra_length = try read_u16(archive, at + 28)
         let start = at + 30 + name_length + extra_length
         let stop = start + entry.packed_size
         if stop > len(archive):
-            error("zip: " + entry.path + " runs past the end of the archive")
+            error(ZipError.Damaged(reason = entry.path + " runs past the end of the archive"))
         let method = Method(u16(entry.method))
         if method == none:
-            error("zip: " + entry.path + " uses compression method " + str(entry.method) + ", which zip cannot read")
+            error(ZipError.Unsupported(reason = entry.path + " uses compression method " + str(entry.method) + ", which zip cannot read"))
         match method:
             stored:
                 let whole = archive[start:stop]
@@ -297,7 +322,7 @@ class Archive:
 
 # The central directory, read into the table `Archive.entries`
 # answers (APPNOTE 4.3.12).
-private func scan(archive: list[u8]) -> list[Entry]!:
+private func scan(archive: list[u8]) -> list[Entry] ! ZipError:
     let record = try end_record(archive)
     let count = try read_u16(archive, record + 10)
     let size = try read_u32(archive, record + 12)
@@ -315,10 +340,10 @@ private func scan(archive: list[u8]) -> list[Entry]!:
     for index in range(0, count):
         let signature = try read_u32(archive, at)
         if signature != 0x0201_4B50:
-            error("zip: entry " + str(index + 1) + " of the central directory has no header")
+            error(ZipError.Damaged(reason = "entry " + str(index + 1) + " of the central directory has no header"))
         let flags = try read_u16(archive, at + 8)
         if flags & 1 != 0:
-            error("zip: entry " + str(index + 1) + " is encrypted")
+            error(ZipError.Unsupported(reason = "entry " + str(index + 1) + " is encrypted"))
         let method = try read_u16(archive, at + 10)
         let checksum = try read_u32(archive, at + 16)
         let packed = try read_u32(archive, at + 20)
@@ -329,21 +354,21 @@ private func scan(archive: list[u8]) -> list[Entry]!:
         let header_offset = try read_u32(archive, at + 42)
         let header = header_offset + shift
         if at + 46 + name_length > len(archive):
-            error("zip: entry " + str(index + 1) + " names more than the archive holds")
+            error(ZipError.Damaged(reason = "entry " + str(index + 1) + " names more than the archive holds"))
         let raw = archive[at + 46:at + 46 + name_length]
         let read_name = text(raw)
         if read_name == none:
-            error("zip: entry " + str(index + 1) + " has a name that is not text")
+            error(ZipError.Unsupported(reason = "entry " + str(index + 1) + " has a name that is not text"))
         let name = read_name
         found.append(Entry(path = name, method = method, checksum = checksum, packed_size = packed, plain_size = plain, header_at = header))
         at += 46 + name_length + extra_length + comment_length
     return found
 
-private func verify(entry: Entry, plain: list[u8]) -> !:
+private func verify(entry: Entry, plain: list[u8]) -> ! ZipError:
     if len(plain) != entry.plain_size:
-        error("zip: " + entry.path + " is " + str(len(plain)) + " bytes, not the " + str(entry.plain_size) + " the archive claims")
+        error(ZipError.Damaged(reason = entry.path + " is " + str(len(plain)) + " bytes, not the " + str(entry.plain_size) + " the archive claims"))
     if crc32(plain) != entry.checksum:
-        error("zip: " + entry.path + " fails its checksum")
+        error(ZipError.Damaged(reason = entry.path + " fails its checksum"))
 
 # --- writing ---------------------------------------------------------
 
@@ -362,15 +387,15 @@ class Writer:
 
     # Store one entry.  `compress` deflates it and keeps whichever of
     # the two is smaller, so an entry never grows by being compressed.
-    func add(name: str, data: list[u8], compress: bool = false) -> !:
+    func add(name: str, data: list[u8], compress: bool = false) -> ! ZipError:
         if len(name) == 0:
-            error("zip: an entry needs a name")
+            error(ZipError.Damaged(reason = "an entry needs a name"))
         if len(bytes(name)) > 65535:
-            error("zip: the name " + name + " does not fit an archive's name field")
+            error(ZipError.Damaged(reason = "the name " + name + " does not fit an archive's name field"))
         if len(self.written) >= 65535:
-            error("zip: an archive holds at most 65535 entries")
+            error(ZipError.Unsupported(reason = "an archive holds at most 65535 entries"))
         if len(data) > 4294967295:
-            error("zip: " + name + " is too big for an archive without Zip64")
+            error(ZipError.Unsupported(reason = name + " is too big for an archive without Zip64"))
         let checksum = crc32(data)
         if compress:
             let squeezed = deflate(data)
@@ -496,18 +521,18 @@ private func code_for(bases: list[i64], value: i64) -> i64:
 # Over-subscription is refused; an *incomplete* table is not, because
 # §3.2.7 requires one — "if only one distance code is used, it is
 # encoded using one bit", leaving a code unused.
-private func huffman(lengths: list[i64], counts: list[i64], symbols: list[i64]) -> !:
+private func huffman(lengths: list[i64], counts: list[i64], symbols: list[i64]) -> ! ZipError:
     for slot in range(0, 16):
         counts.append(0)
     for length in lengths:
         if length < 0 or length > 15:
-            error("zip: a Huffman code of " + str(length) + " bits")
+            error(ZipError.Damaged(reason = "a Huffman code of " + str(length) + " bits"))
         counts[length] += 1
     var left: i64 = 1
     for length in range(1, 16):
         left = left * 2 - counts[length]
         if left < 0:
-            error("zip: an over-subscribed Huffman table")
+            error(ZipError.Damaged(reason = "an over-subscribed Huffman table"))
     var offsets: list[i64] = [0, 0]
     for length in range(1, 15):
         offsets.append(offsets[length] + counts[length])
@@ -542,13 +567,13 @@ private struct Stream:
     # its own least significant bit — so this is the order for
     # BFINAL, BTYPE, LEN, HLIT and every extra-bits field, and
     # `decode` assembles a Huffman code the other way round.
-    private func take(data: list[u8], count: i64) -> i64!:
+    private func take(data: list[u8], count: i64) -> i64 ! ZipError:
         var value: i64 = 0
         var taken: i64 = 0
         while taken < count:
             let index = self.position >> 3
             if index >= len(data):
-                error("zip: the compressed stream ends in the middle of a code")
+                error(ZipError.Damaged(reason = "the compressed stream ends in the middle of a code"))
             let bit = i64(data[index]) >> (self.position & 7) & 1
             value = value | bit << taken
             self.position += 1
@@ -561,7 +586,7 @@ private struct Stream:
     # so far is compared against the run of codes of that length,
     # which is what §3.2.2's "shorter codes lexicographically precede
     # longer codes" means when you read rather than write.
-    private func decode(data: list[u8], counts: list[i64], symbols: list[i64]) -> i64!:
+    private func decode(data: list[u8], counts: list[i64], symbols: list[i64]) -> i64 ! ZipError:
         var code: i64 = 0
         var first: i64 = 0
         var index: i64 = 0
@@ -574,22 +599,22 @@ private struct Stream:
             index += count
             first = (first + count) << 1
             code = code << 1
-        error("zip: a code the compressed stream's Huffman table does not have")
+        error(ZipError.Damaged(reason = "a code the compressed stream's Huffman table does not have"))
 
     # A stored block, RFC 1951 §3.2.4: "any bits of input up to the
     # next byte boundary are ignored", then LEN, then NLEN — the
     # one's complement of LEN — then LEN bytes as they are.
-    private func stored(data: list[u8], out: list[u8]) -> !:
+    private func stored(data: list[u8], out: list[u8]) -> ! ZipError:
         self.position = (self.position + 7) >> 3 << 3
         let at = self.position >> 3
         if at + 4 > len(data):
-            error("zip: a stored block with no header")
+            error(ZipError.Damaged(reason = "a stored block with no header"))
         let length = i64(data[at]) | i64(data[at + 1]) << 8
         let complement = i64(data[at + 2]) | i64(data[at + 3]) << 8
         if length + complement != 65535:
-            error("zip: a stored block whose length does not check out")
+            error(ZipError.Damaged(reason = "a stored block whose length does not check out"))
         if at + 4 + length > len(data):
-            error("zip: a stored block that runs past the end of the stream")
+            error(ZipError.Damaged(reason = "a stored block that runs past the end of the stream"))
         for step in range(0, length):
             out.append(data[at + 4 + step])
         self.position = (at + 4 + length) << 3
@@ -601,7 +626,7 @@ private struct Stream:
     # §3.2.3's <length 5, distance 2> over X,Y giving X,Y,X,Y,X — so
     # the copy reads the output one u8 at a time rather than
     # slicing it.
-    private func codes(data: list[u8], out: list[u8], lit_counts: list[i64], lit_symbols: list[i64], dist_counts: list[i64], dist_symbols: list[i64]) -> !:
+    private func codes(data: list[u8], out: list[u8], lit_counts: list[i64], lit_symbols: list[i64], dist_counts: list[i64], dist_symbols: list[i64]) -> ! ZipError:
         let lengths = length_bases
         let length_bits = length_extras
         let distances = distance_bases
@@ -615,16 +640,16 @@ private struct Stream:
             else:
                 let code = symbol - 257
                 if code >= 29:
-                    error("zip: an invalid length code in the compressed stream")
+                    error(ZipError.Damaged(reason = "an invalid length code in the compressed stream"))
                 let extra = try self.take(data, length_bits[code])
                 let length = lengths[code] + extra
                 let far = try self.decode(data, dist_counts, dist_symbols)
                 if far >= 30:
-                    error("zip: an invalid distance code in the compressed stream")
+                    error(ZipError.Damaged(reason = "an invalid distance code in the compressed stream"))
                 let far_extra = try self.take(data, distance_bits[far])
                 let distance = distances[far] + far_extra
                 if distance > len(out):
-                    error("zip: the compressed stream reaches back before its start")
+                    error(ZipError.Damaged(reason = "the compressed stream reaches back before its start"))
                 for step in range(0, length):
                     out.append(out[len(out) - distance])
 
@@ -634,7 +659,7 @@ private struct Stream:
     # 286-287 and distance codes 30-31 never occur in a stream and are
     # built anyway, because the RFC says they "participate in the code
     # construction" — leaving them out would shift every code.
-    private func fixed(data: list[u8], out: list[u8]) -> !:
+    private func fixed(data: list[u8], out: list[u8]) -> ! ZipError:
         var lengths: list[i64] = []
         for symbol in range(0, 144):
             lengths.append(8)
@@ -663,7 +688,7 @@ private struct Stream:
     # repeat; 16 repeats the previous length, and because the two
     # alphabets are "a single sequence of HLIT + HDIST + 258 values"
     # a repeat may cross from one into the other.
-    private func dynamic(data: list[u8], out: list[u8]) -> !:
+    private func dynamic(data: list[u8], out: list[u8]) -> ! ZipError:
         let literal_bits = try self.take(data, 5)
         let distance_count_bits = try self.take(data, 5)
         let table_bits = try self.take(data, 4)
@@ -671,7 +696,7 @@ private struct Stream:
         let far_count = distance_count_bits + 1
         let table_count = table_bits + 4
         if literals > 286 or far_count > 30:
-            error("zip: the compressed stream declares more codes than DEFLATE has")
+            error(ZipError.Damaged(reason = "the compressed stream declares more codes than DEFLATE has"))
         var code_lengths: list[i64] = []
         for slot in range(0, 19):
             code_lengths.append(0)
@@ -691,7 +716,7 @@ private struct Stream:
                 var value: i64 = 0
                 if symbol == 16:
                     if len(lengths) == 0:
-                        error("zip: the compressed stream repeats a code length that is not there")
+                        error(ZipError.Damaged(reason = "the compressed stream repeats a code length that is not there"))
                     value = lengths[len(lengths) - 1]
                     let more = try self.take(data, 2)
                     repeat = 3 + more
@@ -702,7 +727,7 @@ private struct Stream:
                     let many = try self.take(data, 7)
                     repeat = 11 + many
                 if len(lengths) + repeat > literals + far_count:
-                    error("zip: the compressed stream repeats past its own code table")
+                    error(ZipError.Damaged(reason = "the compressed stream repeats past its own code table"))
                 for step in range(0, repeat):
                     lengths.append(value)
         var lit_lengths: list[i64] = []
@@ -723,7 +748,7 @@ private struct Stream:
 # with no zlib or gzip wrapper around it, which is what a ZIP entry
 # holds.  Damaged input is an error, never a trap: the bytes are the
 # world's, not the program's.
-func inflate(data: list[u8]) -> list[u8]!:
+func inflate(data: list[u8]) -> list[u8] ! ZipError:
     var reader = Stream(position = 0)
     var out = list[u8]()
     var last: i64 = 0
@@ -731,7 +756,7 @@ func inflate(data: list[u8]) -> list[u8]!:
         last = try reader.take(data, 1)
         let kind = Block(u8(try reader.take(data, 2)))
         if kind == none:
-            error("zip: the compressed stream has a block of an unknown kind")
+            error(ZipError.Damaged(reason = "the compressed stream has a block of an unknown kind"))
         match kind:
             stored:
                 try reader.stored(data, out)
@@ -869,9 +894,13 @@ func deflate(data: list[u8]) -> list[u8]:
 
 # The bytes of an archive on disk.  A convenience, and the only thing
 # in this module that touches the world; `entries` and `extract` take
-# what it answers.
-func read(path: str) -> list[u8]!:
-    return try files.read_bytes(path)
+# what it answers.  `std.files` fails with the host's own sentence —
+# the `str` form — so the refusal is caught here and re-raised as
+# `ZipError.Io`, the visible conversion docs/ERRORS.md asks for.
+func read(path: str) -> list[u8] ! ZipError:
+    let data = files.read_bytes(path) catch reason:
+        error(ZipError.Io(reason = reason))
+    return data
 
 # Write an archive to disk.  Takes what `Writer.finish` answers, so
 # building one and saving it is two sentences:
@@ -879,5 +908,6 @@ func read(path: str) -> list[u8]!:
 #     var w = zip.Writer()
 #     try w.add("a.txt", zip.to_bytes("hello\n"))
 #     try zip.write("out.zip", w.finish())
-func write(path: str, archive: list[u8]) -> !:
-    try files.write_bytes(path, archive)
+func write(path: str, archive: list[u8]) -> ! ZipError:
+    files.write_bytes(path, archive) catch reason:
+        error(ZipError.Io(reason = reason))

@@ -47,7 +47,7 @@ fn requestOf(world: anytype) []const u8 {
 
 test "a get reads status, headers, and a content-length body" {
     var session = try hosted.compare(
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    let page = try http.get("http://example.test/index.html")
         \\    print(str(page.status))
         \\    let kind = page.headers.get("content-type")
@@ -84,7 +84,7 @@ test "a get reads status, headers, and a content-length body" {
 
 test "a chunked reply is decoded into the body it framed" {
     try hosted.printsGiven(
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    let page = try http.get("http://example.test/")
         \\    var held = list[u8]()
         \\    for b in page.body:
@@ -101,7 +101,7 @@ test "a chunked reply is decoded into the body it framed" {
 
 test "a 404 is an answer, not an error" {
     try hosted.printsGiven(
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    let page = try http.get("http://example.test/absent")
         \\    print("answered " + str(page.status))
         \\
@@ -110,7 +110,7 @@ test "a 404 is an answer, not an error" {
 
 test "a post carries its body, its type, and its length" {
     var session = try hosted.compare(
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    var note = strings.to_bytes("dear server")
         \\    let page = try http.post("http://example.test/notes", note, "text/plain")
         \\    print(str(page.status))
@@ -135,7 +135,7 @@ test "a client joins its base, sends its headers, and answers through the method
     var session = try hosted.compare(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    var api = http.Client("http://example.test")
         \\    api.header("authorization", "Bearer opensesame")
         \\    let answer = try api.get("/status")
@@ -145,7 +145,12 @@ test "a client joins its base, sends its headers, and answers through the method
         \\        print("not text")
         \\        return
         \\    print(str(len(words) > 0))
-        \\    let doc = try answer.json()
+        \\    # `json()` fails with json's own `Malformed`, not this
+        \\    # module's union, so a caller that propagates `HttpError`
+        \\    # catches it where the two channels meet.
+        \\    let doc = answer.json() catch reason:
+        \\        print("bad json: " + json.describe(reason))
+        \\        return
         \\    let ready = doc.member("ready")
         \\    if ready == none:
         \\        print("missing")
@@ -168,7 +173,7 @@ test "a client joins its base, sends its headers, and answers through the method
 
 test "the response predicates read a failure as data" {
     try hosted.printsGiven(
-        \\func main() -> !:
+        \\func main() -> ! http.HttpError:
         \\    let page = try http.get("http://example.test/absent")
         \\    print(str(page.ok()))
         \\    let words = page.text()
@@ -178,27 +183,44 @@ test "the response predicates read a failure as data" {
 }
 
 test "https and non-http urls are refused with the reason" {
+    // The refusal is an `HttpError` member: https is `Unsupported`,
+    // an unreadable address is `BadUrl` with the address in its own
+    // payload — pinned by `match`, which holds the member as well as
+    // the words — and `describe` renders the one-line sentence.
     try hosted.printsGiven(
-        \\func fetch(url: str) -> !:
+        \\func fetch(url: str) -> ! http.HttpError:
         \\    let held = try http.get(url)
         \\
         \\func main():
         \\    fetch("https://example.test/") catch reason:
-        \\        print(str(strings.starts_with(reason, "https is not supported yet")))
+        \\        match reason:
+        \\            Unsupported(why):
+        \\                print(str(strings.starts_with(why, "https is not supported yet")))
+        \\            else:
+        \\                print("the wrong member")
         \\    fetch("ftp://example.test/") catch reason:
-        \\        print(reason)
+        \\        match reason:
+        \\            BadUrl(why, address):
+        \\                print(why + " | " + address)
+        \\            else:
+        \\                print("the wrong member")
+        \\        print(http.describe(reason))
         \\
-    , .{}, "true\nnot an http url: ftp://example.test/\n");
+    , .{}, "true\nnot an http url | ftp://example.test/\nnot an http url: ftp://example.test/\n");
 }
 
 test "a reply that is not HTTP is an error naming what came" {
     try hosted.printsGiven(
-        \\func fetch() -> !:
+        \\func fetch() -> ! http.HttpError:
         \\    let held = try http.get("http://example.test/")
         \\
         \\func main():
         \\    fetch() catch reason:
-        \\        print(reason)
+        \\        match reason:
+        \\            Protocol(why):
+        \\                print(why)
+        \\            else:
+        \\                print("the wrong member")
         \\
     , served("SMTP ready\r\n\r\n"), "not an HTTP reply: SMTP ready\n");
 }

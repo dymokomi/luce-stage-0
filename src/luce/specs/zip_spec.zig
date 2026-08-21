@@ -29,10 +29,25 @@ fn agreeOk(source: []const u8) !void {
     return agree.okGiven(source, budget);
 }
 
-/// The run ends as an error nobody caught, with exactly these words.
-fn agreeRaises(source: []const u8, message: []const u8) !void {
-    return agree.errors(source, budget, .user_error, message);
+fn agreePrints(source: []const u8, expected: []const u8) !void {
+    return agree.printsGiven(source, budget, expected);
 }
+
+/// What a refusal spec prints: the member's name, then its reason —
+/// so the specs pin which `ZipError` member a site raises, not just
+/// the words inside it.
+const shows =
+    \\func shown(failed: zip.ZipError) -> str:
+    \\    match failed:
+    \\        Damaged(reason):
+    \\            return "damaged: " + reason
+    \\        Unsupported(reason):
+    \\            return "unsupported: " + reason
+    \\        Io(reason):
+    \\            return "io: " + reason
+    \\
+    \\
+;
 
 // ---------------------------------------------------------------------------
 // The checksum
@@ -72,7 +87,7 @@ test "zip: bytes and text are inverse over anything a string can hold" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main():
         \\    let plain = "the quick brown fox"
         \\    let plain_again = zip.text(zip.to_bytes(plain)) else ""
         \\    assert(plain_again == plain)
@@ -131,7 +146,7 @@ test "zip: an archive this module wrote is one it can read" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    # Four entries of four shapes: nothing at all, a line of
         \\    # text, every u8 there is, and one i64 enough to have
         \\    # a structure.
@@ -184,7 +199,7 @@ test "zip: compressing an entry changes its size and nothing else" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    var text = ""
         \\    for step in range(0, 60):
         \\        text += "luce compiles bytes into machine code. "
@@ -227,7 +242,7 @@ test "zip: deflate and inflate are inverse, on text and on raw bytes" {
         \\            return false
         \\    return true
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    # Nothing at all: an empty stream is still a block.
         \\    var nothing: list[u8] = []
         \\    let nothing_back = try zip.inflate(zip.deflate(nothing))
@@ -269,7 +284,7 @@ test "zip: what Info-ZIP stored, std.zip reads" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let raw = stored()
         \\    assert(len(raw) == 220)
         \\    let archive = try zip.Archive(raw)
@@ -312,7 +327,7 @@ test "zip: an archive Info-ZIP wrote survives a real file, both ways" {
     try agree.okGiven(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let original = stored()
         \\    try zip.write("out.zip", original)
         \\
@@ -345,7 +360,7 @@ test "zip: an archive std.zip wrote to a file is one it reads back" {
     try agree.okGiven(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    var writer = zip.Writer()
         \\    try writer.add("greeting.txt", zip.to_bytes("hello, world\n"))
         \\    var raw: list[u8] = [0, 255, 128, 1]
@@ -374,7 +389,7 @@ test "zip: what Info-ZIP deflated, std.zip inflates" {
         \\import std.zip
         \\import std.strings
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    # A dynamic Huffman block, written by Info-ZIP at -9: the
         \\    # tables come out of the stream, not out of RFC 1951.
         \\    let archive = try zip.Archive(dynamic())
@@ -403,7 +418,7 @@ test "zip: an archive rebuilt out of one Info-ZIP wrote holds the same bytes" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let original = try zip.Archive(stored())
         \\    let found = original.entries()
         \\    var writer = zip.Writer()
@@ -432,139 +447,168 @@ test "zip: an archive rebuilt out of one Info-ZIP wrote holds the same bytes" {
 // ---------------------------------------------------------------------------
 
 test "zip: bytes that are not an archive answer by name" {
-    try agreeRaises(
+    // The refusals are a `ZipError` union now (docs/ERRORS.md R2), so
+    // the specs read the member and its payload apart with `match` —
+    // which member a site raises is part of the module's contract —
+    // and one row holds `describe` to the rendered sentence.
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    var scraps: list[u8] = [80, 75, 3]
-        \\    let opened = try zip.Archive(scraps)
-        \\
-    , "zip: not an archive (only 3 bytes)");
-
-    try agreeRaises(
-        \\import std.zip
-        \\
-        \\func main() -> !:
+        \\    zip.Archive(scraps) catch reason:
+        \\        print(shown(reason))
         \\    let prose = zip.to_bytes("this file is prose, not an archive at all")
-        \\    let opened = try zip.Archive(prose)
+        \\    zip.Archive(prose) catch reason:
+        \\        print(zip.describe(reason))
         \\
-    , "zip: not an archive (no end-of-central-directory record)");
+    ,
+        \\damaged: not an archive (only 3 bytes)
+        \\zip: not an archive (no end-of-central-directory record)
+        \\
+    );
 }
 
 test "zip: an archive cut short says it is truncated" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    let whole = stored()
         \\    # Keep the end record and lose the directory it points at.
         \\    var cut: list[u8] = []
         \\    for index in range(0, len(whole)):
         \\        if index < 60 or index >= len(whole) - 22:
         \\            cut.append(whole[index])
-        \\    let opened = try zip.Archive(cut)
+        \\    zip.Archive(cut) catch reason:
+        \\        print(shown(reason))
         \\
-    ++ fixtures, "zip: the archive is truncated");
+    ++ fixtures,
+        \\damaged: the archive is truncated
+        \\
+    );
 }
 
 test "zip: a directory entry with no header on it says which one" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    var damaged = copied()
         \\    # The central directory starts at 96; break its signature.
         \\    damaged[96] = 88
-        \\    let opened = try zip.Archive(damaged)
+        \\    zip.Archive(damaged) catch reason:
+        \\        print(shown(reason))
         \\
-    ++ fixtures, "zip: entry 1 of the central directory has no header");
+    ++ fixtures,
+        \\damaged: entry 1 of the central directory has no header
+        \\
+    );
 }
 
 test "zip: contents that do not match their checksum are refused" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main() -> ! zip.ZipError:
         \\    var damaged = copied()
         \\    # "hello\n" begins at 35; make it "jello\n".
         \\    damaged[35] = 106
         \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
-        \\    let data = try opened.extract(found[0])
+        \\    opened.extract(found[0]) catch reason:
+        \\        print(shown(reason))
         \\
-    ++ fixtures, "zip: a.txt fails its checksum");
+    ++ fixtures,
+        \\damaged: a.txt fails its checksum
+        \\
+    );
 }
 
 test "zip: a compression method this module does not have is named" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main() -> ! zip.ZipError:
         \\    var damaged = copied()
         \\    # Method 14 is LZMA, in the directory's copy of the field.
         \\    damaged[106] = 14
         \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
-        \\    let data = try opened.extract(found[0])
+        \\    opened.extract(found[0]) catch reason:
+        \\        print(shown(reason))
         \\
-    ++ fixtures, "zip: a.txt uses compression method 14, which zip cannot read");
+    ++ fixtures,
+        \\unsupported: a.txt uses compression method 14, which zip cannot read
+        \\
+    );
 }
 
 test "zip: an entry an archive says is encrypted is not half-read" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    var damaged = copied()
         \\    # Flag bit 0, in the directory's copy of the flags.
         \\    damaged[104] = 1
-        \\    let opened = try zip.Archive(damaged)
+        \\    zip.Archive(damaged) catch reason:
+        \\        print(shown(reason))
         \\
-    ++ fixtures, "zip: entry 1 is encrypted");
+    ++ fixtures,
+        \\unsupported: entry 1 is encrypted
+        \\
+    );
 }
 
 test "zip: a compressed stream that is not one says so" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    # Block kind 3 is the one DEFLATE reserves and never uses.
         \\    var nonsense: list[u8] = [7, 0, 0, 0]
-        \\    let back = try zip.inflate(nonsense)
-        \\
-    , "zip: the compressed stream has a block of an unknown kind");
-
-    try agreeRaises(
-        \\import std.zip
-        \\
-        \\func main() -> !:
+        \\    zip.inflate(nonsense) catch reason:
+        \\        print(shown(reason))
         \\    # A final stored block whose length and complement disagree.
         \\    var wrong: list[u8] = [1, 4, 0, 0, 0, 65, 66, 67, 68]
-        \\    let back = try zip.inflate(wrong)
-        \\
-    , "zip: a stored block whose length does not check out");
-
-    try agreeRaises(
-        \\import std.zip
-        \\
-        \\func main() -> !:
+        \\    zip.inflate(wrong) catch reason:
+        \\        print(shown(reason))
         \\    # A fixed-Huffman block that ends before its codes do.
         \\    var fragment: list[u8] = [3]
-        \\    let back = try zip.inflate(fragment)
+        \\    zip.inflate(fragment) catch reason:
+        \\        print(shown(reason))
         \\
-    , "zip: the compressed stream ends in the middle of a code");
+    ,
+        \\damaged: the compressed stream has a block of an unknown kind
+        \\damaged: a stored block whose length does not check out
+        \\damaged: the compressed stream ends in the middle of a code
+        \\
+    );
 }
 
 test "zip: an entry needs a name" {
-    try agreeRaises(
+    try agreePrints(
         \\import std.zip
         \\
-        \\func main() -> !:
+    ++ shows ++
+        \\func main():
         \\    var writer = zip.Writer()
         \\    var nothing: list[u8] = []
-        \\    try writer.add("", nothing)
+        \\    writer.add("", nothing) catch reason:
+        \\        print(shown(reason))
         \\
-    , "zip: an entry needs a name");
+    ,
+        \\damaged: an entry needs a name
+        \\
+    );
 }
 
 test "zip: a fixed Huffman block, which is the one RFC 1951 prints" {
@@ -572,7 +616,7 @@ test "zip: a fixed Huffman block, which is the one RFC 1951 prints" {
         \\import std.zip
         \\import std.strings
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    # Short and repetitive, so Info-ZIP had nothing to gain by
         \\    # carrying its own tables and reached for §3.2.6's.
         \\    let archive = try zip.Archive(fixed())
@@ -601,7 +645,7 @@ test "zip: an entry written without seeking reads from the directory" {
         \\import std.zip
         \\import std.strings
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let archive = try zip.Archive(descriptor())
         \\    let found = archive.entries()
         \\    assert(len(found) == 1)
@@ -625,7 +669,7 @@ test "zip: an archive with a program in front of it still reads" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let raw = prefixed()
         \\    let plain = stored()
         \\    assert(len(raw) == len(plain) + 52)
@@ -653,7 +697,7 @@ test "zip: a signature inside a comment is not the end record" {
     try agreeOk(
         \\import std.zip
         \\
-        \\func main() -> !:
+        \\func main() -> ! zip.ZipError:
         \\    let inner = stored()
         \\    var archive: list[u8] = []
         \\    for index in range(0, len(inner)):

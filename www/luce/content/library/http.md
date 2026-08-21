@@ -18,8 +18,8 @@ connection, a reply that is not HTTP.
 ## Fetch
 
 ```text
-http.get(url: str) -> http.Response!
-http.post(url: str, body: list[u8], content_type: str) -> http.Response!
+http.get(url: str) -> http.Response ! http.HttpError
+http.post(url: str, body: list[u8], content_type: str) -> http.Response ! http.HttpError
 ```
 
 The URL is `http://host[:port]/path`; the port defaults to 80 and a
@@ -37,8 +37,8 @@ handed and the `Content-Length` it measured.
 ```text
 http.Client(base: str = "")
 client.header(name: str, value: str)
-client.get(path: str) -> http.Response!
-client.post(path: str, body: list[u8], content_type: str) -> http.Response!
+client.get(path: str) -> http.Response ! http.HttpError
+client.post(path: str, body: list[u8], content_type: str) -> http.Response ! http.HttpError
 ```
 
 A `Client` carries what every request repeats: the base each path is
@@ -65,7 +65,7 @@ struct Response:
 
     func ok() -> bool
     func text() -> str?
-    func json() -> json.Json!
+    func json() -> json.Json ! json.Malformed
 ```
 
 `status` is the number the server said. `headers` holds each header
@@ -78,7 +78,10 @@ reads is what the server meant.
 299\. `text()` answers the body as UTF-8 text, or absent when it is
 not — the parse shape. `json()` answers the body as a
 [`json.Json`](/library/json/) document, and a body that is not text or
-not JSON is the error it says.
+not JSON fails with `json`'s own
+[`Malformed`](/library/json/#input-limits-and-refusals) union, passed
+through whole — the json module is the authority on why a document is
+wrong, and its position payload is worth keeping.
 
 ## A server and its client, in one program
 
@@ -135,7 +138,7 @@ func fetch() -> http.Response!:
             error("the server never came up")
         os.sleep_ms(10)
 
-func try_once() -> http.Response!:
+func try_once() -> http.Response ! http.HttpError:
     return try http.get("http://127.0.0.1:18641/")
 
 func main() -> !:
@@ -164,11 +167,29 @@ the door is open except by knocking.
 
 ## Errors
 
-Transport refusals travel unchanged from `std.network`: `io_failed`
-with the reason. This module adds only the sentences the protocol
-earns — `not an HTTP reply`, `not a chunk size`, `the reply never
-finished its headers` — each carried in the ordinary error channel and
-caught with `catch` like every other.
+The request path fails with one union:
+
+```text
+union HttpError:
+    Unsupported(reason: str)
+    BadUrl(reason: str, url: str)
+    Protocol(reason: str)
+    Io(reason: str)
+```
+
+`Unsupported` is the honest https refusal. `BadUrl` is an address
+this module cannot read — not-http, no host, a port that is not a
+number — with the address in its own payload. `Protocol` is a reply
+that is not HTTP: a malformed status line, headers that never finish,
+a broken chunk. `Io` wraps the transport refusing — `std.network` and
+`std.io` fail with the host's own `str` sentence, and the exchange
+catches it and re-raises `HttpError.Io`, so the conversion is visible
+where it happens. `match` reads the members apart; `http.describe`
+renders the one-line sentence.
+
+| Signature | Result |
+|---|---|
+| `http.describe(failed: HttpError) -> str` | the refusal as one sentence |
 
 ## Deliberately absent
 

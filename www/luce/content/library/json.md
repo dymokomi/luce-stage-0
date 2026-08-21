@@ -9,8 +9,9 @@ import std.json
 ```
 
 The parser follows RFC 8259. It consumes one complete JSON value, allows the
-four JSON whitespace bytes around it, and reports malformed input as an
-error with a byte offset.
+four JSON whitespace bytes around it, and reports malformed input as a typed
+error — the `Malformed` union, whose one member carries the reason and the
+scalar position.
 
 ## `Json` is a union
 
@@ -34,7 +35,7 @@ keeps both `integer` and `real`. JSON strings are named `text` because
 ```luce run
 import std.json
 
-func describe(doc: json.Json) -> str:
+func label(doc: json.Json) -> str:
     match doc:
         null:
             return "null"
@@ -51,12 +52,12 @@ func describe(doc: json.Json) -> str:
         object(fields):
             return "object " + str(len(fields))
 
-func main() -> !:
+func main() -> ! json.Malformed:
     let value = try json.parse("[null, true, 7, 7.5, \"s\"]")
     match value:
         array(items):
             for item in items:
-                print(describe(item))
+                print(label(item))
         else:
             print("not an array")
 ```
@@ -73,7 +74,8 @@ text s
 
 | Signature | Result |
 |---|---|
-| `json.parse(content: str) -> Json!` | one parsed value, or an error naming the scalar position where the document is invalid |
+| `json.parse(content: str) -> Json ! Malformed` | one parsed value, or a `Malformed` naming the reason and the scalar position where the document is invalid |
+| `json.describe(failed: Malformed) -> str` | the refusal as one sentence: `json: REASON, at position N` |
 | `json.quote(content: str) -> str` | a JSON string literal with quotes and escapes |
 | `value.is_null() -> bool` | whether the member is `null` |
 | `value.as_bool() -> bool?` | boolean payload, or `none` for another member |
@@ -95,7 +97,7 @@ call `count()` before using an index supplied by input.
 ```luce run
 import std.json
 
-func main() -> !:
+func main() -> ! json.Malformed:
     let doc = try json.parse("{\"name\": \"Luce\", \"port\": 8080, \"debug\": false}")
     match doc:
         object(fields):
@@ -160,7 +162,7 @@ parses back as a `real`, and escaped text is written in canonical JSON form.
 ```luce run
 import std.json
 
-func main() -> !:
+func main() -> ! json.Malformed:
     let doc = try json.parse("[42, 42.0, 4.2e1, \"\\u0041\"]")
     print(str(doc.element(0).as_i64() else -1))
     print(str(doc.element(1).as_i64() == none))
@@ -186,15 +188,49 @@ text that can represent it.
 digits after a decimal or exponent, trailing text, unpaired surrogate
 escapes, and unknown literal names. Nested arrays and objects are limited to
 64 levels so the parser and writer stay below the runtime call-depth limit.
-The exact error message names the byte offset; handle it with `try` or
-`catch` rather than treating malformed input as ordinary absence.
 
-Reading a document from a file is deliberately three separate operations:
+The failure is typed: `parse` fails with the `Malformed` union, whose one
+member carries the reason and the Unicode-scalar position where the parser
+met it. `match` reads the payloads apart; `json.describe` renders the
+one-line sentence for a caller that only prints.
+
+```text
+union Malformed:
+    Syntax(reason: str, at: i64)
+```
+
+```luce run
+import std.json
+
+func main():
+    json.parse("[1, 2") catch reason:
+        match reason:
+            Syntax(why, at):
+                print(why + " at " + str(at))
+        print(json.describe(reason))
+```
+
+```output
+the text ends inside the array at 0
+json: the text ends inside the array, at position 0
+```
+
+Handle the error with `try` or `catch` rather than treating malformed input
+as ordinary absence. A caller that propagates it declares the same error
+type (`-> ! json.Malformed`); a caller with its own error channel catches
+the value and raises its own, with `json.describe` as the ready-made
+sentence.
+
+Reading a document from a file is deliberately three separate operations —
+and the last one's error is converted where the two channels meet, because
+`files` fails with the host's `str` sentence while `parse` fails with
+`Malformed`:
 
 ```text
 let data = try files.read_bytes(path)
 let text = strings.from_bytes(data) else ""
-let value = try json.parse(text)
+let value = json.parse(text) catch reason:
+    error(json.describe(reason))
 ```
 
 `std.json` receives a Luce `str`, so UTF-8 validation has already happened
