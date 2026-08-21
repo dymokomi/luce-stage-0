@@ -81,9 +81,15 @@ func is_letter(value: char) -> bool:
 
 # --- list ------------------------------------------------------------
 
+# `std.zip` fails with its own `ZipError` union; zipper's error
+# channel is the plain sentence a person reads at the prompt, so each
+# zip call catches the value and re-raises `zip.describe`'s rendering
+# — the visible conversion (docs/ERRORS.md).
 func list_archive(path: str) -> !:
-    let raw = try zip.read(path)
-    let archive = try zip.Archive(raw)
+    let raw = zip.read(path) catch reason:
+        error(zip.describe(reason))
+    let archive = zip.Archive(raw) catch reason:
+        error(zip.describe(reason))
     let entries = archive.entries()
     print(counted(len(entries), "entry", "entries") + " in " + path + ", " + counted(len(raw), "byte", "bytes"))
     for entry in entries:
@@ -113,7 +119,10 @@ func method_of(entry: zip.Entry) -> str:
 # that is already there, so this is a call and not a bookkeeping
 # problem.
 func unzip_archive(path: str, into: str) -> !:
-    let archive = try zip.Archive(try zip.read(path))
+    let raw = zip.read(path) catch reason:
+        error(zip.describe(reason))
+    let archive = zip.Archive(raw) catch reason:
+        error(zip.describe(reason))
     let entries = archive.entries()
     # The question this gate actually asks is "is there a *directory*
     # here", and `exists` answered "is there an entry" — so a file
@@ -139,7 +148,8 @@ func unzip_archive(path: str, into: str) -> !:
             try files.make_directory(target)
         else:
             try files.make_directory(paths.dir(target))
-            let data = try archive.extract(entry)
+            let data = archive.extract(entry) catch reason:
+                error(zip.describe(reason))
             try files.write_bytes(target, data)
             print("  " + strings.pad_left(str(len(data)), 10) + "  " + target)
             written += 1
@@ -159,11 +169,13 @@ func zip_files(path: str, sources: list[str]) -> !:
     for source in sources:
         let name = try safe_name(source)
         let data = try files.read_bytes(source)
-        try maker.add(name, data, true)
+        maker.add(name, data, true) catch reason:
+            error(zip.describe(reason))
         total += len(data)
         print("  " + strings.pad_left(str(len(data)), 10) + "  " + name)
     let archive = maker.finish()
-    try zip.write(path, archive)
+    zip.write(path, archive) catch reason:
+        error(zip.describe(reason))
     print(counted(len(sources), "file", "files") + " (" + counted(total, "byte", "bytes") + ") into " + path + ", " + counted(len(archive), "byte", "bytes"))
 
 # --- the command line ------------------------------------------------

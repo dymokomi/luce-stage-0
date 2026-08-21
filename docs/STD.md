@@ -34,11 +34,11 @@ cost of changing the embedded library.
 | `std.files` | fallible whole-file, directory, and open-file APIs | kind/existence, text/line/byte reads and writes, append/delete/rename/mkdir, `Mode` and the `File` class (fallible `init(path, mode)`, conforming to `io.Reader`/`io.Writer`), entries/list |
 | `std.os` | console, time, environment, process and machine services | line input, standard error, clocks, environment, `os.run` (with an optional stdin feed), `Process` (a held child: feed/read/ready/wait), `stdin`/`stdout`/`stderr` as `io` streams, memory and CPU facts |
 | `std.term` | the terminal | frame drawing (rows/cols, clear/move/style/write/flush), `copy` to the system clipboard, one typed `Event` stream behind `read()`, border glyphs and `junction` |
-| `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse`, `quote`, typed accessors, compact and pretty writing |
-| `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion |
+| `std.json` | RFC 8259 tree, parser, and writer | `Json` union, `parse` failing with the `Malformed` union (+ `describe`), `quote`, typed accessors, compact and pretty writing |
+| `std.zip` | ZIP/DEFLATE in Luce | archive read/write, entries/extract, CRC, writer, inflate/deflate, text/byte conversion; the archive path fails with the `ZipError` union (`Damaged`/`Unsupported`/`Io`, + `describe`) |
 | `std.gpu` | backend-neutral low-level drawing surface | backend identity and `Surface` operations |
 | `std.network` | TCP transport | `Connection` (static `dial`, read/write/flush, conforming to `io.Reader`/`io.Writer`), `Listener` (fallible `init(port)`, accept/port) |
-| `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Client` (base URL + default headers), `Response` with `ok`/`text`/`json`; status codes are data |
+| `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Client` (base URL + default headers), `Response` with `ok`/`text`/`json`; status codes are data; the request path fails with the `HttpError` union (`Unsupported`/`BadUrl`/`Protocol`/`Io`, + `describe`) |
 | `std.ui` | low-level native windows | `Window` with a fallible init (`try ui.Window(...)`) and a window-owned GPU surface |
 | `std.build` | the plan a `build.luc` declares | `Plan` (program/library/object/command steps, `default`, `emit` printing versioned JSON), `Step.needs` edges; the luce tool executes the plan (docs/BUILD.md) |
 | `std.c` | the C boundary's helpers (docs/FFI.md) | `with_bytes`/`with_bytes_foreign` scoped buffer addresses, `zstring` NUL-terminated text |

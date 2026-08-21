@@ -1,7 +1,11 @@
 # Typed errors and fallible function values — design for the freeze
 
 **Status: ratified 2026-08-21 (owner); R3 landed 2026-08-21, R2's
-language half landed 2026-08-22 — the std sweep remains.**
+language half landed 2026-08-22, and the std sweep landed with it:
+`json` fails with `Malformed`, `zip` with `ZipError`, `http` with
+`HttpError`, each with a `describe` rendering.  `files`, `network`,
+`os`, and `term` stay on the bare `!` deliberately — a host refusal
+is the world's sentence, not a member list this side owns.**
 Extends docs/FAILURE.md; that file's three-way rule (absence / error /
 trap) is untouched. Two rulings land here:
 
@@ -80,5 +84,12 @@ error types, raise/catch/try typing, function-type identity and the
 conversion rule), HIR/MIR (signatures carry the error type; raise and
 catch carry a `Value`), both engines through one runtime unwind, specs
 for every row above, docs (FAILURE.md, Guide, Library), and then the
-std sweep: `files`, `network`, `http`, `zip`, `json`, `os.run`
-declare their unions before the freeze locks.
+std sweep.  The sweep's ruling: the three pure-protocol modules —
+`json` (`Malformed`), `zip` (`ZipError`), `http` (`HttpError`) —
+declare unions and each ships a `describe` that renders the old
+sentence; `files`, `network`, `os`, and `term` stay on the bare `!`,
+because a host refusal is the world's own message.  Where a typed
+module calls a bare-`!` one (`zip.read` over `files`, the exchange
+over `network`/`io`), the `str` is caught and re-raised as the
+union's `Io` member — the visible conversion, demonstrated in std
+itself.

@@ -32,18 +32,13 @@ fn agreeOk(source: []const u8) !void {
     return agree.okGiven(source, budget);
 }
 
-/// The run ends as an error nobody caught, with exactly these words.
-fn agreeRaises(source: []const u8, message: []const u8) !void {
-    return agree.errors(source, budget, .user_error, message);
-}
-
 /// Every acceptance spec asks the same question of a text — does this
 /// parse — so the two functions that ask it are written once here and
 /// stand in front of the program that uses them.
 const asks =
     \\import std.json
     \\
-    \\func counted(text: str) -> i64!:
+    \\func counted(text: str) -> i64 ! json.Malformed:
     \\    let doc = try json.parse(text)
     \\    return doc.count()
     \\
@@ -200,7 +195,7 @@ test "json: a number is read by the notation it was written in, and the notation
         \\func name_of(value: json.Json) -> str:
         \\    return str(value)
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[42, -7, 4.2, 42.0, 4.2e1, 1e3, -0, 0]")
         \\
         \\    # Written whole, so it is a whole number — and the union
@@ -241,7 +236,7 @@ test "json: a number is read by the notation it was written in, and the notation
 
 test "json: a whole number past i64 is real, and a number past f64 is refused" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # Grammatical, so the document is valid — RFC 8259 section
         \\    # 6 sets no bound on the notation.  A whole number too
         \\    # large for a i64 is a real, which is where its precision
@@ -269,7 +264,7 @@ test "json: a whole number past i64 is real, and a number past f64 is refused" {
 
 test "json: the eight escapes decode, and nothing else is an escape" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[\"\\\"\", \"\\\\\", \"\\/\", \"\\b\", \"\\f\", \"\\n\", \"\\r\", \"\\t\"]")
         \\    assert(doc.element(0).as_text() else "" == "\"")
         \\    assert(doc.element(1).as_text() else "" == "\\")
@@ -292,7 +287,7 @@ test "json: the eight escapes decode, and nothing else is an escape" {
 
 test "json: a \\u escape is four hexadecimal digits, in either case" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[\"\\u0041\", \"\\u00e9\", \"\\u20AC\", \"\\u0000\"]")
         \\    assert(doc.element(0).as_text() else "" == "A")
         \\    assert(doc.element(1).as_text() else "" == str(char(233)))
@@ -309,7 +304,7 @@ test "json: a \\u escape is four hexadecimal digits, in either case" {
 
 test "json: a surrogate pair is one codepoint, and half of one is refused" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # RFC 8259 section 7's own example: G-clef, U+1D11E, is
         \\    # written as two escapes and read as one character —
         \\    # four bytes of UTF-8, not two characters of three.
@@ -360,7 +355,7 @@ test "json: a control character inside a string must be escaped" {
 
 test "json: text outside ASCII arrives as itself" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # The input is a Luce str, so it is valid UTF-8 before
         \\    # the parser sees a u8 of it (RFC 8259 section 8.1) —
         \\    # there is no encoding question here to get wrong.
@@ -382,7 +377,7 @@ test "json: text outside ASCII arrives as itself" {
 
 test "json: an object is names and values, and the punctuation is not optional" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    assert(accepted("{}"))
         \\    assert(accepted("{\"a\":1}"))
         \\    assert(accepted("{\"a\":1,\"b\":2}"))
@@ -411,7 +406,7 @@ test "json: an object is names and values, and the punctuation is not optional" 
 
 test "json: an array is values in order, and the punctuation is not optional" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    assert(accepted("[]"))
         \\    assert(accepted("[1]"))
         \\    assert(accepted("[1,2,3]"))
@@ -436,7 +431,7 @@ test "json: an array is values in order, and the punctuation is not optional" {
 
 test "json: a duplicate member resolves to the last, and an object is a mapping" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # RFC 8259 section 4: names SHOULD be unique, and what
         \\    # happens when they are not is unpredictable.  An object
         \\    # here is a map[str, Json], so the second "a" replaces
@@ -462,7 +457,7 @@ test "json: a duplicate member resolves to the last, and an object is a mapping"
 
 test "json: a member name is compared decoded, however it was written" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # The same name, spelled three ways.  Escapes are spent on
         \\    # the way in, so a lookup is a map lookup and nothing is
         \\    # decoded twice.
@@ -547,7 +542,7 @@ test "json: a document at the bound parses, walks and writes inside loom's own c
         \\        else:
         \\            return 0
         \\
-        \\func under(padding: i64, text: str) -> i64!:
+        \\func under(padding: i64, text: str) -> i64 ! json.Malformed:
         \\    # Fifty frames of somebody else's program before this
         \\    # module is called at all.
         \\    if padding > 0:
@@ -557,7 +552,7 @@ test "json: a document at the bound parses, walks and writes inside loom's own c
         \\    let again = try json.parse(doc.write())
         \\    return deepest(doc) + deepest(again)
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    print(str(try under(50, nest(64))))
         \\
     , .{ .call_depth = 128 },
@@ -593,7 +588,7 @@ test "json: a match over a Json needs no else, and names all seven members" {
         \\        object(fields):
         \\            return "object of " + str(len(fields))
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[null, true, 7, 7.5, \"s\", [1], {\"a\": 1}]")
         \\    match doc:
         \\        array(items):
@@ -619,7 +614,7 @@ test "json: an accessor of the wrong member answers absence, and null is not abs
     try agreeOk(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[\"s\", 1, true, false, null, {}, []]")
         \\    let text = doc.element(0)
         \\    let number = doc.element(1)
@@ -659,7 +654,7 @@ test "json: an accessor of the wrong member answers absence, and null is not abs
 
 test "json: member answers absence for a name that is not there and for a value that is not an object" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("{\"here\": 1}")
         \\    # `has` is a reserved name in Luce, so `member(…) != none`
         \\    # is the membership question, and it is the same one call.
@@ -677,7 +672,7 @@ test "json: member answers absence for a name that is not there and for a value 
 
 test "json: element walks arrays and objects alike, and past the end is a bug that traps" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[1, [2, 3], {\"a\": 4}, 5]")
         \\    assert(doc.count() == 4)
         \\    assert(doc.element(0).as_i64() else -1 == 1)
@@ -702,7 +697,7 @@ test "json: element walks arrays and objects alike, and past the end is a bug th
     try agree.trapGiven(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("[1, 2]")
         \\    print(str(doc.element(2).as_i64() else -1))
         \\
@@ -767,7 +762,7 @@ test "json: a parsed tree is walked, mutated through its containers, and written
         \\        else:
         \\            return
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("{\"servers\":[{\"port\":80},{\"port\":8080}],\"port\":1}")
         \\    bump(doc)
         \\    print(doc.write())
@@ -784,7 +779,7 @@ test "json: a parsed tree is walked, mutated through its containers, and written
 
 test "json: write puts the value back and the whitespace nowhere" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let spaced = "{\n  \"a\" : [ 1, 2 ] ,\n  \"b\" : { \"c\" : null }\n}"
         \\    let doc = try json.parse(spaced)
         \\    assert(doc.write() == "{\"a\":[1,2],\"b\":{\"c\":null}}")
@@ -801,7 +796,7 @@ test "json: write re-encodes the value, and parsing what it wrote gives the same
     try agreeOk(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # The value is what survived the parse, so `write` is a
         \\    # re-encoding and not an echo: an escape that had a
         \\    # shorter spelling gets it, a solidus loses the one it did
@@ -820,7 +815,7 @@ test "json: write re-encodes the value, and parsing what it wrote gives the same
 
 test "json: parse, write, parse is a fixed point over a rich document" {
     try agreeOk(reads ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let source = "{\n  \"name\": \"luce\",\n  \"version\": 2,\n  \"ratio\": -1.5e-3,\n  \"tags\": [\"lang\", \"runtime\", []],\n  \"nested\": {\"a\": {\"b\": {\"c\": [true, false, null]}}},\n  \"escaped\": \"quote \\\" slash \\\\ newline \\n clef \\ud834\\udd1e\",\n  \"empty\": {},\n  \"none\": null\n}"
         \\    let first = try json.parse(source)
         \\    let once = first.write()
@@ -849,7 +844,7 @@ test "json: pretty indents by the count it is given" {
     try agree.printsGiven(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    let doc = try json.parse("{\"a\":[1,{\"b\":2}],\"c\":{},\"d\":[]}")
         \\    print(doc.pretty(2))
         \\    print(doc.pretty(0))
@@ -890,7 +885,7 @@ test "json: quote escapes what must be escaped and leaves the rest alone" {
     try agreeOk(
         \\import std.json
         \\
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    assert(json.quote("") == "\"\"")
         \\    assert(json.quote("plain") == "\"plain\"")
         \\    assert(json.quote("a\"b") == "\"a\\\"b\"")
@@ -923,123 +918,68 @@ test "json: quote escapes what must be escaped and leaves the rest alone" {
 // ---------------------------------------------------------------------------
 
 test "json: a refusal names the problem and its scalar position" {
-    try agreeRaises(
+    // Every way a document can be wrong is the one `Malformed` member
+    // carrying a reason and the scalar position where the parser met
+    // it.  The specs read the payloads apart with `match` — a stronger
+    // pin than string equality on a rendered sentence — and the last
+    // row holds `describe` to the sentence a caller that only prints
+    // gets.
+    try agree.printsGiven(
         \\import std.json
         \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("")
+        \\func shown(text: str) -> str:
+        \\    json.parse(text) catch reason:
+        \\        match reason:
+        \\            Syntax(why, at):
+        \\                return why + " @ " + str(at)
+        \\    return "parsed"
         \\
-    , "json: there is no value in the text");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("{} {}")
-        \\
-    , "json: text after the document's one value, at position 3");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[1, 2")
-        \\
-    , "json: the text ends inside the array opened at position 0");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("{\"a\": 1 \"b\": 2}")
-        \\
-    , "json: a comma or a close was expected at position 8");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("{a: 1}")
-        \\
-    , "json: a member name must be a string, at position 1");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("{\"a\" 1}")
-        \\
-    , "json: a member name must be followed by a colon, at position 5");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[01]")
-        \\
-    , "json: a number may not have a leading zero, at position 1");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[1.]")
-        \\
-    , "json: a fraction needs a digit after the point, at position 3");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[1e999]")
-        \\
-    , "json: the number at position 1 is past what an f64 can hold");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[\"a\\qb\"]")
-        \\
-    , "json: unknown escape at position 3");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[\"\\ud834\"]")
-        \\
-    , "json: a high surrogate escape at position 2 is not followed by its low half");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[\"\\udd1e\"]")
-        \\
-    , "json: a low surrogate escape stands alone at position 2");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
-        \\    let doc = try json.parse("[garbage]")
-        \\
-    , "json: a value was expected at position 1");
-
-    try agreeRaises(
-        \\import std.json
-        \\
-        \\func main() -> !:
+        \\func main():
+        \\    print(shown(""))
+        \\    print(shown("{} {}"))
+        \\    print(shown("[1, 2"))
+        \\    print(shown("{\"a\": 1 \"b\": 2}"))
+        \\    print(shown("{a: 1}"))
+        \\    print(shown("{\"a\" 1}"))
+        \\    print(shown("[01]"))
+        \\    print(shown("[1.]"))
+        \\    print(shown("[1e999]"))
+        \\    print(shown("[\"a\\qb\"]"))
+        \\    print(shown("[\"\\ud834\"]"))
+        \\    print(shown("[\"\\udd1e\"]"))
+        \\    print(shown("[garbage]"))
+        \\    print(shown("[\"unclosed"))
         \\    var deep = builder()
         \\    for step in range(0, 65):
         \\        deep.append("[")
         \\    deep.append("1")
         \\    for step in range(0, 65):
         \\        deep.append("]")
-        \\    let doc = try json.parse(deep.build())
+        \\    print(shown(deep.build()))
         \\
-    , "json: values nested deeper than 64, at position 64");
+        \\    # And the one rendering, for the caller that only prints.
+        \\    json.parse("{} {}") catch reason:
+        \\        print(json.describe(reason))
+        \\
+    , budget,
+        \\there is no value in the text @ 0
+        \\text after the document's one value @ 3
+        \\the text ends inside the array @ 0
+        \\a comma or a close was expected @ 8
+        \\a member name must be a string @ 1
+        \\a member name must be followed by a colon @ 5
+        \\a number may not have a leading zero @ 1
+        \\a fraction needs a digit after the point @ 3
+        \\the number is past what an f64 can hold @ 1
+        \\unknown escape @ 3
+        \\a high surrogate escape is not followed by its low half @ 2
+        \\a low surrogate escape stands alone @ 2
+        \\a value was expected @ 1
+        \\the string is never closed @ 1
+        \\values nested deeper than 64 @ 64
+        \\json: text after the document's one value, at position 3
+        \\
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,7 +1059,7 @@ test "json: the JSONTestSuite n_ cases, which every parser must refuse" {
 
 test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what this one decided" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # i_number_too_big_pos_int: grammatical, so it parses; too
         \\    # large for a i64, so it is a real, which is where its
         \\    # precision honestly is.
@@ -1162,7 +1102,7 @@ test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what t
 
 test "json: documents parsed in a loop leave nothing behind" {
     try agreeOk(asks ++
-        \\func main() -> !:
+        \\func main() -> ! json.Malformed:
         \\    # Every one of these owns a tree of lists and maps, and
         \\    # every one of them is freed by the scope that received it
         \\    # — recursively, through the containers, which is what the
@@ -1192,10 +1132,13 @@ test "json: the recipe for a file is three calls, and none of them is this modul
         \\func main() -> !:
         \\    # json touches nothing: the bytes come off the disk, the
         \\    # text is a validation of those bytes, and the value is a
-        \\    # reading of that text.
+        \\    # reading of that text.  The disk fails with the host's
+        \\    # sentence and the parse fails with json's own union, so
+        \\    # the second is converted where the two channels meet.
         \\    let data = try files.read_bytes("config.json")
         \\    let text = strings.from_bytes(data) else ""
-        \\    let doc = try json.parse(text)
+        \\    let doc = json.parse(text) catch reason:
+        \\        error(json.describe(reason))
         \\    # The walking form: the map inside the value is reached by
         \\    # `match` and nothing is copied.
         \\    match doc:

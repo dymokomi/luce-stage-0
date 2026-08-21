@@ -6,6 +6,26 @@ release is a complete toolchain rather than a compatibility promise.
 
 ## Unreleased
 
+- The standard library speaks typed errors (docs/ERRORS.md R2, the
+  std sweep): the three pure-protocol modules declare what they fail
+  with — `json.parse` and the whole parse path fail with `Malformed`,
+  one member carrying the reason and the scalar position; `zip`'s
+  archive path fails with `ZipError` (`Damaged` for bytes that lie,
+  `Unsupported` for a capability the module lacks, `Io` for the
+  disk); `http`'s request path fails with `HttpError`
+  (`Unsupported`/`BadUrl`/`Protocol`/`Io`), and `Response.json`
+  passes `json.Malformed` through whole.  Each module ships
+  `describe`, rendering the member back into the one-line sentence a
+  caller that only prints wants.  Where a typed module meets a
+  bare-`!` host call — `zip.read` over `files`, the exchange over
+  `network` — the `str` is caught and re-raised as the union's `Io`
+  member: the visible conversion, demonstrated in std itself.
+  `files`, `network`, `os`, and `term` stay on the bare `!`
+  deliberately, because a host refusal is the world's own sentence.
+  The specs now pin members and payloads with `match` rather than
+  rendered strings, which is a stronger claim than the one it
+  replaces.
+
 - Errors are typed, and they are unions (docs/ERRORS.md R2): a
   fallible function may declare what it fails *with* — `-> i64 !
   ParseError`, where `ParseError` is an ordinary union — and

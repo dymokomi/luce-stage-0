@@ -7,6 +7,7 @@
 # until the door opens, chunked framing crossing a real socket.
 
 import std.http
+import std.json
 import std.network
 import std.os
 import std.strings
@@ -41,7 +42,10 @@ func test_a_client_carries_base_and_headers_over_loopback() -> !:
     let answer = try fetch_with(api)
     try server.wait()
     assert(answer.ok())
-    let doc = try answer.json()
+    # `json()` fails with json's own `Malformed`; this test speaks the
+    # plain channel, so the refusal is re-raised as its sentence.
+    let doc = answer.json() catch reason:
+        error(json.describe(reason))
     let ready = doc.member("ready")
     if ready == none:
         error("the reply named no ready member")
@@ -59,22 +63,35 @@ func fetch_with(api: http.Client) -> http.Response!:
             error("the server never came up")
         os.sleep_ms(10)
 
-func try_client(api: http.Client) -> http.Response?!:
+func try_client(api: http.Client) -> http.Response? ! http.HttpError:
     return try api.get("/status")
 
 func test_refusals_carry_their_reasons():
+    # The refusal is an `HttpError` member: https is `Unsupported`, an
+    # unreadable address is `BadUrl` with the address in its own
+    # payload, and `describe` renders the one-line sentence.
     var said = ""
     fetch_https() catch reason:
-        said = reason
+        match reason:
+            Unsupported(why):
+                said = why
+            else:
+                said = "the wrong member"
     assert(strings.starts_with(said, "https is not supported yet"))
     fetch_elsewhere() catch reason:
-        said = reason
+        match reason:
+            BadUrl(why, address):
+                assert(why == "not an http url")
+                assert(address == "gopher://old.test/")
+            else:
+                trap("the wrong member")
+        said = http.describe(reason)
     assert(said == "not an http url: gopher://old.test/")
 
-func fetch_https() -> !:
+func fetch_https() -> ! http.HttpError:
     let held = try http.get("https://example.test/")
 
-func fetch_elsewhere() -> !:
+func fetch_elsewhere() -> ! http.HttpError:
     let held = try http.get("gopher://old.test/")
 
 # -- the server half, in ordinary Luce --------------------------------

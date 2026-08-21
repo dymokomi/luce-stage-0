@@ -9,9 +9,12 @@
 import std.json
 from positions import lines_of, position
 
-# The params of one publishDiagnostics notification.
+# The params of one publishDiagnostics notification.  `json.parse`
+# fails with its `Malformed` union; this module's callers speak the
+# plain error channel, so the refusal is re-raised as the sentence.
 func published(uri: str, content: str, answer: str) -> json.Json!:
-    let rows = try json.parse(answer)
+    let rows = json.parse(answer) catch reason:
+        error(json.describe(reason))
     let lines = lines_of(content)
     var out = list[json.Json]()
     for index in range(0, rows.count()):
