@@ -1,11 +1,18 @@
 # The self-hosting program — FFI, the Luce-written compiler, and the freeze
 
-**Status: plan.** Ratified direction (owner, 2026-08-19): the language
-freeze and the self-host line are the same line. Luce freezes at the
-point where the next compiler can be written **fully in Luce**, proven
-by that compiler compiling itself and passing a differential against
-the Zig toolchain — which then retires, gradually, to two jobs: oracle
-and bootstrap seed. Nothing here is current reference until it lands.
+**Status: FROZEN (owner, 2026-08-23).** The language is locked as
+stage 0. Every pre-freeze ruling landed and gated: Tier-1 FFI whole
+(extern/foreign/blocking, --link, std.c scoped buffers, build-plan
+links), indirect unions (D20), positional match captures (D21),
+fallible function values (R3), typed union errors (R2), the channel
+half of cancellation (receive_by + os.Deadline), and the std sweep
+(json/zip/http error unions). The readiness probe — a compiler slice
+using every feature at once — compiled first try. From here the Zig
+toolchain has two jobs, oracle and bootstrap seed; **toolchain**
+changes (bug fixes, DWARF line tables, artifact work) remain
+welcome, **language** changes are over. The next compiler is written
+fully in Luce, in its own repository, against this frozen seed.
+Original ratified direction (2026-08-19) follows.
 
 **The constitution (owner, 2026-08-20).** Where a design question has
 no Luce-internal answer, the tiebreakers are fixed: **Zig** for

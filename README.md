@@ -1,5 +1,11 @@
 # LuciaOS
 
+> **This tree is frozen as `luce-stage-0` (2026-08-23).** The Luce
+> language is locked here as the stage-0 seed and oracle; the next
+> Luce compiler is written in Luce itself, in its own repository.
+> Toolchain fixes are welcome; language changes are over.
+> docs/SELFHOST.md records the program.
+
 **Good for humans. Good for computers.**
 
 LuciaOS v2 is a small computing environment built language-first:
