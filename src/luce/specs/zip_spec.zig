@@ -39,11 +39,11 @@ fn agreePrints(source: []const u8, expected: []const u8) !void {
 const shows =
     \\func shown(failed: zip.ZipError) -> str:
     \\    match failed:
-    \\        Damaged(reason):
+    \\        damaged(reason):
     \\            return "damaged: " + reason
-    \\        Unsupported(reason):
+    \\        unsupported(reason):
     \\            return "unsupported: " + reason
-    \\        Io(reason):
+    \\        io(reason):
     \\            return "io: " + reason
     \\
     \\

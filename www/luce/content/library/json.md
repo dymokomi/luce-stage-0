@@ -196,7 +196,7 @@ one-line sentence for a caller that only prints.
 
 ```text
 union Malformed:
-    Syntax(reason: str, at: i64)
+    syntax(reason: str, at: i64)
 ```
 
 ```luce run
@@ -205,7 +205,7 @@ import std.json
 func main():
     json.parse("[1, 2") catch reason:
         match reason:
-            Syntax(why, at):
+            syntax(why, at):
                 print(why + " at " + str(at))
         print(json.describe(reason))
 ```

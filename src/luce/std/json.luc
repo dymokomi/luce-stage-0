@@ -309,13 +309,13 @@ union Json:
 # document can be wrong is the same kind of news — a reason, and the
 # Unicode-scalar position where the parser met it.
 union Malformed:
-    Syntax(reason: str, at: i64)
+    syntax(reason: str, at: i64)
 
 # The refusal as one sentence: the reason, then the position.  For the
 # caller that prints rather than reads the payloads apart.
 func describe(failed: Malformed) -> str:
     match failed:
-        Syntax(reason, at):
+        syntax(reason, at):
             return "json: " + reason + ", at position " + str(at)
 
 # --- parsing ---------------------------------------------------------
@@ -331,11 +331,11 @@ func parse(content: str) -> Json ! Malformed:
     var reader = Parser(content = content, at = 0)
     reader.skip_blank()
     if reader.at >= len(content):
-        error(Malformed.Syntax(reason = "there is no value in the text", at = reader.at))
+        error(Malformed.syntax(reason = "there is no value in the text", at = reader.at))
     let value = try reader.read_value(0)
     reader.skip_blank()
     if reader.at != len(content):
-        error(Malformed.Syntax(reason = "text after the document's one value", at = reader.at))
+        error(Malformed.syntax(reason = "text after the document's one value", at = reader.at))
     return value
 
 # The read head over the document: the text, and the scalar the parser
@@ -365,14 +365,14 @@ private struct Parser:
     private func read_value(depth: i64) -> Json ! Malformed:
         self.skip_blank()
         if self.at >= len(self.content):
-            error(Malformed.Syntax(reason = "a value was expected", at = self.at))
+            error(Malformed.syntax(reason = "a value was expected", at = self.at))
         # RFC 8259 §3: a value's first character says which value it
         # is — this match is the section list.
         match self.content[self.at]:
             # §5: values separated by commas, between brackets.
             bracket_open:
                 if depth >= max_depth:
-                    error(Malformed.Syntax(reason = f"values nested deeper than {max_depth}", at = self.at))
+                    error(Malformed.syntax(reason = f"values nested deeper than {max_depth}", at = self.at))
                 let opened = self.at
                 var items = list[Json]()
                 self.at += 1
@@ -388,21 +388,21 @@ private struct Parser:
                         items.append(element)
                         self.skip_blank()
                         if self.at >= len(self.content):
-                            error(Malformed.Syntax(reason = "the text ends inside the array", at = opened))
+                            error(Malformed.syntax(reason = "the text ends inside the array", at = opened))
                         match self.content[self.at]:
                             comma:
                                 self.at += 1
                             bracket_close:
                                 listed = true
                             else:
-                                error(Malformed.Syntax(reason = "a comma or a close was expected", at = self.at))
+                                error(Malformed.syntax(reason = "a comma or a close was expected", at = self.at))
                 self.at += 1
                 return Json.array(items = items)
 
             # §4: names, colons, values, commas, between braces.
             brace_open:
                 if depth >= max_depth:
-                    error(Malformed.Syntax(reason = f"values nested deeper than {max_depth}", at = self.at))
+                    error(Malformed.syntax(reason = f"values nested deeper than {max_depth}", at = self.at))
                 let opened = self.at
                 var fields = map[str, Json]()
                 self.at += 1
@@ -412,11 +412,11 @@ private struct Parser:
                     while not mapped:
                         self.skip_blank()
                         if self.at >= len(self.content) or self.content[self.at] != quote_mark:
-                            error(Malformed.Syntax(reason = "a member name must be a string", at = self.at))
+                            error(Malformed.syntax(reason = "a member name must be a string", at = self.at))
                         let name = try self.read_string()
                         self.skip_blank()
                         if self.at >= len(self.content) or self.content[self.at] != colon:
-                            error(Malformed.Syntax(reason = "a member name must be followed by a colon", at = self.at))
+                            error(Malformed.syntax(reason = "a member name must be followed by a colon", at = self.at))
                         self.at += 1
                         let member = try self.read_value(depth + 1)
                         # §4 leaves a repeated name to the parser; a
@@ -426,14 +426,14 @@ private struct Parser:
                         fields[name] = member
                         self.skip_blank()
                         if self.at >= len(self.content):
-                            error(Malformed.Syntax(reason = "the text ends inside the object", at = opened))
+                            error(Malformed.syntax(reason = "the text ends inside the object", at = opened))
                         match self.content[self.at]:
                             comma:
                                 self.at += 1
                             brace_close:
                                 mapped = true
                             else:
-                                error(Malformed.Syntax(reason = "a comma or a close was expected", at = self.at))
+                                error(Malformed.syntax(reason = "a comma or a close was expected", at = self.at))
                 self.at += 1
                 return Json.object(fields = fields)
 
@@ -455,7 +455,7 @@ private struct Parser:
                     return Json.boolean(value = false)
                 if self.word("null"):
                     return Json.null
-                error(Malformed.Syntax(reason = "a value was expected", at = self.at))
+                error(Malformed.syntax(reason = "a value was expected", at = self.at))
 
     # RFC 8259 §2: whitespace is exactly these four bytes — space,
     # horizontal tab, line feed and carriage return.  Nothing else is
@@ -506,9 +506,9 @@ private struct Parser:
             elif u32(c) < 32:
                 # §7: the control characters must be escaped.  A raw
                 # newline inside a str is the usual way to meet this.
-                error(Malformed.Syntax(reason = "an unescaped control character inside a string", at = self.at))
+                error(Malformed.syntax(reason = "an unescaped control character inside a string", at = self.at))
             self.at += 1
-        error(Malformed.Syntax(reason = "the string is never closed", at = opened))
+        error(Malformed.syntax(reason = "the string is never closed", at = opened))
 
     # The rest of a str token, decoded, with the read head on its
     # first backslash.  `opened` is the opening quote, kept for the
@@ -524,7 +524,7 @@ private struct Parser:
             elif c == backslash:
                 try self.decode_escape(out)
             elif u32(c) < 32:
-                error(Malformed.Syntax(reason = "an unescaped control character inside a string", at = self.at))
+                error(Malformed.syntax(reason = "an unescaped control character inside a string", at = self.at))
             else:
                 # A run of ordinary scalars goes in whole: it can hold
                 # whole characters of any width, and it ends at a
@@ -534,7 +534,7 @@ private struct Parser:
                 while self.at < len(self.content) and self.content[self.at] != backslash and self.content[self.at] != quote_mark and u32(self.content[self.at]) >= 32:
                     self.at += 1
                 out.append(self.content[run:self.at])
-        error(Malformed.Syntax(reason = "the string is never closed", at = opened))
+        error(Malformed.syntax(reason = "the string is never closed", at = opened))
 
     # RFC 8259 §7's eight escapes and `\uXXXX`.  Puts what the escape
     # spells into `out`; the read head stands on the backslash and is
@@ -543,7 +543,7 @@ private struct Parser:
     private func decode_escape(out: builder) -> ! Malformed:
         let slash = self.at
         if slash + 1 >= len(self.content):
-            error(Malformed.Syntax(reason = "the text ends inside an escape", at = slash))
+            error(Malformed.syntax(reason = "the text ends inside an escape", at = slash))
         let c = self.content[slash + 1]
         if c == letter_u:
             # A high surrogate is half of a codepoint and must be
@@ -557,16 +557,16 @@ private struct Parser:
                 # The head stands after the four digits, where the low
                 # half's own `\u` must be.
                 if self.at + 1 >= len(self.content) or self.content[self.at] != backslash or self.content[self.at + 1] != letter_u:
-                    error(Malformed.Syntax(reason = "a high surrogate escape is not followed by its low half", at = slash))
+                    error(Malformed.syntax(reason = "a high surrogate escape is not followed by its low half", at = slash))
                 self.at += 2
                 let low = try self.read_hex4()
                 if low < 56320 or low > 57343:
-                    error(Malformed.Syntax(reason = "a high surrogate escape is followed by something that is not a low surrogate", at = slash))
+                    error(Malformed.syntax(reason = "a high surrogate escape is followed by something that is not a low surrogate", at = slash))
                 # §7's own example is this exact pair: 𝄞 is one
                 # codepoint written as two escapes.
                 code = 65536 + (code - 55296) * 1024 + (low - 56320)
             elif code >= 56320 and code <= 57343:
-                error(Malformed.Syntax(reason = "a low surrogate escape stands alone", at = slash))
+                error(Malformed.syntax(reason = "a low surrogate escape stands alone", at = slash))
             out.append(str(char(code)))
             return
         match c:
@@ -583,7 +583,7 @@ private struct Parser:
             't':
                 out.append_ascii(9)
             else:
-                error(Malformed.Syntax(reason = "unknown escape", at = slash))
+                error(Malformed.syntax(reason = "unknown escape", at = slash))
         self.at = slash + 2
 
     # Four hexadecimal digits at the read head, as the number they
@@ -591,7 +591,7 @@ private struct Parser:
     private func read_hex4() -> i64 ! Malformed:
         let start = self.at
         if start + 4 > len(self.content):
-            error(Malformed.Syntax(reason = "an escape wants four hexadecimal digits and the text ends first", at = start))
+            error(Malformed.syntax(reason = "an escape wants four hexadecimal digits and the text ends first", at = start))
         var value: i64 = 0
         for i in range(0, 4):
             let c = self.content[start + i]
@@ -603,7 +603,7 @@ private struct Parser:
             elif c >= 'A' and c <= 'F':
                 part = i64(u32(c)) - i64(u32('A')) + 10
             else:
-                error(Malformed.Syntax(reason = "an escape wants four hexadecimal digits", at = start))
+                error(Malformed.syntax(reason = "an escape wants four hexadecimal digits", at = start))
             value = value * 16 + part
         self.at = start + 4
         return value
@@ -626,11 +626,11 @@ private struct Parser:
         if self.content[self.at] == minus:
             self.at += 1
         if self.at >= len(self.content) or not is_digit(self.content[self.at]):
-            error(Malformed.Syntax(reason = "a number needs a digit", at = self.at))
+            error(Malformed.syntax(reason = "a number needs a digit", at = self.at))
         if self.content[self.at] == digit_zero:
             self.at += 1
             if self.at < len(self.content) and is_digit(self.content[self.at]):
-                error(Malformed.Syntax(reason = "a number may not have a leading zero", at = start))
+                error(Malformed.syntax(reason = "a number may not have a leading zero", at = start))
         else:
             while self.at < len(self.content) and is_digit(self.content[self.at]):
                 self.at += 1
@@ -639,7 +639,7 @@ private struct Parser:
             whole = false
             self.at += 1
             if self.at >= len(self.content) or not is_digit(self.content[self.at]):
-                error(Malformed.Syntax(reason = "a fraction needs a digit after the point", at = self.at))
+                error(Malformed.syntax(reason = "a fraction needs a digit after the point", at = self.at))
             while self.at < len(self.content) and is_digit(self.content[self.at]):
                 self.at += 1
         if self.at < len(self.content) and (self.content[self.at] == letter_e or self.content[self.at] == letter_e_capital):
@@ -648,7 +648,7 @@ private struct Parser:
             if self.at < len(self.content) and (self.content[self.at] == plus or self.content[self.at] == minus):
                 self.at += 1
             if self.at >= len(self.content) or not is_digit(self.content[self.at]):
-                error(Malformed.Syntax(reason = "an exponent needs a digit", at = self.at))
+                error(Malformed.syntax(reason = "an exponent needs a digit", at = self.at))
             while self.at < len(self.content) and is_digit(self.content[self.at]):
                 self.at += 1
         let token = self.content[start:self.at]
@@ -659,7 +659,7 @@ private struct Parser:
         let measured = parse_f64(token)
         if measured != none:
             return Json.real(value = measured)
-        error(Malformed.Syntax(reason = "the number is past what an f64 can hold", at = start))
+        error(Malformed.syntax(reason = "the number is past what an f64 can hold", at = start))
 
 private func is_digit(c: char) -> bool:
     return c >= digit_zero and c <= digit_nine

@@ -20,16 +20,16 @@ Every fallible function in the module fails with one union:
 
 ```text
 union ZipError:
-    Damaged(reason: str)
-    Unsupported(reason: str)
-    Io(reason: str)
+    damaged(reason: str)
+    unsupported(reason: str)
+    io(reason: str)
 ```
 
-`Damaged` is bytes that do not hold what they claim — truncation, a broken
-directory, a failed checksum, a malformed DEFLATE stream. `Unsupported` is a
+`damaged` is bytes that do not hold what they claim — truncation, a broken
+directory, a failed checksum, a malformed DEFLATE stream. `unsupported` is a
 conforming archive asking for a capability the module does not have: another
 compression method, encryption, a non-UTF-8 entry name, or a size that needs
-Zip64. `Io` wraps the host's sentence when `zip.read` or `zip.write` touches
+Zip64. `io` wraps the host's sentence when `zip.read` or `zip.write` touches
 the disk. `match` reads the members apart; `zip.describe` renders the
 `zip: REASON` sentence for a caller that only prints.
 
@@ -44,11 +44,11 @@ func main():
     var scraps: list[u8] = [80, 75, 3]
     zip.Archive(scraps) catch reason:
         match reason:
-            Damaged(why):
+            damaged(why):
                 print("damaged: " + why)
-            Unsupported(why):
+            unsupported(why):
                 print("unsupported: " + why)
-            Io(why):
+            io(why):
                 print("io: " + why)
         print(zip.describe(reason))
 ```
@@ -182,8 +182,8 @@ These are the only host-facing functions in the module:
 
 | Signature | Result |
 |---|---|
-| `zip.read(path: str) -> list[u8] ! ZipError` | reads an archive's bytes with `std.files.read_bytes`; a host refusal arrives as `ZipError.Io` |
-| `zip.write(path: str, archive: list[u8]) -> ! ZipError` | writes archive bytes with `std.files.write_bytes`; a host refusal arrives as `ZipError.Io` |
+| `zip.read(path: str) -> list[u8] ! ZipError` | reads an archive's bytes with `std.files.read_bytes`; a host refusal arrives as `ZipError.io` |
+| `zip.write(path: str, archive: list[u8]) -> ! ZipError` | writes archive bytes with `std.files.write_bytes`; a host refusal arrives as `ZipError.io` |
 
 Use them with a `Writer` when an archive belongs on disk:
 

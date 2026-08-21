@@ -930,7 +930,7 @@ test "json: a refusal names the problem and its scalar position" {
         \\func shown(text: str) -> str:
         \\    json.parse(text) catch reason:
         \\        match reason:
-        \\            Syntax(why, at):
+        \\            syntax(why, at):
         \\                return why + " @ " + str(at)
         \\    return "parsed"
         \\

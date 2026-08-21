@@ -171,19 +171,19 @@ The request path fails with one union:
 
 ```text
 union HttpError:
-    Unsupported(reason: str)
-    BadUrl(reason: str, url: str)
-    Protocol(reason: str)
-    Io(reason: str)
+    unsupported(reason: str)
+    bad_url(reason: str, url: str)
+    protocol(reason: str)
+    io(reason: str)
 ```
 
-`Unsupported` is the honest https refusal. `BadUrl` is an address
+`unsupported` is the honest https refusal. `bad_url` is an address
 this module cannot read — not-http, no host, a port that is not a
-number — with the address in its own payload. `Protocol` is a reply
+number — with the address in its own payload. `protocol` is a reply
 that is not HTTP: a malformed status line, headers that never finish,
-a broken chunk. `Io` wraps the transport refusing — `std.network` and
+a broken chunk. `io` wraps the transport refusing — `std.network` and
 `std.io` fail with the host's own `str` sentence, and the exchange
-catches it and re-raises `HttpError.Io`, so the conversion is visible
+catches it and re-raises `HttpError.io`, so the conversion is visible
 where it happens. `match` reads the members apart; `http.describe`
 renders the one-line sentence.
 

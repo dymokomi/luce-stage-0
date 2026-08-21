@@ -183,8 +183,8 @@ test "the response predicates read a failure as data" {
 }
 
 test "https and non-http urls are refused with the reason" {
-    // The refusal is an `HttpError` member: https is `Unsupported`,
-    // an unreadable address is `BadUrl` with the address in its own
+    // The refusal is an `HttpError` member: https is `unsupported`,
+    // an unreadable address is `bad_url` with the address in its own
     // payload — pinned by `match`, which holds the member as well as
     // the words — and `describe` renders the one-line sentence.
     try hosted.printsGiven(
@@ -194,13 +194,13 @@ test "https and non-http urls are refused with the reason" {
         \\func main():
         \\    fetch("https://example.test/") catch reason:
         \\        match reason:
-        \\            Unsupported(why):
+        \\            unsupported(why):
         \\                print(str(strings.starts_with(why, "https is not supported yet")))
         \\            else:
         \\                print("the wrong member")
         \\    fetch("ftp://example.test/") catch reason:
         \\        match reason:
-        \\            BadUrl(why, address):
+        \\            bad_url(why, address):
         \\                print(why + " | " + address)
         \\            else:
         \\                print("the wrong member")
@@ -217,7 +217,7 @@ test "a reply that is not HTTP is an error naming what came" {
         \\func main():
         \\    fetch() catch reason:
         \\        match reason:
-        \\            Protocol(why):
+        \\            protocol(why):
         \\                print(why)
         \\            else:
         \\                print("the wrong member")

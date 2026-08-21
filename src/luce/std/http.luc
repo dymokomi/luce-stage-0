@@ -28,29 +28,29 @@ import std.strings
 
 # What the request path fails with (docs/ERRORS.md R2).  Four members
 # for the four different kinds of refusal a fetch can meet:
-# `Unsupported` is a capability this module honestly lacks (https),
-# `BadUrl` is an address this module cannot read — with the address
-# in its own payload — `Protocol` is a reply that is not HTTP, and
-# `Io` is the transport refusing.  `std.network` and `std.io` fail
+# `unsupported` is a capability this module honestly lacks (https),
+# `bad_url` is an address this module cannot read — with the address
+# in its own payload — `protocol` is a reply that is not HTTP, and
+# `io` is the transport refusing.  `std.network` and `std.io` fail
 # with the host's own `str` sentence, so the exchange catches it and
-# re-raises `HttpError.Io`, the visible conversion.
+# re-raises `HttpError.io`, the visible conversion.
 union HttpError:
-    Unsupported(reason: str)
-    BadUrl(reason: str, url: str)
-    Protocol(reason: str)
-    Io(reason: str)
+    unsupported(reason: str)
+    bad_url(reason: str, url: str)
+    protocol(reason: str)
+    io(reason: str)
 
 # The refusal as one sentence, for the caller that prints rather than
 # reads the members apart.
 func describe(failed: HttpError) -> str:
     match failed:
-        Unsupported(reason):
+        unsupported(reason):
             return reason
-        BadUrl(reason, url):
+        bad_url(reason, url):
             return reason + ": " + url
-        Protocol(reason):
+        protocol(reason):
             return reason
-        Io(reason):
+        io(reason):
             return reason
 
 # One answer from a server.  `headers` holds each name lowercased with
@@ -82,7 +82,7 @@ struct Response:
     func json() -> json.Json ! json.Malformed:
         let spoken = parse_str(self.body)
         if spoken == none:
-            error(json.Malformed.Syntax(reason = "the body is not text", at = 0))
+            error(json.Malformed.syntax(reason = "the body is not text", at = 0))
         return try json.parse(spoken)
 
 func get(url: str) -> Response ! HttpError:
@@ -137,7 +137,7 @@ private func line_end() -> str:
 private func exchange(method: str, url: str, body: list[u8], content_type: str, extra: map[str, str]) -> Response ! HttpError:
     let place = try split_url(url)
     let conn = network.Connection.dial(place.host, place.port) catch reason:
-        error(HttpError.Io(reason = reason))
+        error(HttpError.io(reason = reason))
 
     let crlf = line_end()
     var head = method + " " + place.path + " HTTP/1.1" + crlf
@@ -154,10 +154,10 @@ private func exchange(method: str, url: str, body: list[u8], content_type: str, 
     for b in body:
         request.append(b)
     io.send(conn, request) catch reason:
-        error(HttpError.Io(reason = reason))
+        error(HttpError.io(reason = reason))
 
     let raw = io.drain(conn) catch reason:
-        error(HttpError.Io(reason = reason))
+        error(HttpError.io(reason = reason))
     return try parse_response(raw)
 
 # Where a URL points: the machine, the door, and the path asked for.
@@ -170,12 +170,12 @@ private struct Place:
 # whatever query it carries; a missing path is `/`.
 private func split_url(url: str) -> Place ! HttpError:
     if strings.starts_with(url, "https://"):
-        error(HttpError.Unsupported(reason = "https is not supported yet: TLS is a planned addition, and pretending would be worse"))
+        error(HttpError.unsupported(reason = "https is not supported yet: TLS is a planned addition, and pretending would be worse"))
     if not strings.starts_with(url, "http://"):
-        error(HttpError.BadUrl(reason = "not an http url", url = url))
+        error(HttpError.bad_url(reason = "not an http url", url = url))
     let rest = url[7:]
     if len(rest) == 0:
-        error(HttpError.BadUrl(reason = "no host", url = url))
+        error(HttpError.bad_url(reason = "no host", url = url))
     var host_end = len(rest)
     let cut = strings.find(rest, "/")
     if cut != none:
@@ -191,10 +191,10 @@ private func split_url(url: str) -> Place ! HttpError:
         host = authority[0:colon]
         let spoken = parse_i64(authority[colon + 1:])
         if spoken == none:
-            error(HttpError.BadUrl(reason = "not a port number", url = url))
+            error(HttpError.bad_url(reason = "not a port number", url = url))
         port = spoken
     if len(host) == 0:
-        error(HttpError.BadUrl(reason = "no host", url = url))
+        error(HttpError.bad_url(reason = "no host", url = url))
     return Place(host = host, port = port, path = path)
 
 # -- reading what came back -------------------------------------------
@@ -202,7 +202,7 @@ private func split_url(url: str) -> Place ! HttpError:
 private func parse_response(raw: list[u8]) -> Response ! HttpError:
     let split_at = find_head_end(raw)
     if split_at == none:
-        error(HttpError.Protocol(reason = "the reply never finished its headers"))
+        error(HttpError.protocol(reason = "the reply never finished its headers"))
     var head_bytes = list[u8]()
     var at: i64 = 0
     while at < split_at:
@@ -210,7 +210,7 @@ private func parse_response(raw: list[u8]) -> Response ! HttpError:
         at += 1
     let head = strings.from_bytes(head_bytes)
     if head == none:
-        error(HttpError.Protocol(reason = "the reply's headers are not text"))
+        error(HttpError.protocol(reason = "the reply's headers are not text"))
 
     let lines = strings.split(head, line_end())
     let status = try read_status(lines[0])
@@ -252,12 +252,12 @@ private func find_head_end(raw: list[u8]) -> i64?:
 private func read_status(line: str) -> i64 ! HttpError:
     let parts = strings.split(line, " ")
     if len(parts) < 2 or not strings.starts_with(parts[0], "HTTP/"):
-        error(HttpError.Protocol(reason = "not an HTTP reply: " + line))
+        error(HttpError.protocol(reason = "not an HTTP reply: " + line))
     let code = parse_i64(parts[1])
     if code == none:
-        error(HttpError.Protocol(reason = "not an HTTP status: " + line))
+        error(HttpError.protocol(reason = "not an HTTP status: " + line))
     if code < 100 or code > 599:
-        error(HttpError.Protocol(reason = "not an HTTP status: " + line))
+        error(HttpError.protocol(reason = "not an HTTP status: " + line))
     return code
 
 # Remove chunked framing: `SIZE-in-hex CRLF data CRLF` repeated, a
@@ -279,26 +279,26 @@ private func unchunk(framed: list[u8]) -> list[u8] ! HttpError:
                     while at < len(framed) and framed[at] != 13:
                         at += 1
                     break
-                error(HttpError.Protocol(reason = "not a chunk size"))
+                error(HttpError.protocol(reason = "not a chunk size"))
             size = size * 16 + worth
             digits += 1
             at += 1
         if digits == 0:
-            error(HttpError.Protocol(reason = "not a chunk size"))
+            error(HttpError.protocol(reason = "not a chunk size"))
         if at + 1 >= len(framed) or framed[at] != 13 or framed[at + 1] != 10:
-            error(HttpError.Protocol(reason = "a chunk size line never ended"))
+            error(HttpError.protocol(reason = "a chunk size line never ended"))
         at += 2
         if size == 0:
             return out
         if at + size > len(framed):
-            error(HttpError.Protocol(reason = "a chunk ended before its data did"))
+            error(HttpError.protocol(reason = "a chunk ended before its data did"))
         var taken: i64 = 0
         while taken < size:
             out.append(framed[at + taken])
             taken += 1
         at += size
         if at + 1 >= len(framed) or framed[at] != 13 or framed[at + 1] != 10:
-            error(HttpError.Protocol(reason = "a chunk's data never ended"))
+            error(HttpError.protocol(reason = "a chunk's data never ended"))
         at += 2
 
 # What a hex digit is worth, or none for a byte that is not one.

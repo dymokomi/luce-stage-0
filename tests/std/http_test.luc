@@ -67,20 +67,20 @@ func try_client(api: http.Client) -> http.Response? ! http.HttpError:
     return try api.get("/status")
 
 func test_refusals_carry_their_reasons():
-    # The refusal is an `HttpError` member: https is `Unsupported`, an
-    # unreadable address is `BadUrl` with the address in its own
+    # The refusal is an `HttpError` member: https is `unsupported`, an
+    # unreadable address is `bad_url` with the address in its own
     # payload, and `describe` renders the one-line sentence.
     var said = ""
     fetch_https() catch reason:
         match reason:
-            Unsupported(why):
+            unsupported(why):
                 said = why
             else:
                 said = "the wrong member"
     assert(strings.starts_with(said, "https is not supported yet"))
     fetch_elsewhere() catch reason:
         match reason:
-            BadUrl(why, address):
+            bad_url(why, address):
                 assert(why == "not an http url")
                 assert(address == "gopher://old.test/")
             else:
