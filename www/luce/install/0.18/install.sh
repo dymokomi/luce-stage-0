@@ -15,7 +15,7 @@ install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
 editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
 profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
-extension_version=0.5.1
+extension_version=0.6.0
 termui_version=0.5.0
 
 system=$(uname -s)
@@ -303,7 +303,7 @@ if ! printf '%s\n' "$source_commit" | awk \
     echo "luce: release archive has an invalid source identity" >&2
     exit 1
 fi
-for tool in luce loom; do
+for tool in luce-0 loom; do
     if ! build_info=$("$release/bin/$tool" --build-info 2>/dev/null) ||
         ! printf '%s\n' "$build_info" | grep -Fxq "$tool $version" ||
         ! printf '%s\n' "$build_info" | grep -Fxq "source $source_commit"; then
@@ -311,7 +311,7 @@ for tool in luce loom; do
         exit 1
     fi
 done
-for tool in luce loom editor; do
+for tool in luce-0 loom editor; do
     if [ ! -x "$release/bin/$tool" ]; then
         echo "luce: release archive is missing bin/$tool" >&2
         exit 1
@@ -322,13 +322,13 @@ done
 # simply work without inline diagnostics until the next release.
 case "$platform" in
     macos-*)
-        if [ ! -x "$release/bin/luce-lsp" ]; then
-            echo "luce: release archive is missing bin/luce-lsp" >&2
+        if [ ! -x "$release/bin/luce-lsp-0" ]; then
+            echo "luce: release archive is missing bin/luce-lsp-0" >&2
             exit 1
         fi
         ;;
     *)
-        if [ ! -x "$release/bin/luce-lsp" ]; then
+        if [ ! -x "$release/bin/luce-lsp-0" ]; then
             echo "note: this platform's archive has no language server yet"
         fi
         ;;

@@ -21,8 +21,11 @@ ARM64, install the current release with one command:
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
 ```
 
-The release ships `luce`, `loom`, `editor`, and their runtime libraries under
-`~/.local/luce`. It also installs the Luce syntax extension into the local
+The release installs the stage-0 toolchain as `luce-0`, beside `loom`,
+`editor`, the language server `luce-lsp-0`, and their runtime libraries
+under `~/.local/luce` — the unsuffixed `luce` and `luce-lsp` names stay
+free for the next language, which is built with this one. It also
+installs the Luce syntax extension into the local
 VS Code, VS Code Insiders, or Cursor extension shelf, adds
 `~/.local/luce/bin` to your shell's startup profile, and verifies the
 downloaded archive before replacing an existing installation. Run it again

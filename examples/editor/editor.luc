@@ -43,6 +43,10 @@ func main(args: list[str]):
     # server plugs in the same way.  A world without the server leaves
     # the editor exactly as it was.
     if strings.ends_with(shared.document().path, ".luc"):
-        shared.attach_lsp("luce-lsp")
+        # The installed stage-0 server is `luce-lsp-0`; a development
+        # tree still builds `luce-lsp`.  `attach_lsp` takes the command
+        # as data, so the editor prefers the installed name and the
+        # client's spawn failure path covers a tree with neither.
+        shared.attach_lsp("luce-lsp-0")
         app.set_tick(100)
     app.start()

@@ -86,19 +86,24 @@ function findServer(setting) {
   if (setting && setting !== "luce-lsp") return setting;
   const path = require("path");
   const fs = require("fs");
-  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-    if (!dir) continue;
-    try {
-      fs.accessSync(path.join(dir, "luce-lsp"), fs.constants.X_OK);
-      return "luce-lsp";
-    } catch {}
+  // The installed stage-0 server is `luce-lsp-0`; a development tree
+  // still builds `luce-lsp`. Prefer the installed name so the real
+  // `luce-lsp` stays free for the next language.
+  for (const name of ["luce-lsp-0", "luce-lsp"]) {
+    for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+      if (!dir) continue;
+      try {
+        fs.accessSync(path.join(dir, name), fs.constants.X_OK);
+        return name;
+      } catch {}
+    }
   }
-  const installed = path.join(require("os").homedir(), ".local", "luce", "bin", "luce-lsp");
+  const installed = path.join(require("os").homedir(), ".local", "luce", "bin", "luce-lsp-0");
   try {
     fs.accessSync(installed, fs.constants.X_OK);
     return installed;
   } catch {}
-  return "luce-lsp";
+  return "luce-lsp-0";
 }
 
 /** Start the server and wire one document's diagnostics.  Everything

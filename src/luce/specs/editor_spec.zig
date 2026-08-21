@@ -388,7 +388,7 @@ test "the editor holds its language server and shows what it said" {
     defer session.deinit();
 
     const transcript = session.printed();
-    try testing.expect(std.mem.indexOf(u8, transcript, "[spawn]luce-lsp") != null);
+    try testing.expect(std.mem.indexOf(u8, transcript, "[spawn]luce-lsp-0") != null);
     try testing.expect(std.mem.indexOf(u8, transcript, "textDocument/didOpen") != null);
     // The diagnostic's sentence reached the frame the person saw.
     const shown = try screenText(transcript);

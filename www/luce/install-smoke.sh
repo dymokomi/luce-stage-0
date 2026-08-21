@@ -52,11 +52,11 @@ printf '%s\n' stale >"$smoke_install/stale-from-first-install"
 run_installer
 test ! -e "$smoke_install/stale-from-first-install"
 
-test "$("$smoke_install/bin/luce" --version)" = "luce $release_version"
+test "$("$smoke_install/bin/luce-0" --version)" = "luce $release_version"
 test "$("$smoke_install/bin/loom" --version)" = "loom $release_version"
 source_commit=$(awk '$1 == "source" { print $2; exit }' "$smoke_install/share/luce/BUILD-MANIFEST")
 test -n "$source_commit"
-"$smoke_install/bin/luce" --build-info | grep -Fxq "source $source_commit"
+"$smoke_install/bin/luce-0" --build-info | grep -Fxq "source $source_commit"
 "$smoke_install/bin/loom" --build-info | grep -Fxq "source $source_commit"
 test -x "$smoke_install/bin/editor"
 test -f "$smoke_install/lib/termui-$termui_version/termui.luc"
@@ -65,16 +65,16 @@ test "$(grep -Fc "$smoke_install/bin" "$smoke_profile")" -eq 1
 test "$(grep -Fc "$smoke_install/lib" "$smoke_profile")" -eq 1
 
 printf '%s\n' 'func main():' '    print("installer works")' >"$smoke_program"
-(cd "$smoke" && "$smoke_install/bin/luce" build hello.luc)
+(cd "$smoke" && "$smoke_install/bin/luce-0" build hello.luc)
 test "$("$smoke/hello")" = "installer works"
 
-(cd "$smoke" && "$smoke_install/bin/luce" build hello.luc --emit=library -o hello.lc)
+(cd "$smoke" && "$smoke_install/bin/luce-0" build hello.luc --emit=library -o hello.lc)
 test "$("$smoke_install/bin/loom" run "$smoke/hello.lc")" = "installer works"
 
 printf '%s\n' \
     'func test_installed_toolchain():' \
     '    assert(6 * 7 == 42)' >"$smoke/toolchain_test.luc"
-(cd "$smoke" && "$smoke_install/bin/luce" test toolchain_test.luc >test-output.txt)
+(cd "$smoke" && "$smoke_install/bin/luce-0" test toolchain_test.luc >test-output.txt)
 grep -Fq '1 passed, 0 failed' "$smoke/test-output.txt"
 
 printf '%s\n' 'name: smoke' 'version: 0.1.0' 'packages:' "  termui: $termui_version" >"$smoke/luce.yaml"
@@ -84,15 +84,15 @@ printf '%s\n' \
     'func main():' \
     '    let frame = termui.snapshot(Panel("ok", Label("ready")), 3, 10)' \
     '    print(frame.line(1))' >"$smoke/package_app.luc"
-(cd "$smoke" && . "$smoke_profile" && "$smoke_install/bin/luce" build package_app.luc)
+(cd "$smoke" && . "$smoke_profile" && "$smoke_install/bin/luce-0" build package_app.luc)
 test "$("$smoke/package_app")" = "│ready   │"
 
 # The language server answers a framed initialize over stdio — the
 # conversation the editors will hold — when the archive carries one.
-if [ -x "$smoke_install/bin/luce-lsp" ]; then
+if [ -x "$smoke_install/bin/luce-lsp-0" ]; then
     lsp_request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
     lsp_answer=$(printf 'Content-Length: %s\r\n\r\n%s' "${#lsp_request}" "$lsp_request" | \
-        "$smoke_install/bin/luce-lsp")
+        "$smoke_install/bin/luce-lsp-0")
     case "$lsp_answer" in
         *'"textDocumentSync":1'*) : ;;
         *)
@@ -103,7 +103,7 @@ if [ -x "$smoke_install/bin/luce-lsp" ]; then
 fi
 
 if [ "$(uname -s)" = Linux ]; then
-    for tool in luce loom editor luce-lsp; do
+    for tool in luce-0 loom editor luce-lsp-0; do
         dependencies=$(ldd "$smoke_install/bin/$tool")
         if printf '%s\n' "$dependencies" | grep -E 'libLLVM|libstdc\+\+|libz3|libxml2|libzstd|libedit|not found' >/dev/null; then
             echo "installer smoke: installed $tool has an unpublished Linux dependency" >&2

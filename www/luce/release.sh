@@ -124,12 +124,20 @@ assemble_archive() {
 
     mkdir -p "$release_tree/bin" "$release_tree/lib" "$extension_tree/syntaxes" \
         "$release_tree/share/licenses/luce" "$release_tree/share/luce"
+    # Stage 0 installs under suffixed names — the unsuffixed `luce`
+    # and `luce-lsp` belong to the next language, which will need to
+    # test its own install beside this one.
     for tool in luce loom editor luce-lsp; do
         if [ ! -x "$prefix/$tool" ]; then
             echo "luce release: $platform prefix is missing $tool" >&2
             exit 1
         fi
-        cp "$prefix/$tool" "$release_tree/bin/$tool"
+        case "$tool" in
+            luce) shipped=luce-0 ;;
+            luce-lsp) shipped=luce-lsp-0 ;;
+            *) shipped=$tool ;;
+        esac
+        cp "$prefix/$tool" "$release_tree/bin/$shipped"
     done
     for library in libluce_rt.a libluce_start.a; do
         if [ ! -f "$prefix/lib/$library" ]; then
