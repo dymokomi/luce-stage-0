@@ -2626,6 +2626,22 @@ pub const Parser = struct {
     fn inlineBlock(self: *Parser) Error!?ast.Block {
         const start = self.peek().span.start;
         const parsed = (try self.statement()) orelse return null;
+        // One *simple* statement only.  A compound statement inline —
+        // `if a: if b: run()` — nests two headers on one line, which is
+        // the unreadable form the indented body exists to prevent; it
+        // gets its own line (docs/STATEMENTS.md).
+        switch (parsed) {
+            .conditional, .while_loop, .for_range, .for_each, .match => {
+                try self.report(
+                    "luce.parse.expected",
+                    .{ .start = start, .end = self.peek().span.start },
+                    "an inline ':' body is one simple statement; put this block on its own indented lines",
+                    .{},
+                );
+                return null;
+            },
+            else => {},
+        }
         const statements = try self.arena.alloc(ast.Statement, 1);
         statements[0] = parsed;
         return .{ .statements = statements, .span = .{ .start = start, .end = self.peek().span.start } };
@@ -3095,20 +3111,24 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
-            if (self.peekKind() == .keyword_else) {
+            // The catch-all arm is `else` or the wildcard `_` — the same
+            // arm for everything the others did not name (docs/UNION.md).
+            const is_underscore = self.peekKind() == .identifier and
+                std.mem.eql(u8, self.text(self.peek()), "_");
+            if (self.peekKind() == .keyword_else or is_underscore) {
                 const keyword = self.advance();
                 if (else_span != null) {
                     try self.report(
                         "luce.parse.expected",
                         keyword.span,
-                        "one else per match: it is the arm for everything the others did not name",
+                        "one catch-all per match: else or _ is the arm for everything the others did not name",
                         .{},
                     );
                     self.recover();
                     continue;
                 }
                 else_span = keyword.span;
-                else_block = (try self.block("else")) orelse {
+                else_block = (try self.block(if (is_underscore) "_" else "else")) orelse {
                     self.recover();
                     continue;
                 };

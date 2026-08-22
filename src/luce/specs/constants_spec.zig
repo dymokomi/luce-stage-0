@@ -258,9 +258,9 @@ test "constants: a lambda may read a constant container" {
         \\    return read()
         \\
         \\func main():
-        \\    let last: func() -> i64 = () -> TABLE[1]
+        \\    let last: func() -> i64 = () => TABLE[1]
         \\    assert(last() == 8)
-        \\    assert(apply(() -> TABLE[0]) == 4)
+        \\    assert(apply(() => TABLE[0]) == 4)
         \\
     );
 }

@@ -312,7 +312,7 @@
         },
         {
           "name": "keyword.operator.function-return.luce",
-          "match": "->"
+          "match": "->|=>"
         },
         {
           "name": "keyword.operator.comparison.luce",

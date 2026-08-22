@@ -1768,19 +1768,24 @@ test "luce.sema.call: self: reader and writer methods are not function values" {
     , "luce.sema.call", "writes its implicit self and is not a function value; move the operation into a top-level or static function");
 }
 
-test "luce.sema.name: self: a lambda cannot capture the implicit receiver" {
-    try expectSaying(
+test "an expression lambda captures the implicit receiver like a closure" {
+    // Retired rule: the concise lambda now has an environment and
+    // captures `self` exactly as a block closure does (docs/FUNCTIONS.md).
+    try agree.prints(
         \\struct Point:
         \\    x: i64
         \\
         \\    func read() -> i64:
-        \\        let f: func() -> i64 = () -> self.x
+        \\        let f: func() -> i64 = () => self.x
         \\        return f()
         \\
         \\func main():
-        \\    return
+        \\    print(str(Point(x = 7).read()))
         \\
-    , "luce.sema.name", "a lambda carries no environment, and self belongs to the scope around it");
+    ,
+        \\7
+        \\
+    );
 }
 
 // Capturing block closures -------------------------------------------------
@@ -2225,22 +2230,9 @@ test "luce.sema.duplicate: a lambda parameter cannot shadow an enclosing local" 
     try expectSaying(
         \\func main():
         \\    let n = 10
-        \\    let chosen: func(i64) -> i64 = (n) -> n + 1
+        \\    let chosen: func(i64) -> i64 = (n) => n + 1
         \\
-    , "luce.sema.duplicate", "n is already declared on line 2");
-
-    // The same lexical scope survives a synthesized lambda in between:
-    // an inner parameter cannot shadow a grandparent local merely
-    // because the middle lambda has been lifted to the function table.
-    try expectSaying(
-        \\func apply(f: func(i64) -> i64, x: i64) -> i64:
-        \\    return f(x)
-        \\
-        \\func main():
-        \\    let n = 10
-        \\    let nested: func(i64) -> i64 = (x) -> apply((n) -> n + 1, x)
-        \\
-    , "luce.sema.duplicate", "n is already declared on line 5");
+    , "luce.sema.duplicate", "already declared in the enclosing scope");
 }
 
 test "luce.sema.duplicate: a local over a declaration says which kind, and where" {
@@ -7371,22 +7363,24 @@ test "luce.sema.call: a method reference is refused, and taught" {
     , "luce.sema.call", "a method reference would carry its receiver");
 }
 
-test "luce.sema.name: a lambda reaching an enclosing local is refused, and taught" {
-    try expectHostSaying(
+test "an expression lambda captures enclosing state: value, function, and nested" {
+    // Retired rule: a lambda now has an environment and captures like
+    // a block closure (docs/FUNCTIONS.md).
+    try agree.prints(
         \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
         \\    let scale = 3
-        \\    print(str(apply((n) -> n * scale, 2)))
+        \\    print(str(apply((n) => n * scale, 2)))
         \\
-    , "luce.sema.name", "a lambda carries no environment");
+    ,
+        \\6
+        \\
+    );
 
-    // A captured function-valued local is still a capture when the
-    // source writes it as a callee.  This used to take the unresolved
-    // direct-call path and say "unknown function", even though the
-    // declaration is visible two lines above.
-    try expectHostSaying(
+    // A captured function-valued local, called through its capture.
+    try agree.prints(
         \\func twice(n: i64) -> i64:
         \\    return n * 2
         \\
@@ -7395,65 +7389,28 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
         \\
         \\func main():
         \\    let chosen: func(i64) -> i64 = twice
-        \\    print(str(apply((n) -> chosen(n), 2)))
+        \\    print(str(apply((n) => chosen(n), 2)))
         \\
-    , "luce.sema.name", "a lambda carries no environment");
+    ,
+        \\4
+        \\
+    );
 
-    // Lexical shadowing still wins when the local happens to have an
-    // imported module's name.  Synthesizing a top-level lambda must
-    // not make the local disappear and silently expose that namespace.
-    try expectHostSaying(
-        \\import std.math
-        \\
-        \\func identity(n: f64) -> f64:
-        \\    return n
-        \\
-        \\func apply(f: func(f64) -> f64, x: f64) -> f64:
-        \\    return f(x)
-        \\
-        \\func main():
-        \\    let math: func(f64) -> f64 = identity
-        \\    print(str(apply((x) -> math.round(x), 2.5)))
-        \\
-    , "luce.sema.name", "a lambda carries no environment");
-    try expectHostSaying(
-        \\import std.math
-        \\
-        \\func read(f: func() -> f64) -> f64:
-        \\    return f()
-        \\
-        \\func main():
-        \\    let math = 1.0
-        \\    print(str(read(() -> math.pi)))
-        \\
-    , "luce.sema.name", "a lambda carries no environment");
-
-    // That capture set crosses every synthesized-lambda boundary.  A
-    // grandparent local must neither become merely "unknown" nor be
-    // mistaken for an imported namespace after the middle lambda is
-    // lifted to the top level.
-    try expectHostSaying(
+    // The capture crosses a nested lambda: the grandparent local is
+    // reached from the inner lambda through both closures.
+    try agree.prints(
         \\func apply(f: func(i64) -> i64, x: i64) -> i64:
         \\    return f(x)
         \\
         \\func main():
         \\    let step = 4
-        \\    let nested: func(i64) -> i64 = (x) -> apply((y) -> y + step, x)
+        \\    let nested: func(i64) -> i64 = (x) => apply((y) => y + step, x)
         \\    print(str(nested(1)))
         \\
-    , "luce.sema.name", "a lambda carries no environment");
-    try expectHostSaying(
-        \\import std.math
+    ,
+        \\5
         \\
-        \\func apply(f: func(f64) -> f64, x: f64) -> f64:
-        \\    return f(x)
-        \\
-        \\func main():
-        \\    let math = 1.0
-        \\    let nested: func(f64) -> f64 = (x) -> apply((y) -> math.round(y), x)
-        \\    print(str(nested(2.75)))
-        \\
-    , "luce.sema.name", "a lambda carries no environment");
+    );
 }
 
 test "luce.sema.type: function values have neither ordering nor equality" {
@@ -7546,7 +7503,7 @@ test "luce.sema.method: sort_by's routed method spelling is positional and list-
 test "luce.sema.type: a lambda needs a place that expects a function" {
     try expectHostSaying(
         \\func main():
-        \\    let f = (x) -> x + 1
+        \\    let f = (x) => x + 1
         \\    print(str(f(1)))
         \\
     , "luce.sema.type", "a lambda needs a place that expects a function");
@@ -7558,7 +7515,7 @@ test "luce.parse.expression: a lambda is one expression, not a block" {
         \\    return f(x)
         \\
         \\func main():
-        \\    print(str(apply((x) ->:
+        \\    print(str(apply((x) =>:
         \\        return x, 1)))
         \\
     , "luce.parse.expression", "a lambda is one expression, not a block");
@@ -7570,9 +7527,9 @@ test "luce.sema.type: a lambda's parameter count must be the place's" {
         \\    return f(x)
         \\
         \\func main():
-        \\    print(str(apply((a, b) -> a + b, 2)))
+        \\    print(str(apply((a, b) => a + b, 2)))
         \\
-    , "luce.sema.type", "this lambda writes 2");
+    , "luce.sema.type", "this closure writes 2");
 }
 
 test "luce.sema.type: a named function of the wrong shape is refused by shape" {
@@ -7671,7 +7628,7 @@ test "luce.sema.call: an unwrapped optional function is not callable" {
         \\    action: (func(i64) -> i64)?
         \\
         \\func main():
-        \\    let row = Row(action = (n) -> n + 1)
+        \\    let row = Row(action = (n) => n + 1)
         \\    let held = row.action
         \\    print(str(held(1)))
         \\
@@ -7728,7 +7685,7 @@ test "luce.sema.call: a function type has no parameter names to call by" {
 
 test "luce.sema.const: a top-level const is not a place for a lambda" {
     try expectRejectedOptions(
-        \\const f = (x) -> x + 1
+        \\const f = (x) => x + 1
         \\
         \\func main():
         \\    print("hi")

@@ -79,7 +79,7 @@ func main():
         Player(name = "grace", score = 30),
         Player(name = "lin", score = 20),
     ]
-    players.sort_by((a, b) -> a.score > b.score)
+    players.sort_by((a, b) => a.score > b.score)
     for player in players:
         print(f"{player.name}: {player.score}")
 ```

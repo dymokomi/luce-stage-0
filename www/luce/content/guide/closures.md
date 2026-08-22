@@ -19,7 +19,7 @@ func apply(operation: func(i64) -> i64, value: i64) -> i64:
 func main():
     let doubled: func(i64) -> i64 = (value) -> value * 2
     print(str(apply(doubled, 21)))
-    print(str(apply((value) -> value + 1, 41)))
+    print(str(apply((value) => value + 1, 41)))
 ```
 
 ```output
@@ -153,7 +153,7 @@ func main():
         let item = Item(value = 7)
         reader = make_reader(item)
         print(str(reader()))
-    let read = reader else () -> -1
+    let read = reader else () => -1
     print(str(read()))
 ```
 
@@ -188,10 +188,10 @@ func main():
     if true:
         let node = Node(value = 42, callback = none)
         node.install()
-        let installed = node.callback else () -> -1
+        let installed = node.callback else () => -1
         callback = installed
         print(str(installed()))
-    let read = callback else () -> -1
+    let read = callback else () => -1
     print(str(read()))
 ```
 

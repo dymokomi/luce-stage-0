@@ -319,6 +319,7 @@ const Symbol = struct { kind: luce.lex.Kind, text: []const u8, role: Role };
 /// in the language moves here or the suite says which row lied.
 const symbols = [_]Symbol{
     .{ .kind = .arrow, .text = "->", .role = .function_return },
+    .{ .kind = .fat_arrow, .text = "=>", .role = .function_return },
 
     .{ .kind = .equal, .text = "==", .role = .comparison },
     .{ .kind = .not_equal, .text = "!=", .role = .comparison },

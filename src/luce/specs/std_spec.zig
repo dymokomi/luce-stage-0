@@ -373,7 +373,7 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\    assert(players[2].score == 20)
         \\    assert(players[2].order == 2)
         \\    assert(players[3].score == 30)
-        \\    players.sort_by((a, b) -> a.score > b.score)
+        \\    players.sort_by((a, b) => a.score > b.score)
         \\    assert(players[0].score == 30)
         \\    assert(players[1].score == 20)
         \\    assert(players[1].order == 0)
@@ -381,7 +381,7 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\    assert(players[2].order == 2)
         \\    assert(players[3].score == 10)
         \\    var numbers: list[i64] = [3, 1, 2]
-        \\    numbers.sort_by((a, b) -> a < b)
+        \\    numbers.sort_by((a, b) => a < b)
         \\    assert(numbers[0] == 1)
         \\    assert(numbers[1] == 2)
         \\    assert(numbers[2] == 3)

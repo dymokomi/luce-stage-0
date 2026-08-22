@@ -823,11 +823,12 @@ fn namedCallExpression(self: *Parser, callee: []const u8, start: usize) Error!?*
     } });
 }
 
-/// Whether the `(` under the cursor closes on a `->`, which is what
-/// makes it a lambda's parameter list rather than a grouping.  Nesting
-/// is counted so `((a))` and `(f(x))` answer honestly; a run that ends
-/// at end of input answers no and lets the ordinary parse report the
-/// unclosed paren.
+/// Whether the `(` under the cursor closes on a `=>` — the expression
+/// lambda's arrow (docs/FUNCTIONS.md) — or the retired `->`, which is
+/// recognised here only so `lambda` can reject it with a focused
+/// diagnostic.  Nesting is counted so `((a))` and `(f(x))` answer
+/// honestly; a run that ends at end of input answers no and lets the
+/// ordinary parse report the unclosed paren.
 fn arrowFollowsGroup(self: *Parser) bool {
     var depth: usize = 0;
     var ahead: usize = 0;
@@ -836,7 +837,10 @@ fn arrowFollowsGroup(self: *Parser) bool {
             .left_paren => depth += 1,
             .right_paren => {
                 depth -= 1;
-                if (depth == 0) return self.peekAhead(ahead + 1) == .arrow;
+                if (depth == 0) {
+                    const after = self.peekAhead(ahead + 1);
+                    return after == .fat_arrow or after == .arrow;
+                }
             },
             .end_of_file => return false,
             else => {},
@@ -859,7 +863,19 @@ fn lambda(self: *Parser) Error!?*ast.Expression {
         if (self.accept(.comma) == null) break;
     }
     if ((try self.expectClose(.right_paren, opener)) == null) return null;
-    _ = self.advance(); // ->
+    // `=>` yields the body's value; `->` declares a type and is retired
+    // from lambdas (docs/FUNCTIONS.md).  Reject the old spelling where
+    // the reader wrote it, with the one-token fix.
+    if (self.peekKind() == .arrow) {
+        try self.report(
+            "luce.parse.expression",
+            self.peek().span,
+            "an expression lambda yields its body with '=>'; '->' declares a result type [FUNCTIONS.md]",
+            .{},
+        );
+        return null;
+    }
+    _ = (try self.expect(.fat_arrow, "'=>' after the lambda's parameters")) orelse return null;
     // A block after the arrow is the one shape this grammar cannot
     // take: an indentation language cannot put statements inside a
     // call's parentheses, which is why Python's lambda is one

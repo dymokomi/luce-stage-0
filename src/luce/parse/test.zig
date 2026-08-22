@@ -2830,7 +2830,7 @@ test "else is the last arm of a match, and there is one of it" {
         .code = "luce.parse.expected",
         .line = 5,
         .column = 9,
-        .contains = "one else per match",
+        .contains = "one catch-all per match",
     }});
 }
 

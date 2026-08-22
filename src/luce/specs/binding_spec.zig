@@ -530,7 +530,7 @@ test "a plain function, a lambda and a bind fill one function-typed place" {
         \\func main():
         \\    let doubling = Scale(factor = 2)
         \\    print(str(apply(5, twice)))
-        \\    print(str(apply(5, (n) -> n * 2)))
+        \\    print(str(apply(5, (n) => n * 2)))
         \\    print(str(apply(5, doubling.times)))
         \\
     , "10\n10\n10\n");
@@ -705,7 +705,7 @@ test "a lambda stored in a slot is a function value like any other" {
         \\    action: (func(i64) -> i64)?
         \\
         \\func main():
-        \\    let row = Row(action = (n) -> n + 1)
+        \\    let row = Row(action = (n) => n + 1)
         \\    let action = row.action
         \\    if action != none:
         \\        print(str(action(41)))
@@ -786,7 +786,7 @@ test "a function value lands on the field of an element, in a list, an array and
         \\    names.items.append("one")
         \\    var rows = list[Cell]()
         \\    rows.append(Cell())
-        \\    rows[0].render = (n) -> "lambda " + str(n)
+        \\    rows[0].render = (n) => "lambda " + str(n)
         \\    var grid = array[Cell](2, 2)
         \\    grid[1, 1].render = names.at
         \\    var by_name = map[str, Cell]()
@@ -958,7 +958,7 @@ test "a builtin method's parameter is a landing place, whatever the receiver nam
         \\func main():
         \\    var steps = list[(func(i64) -> str)?]()
         \\    steps.append(plain)
-        \\    steps.insert(0, (n) -> "lambda " + str(n))
+        \\    steps.insert(0, (n) => "lambda " + str(n))
         \\    steps.append(none)
         \\    for step in steps:
         \\        if step != none:

@@ -1947,6 +1947,7 @@ pub const FunctionBuilder = struct {
         written: ast.Lambda,
         wanted_function: ?u32,
     ) Error!?Typed {
+        _ = expression;
         const index = wanted_function orelse {
             try self.fail(
                 "luce.sema.type",
@@ -1957,48 +1958,13 @@ pub const FunctionBuilder = struct {
             return null;
         };
         const signature = self.analyzer.signatures.items[index];
-        if (written.parameters.len != signature.parameters.len) {
-            try self.fail(
-                "luce.sema.type",
-                written.span,
-                "this place is {s} and takes {d} parameter{s}; this lambda writes {d}",
-                .{
-                    try self.analyzer.typeName(.{ .function = index }),
-                    signature.parameters.len,
-                    if (signature.parameters.len == 1) "" else "s",
-                    written.parameters.len,
-                },
-            );
-            return null;
-        }
-        const enclosing = try self.visibleLocals();
-        for (written.parameters) |parameter| {
-            for (enclosing) |held| {
-                if (!std.mem.eql(u8, parameter.text, held.name)) continue;
-                try self.fail("luce.sema.duplicate", parameter.span, "{s} is already declared{s}", .{
-                    parameter.text,
-                    try naming.declaredAt(
-                        self.analyzer,
-                        self.analyzer.modules[self.module].file,
-                        held.declared_at,
-                    ),
-                });
-                return null;
-            }
-        }
-        // The synthesized declaration.  Its parameters carry names and
-        // no written types — the signature is where the types are, and
-        // `registerLambda` hands them over resolved — and its body is
-        // the one expression, as the statement that leaves with it.
-        const parameters = try self.arena().alloc(ast.Parameter, written.parameters.len);
-        for (written.parameters, parameters) |name, *slot| {
-            slot.* = .{
-                .name = name.text,
-                .name_span = name.span,
-                .type_name = .{ .name = "func", .span = name.span },
-                .span = name.span,
-            };
-        }
+        // `(params) => expr` is `func(params): return expr` — the
+        // expression lambda desugars to a block closure so it gains an
+        // ordinary lexical environment and captures like one
+        // (docs/ERRORS.md predates this; docs/FUNCTIONS.md).  The body
+        // yields the value, or evaluates it when the place answers
+        // nothing.  Everything else — capture, arity, both engines —
+        // is `lowerClosure`'s, unchanged.
         const body_statements = try self.arena().alloc(ast.Statement, 1);
         if (signature.result == .none) {
             body_statements[0] = .{ .expression = .{ .value = written.body, .span = written.body.span() } };
@@ -2007,49 +1973,13 @@ pub const FunctionBuilder = struct {
             values[0] = written.body;
             body_statements[0] = .{ .return_statement = .{ .values = values, .span = written.body.span() } };
         }
-        const returns = try self.arena().alloc(ast.TypeName, if (signature.result == .none) 0 else 1);
-        if (returns.len == 1) returns[0] = .{ .name = "func", .span = written.span };
-        const declaration = try self.arena().create(ast.FuncDecl);
-        const at = self.analyzer.diagnostics.sources.place(
-            self.analyzer.modules[self.module].file,
-            written.span.start,
-        );
-        declaration.* = .{
-            // Unforgeable from source, and readable in a trace: no
-            // identifier holds a parenthesis.  The source place makes
-            // sibling lambdas distinct too, so `str(f)` never gives
-            // two unequal functions the same compiler name.
-            .name = try std.fmt.allocPrint(
-                self.arena(),
-                "{s}.(lambda@{d}.{d})",
-                .{ self.name, at.line, at.column },
-            ),
-            .name_span = written.span,
-            .parameters = parameters,
-            .returns = returns,
+        const closure: ast.Closure = .{
+            .captures = &.{},
+            .parameters = written.parameters,
             .body = .{ .statements = body_statements, .span = written.span },
             .span = written.span,
         };
-        const named = try signatures.registerLambda(
-            self.analyzer,
-            declaration,
-            self.module,
-            signature,
-            enclosing,
-        );
-        _ = expression;
-        const value: Type = .{ .function = index };
-        return .{
-            // A function value that remembers it was written in place
-            // (nodes.LambdaRef); everything else about it is the
-            // named case, synthesized declaration included.
-            .node = try recorder.recordNode(self, .{ .lambda_ref = .{
-                .function = named,
-                .result = value,
-                .span = written.span,
-            } }),
-            .value_type = value,
-        };
+        return closures.lowerClosure(self, closure, wanted_function);
     }
 
     /// Every local name a body can see right now, innermost scope

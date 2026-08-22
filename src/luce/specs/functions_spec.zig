@@ -193,8 +193,8 @@ test "a lambda takes its parameter types from the place it lands on" {
         \\    return b
         \\
         \\func main():
-        \\    print(str(pick((a, b) -> a < b, 3, 7)))
-        \\    print(str(pick((a, b) -> a > b, 3, 7)))
+        \\    print(str(pick((a, b) => a < b, 3, 7)))
+        \\    print(str(pick((a, b) => a > b, 3, 7)))
         \\
     , "3\n7\n");
 }
@@ -202,8 +202,8 @@ test "a lambda takes its parameter types from the place it lands on" {
 test "a lambda lands on a let, and on a value whose type it never wrote" {
     try agree.prints(
         \\func main():
-        \\    let halve: func(f64) -> f64 = (x) -> x / 2.0
-        \\    let near: func(i64) -> bool = (n) -> n < 10
+        \\    let halve: func(f64) -> f64 = (x) => x / 2.0
+        \\    let near: func(i64) -> bool = (n) => n < 10
         \\    print(str(halve(5.0)))
         \\    print(str(near(3)))
         \\    print(str(near(30)))
@@ -220,8 +220,8 @@ test "a lambda with no parameters, and one answering nothing" {
         \\    say(word)
         \\
         \\func main():
-        \\    print(str(run(() -> 7)))
-        \\    each((w) -> print(w + "."), "here")
+        \\    print(str(run(() => 7)))
+        \\    each((w) => print(w + "."), "here")
         \\
     , "7\nhere.\n");
 }
@@ -245,10 +245,10 @@ test "a lambda's body may name a constant and call a visible function" {
         \\    return f(x)
         \\
         \\func main():
-        \\    print(str(apply((n) -> n + step, 1)))
-        \\    print(str(apply((n) -> triple(n) + step, 2)))
-        \\    assert(read(() -> math.pi) > 3.0)
-        \\    assert(apply_double((x) -> math.round(x), 2.75) == 3.0)
+        \\    print(str(apply((n) => n + step, 1)))
+        \\    print(str(apply((n) => triple(n) + step, 2)))
+        \\    assert(read(() => math.pi) > 3.0)
+        \\    assert(apply_double((x) => math.round(x), 2.75) == 3.0)
         \\
     , "5\n10\n");
 }
@@ -265,7 +265,7 @@ test "a lambda is the named case: the two spellings run the same way" {
         \\
         \\func main():
         \\    print(str(pick(ascending, 3, 7)))
-        \\    print(str(pick((a, b) -> a < b, 3, 7)))
+        \\    print(str(pick((a, b) => a < b, 3, 7)))
         \\
     , "3\n3\n");
 }
@@ -279,7 +279,7 @@ test "a lambda nested inside a lambda's body is a function of its own" {
         \\    return f(f(x))
         \\
         \\func main():
-        \\    print(str(twice((n) -> apply((m) -> m + 1, n), 5)))
+        \\    print(str(twice((n) => apply((m) => m + 1, n), 5)))
         \\
     , "7\n");
 }
@@ -334,8 +334,8 @@ test "str of a function value is the function's name" {
 test "str gives sibling lambdas distinct compiler function names" {
     try agree.prints(
         \\func main():
-        \\    let twice: func(i64) -> i64 = (n) -> n * 2
-        \\    let thrice: func(i64) -> i64 = (n) -> n * 3
+        \\    let twice: func(i64) -> i64 = (n) => n * 2
+        \\    let thrice: func(i64) -> i64 = (n) => n * 3
         \\    print(str(str(twice) != str(thrice)))
         \\
     , "true\n");

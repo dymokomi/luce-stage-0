@@ -212,7 +212,12 @@ fn scanExpression(
         },
         .try_call => |attempt| try scanExpression(self, attempt.operand, mutable, inside),
         .spawn => |worker| try scanExpression(self, worker.call, mutable, inside),
-        .lambda => {}, // concise lambdas are deliberately capture-free
+        .lambda => |written| {
+            // An expression lambda captures like the block closure it
+            // desugars to (docs/FUNCTIONS.md): its parameters shadow,
+            // and its body scans for the outer names it reads.
+            try scanExpression(self, written.body, mutable, true);
+        },
         .closure => |closure| {
             for (closure.captures) |capture| switch (capture.mode) {
                 .strong => try markMutable(self, mutable, capture.name.text),
@@ -608,7 +613,12 @@ const Collector = struct {
             },
             .try_call => |attempt| try c.expression(attempt.operand),
             .spawn => |worker| try c.expression(worker.call),
-            .lambda => {},
+            .lambda => |lam| {
+                const floor = c.locals.items.len;
+                defer c.locals.shrinkRetainingCapacity(floor);
+                for (lam.parameters) |parameter| try c.addLocal(parameter.text);
+                try c.expression(lam.body);
+            },
             .closure => |nested| {
                 // A nested capture list is evaluated in this closure.
                 for (nested.captures) |capture| switch (capture.mode) {

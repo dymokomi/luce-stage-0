@@ -6,7 +6,7 @@ closure all use the same `func(...)` type and the same indirect-call path.
 
 The surface has two anonymous forms:
 
-- `(parameters) -> expression` is a concise, capture-free expression lambda;
+- `(parameters) => expression` is a concise expression lambda that yields its body and captures its environment like a closure;
 - `func(parameters):` opens a block closure that may capture enclosing locals.
 
 ## Function types
@@ -44,7 +44,7 @@ import std.lists
 
 func main():
     var values = [3, 1, 2]
-    values.sort_by((left, right) -> left < right)
+    values.sort_by((left, right) => left < right)
     assert(values[0] == 1)
 ```
 
@@ -111,8 +111,8 @@ func make_pair() -> CounterPair:
 
 func main():
     let pair = make_pair()
-    let add = pair.add else (value) -> value
-    let read = pair.read else () -> -1
+    let add = pair.add else (value) => value
+    let read = pair.read else () => -1
     assert(add(40) == 40)
     assert(add(2) == 42)
     assert(read() == 42)
@@ -192,7 +192,7 @@ class Node:
 func main():
     let node = Node(value = 42, callback = none)
     node.install()
-    let callback = node.callback else () -> 0
+    let callback = node.callback else () => 0
     assert(callback() == 42)
 ```
 

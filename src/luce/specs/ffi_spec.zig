@@ -107,10 +107,10 @@ test "the scoped buffer form hands real memory across and back" {
         \\
         \\func main():
         \\    var data = c.zstring("AB")
-        \\    let total = c.with_bytes(data, (p) -> luce_ffi_probe_sum_bytes(p, 3))
+        \\    let total = c.with_bytes(data, (p) => luce_ffi_probe_sum_bytes(p, 3))
         \\    print(str(total))
         \\    var empty = list[u8]()
-        \\    print(str(c.with_bytes(empty, (p) -> luce_ffi_probe_sum_bytes(p, 0))))
+        \\    print(str(c.with_bytes(empty, (p) => luce_ffi_probe_sum_bytes(p, 0))))
         \\
     ,
         \\131

@@ -6024,3 +6024,29 @@ test "inline blocks: a while body and a one-line function on the same line" {
         \\
     );
 }
+
+test "syntax: => lambdas capture, and _ is a match wildcard, on both engines" {
+    try agree.prints(
+        \\func keep(v: i64, p: func(i64) -> bool) -> bool:
+        \\    return p(v)
+        \\
+        \\func classify(c: char) -> str:
+        \\    match c:
+        \\        '0': return "zero"
+        \\        _: return "other"
+        \\
+        \\func main():
+        \\    let threshold = 5
+        \\    print(str(keep(7, (x) => x > threshold)))
+        \\    print(str(keep(3, (x) => x > threshold)))
+        \\    print(classify('0'))
+        \\    print(classify('z'))
+        \\
+    ,
+        \\true
+        \\false
+        \\zero
+        \\other
+        \\
+    );
+}

@@ -1631,7 +1631,7 @@ test "function signatures, values, lambdas, and indirect calls round-trip" {
         \\func main():
         \\    let chosen: func(i64) -> i64 = twice
         \\    print(str(chosen))
-        \\    print(str(apply((n) -> n + 1, 4)))
+        \\    print(str(apply((n) => n + 1, 4)))
         \\
     ;
     var program = try compileScript(source);

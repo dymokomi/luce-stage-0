@@ -95,8 +95,8 @@ test "closure: a weak capture zeros while a strong capture retains" {
         \\        strong_read = func():
         \\            return strong_item.value
         \\        assert(weak_read() == 7)
-        \\    let call_weak = weak_read else () -> -1
-        \\    let call_strong = strong_read else () -> -1
+        \\    let call_weak = weak_read else () => -1
+        \\    let call_strong = strong_read else () => -1
         \\    print(str(call_weak()))
         \\    print(str(call_strong()))
         \\
@@ -136,8 +136,8 @@ test "closure: different closures share one mutable cell" {
         \\
         \\func main():
         \\    let pair = make_pair()
-        \\    let add = pair.add else (value) -> value
-        \\    let read = pair.read else () -> -1
+        \\    let add = pair.add else (value) => value
+        \\    let read = pair.read else () => -1
         \\    assert(add(40) == 40)
         \\    assert(add(2) == 42)
         \\    assert(read() == 42)
@@ -183,10 +183,10 @@ test "closure: lists, maps, and arrays hold heterogeneous environments" {
         \\    var cells = array[(func(i64) -> i64)?](2)
         \\    cells[0] = add_one
         \\    cells[1] = add_two
-        \\    let first = functions[0] else (value) -> value
-        \\    let second = functions[1] else (value) -> value
-        \\    let array_first = cells[0] else (value) -> value
-        \\    let array_second = cells[1] else (value) -> value
+        \\    let first = functions[0] else (value) => value
+        \\    let second = functions[1] else (value) => value
+        \\    let array_first = cells[0] else (value) => value
+        \\    let array_second = cells[1] else (value) => value
         \\    assert(first(40) == 41)
         \\    assert(second(40) == 42)
         \\    assert(named["one"](41) == 42)
@@ -429,10 +429,10 @@ test "closure: weak self breaks a stored callback cycle and zeros afterward" {
         \\    if true:
         \\        let node = Node(value = 42, callback = none)
         \\        node.install()
-        \\        let installed = node.callback else () -> -1
+        \\        let installed = node.callback else () => -1
         \\        callback = installed
         \\        assert(installed() == 42)
-        \\    let read = callback else () -> -1
+        \\    let read = callback else () => -1
         \\    assert(read() == 0)
         \\
     , "closed 42\nclosed 0\n");

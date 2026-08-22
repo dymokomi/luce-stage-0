@@ -44,7 +44,7 @@ extern func luce_ffi_probe_sum_bytes(at: foreign, count: u64) -> i64
 
 func main():
     var data = c.zstring("AB")
-    let total = c.with_bytes(data, (p) -> luce_ffi_probe_sum_bytes(p, 3))
+    let total = c.with_bytes(data, (p) => luce_ffi_probe_sum_bytes(p, 3))
     print(str(total))
 ```
 

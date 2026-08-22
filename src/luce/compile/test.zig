@@ -3194,3 +3194,28 @@ test "an inline ':' block holds exactly one statement" {
         \\
     , "luce.parse.expected");
 }
+
+test "an expression lambda uses => and the old -> is rejected" {
+    // `=>` yields; `->` declares a type. The retired lambda arrow gets
+    // a focused diagnostic naming the one-token fix.
+    try expectRejected(
+        \\func keep(v: i64, p: func(i64) -> bool) -> bool:
+        \\    return p(v)
+        \\func main():
+        \\    print(str(keep(7, (x) -> x > 5)))
+        \\
+    , "luce.parse.expression");
+}
+
+test "an inline ':' body is one simple statement, not a compound one" {
+    try expectRejected(
+        \\func main():
+        \\    if true: if false: print("x")
+        \\
+    , "luce.parse.expected");
+    try expectRejected(
+        \\func main():
+        \\    for i in range(0, 3): while i > 0: print(str(i))
+        \\
+    , "luce.parse.expected");
+}

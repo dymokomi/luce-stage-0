@@ -196,8 +196,8 @@ because the key's absence already represents a missing value. A custom class
 initializer may also establish a required bare function field: the object is
 created only after definite initialization proves that field is present.
 
-A one-expression lambda is `(parameters) -> expression`; it does not capture
-locals. A block closure is `func(parameters):` followed by an indented body and
+A one-expression lambda is `(parameters) => expression`; it captures its
+environment like a closure. A block closure is `func(parameters):` followed by an indented body and
 may capture enclosing locals. Its parameter and result types come from the
 destination function type. Immutable captures are retained snapshots,
 captured mutable locals share one cell, `[name = expression]` captures an

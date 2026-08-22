@@ -60,7 +60,7 @@ func main():
         print(player.name)
 
     var numbers = [3, 1, 2]
-    numbers.sort_by((a, b) -> a < b)
+    numbers.sort_by((a, b) => a < b)
     print(f"{numbers[0]} {numbers[1]} {numbers[2]}")
 ```
 

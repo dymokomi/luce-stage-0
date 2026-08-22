@@ -14,7 +14,7 @@ import std.strings
 # nothing — the callee learns the count some other way, because C
 # does.  Answers whatever `body` answers.
 #
-#     let total = c.with_bytes(data, (p) -> sum_bytes(p, u64(len(data))))
+#     let total = c.with_bytes(data, (p) => sum_bytes(p, u64(len(data))))
 #
 # The token must not outlive the call, and the buffer must not grow,
 # shrink, or die while it lives.
