@@ -4,16 +4,36 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
-## 0.19 — inline single-statement blocks
+## 0.19 — suites, lambdas, and value matches
+
+A coherent revision of the stage-0 seed around three arrows that no longer
+overlap: **`->` declares a type**, **`=>` yields a value**, and **`:` opens
+a suite** of statements. Purely additive and front-end only — every new form
+desugars before HIR, so both engines agree for free and the module format
+and host ABI are untouched.
 
 - **Inline blocks.** A block whose body is a single statement may be
   written on one line, after the `:`: `if done: return 0`, `while n > 0: n =
   n - 1`, `func neg(x: i64) -> i64: return 0 - x`, and one-line `match` arms.
   Every block-opening construct accepts it, and the inline body is the exact
-  same one-statement block the indented form builds — so both engines agree
-  for free and the module format and host ABI are untouched. One statement
-  per line (Luce has no separator); the indented form is unchanged. A purely
-  additive, purely syntactic revision of the stage-0 seed.
+  same one-statement block the indented form builds. One statement per line
+  (Luce has no separator); the indented form is unchanged.
+
+- **Expression lambdas use `=>`.** `(x) => x + 1` replaces the retired
+  `(x) -> …`, and `=>` *yields* the body's value — the same word a value
+  match uses. The lambda captures its environment like the block closure it
+  desugars to; the old arrow gets a focused diagnostic naming the fix. A
+  lambda or block closure may also write its own parameter types and result:
+  `(x: i64) => x > 0`, `func(x: i64) -> bool: …`.
+
+- **`match` is a value.** Where an expression is expected, every arm yields
+  with `=>` and the whole `match` is the chosen arm's value: `return match c:
+  red => "red"; …` and `let d: i64? = match c: '0'..'9' => 1; _ => none`. The
+  result type comes from where the match lands; it is exhaustive by the same
+  rule as the statement form, evaluates its scrutinee once, and refuses a
+  landing it cannot type. It desugars to a hidden slot the chosen arm
+  assigns, so there is no new instruction and no second family of return
+  rules.
 
 ## 0.18 — stage-0 freeze
 
