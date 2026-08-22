@@ -188,6 +188,16 @@ fn expressionWritesReceiver(
         },
         .try_call => |attempt| expressionWritesReceiver(self, info, attempt.operand),
         .spawn => |spawn| expressionWritesReceiver(self, info, spawn.call),
+        .match_value => |written| blk: {
+            if (expressionWritesReceiver(self, info, written.scrutinee)) break :blk true;
+            for (written.arms) |arm| {
+                if (expressionWritesReceiver(self, info, arm.value)) break :blk true;
+            }
+            break :blk if (written.else_value) |value|
+                expressionWritesReceiver(self, info, value)
+            else
+                false;
+        },
         // A lambda cannot carry self.  Its body is checked in its
         // synthesized function and must not change the enclosing
         // method's receiver classification.

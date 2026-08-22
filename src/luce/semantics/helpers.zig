@@ -134,6 +134,13 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
                 if (deeperThan(value, left)) break true;
             }
         } else false,
+        .match_value => |written| blk: {
+            if (deeperThan(written.scrutinee, left)) break :blk true;
+            for (written.arms) |arm| {
+                if (deeperThan(arm.value, left)) break :blk true;
+            }
+            break :blk if (written.else_value) |value| deeperThan(value, left) else false;
+        },
         .binary => |binary| deeperThan(binary.left, left) or deeperThan(binary.right, left),
         .call => |call| anyDeeperArgument(call.arguments, left),
         .value_call => |written| deeperThan(written.callee, left) or

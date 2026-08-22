@@ -257,6 +257,9 @@ pub const Expression = union(enum) {
     /// `[weak model] func(event): ...` — a block closure carrying an
     /// ARC-managed lexical environment.
     closure: Closure,
+    /// `match c: '0' => 0; _ => none` — a match written as an
+    /// expression, each arm yielding with `=>` (docs/ENUMS.md).
+    match_value: MatchValue,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {
@@ -426,6 +429,33 @@ pub const Match = struct {
     else_block: ?Block,
     /// The span of `else`, for a diagnostic about the arm that catches
     /// everything.  Null when there is none.
+    else_span: ?Span = null,
+    span: Span,
+};
+
+/// One arm of an expression-valued match: the same header a
+/// statement arm has (a member name and optional payload bindings, or
+/// literal `values`), but it yields a value with `=>` instead of
+/// opening a suite.  `value` is what the arm evaluates to.
+pub const MatchValueArm = struct {
+    name: []const u8,
+    name_span: Span,
+    bindings: []Name = &.{},
+    values: []ValuePattern = &.{},
+    value: *Expression,
+    span: Span,
+};
+
+/// `match expr: pattern => value; _ => value` — a match written where
+/// an expression is expected (docs/ENUMS.md).  Every
+/// arm yields with `=>`; `else_value` is the catch-all `_`/`else`
+/// arm's value.  Stage 4 desugars it to a hidden slot the arms assign
+/// and the surrounding expression reads.
+pub const MatchValue = struct {
+    scrutinee: *Expression,
+    arms: []MatchValueArm,
+    else_value: ?*Expression,
+    /// The span of `else`/`_`, for a diagnostic about the catch-all.
     else_span: ?Span = null,
     span: Span,
 };

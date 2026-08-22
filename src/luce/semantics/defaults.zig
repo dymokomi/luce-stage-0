@@ -360,6 +360,14 @@ fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expres
         // A block closure is not a constant default. The folder reports that
         // directly; its body runs later and is not evaluated here.
         .closure => return null,
+        .match_value => |written| {
+            if (parameterRead(declaration, written.scrutinee)) |read| return read;
+            for (written.arms) |arm| {
+                if (parameterRead(declaration, arm.value)) |read| return read;
+            }
+            if (written.else_value) |value| return parameterRead(declaration, value);
+            return null;
+        },
         .call => |call| {
             for (call.arguments) |argument| {
                 if (parameterRead(declaration, argument.value)) |read| return read;

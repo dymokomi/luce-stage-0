@@ -345,6 +345,11 @@ fn validateExpression(self: *FunctionBuilder, initialized: []const bool, express
         },
         .try_call => |attempt| try validateExpression(self, initialized, attempt.operand),
         .spawn => |worker| try validateExpression(self, initialized, worker.call),
+        .match_value => |written| {
+            try validateExpression(self, initialized, written.scrutinee);
+            for (written.arms) |arm| try validateExpression(self, initialized, arm.value);
+            if (written.else_value) |value| try validateExpression(self, initialized, value);
+        },
         .lambda => |lambda| {
             var captures_self = expressionContainsSelf(lambda.body);
             for (lambda.parameters) |parameter| {
@@ -421,6 +426,13 @@ fn containsSelf(expression: *const ast.Expression) bool {
         .spawn => |worker| containsSelf(worker.call),
         .lambda => |lambda| containsSelf(lambda.body),
         .closure => |closure| closureContainsSelf(closure),
+        .match_value => |written| blk: {
+            if (containsSelf(written.scrutinee)) break :blk true;
+            for (written.arms) |arm| {
+                if (containsSelf(arm.value)) break :blk true;
+            }
+            break :blk if (written.else_value) |value| containsSelf(value) else false;
+        },
         .int_literal,
         .float_literal,
         .bool_literal,

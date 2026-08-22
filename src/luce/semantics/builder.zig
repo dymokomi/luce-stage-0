@@ -420,6 +420,14 @@ pub const FunctionBuilder = struct {
     /// that has a landing width of its own.  Inference where nothing is
     /// expected is untouched — `let n = 1` still takes the default.
     wanted: ?Type = null,
+    /// The full type of the place the next expression lands on —
+    /// unlike `wanted`, which narrows to a literal's landing width and
+    /// is null for `str`, `char`, a union, and everything else that no
+    /// literal lands on.  An expression-valued match reads it as the
+    /// one type all its arms must yield, since a match chooses among
+    /// values and has no landing width of its own.  Read and cleared in
+    /// `lowerExpressionInner` like `wanted`.
+    wanted_place: ?Type = null,
     /// The signature the next expression lands on, when the place it is
     /// going into names one — `xs.sort_by(by_score)`, `let before:
     /// func(i64, i64) -> bool = ascending` (docs/FUNCTIONS.md).
@@ -871,6 +879,7 @@ pub const FunctionBuilder = struct {
     /// nothing is expected stays untouched.
     pub fn wantPlace(self: *FunctionBuilder, expected: Type) void {
         self.wanted = context.literalLandingType(expected);
+        self.wanted_place = expected;
         self.wanted_container = self.containerPlace(expected);
         self.wanted_function = switch (expected) {
             .function => |index| index,
@@ -1712,6 +1721,8 @@ pub const FunctionBuilder = struct {
         self.wanted_container = null;
         const wanted = self.wanted;
         self.wanted = null;
+        const wanted_place = self.wanted_place;
+        self.wanted_place = null;
         const wanted_function = self.wanted_function;
         self.wanted_function = null;
         switch (expression.*) {
@@ -1923,7 +1934,95 @@ pub const FunctionBuilder = struct {
             .spawn => |worker| return calls.lowerSpawn(self, worker, as_statement),
             .lambda => |written| return self.lowerLambda(expression, written, wanted_function),
             .closure => |written| return closures.lowerClosure(self, written, wanted_function),
+            .match_value => |written| return self.lowerMatchValue(written, wanted_place),
         }
+    }
+
+    /// `match c: '0' => 0; _ => none` written as a value (docs/ENUMS.md).
+    ///
+    /// A match is a chooser: it selects one arm and yields that arm's
+    /// value.  The desugar is a hidden slot of the result type,
+    /// zero-filled like a late `var` (statements.lowerLateDeclaration),
+    /// that every arm assigns — then the surrounding expression reads
+    /// the slot.  So both engines run the ordinary statement match, and
+    /// every rule it already enforces holds here: exhaustiveness (a
+    /// scalar match needs a catch-all, an enum match needs every
+    /// member), single evaluation of the scrutinee, one arm chosen.
+    /// The slot is exhaustively assigned, so its zero is only ever a
+    /// placeholder the chosen arm overwrites.
+    ///
+    /// The result type comes from where the match lands, exactly as a
+    /// lambda's does — a chooser must know the one type it chooses
+    /// among — so a match with no landing context is refused saying so.
+    fn lowerMatchValue(self: *FunctionBuilder, written: ast.MatchValue, wanted: ?Type) Error!?Typed {
+        const result_type = wanted orelse {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "a match used as a value takes its type from where it lands: annotate the binding (let x: T = match …), or write it where the type is known — a return, or a declared argument",
+                .{},
+            );
+            return null;
+        };
+
+        const hidden = try std.fmt.allocPrint(self.arena(), "#match{d}", .{self.recorded_locals.items.len});
+        const local = (try self.declareLocal(hidden, result_type, true, written.span)) orelse return null;
+        // The zero fill's store decision, from the slot's type alone —
+        // the same one a late `var` makes (statements.lowerLateDeclaration).
+        const store: nodes.StoreKind = if (!shapes.ownsStorage(self.analyzer, result_type))
+            .plain
+        else switch (result_type) {
+            .strukt, .variant => .take,
+            else => .copy,
+        };
+        try recorder.recordStatement(self, .{ .declare = .{
+            .local = local,
+            .value = null,
+            .store = store,
+            .span = written.span,
+        } });
+
+        // The statement match that fills the slot: every arm keeps its
+        // header and gains a body of `hidden = value`.
+        const arms = try self.arena().alloc(ast.MatchArm, written.arms.len);
+        for (written.arms, arms) |arm, *slot| {
+            slot.* = .{
+                .name = arm.name,
+                .name_span = arm.name_span,
+                .bindings = arm.bindings,
+                .values = arm.values,
+                .body = try self.slotAssignment(hidden, arm.value),
+                .span = arm.span,
+            };
+        }
+        const else_block: ?ast.Block = if (written.else_value) |value|
+            try self.slotAssignment(hidden, value)
+        else
+            null;
+        try statements.lowerMatch(self, .{
+            .scrutinee = written.scrutinee,
+            .arms = arms,
+            .else_block = else_block,
+            .else_span = written.else_span,
+            .span = written.span,
+        });
+
+        // The expression's value is the slot, read back with its type.
+        const read = try self.arena().create(ast.Expression);
+        read.* = .{ .name = .{ .text = hidden, .span = written.span } };
+        return self.lowerExpression(read, false);
+    }
+
+    /// A one-statement block assigning `value` into the hidden match
+    /// slot named `hidden`.
+    fn slotAssignment(self: *FunctionBuilder, hidden: []const u8, value: *ast.Expression) Error!ast.Block {
+        const body = try self.arena().alloc(ast.Statement, 1);
+        body[0] = .{ .assign = .{
+            .target = .{ .name = .{ .text = hidden, .span = value.span() } },
+            .value = value,
+            .span = value.span(),
+        } };
+        return .{ .statements = body, .span = value.span() };
     }
 
     /// `(a, b) -> expr` — a lambda (docs/FUNCTIONS.md S3, D2).

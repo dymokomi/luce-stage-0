@@ -6085,3 +6085,131 @@ test "typed params: an explicit lambda parameter type is allowed with context" {
         \\
     );
 }
+
+test "match value: a value match binds a name and yields its arm, both engines" {
+    try agree.prints(
+        \\func classify(n: i64) -> str:
+        \\    return match n:
+        \\        0 => "zero"
+        \\        1, 2, 3 => "small"
+        \\        _ => "big"
+        \\
+        \\func main():
+        \\    for n in [0, 2, 9]:
+        \\        let label: str = match n:
+        \\            0 => "z"
+        \\            _ => classify(n)
+        \\        print(label)
+        \\
+    ,
+        \\z
+        \\small
+        \\big
+        \\
+    );
+}
+
+test "match value: an arm may yield none into an optional place, both engines" {
+    try agree.prints(
+        \\func main():
+        \\    for c in ['0', '5', 'x']:
+        \\        let digit: i64? = match c:
+        \\            '0'..'9' => 1
+        \\            _ => none
+        \\        print(str(digit else -1))
+        \\
+    ,
+        \\1
+        \\1
+        \\-1
+        \\
+    );
+}
+
+test "match value: a union match over payloads yields, both engines" {
+    try agree.prints(
+        \\union Shape:
+        \\    dot
+        \\    circle(radius: i64)
+        \\    square(side: i64)
+        \\
+        \\func area(s: Shape) -> i64:
+        \\    return match s:
+        \\        dot => 0
+        \\        circle(radius) => radius * radius * 3
+        \\        square(side) => side * side
+        \\
+        \\func main():
+        \\    print(str(area(Shape.circle(radius = 10))))
+        \\    print(str(area(Shape.square(side = 4))))
+        \\    print(str(area(Shape.dot)))
+        \\
+    ,
+        \\300
+        \\16
+        \\0
+        \\
+    );
+}
+
+test "match value: an enum match without else is exhaustive on its own, both engines" {
+    try agree.prints(
+        \\enum Suit:
+        \\    spades
+        \\    hearts
+        \\
+        \\func color(s: Suit) -> str:
+        \\    return match s:
+        \\        spades => "black"
+        \\        hearts => "red"
+        \\
+        \\func main():
+        \\    print(color(Suit.spades))
+        \\    print(color(Suit.hearts))
+        \\
+    ,
+        \\black
+        \\red
+        \\
+    );
+}
+
+test "match value: an expression match nests as another arm's value, both engines" {
+    try agree.prints(
+        \\func main():
+        \\    for x in [0, 2, 9]:
+        \\        let tier: str = match x:
+        \\            0 => "none"
+        \\            _ => match x:
+        \\                1, 2, 3 => "low"
+        \\                _ => "high"
+        \\        print(tier)
+        \\
+    ,
+        \\none
+        \\low
+        \\high
+        \\
+    );
+}
+
+test "match value: the scrutinee is evaluated exactly once, both engines" {
+    try agree.prints(
+        \\func main():
+        \\    var calls = 0
+        \\    let bump = func() -> i64:
+        \\        calls += 1
+        \\        return 2
+        \\    let label: str = match bump():
+        \\        1 => "one"
+        \\        2 => "two"
+        \\        _ => "other"
+        \\    print(label)
+        \\    print(str(calls))
+        \\
+    ,
+        \\two
+        \\1
+        \\
+    );
+}

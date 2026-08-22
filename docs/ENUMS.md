@@ -258,6 +258,40 @@ func main():
 Arms are statements, so they assign, loop, `break`, `continue` and
 `return`; and a `match` nests inside another arm like any statement.
 
+### A match as a value
+
+Where an expression is expected, a `match` yields a value: every arm uses
+`=>` in place of the `:` suite, and the whole `match` *is* the value the
+chosen arm yields. The result type comes from where the match lands — a
+typed binding, a `return`, a declared argument — so no arm-by-arm type
+unification is needed:
+
+```luce
+enum Colour:
+    red
+    green
+    blue
+
+func name(c: Colour) -> str:
+    return match c:
+        red => "red"
+        green => "green"
+        blue => "blue"
+
+func main():
+    assert(name(Colour.blue) == "blue")
+```
+
+The value form is exhaustive by the same rule as the statement form (an
+enum or union match names every member or ends in `else`; a scalar match
+ends in `_`/`else`), it evaluates its scrutinee once, and `=>` yields into
+the surrounding expression rather than returning from the function. A
+`match` written where its type cannot be read — a bare `let x = match …`
+with no annotation — is refused. The two arm forms never mix: within one
+`match` every arm ends in `:` or every arm yields with `=>`. This is the
+same `=>` a lambda uses to yield its body; `->` only ever declares a type,
+and `:` only ever opens a suite.
+
 ## Methods and static functions
 
 An enum takes the methods and namespace functions a struct takes

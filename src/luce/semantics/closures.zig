@@ -212,6 +212,11 @@ fn scanExpression(
         },
         .try_call => |attempt| try scanExpression(self, attempt.operand, mutable, inside),
         .spawn => |worker| try scanExpression(self, worker.call, mutable, inside),
+        // Held in its own function, not inlined here: this switch is the
+        // hot recursive frame that walks a whole function body before
+        // lowering, and a per-arm loop's locals would enlarge every one
+        // of those frames and lower the depth the native stack survives.
+        .match_value => try scanMatchValue(self, expression, mutable, inside),
         .lambda => |written| {
             // An expression lambda captures like the block closure it
             // desugars to (docs/FUNCTIONS.md): its parameters shadow,
@@ -234,6 +239,22 @@ fn scanExpression(
         .none_literal,
         => {},
     }
+}
+
+/// The `match_value` arm of `scanExpression`, kept out of that hot
+/// recursive frame (see the note at its call site).  An arm's payload
+/// bindings shadow inside its value, but they name nothing the outer
+/// scope could have made mutable, so a plain recursive walk is enough.
+fn scanMatchValue(
+    self: *FunctionBuilder,
+    expression: *const ast.Expression,
+    mutable: *const std.StringHashMapUnmanaged(void),
+    inside: bool,
+) Error!void {
+    const written = expression.match_value;
+    try scanExpression(self, written.scrutinee, mutable, inside);
+    for (written.arms) |arm| try scanExpression(self, arm.value, mutable, inside);
+    if (written.else_value) |value| try scanExpression(self, value, mutable, inside);
 }
 
 // -- Hidden ARC cells -----------------------------------------------------
@@ -575,6 +596,21 @@ const Collector = struct {
         }
     }
 
+    /// The `match_value` arm of `expression`, kept out of that
+    /// recursive frame.  Each arm's payload bindings are locals of its
+    /// value, so they enter the scope, get scanned under, and leave.
+    fn matchValue(c: *Collector, written: *const ast.Expression) Error!void {
+        const mv = written.match_value;
+        try c.expression(mv.scrutinee);
+        for (mv.arms) |arm| {
+            const floor = c.locals.items.len;
+            defer c.locals.shrinkRetainingCapacity(floor);
+            for (arm.bindings) |binding| try c.addLocal(binding.text);
+            try c.expression(arm.value);
+        }
+        if (mv.else_value) |value| try c.expression(value);
+    }
+
     fn expression(c: *Collector, written: *const ast.Expression) Error!void {
         switch (written.*) {
             .name => |name| try c.note(name.text, name.span),
@@ -613,6 +649,9 @@ const Collector = struct {
             },
             .try_call => |attempt| try c.expression(attempt.operand),
             .spawn => |worker| try c.expression(worker.call),
+            // Held in its own method for the same reason as the sibling
+            // walker's `scanMatchValue`: keep this recursive frame lean.
+            .match_value => try c.matchValue(written),
             .lambda => |lam| {
                 const floor = c.locals.items.len;
                 defer c.locals.shrinkRetainingCapacity(floor);

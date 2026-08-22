@@ -79,6 +79,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_spawn,
         .keyword_try,
         .keyword_func,
+        .keyword_match,
         .minus,
         .tilde,
         .left_paren,
@@ -362,6 +363,13 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
     if (foreignOperator(self)) |found| {
         try reportForeignOperator(self, found);
         return null;
+    }
+
+    // `match c: … => …` written as a value.  A block-structured
+    // expression: the sibling grammar owns the arms, and answers one
+    // `*Expression` the Pratt loop then treats like any operand.
+    if (self.peekKind() == .keyword_match) {
+        return self.matchValueExpression();
     }
 
     if (self.accept(.keyword_try)) |keyword| {

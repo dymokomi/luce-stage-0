@@ -207,7 +207,7 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
 /// answers `Method?`.  So the final comparison would be a test that
 /// can only succeed, and nothing traps here — there is no case left
 /// for a trap to be about.
-fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
+pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     const temps_floor = self.temps.items.len;
     const scrutinee = (try self.lowerExpression(matched.scrutinee, false)) orelse return;
     if (scrutinee.value_type == .variant) {

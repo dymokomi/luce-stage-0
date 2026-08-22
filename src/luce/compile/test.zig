@@ -3228,3 +3228,43 @@ test "a bare typed lambda cannot infer its result, and is taught the two forms" 
         \\
     , "luce.sema.type");
 }
+
+test "an expression match with no landing type is refused" {
+    // A match chooses among values, so it has no type of its own: the
+    // place it lands in supplies one, and a bare binding supplies none.
+    try expectRejected(
+        \\func main():
+        \\    let a = match 3:
+        \\        3 => 1
+        \\        _ => 0
+        \\    print(str(a))
+        \\
+    , "luce.sema.type");
+}
+
+test "an expression match over a scalar must end in a catch-all" {
+    // The desugared statement match enforces it: a scalar has no finite
+    // set of members, so some arm must catch every value the rest did
+    // not — otherwise the slot has values that yield nothing.
+    try expectRejected(
+        \\func main():
+        \\    let b: i64 = match 3:
+        \\        3 => 1
+        \\    print(str(b))
+        \\
+    , "luce.sema.match");
+}
+
+test "expression-match arms all yield with =>, never a mix" {
+    // An arm that opens a ':' suite in an expression match is a
+    // statement arm where a value is expected; the parser wants the
+    // '=>' the other arms use.
+    try expectRejected(
+        \\func main():
+        \\    let b: i64 = match 3:
+        \\        3 => 1
+        \\        _:
+        \\            print("no")
+        \\
+    , "luce.parse.expected");
+}

@@ -16,6 +16,7 @@
 
 const ast = @import("../parse.zig").ast;
 const builtins = @import("builtins.zig");
+const helpers = @import("helpers.zig");
 
 /// Could evaluating this expression free something a container or
 /// a struct field is holding?
@@ -29,6 +30,19 @@ const builtins = @import("builtins.zig");
 /// about instructions), so `str(i)` and `len(xs)` beside a
 /// container read cost nothing.
 pub fn mayMutateContainers(expression: *const ast.Expression) bool {
+    return mutatesWithin(expression, helpers.max_expression_depth);
+}
+
+/// The recursive body, bounded so a pathologically deep expression —
+/// one lowering itself refuses as nested past `max_expression_depth`
+/// — cannot walk off the native stack here first, before that refusal
+/// is reached.  Exhausting the budget answers the conservative `true`:
+/// this walk exists to be conservative, an over-deep expression is
+/// rejected downstream so the value is moot, and "assume it may" is
+/// always the safe guess.
+fn mutatesWithin(expression: *const ast.Expression, budget: u32) bool {
+    if (budget == 0) return true;
+    const left = budget - 1;
     return switch (expression.*) {
         .method => true,
         // A spawn moves every object argument out of this runtime,
@@ -44,8 +58,20 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         .closure => |written| blk: {
             for (written.captures) |capture| {
                 if (capture.value) |value| {
-                    if (mayMutateContainers(value)) break :blk true;
+                    if (mutatesWithin(value, left)) break :blk true;
                 }
+            }
+            break :blk false;
+        },
+        // A match runs its scrutinee and the one arm it chooses; if any
+        // of those could mutate, so could the match.
+        .match_value => |written| blk: {
+            if (mutatesWithin(written.scrutinee, left)) break :blk true;
+            for (written.arms) |arm| {
+                if (mutatesWithin(arm.value, left)) break :blk true;
+            }
+            if (written.else_value) |value| {
+                if (mutatesWithin(value, left)) break :blk true;
             }
             break :blk false;
         },
@@ -56,46 +82,46 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         .call => |call| blk: {
             if (!builtins.isPure(call.callee)) break :blk true;
             for (call.arguments) |argument| {
-                if (mayMutateContainers(argument.value)) break :blk true;
+                if (mutatesWithin(argument.value, left)) break :blk true;
             }
             break :blk false;
         },
-        .binary => |binary| mayMutateContainers(binary.left) or
-            mayMutateContainers(binary.right),
-        .unary => |unary| mayMutateContainers(unary.operand),
-        .field => |field| mayMutateContainers(field.target),
+        .binary => |binary| mutatesWithin(binary.left, left) or
+            mutatesWithin(binary.right, left),
+        .unary => |unary| mutatesWithin(unary.operand, left),
+        .field => |field| mutatesWithin(field.target, left),
         .index => |index| blk: {
-            if (mayMutateContainers(index.target)) break :blk true;
+            if (mutatesWithin(index.target, left)) break :blk true;
             for (index.indices) |subscript| {
-                if (mayMutateContainers(subscript)) break :blk true;
+                if (mutatesWithin(subscript, left)) break :blk true;
             }
             break :blk false;
         },
         .slice_range => |slice| blk: {
-            if (mayMutateContainers(slice.target)) break :blk true;
+            if (mutatesWithin(slice.target, left)) break :blk true;
             if (slice.start) |bound| {
-                if (mayMutateContainers(bound)) break :blk true;
+                if (mutatesWithin(bound, left)) break :blk true;
             }
             if (slice.end) |bound| {
-                if (mayMutateContainers(bound)) break :blk true;
+                if (mutatesWithin(bound, left)) break :blk true;
             }
             break :blk false;
         },
         .list_literal => |literal| blk: {
             for (literal.elements) |element| {
-                if (mayMutateContainers(element)) break :blk true;
+                if (mutatesWithin(element, left)) break :blk true;
             }
             break :blk false;
         },
         .map_literal => |literal| blk: {
             for (literal.entries) |entry| {
-                if (mayMutateContainers(entry.key) or mayMutateContainers(entry.value)) break :blk true;
+                if (mutatesWithin(entry.key, left) or mutatesWithin(entry.value, left)) break :blk true;
             }
             break :blk false;
         },
         .new_object => |new| blk: {
             for (new.arguments) |argument| {
-                if (mayMutateContainers(argument.value)) break :blk true;
+                if (mutatesWithin(argument.value, left)) break :blk true;
             }
             break :blk false;
         },

@@ -1012,6 +1012,9 @@ pub fn fold(
         .lambda, .closure => {
             return constantError(analyzer, expression.span(), "a function value is not a constant initializer; declare it with func [FUNCTIONS.md]", .{});
         },
+        .match_value => {
+            return constantError(analyzer, expression.span(), "a match chooses at run time; a constant is folded before anything runs [ENUMS.md]", .{});
+        },
     }
 }
 

@@ -493,6 +493,18 @@ pub const Parser = struct {
         }
     }
 
+    /// True for the block-structured expressions — a block closure and
+    /// an expression-valued match — which consume their own trailing
+    /// newline, indentation, and dedent.  A statement whose value is
+    /// one of these has already reached the end of its line, so the
+    /// caller must not also demand a newline.
+    fn endsWithBlock(value: *const ast.Expression) bool {
+        return switch (value.*) {
+            .closure, .match_value => true,
+            else => false,
+        };
+    }
+
     /// Every statement ends at a newline.  When one does not, report
     /// once and drop the rest of the line: parsing the leftovers as a
     /// fresh statement is how a single mistake becomes four.
@@ -2849,7 +2861,7 @@ pub const Parser = struct {
         }
         // A block closure consumed its own newline, indentation, and closing
         // dedent. The next token is already the next statement at this level.
-        if (value.* != .closure) try self.endOfStatement("end of line after the binding");
+        if (!endsWithBlock(value)) try self.endOfStatement("end of line after the binding");
         const span: Span = .{ .start = start.span.start, .end = value.span().end };
         if (mutable) {
             return .{ .variable = .{
@@ -3160,10 +3172,108 @@ pub const Parser = struct {
         } };
     }
 
-    /// One arm: a member name, an optional parenthesized field-name
-    /// list — the union payload extension (docs/UNION.md D5), names
-    /// only, no types — then the block its colon opens.
-    fn matchArm(self: *Parser) Error!?ast.MatchArm {
+    /// `match expr: pattern => value; _ => value` — a match written
+    /// where an expression is expected (docs/ENUMS.md).  Same block
+    /// shape as the statement form, but every arm yields with `=>`,
+    /// and stage 4 desugars the whole thing to a hidden slot the arms
+    /// fill and the surrounding expression reads.  Called from the
+    /// expression grammar; the value it answers is one `*Expression`.
+    pub fn matchValueExpression(self: *Parser) Error!?*ast.Expression {
+        if (!try self.enter("block")) return null;
+        defer self.leave();
+
+        const start = self.advance(); // match
+        const scrutinee = (try self.expression()) orelse return null;
+        if (!try self.colonOrLayout("':' after what is matched")) return null;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
+        if ((try self.blockBody("match")) == null) return null;
+
+        var arms: std.ArrayList(ast.MatchValueArm) = .empty;
+        defer arms.deinit(self.arena);
+        var else_value: ?*ast.Expression = null;
+        var else_span: ?Span = null;
+        var end = scrutinee.span().end;
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            // The catch-all arm is `else` or the wildcard `_` — the
+            // same arm for everything the others did not name.
+            const is_underscore = self.peekKind() == .identifier and
+                std.mem.eql(u8, self.text(self.peek()), "_");
+            if (self.peekKind() == .keyword_else or is_underscore) {
+                const keyword = self.advance();
+                if (else_span != null) {
+                    try self.report(
+                        "luce.parse.expected",
+                        keyword.span,
+                        "one catch-all per match: else or _ is the arm for everything the others did not name",
+                        .{},
+                    );
+                    self.recover();
+                    continue;
+                }
+                else_span = keyword.span;
+                if ((try self.expect(.fat_arrow, "'=>' before the value this arm yields")) == null) {
+                    self.recover();
+                    continue;
+                }
+                const value = (try self.expression()) orelse {
+                    self.recover();
+                    continue;
+                };
+                else_value = value;
+                end = value.span().end;
+                continue;
+            }
+            if (else_span != null) {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "else catches everything the arms above it did not, so it comes last",
+                    .{},
+                );
+                self.recover();
+                continue;
+            }
+            if (try self.expressionArm()) |arm| {
+                end = arm.value.span().end;
+                try arms.append(self.arena, arm);
+            } else {
+                self.recover();
+            }
+        }
+        _ = self.accept(.dedent);
+        return try expr.make(self, .{ .match_value = .{
+            .scrutinee = scrutinee,
+            .arms = try arms.toOwnedSlice(self.arena),
+            .else_value = else_value,
+            .else_span = else_span,
+            .span = .{ .start = start.span.start, .end = end },
+        } });
+    }
+
+    /// The arm's header — everything up to the `:` suite or `=>`
+    /// value: a member name and optional payload bindings, or literal
+    /// `values`.  `label` names the arm for the suite's own
+    /// diagnostics.  Shared by the statement arm and the
+    /// expression-valued arm, which differ only in what follows.
+    const ArmHeader = struct {
+        name: []const u8 = "",
+        name_span: Span,
+        bindings: []ast.Name = &.{},
+        values: []ast.ValuePattern = &.{},
+        label: []const u8,
+        span: Span,
+    };
+
+    /// One arm's header: a member name, an optional parenthesized
+    /// field-name list — the union payload extension (docs/UNION.md
+    /// D5), names only, no types — or the literal patterns of a value
+    /// arm.  The `:` suite or `=>` value is the caller's to read.
+    fn matchArmHeader(self: *Parser) Error!?ArmHeader {
         // A literal opens a value arm; a name opens a member arm.
         // The two vocabularies never collide, because a member is
         // always a bare identifier.
@@ -3175,14 +3285,14 @@ pub const Parser = struct {
             .keyword_true,
             .keyword_false,
             .minus,
-            => return self.valueMatchArm(),
+            => return self.valuePatternHeader(),
             // `zero..nine:` and `comma, colon:` — a name followed by a
             // range or a comma can only be a value arm, because a
             // member arm is one bare name.  A lone `limit:` stays a
             // member arm here; stage 4 reads it as a constant when the
             // scrutinee is a value.
             .identifier => if (self.peekAhead(1) == .dot_dot or self.peekAhead(1) == .comma)
-                return self.valueMatchArm(),
+                return self.valuePatternHeader(),
             else => {},
         }
         // `case stored:` — Python's second keyword, carrying nothing
@@ -3253,22 +3363,21 @@ pub const Parser = struct {
             const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
             written_end = closing.span.end;
         }
-        const body = (try self.block(self.text(name))) orelse return null;
         return .{
             .name = self.text(name),
             .name_span = name.span,
             .bindings = try bindings.toOwnedSlice(self.arena),
-            .body = body,
+            .label = self.text(name),
             .span = .{ .start = name.span.start, .end = written_end },
         };
     }
 
-    /// One value arm: literal patterns separated by commas, each a
-    /// literal or `low .. high` — an inclusive range — then the block
-    /// its colon opens.  The parser reads expressions and stage 4
-    /// requires literals, so a non-literal is refused with what it
-    /// found rather than with a parse error.
-    fn valueMatchArm(self: *Parser) Error!?ast.MatchArm {
+    /// A value arm's header: literal patterns separated by commas,
+    /// each a literal or `low .. high` — an inclusive range.  The
+    /// parser reads expressions and stage 4 requires literals, so a
+    /// non-literal is refused with what it found rather than with a
+    /// parse error.
+    fn valuePatternHeader(self: *Parser) Error!?ArmHeader {
         var patterns: std.ArrayList(ast.ValuePattern) = .empty;
         defer patterns.deinit(self.arena);
         const start = self.peek().span.start;
@@ -3289,13 +3398,42 @@ pub const Parser = struct {
             });
             if (self.accept(.comma) == null) break;
         }
-        const body = (try self.block("match arm")) orelse return null;
         return .{
             .name = "",
             .name_span = .{ .start = start, .end = written_end },
             .values = try patterns.toOwnedSlice(self.arena),
-            .body = body,
+            .label = "match arm",
             .span = .{ .start = start, .end = written_end },
+        };
+    }
+
+    /// One statement arm: a header, then the block its colon opens.
+    fn matchArm(self: *Parser) Error!?ast.MatchArm {
+        const header = (try self.matchArmHeader()) orelse return null;
+        const body = (try self.block(header.label)) orelse return null;
+        return .{
+            .name = header.name,
+            .name_span = header.name_span,
+            .bindings = header.bindings,
+            .values = header.values,
+            .body = body,
+            .span = header.span,
+        };
+    }
+
+    /// One expression-valued arm: a header, then `=>` and the value
+    /// it yields.
+    fn expressionArm(self: *Parser) Error!?ast.MatchValueArm {
+        const header = (try self.matchArmHeader()) orelse return null;
+        if ((try self.expect(.fat_arrow, "'=>' before the value this arm yields")) == null) return null;
+        const value = (try self.expression()) orelse return null;
+        return .{
+            .name = header.name,
+            .name_span = header.name_span,
+            .bindings = header.bindings,
+            .values = header.values,
+            .value = value,
+            .span = header.span,
         };
     }
 
@@ -3316,7 +3454,7 @@ pub const Parser = struct {
             last = (try self.expression()) orelse return null;
             try values.append(self.arena, last);
         }
-        if (last.* != .closure) try self.endOfStatement("end of line after return");
+        if (!endsWithBlock(last)) try self.endOfStatement("end of line after return");
         return .{ .return_statement = .{
             .values = try values.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = last.span().end },
@@ -3378,7 +3516,7 @@ pub const Parser = struct {
                 return null;
             }
             if (try self.handlerOnOneLine(left)) return null;
-            if (left.* != .closure) try self.endOfStatement("end of line after the expression");
+            if (!endsWithBlock(left)) try self.endOfStatement("end of line after the expression");
             return .{ .expression = .{ .value = left, .span = left.span() } };
         }
         _ = self.advance(); // '=' or 'OP='
@@ -3408,7 +3546,7 @@ pub const Parser = struct {
             return self.guarded(assigned);
         }
         if (try self.handlerOnOneLine(value)) return null;
-        if (value.* != .closure) try self.endOfStatement("end of line after the assignment");
+        if (!endsWithBlock(value)) try self.endOfStatement("end of line after the assignment");
         return assigned;
     }
 
