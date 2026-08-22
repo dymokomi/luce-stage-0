@@ -201,7 +201,7 @@ func apply(operation: func(i64) -> i64, value: i64) -> i64:
 func main():
     let chosen: func(i64) -> i64 = twice
     print(str(apply(chosen, 21)))
-    print(str(apply((value) -> value + 1, 41)))
+    print(str(apply((value) => value + 1, 41)))
 ```
 
 ```output

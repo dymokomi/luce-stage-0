@@ -120,6 +120,38 @@ stop
 neither
 ```
 
+Where an expression is expected, a `match` yields a value: every arm uses
+`=>` instead of a `:` suite, and the whole `match` is the value the chosen
+arm yields. The result type comes from where the match lands — here, the
+function's return type:
+
+```luce run
+enum Colour:
+    red
+    green
+    blue
+
+func describe(c: Colour) -> str:
+    return match c:
+        red => "stop"
+        green => "go"
+        blue => "neither"
+
+func main():
+    print(describe(Colour.red))
+    print(describe(Colour.blue))
+```
+
+```output
+stop
+neither
+```
+
+The value form is exhaustive by the same rule, evaluates its scrutinee once,
+and refuses to be written where its type cannot be read (a bare
+`let x = match …` with no annotation). Within one `match`, every arm ends in
+`:` or every arm yields with `=>` — the two never mix.
+
 ```luce fail
 enum Colour:
     red

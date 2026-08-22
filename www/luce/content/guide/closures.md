@@ -17,7 +17,7 @@ func apply(operation: func(i64) -> i64, value: i64) -> i64:
     return operation(value)
 
 func main():
-    let doubled: func(i64) -> i64 = (value) -> value * 2
+    let doubled: func(i64) -> i64 = (value) => value * 2
     print(str(apply(doubled, 21)))
     print(str(apply((value) => value + 1, 41)))
 ```
@@ -27,9 +27,11 @@ func main():
 42
 ```
 
-The landing function type supplies parameter types. The expression is the
-result, so it needs no `return`. This concise form is capture-free: use a block
-closure when the function must carry a local name or contain statements.
+The landing function type supplies parameter types (or write them yourself:
+`(value: i64) => value * 2`). The `=>` **yields** the body's value, so it needs
+no `return`. This concise form captures its environment like the block closure
+it desugars to; reach for a block closure when the function must carry a local
+name or contain statements.
 
 ## Block closures
 

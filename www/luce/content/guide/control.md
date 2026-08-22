@@ -7,7 +7,7 @@ truthy.
 A block whose body is a single statement may be written on one line, after
 the `:`, with no indentation:
 
-```luce
+```luce module file=classify.luc
 func classify(n: i64) -> str:
     if n == 0: return "zero"
     elif n < 10: return "small"
@@ -19,10 +19,11 @@ block (`if`/`elif`/`else`, `while`, `for`, `match` arms, and function,
 `init`, `deinit`, and `catch` bodies) accepts the one-line form. There is
 no statement separator, so an inline block holds exactly one statement.
 
-Control flow is statement-oriented. `if`, `while`, `for`, and `match` choose
-which statements run; they do not themselves produce a value. When a
-function needs to choose an answer, return from each branch or assign a
-previously declared `var`.
+Control flow is statement-oriented: `if`, `while`, and `for` choose which
+statements run rather than producing a value, so to choose an answer you
+return from each branch or assign a previously declared `var`. `match` is the
+exception — it also has an expression form that yields a value directly (see
+[Enumerations](/guide/enums/)).
 
 ## Branching
 
