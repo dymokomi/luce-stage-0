@@ -89,7 +89,7 @@ expect_failure() {
 
 expect_failure unsupported-os 'supports macOS and Linux, not FreeBSD' "$full_bin" \
     TEST_SYSTEM=FreeBSD TEST_MACHINE=x86_64
-expect_failure unsupported-linux-arch 'supports x86-64 and arm64, not riscv64' "$full_bin" \
+expect_failure unsupported-linux-arch 'stage-0 supports macOS arm64 and Linux x86-64 only, not Linux riscv64' "$full_bin" \
     TEST_SYSTEM=Linux TEST_MACHINE=riscv64
 expect_failure old-macos 'requires macOS 15 or newer; found 14.7' "$full_bin" \
     TEST_SYSTEM=Darwin TEST_MACHINE=arm64 TEST_MACOS=14.7

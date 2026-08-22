@@ -4,6 +4,21 @@ Luce uses indentation for blocks. A block follows `:` and is indented by
 four spaces. Conditions are `bool`; numbers and strings are not implicitly
 truthy.
 
+A block whose body is a single statement may be written on one line, after
+the `:`, with no indentation:
+
+```luce
+func classify(n: i64) -> str:
+    if n == 0: return "zero"
+    elif n < 10: return "small"
+    else: return "big"
+```
+
+This is the same block, one statement long — every construct that opens a
+block (`if`/`elif`/`else`, `while`, `for`, `match` arms, and function,
+`init`, `deinit`, and `catch` bodies) accepts the one-line form. There is
+no statement separator, so an inline block holds exactly one statement.
+
 Control flow is statement-oriented. `if`, `while`, `for`, and `match` choose
 which statements run; they do not themselves produce a value. When a
 function needs to choose an answer, return from each branch or assign a

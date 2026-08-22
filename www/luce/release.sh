@@ -272,7 +272,7 @@ assemble_archive macos-aarch64 "$macos_prefix"
 # change that does not touch the Linux binaries — and the publisher is
 # responsible for carrying the existing Linux archives forward.
 skip_linux="${LUCE_RELEASE_SKIP_LINUX:-}"
-for architecture in aarch64 x86_64; do
+for architecture in x86_64; do
     if [ -n "$skip_linux" ]; then
         echo "==> Linux $architecture skipped (LUCE_RELEASE_SKIP_LINUX)"
         continue
@@ -298,7 +298,7 @@ done
 echo "==> macOS installer smoke"
 "$here/install-smoke.sh" "$release_output" "$release_work/smoke-macos-aarch64"
 
-for architecture in aarch64 x86_64; do
+for architecture in x86_64; do
     if [ -n "$skip_linux" ]; then
         echo "==> Linux $architecture installer smoke skipped (LUCE_RELEASE_SKIP_LINUX)"
         continue
@@ -330,5 +330,5 @@ done
 if [ -n "$skip_linux" ]; then
     echo "==> release complete: macOS arm64 (Linux archives carried forward unchanged)"
 else
-    echo "==> release complete: macOS arm64, Linux arm64, and Linux x86-64"
+    echo "==> release complete: macOS arm64 and Linux x86-64"
 fi

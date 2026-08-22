@@ -22,8 +22,11 @@ endings. A leading UTF-8 byte-order mark is ignored. Invalid UTF-8, NUL,
 unsupported encodings, stray carriage returns, bidi controls, tabs, and files
 larger than the source limit are diagnosed before or during lexing.
 
-Blocks are introduced by `:` and indented exactly four spaces. Newlines end
-statements; semicolons do not join them. `#` begins a line comment. Names begin
+Blocks are introduced by `:` and indented exactly four spaces. A block whose
+body is a single statement may instead be written inline after the `:` on the
+same line (`if done: return 0`); every block-opening construct accepts it, and
+an inline block holds exactly one statement. Newlines end statements;
+semicolons do not join them. `#` begins a line comment. Names begin
 with an ASCII letter and continue with letters, digits, or `_`; a leading `_`
 is not a privacy convention, and bare `_` is reserved for array rank syntax.
 Declarations conventionally use TitleCase type names and snake_case value

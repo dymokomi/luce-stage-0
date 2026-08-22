@@ -1,6 +1,6 @@
 # Release security and provenance
 
-This is the current release checklist for Luce 0.18. It describes what the
+This is the current release checklist for Luce 0.19. It describes what the
 repository proves before an archive is published and what the installer does
 not pretend to prove.
 

@@ -5964,3 +5964,63 @@ test "failure: a call that raises leaves nothing where its value would have gone
         \\
     , budget, .user_error, "out of bits");
 }
+
+test "inline blocks: a one-line body is exactly the indented body of one statement" {
+    // ':' followed by a single statement on the same line — for every
+    // construct, on both engines. The AST is identical to the indented
+    // form, so the two engines agree for free (docs/STATEMENTS.md).
+    try agree.prints(
+        \\union Shape:
+        \\    dot
+        \\    circle(radius: i64)
+        \\
+        \\func area(s: Shape) -> i64:
+        \\    match s:
+        \\        dot: return 0
+        \\        circle(radius): return radius * radius
+        \\
+        \\func classify(n: i64) -> str:
+        \\    if n == 0: return "zero"
+        \\    elif n < 10: return "small"
+        \\    else: return "big"
+        \\
+        \\func triangle(rows: i64) -> i64:
+        \\    var total = 0
+        \\    for i in range(0, rows): total = total + i
+        \\    return total
+        \\
+        \\func main():
+        \\    print(str(area(Shape.circle(radius = 4))))
+        \\    print(str(area(Shape.dot)))
+        \\    print(classify(0))
+        \\    print(classify(3))
+        \\    print(classify(50))
+        \\    print(str(triangle(5)))
+        \\
+    ,
+        \\16
+        \\0
+        \\zero
+        \\small
+        \\big
+        \\10
+        \\
+    );
+}
+
+test "inline blocks: a while body and a one-line function on the same line" {
+    try agree.prints(
+        \\func negate(x: i64) -> i64: return 0 - x
+        \\
+        \\func main():
+        \\    var n = 5
+        \\    while n > 0: n = n - 1
+        \\    print(str(n))
+        \\    print(str(negate(7)))
+        \\
+    ,
+        \\0
+        \\-7
+        \\
+    );
+}

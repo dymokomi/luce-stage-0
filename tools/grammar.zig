@@ -137,7 +137,13 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_match,
         => .control,
 
-        .keyword_and, .keyword_or, .keyword_not, .keyword_is => .word_operator,
+        // The logical word operators read as keywords in a Python-shaped
+        // language and are coloured like them by every theme — `.control`
+        // is the class themes reliably paint, and the bundled editor
+        // already lumps them with keywords.  `is` (identity) stays a word
+        // operator, its own distinct act.
+        .keyword_and, .keyword_or, .keyword_not => .control,
+        .keyword_is => .word_operator,
 
         .keyword_func,
         .keyword_struct,

@@ -4,7 +4,19 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
-## Unreleased
+## 0.19 — inline single-statement blocks
+
+- **Inline blocks.** A block whose body is a single statement may be
+  written on one line, after the `:`: `if done: return 0`, `while n > 0: n =
+  n - 1`, `func neg(x: i64) -> i64: return 0 - x`, and one-line `match` arms.
+  Every block-opening construct accepts it, and the inline body is the exact
+  same one-statement block the indented form builds — so both engines agree
+  for free and the module format and host ABI are untouched. One statement
+  per line (Luce has no separator); the indented form is unchanged. A purely
+  additive, purely syntactic revision of the stage-0 seed.
+
+## 0.18 — stage-0 freeze
+
 
 - The standard library speaks typed errors (docs/ERRORS.md R2, the
   std sweep): the three pure-protocol modules declare what they fail

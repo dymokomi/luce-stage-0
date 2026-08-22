@@ -13,7 +13,7 @@ maintained packages, and Luce highlighting for local VS Code, VS Code
 Insiders, or Cursor:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.19/install.sh | bash
 ```
 
 Open a new terminal after the installer finishes. Create `hello.luc`:

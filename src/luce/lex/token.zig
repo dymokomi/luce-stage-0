@@ -171,6 +171,10 @@ pub const Kind = enum {
     slash_slash_assign,
     percent_assign,
     arrow,
+    /// `=>` — yields a value: an expression lambda's body and an
+    /// expression `match` arm.  Distinct from `->` (declares a type)
+    /// and `:` (introduces a statement suite).
+    fat_arrow,
     plus,
     minus,
     /// The bit set (docs/BITWISE.md): `&`, `|`, `^`, `~`, `<<`, `>>`

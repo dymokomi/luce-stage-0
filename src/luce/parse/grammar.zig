@@ -2583,6 +2583,14 @@ pub const Parser = struct {
     /// parser wanted.
     pub fn block(self: *Parser, opener: []const u8) Error!?ast.Block {
         if (!try self.colonOrLayout("':' to open the block")) return null;
+        // A one-line body: ':' and a single statement on the same line.
+        // Reached only when a colon was actually written — the
+        // missing-colon recovery in `colonOrLayout` always leaves a
+        // newline here, so it falls through to the indented path.  The
+        // result is the same one-statement `Block` an indented body of
+        // one line would build, so nothing downstream sees a
+        // difference (docs/STATEMENTS.md, inline blocks).
+        if (self.peekKind() != .newline) return try self.inlineBlock();
         if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
         const opened = (try self.blockBody(opener)) orelse return null;
 
@@ -2606,6 +2614,21 @@ pub const Parser = struct {
             .statements = try statements.toOwnedSlice(self.arena),
             .span = .{ .start = opened.span.start, .end = closed.end },
         };
+    }
+
+    /// A one-line block body: the single statement written after `:` on
+    /// the same line.  The statement owns its own line ending — every
+    /// simple statement consumes its trailing newline through
+    /// `endOfStatement`, which is also what rejects a second statement
+    /// with no separator (Luce has none) between them.  So this parses
+    /// exactly one statement and stops, and a following `elif`, `else`,
+    /// dedent, or sibling attaches exactly as after an indented body.
+    fn inlineBlock(self: *Parser) Error!?ast.Block {
+        const start = self.peek().span.start;
+        const parsed = (try self.statement()) orelse return null;
+        const statements = try self.arena.alloc(ast.Statement, 1);
+        statements[0] = parsed;
+        return .{ .statements = statements, .span = .{ .start = start, .end = self.peek().span.start } };
     }
 
     fn statement(self: *Parser) Error!?ast.Statement {
@@ -3711,6 +3734,7 @@ pub fn describe(kind: Kind) []const u8 {
         .slash_slash_assign => "'//='",
         .percent_assign => "'%='",
         .arrow => "'->'",
+        .fat_arrow => "'=>'",
         .plus => "'+'",
         .minus => "'-'",
         .ampersand => "'&'",

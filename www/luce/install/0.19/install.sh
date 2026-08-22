@@ -1,21 +1,21 @@
 #!/bin/sh
-# Install the Luce 0.18 toolchain for macOS 15+ or glibc Linux.
+# Install the Luce 0.19 toolchain for macOS 15+ or glibc Linux.
 #
 # Usage:
 #
-#   curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
+#   curl -fsSL https://luce.luciaos.com/install/0.19/install.sh | bash
 #
 # The archive is checked before it replaces ~/.local/luce.  Running this
 # command again downloads and installs a fresh copy of the same release.
 set -eu
 
-version=0.18
+version=0.19
 base_url="${LUCE_INSTALL_BASE_URL:-https://luce.luciaos.com/install/${version}}"
 install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
 editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
 profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
-extension_version=0.6.0
+extension_version=0.6.1
 termui_version=0.5.0
 
 system=$(uname -s)
@@ -34,12 +34,8 @@ case "$system:$machine" in
         platform=linux-x86_64
         platform_name='Linux x86-64'
         ;;
-    Linux:aarch64|Linux:arm64)
-        platform=linux-aarch64
-        platform_name='Linux arm64'
-        ;;
     Linux:*)
-        echo "luce: this Linux release supports x86-64 and arm64, not $machine" >&2
+        echo "luce: stage-0 supports macOS arm64 and Linux x86-64 only, not Linux $machine" >&2
         exit 1
         ;;
     *)

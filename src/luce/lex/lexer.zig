@@ -500,6 +500,9 @@ const Lexer = struct {
                 if (self.peek(1) == '=') {
                     try self.emit(.equal, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
+                } else if (self.peek(1) == '>') {
+                    try self.emit(.fat_arrow, .{ .start = self.offset, .end = self.offset + 2 });
+                    self.offset += 2;
                 } else {
                     try self.single(.assign);
                 }

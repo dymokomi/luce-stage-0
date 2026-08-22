@@ -15,7 +15,7 @@ The versioned installer replaces the current installation under
 `~/.local/luce` with a complete release:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.19/install.sh | bash
 ```
 
 Running it again downloads and verifies a fresh archive before replacing the

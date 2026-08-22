@@ -3175,3 +3175,22 @@ fn compileAnything(_: void, smith: *testing.Smith) anyerror!void {
         },
     }
 }
+
+test "an inline ':' block holds exactly one statement" {
+    // A second statement on the line has no separator between it and
+    // the first — Luce has none — so `endOfStatement` refuses it, the
+    // same way it refuses two statements run together anywhere.
+    try expectRejected(
+        \\func main():
+        \\    if true: let x = 1 let y = 2
+        \\
+    , "luce.parse.expected");
+    // ':' then a newline is still the indented form, which still wants
+    // a body — an inline block never makes an empty block legal.
+    try expectRejected(
+        \\func main():
+        \\    if true:
+        \\    print("after")
+        \\
+    , "luce.parse.expected");
+}

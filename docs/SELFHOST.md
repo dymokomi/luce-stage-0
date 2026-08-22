@@ -10,7 +10,12 @@ half of cancellation (receive_by + os.Deadline), and the std sweep
 using every feature at once — compiled first try. From here the Zig
 toolchain has two jobs, oracle and bootstrap seed; **toolchain**
 changes (bug fixes, DWARF line tables, artifact work) remain
-welcome, **language** changes are over. The next compiler is written
+welcome, and the language accepts only **purely additive, purely
+syntactic** revisions that invalidate no frozen-era source — the
+freeze is on language *capability*, which is complete. (0.19 added
+inline single-statement blocks under exactly that bar: same AST,
+same MIR format, same host ABI, every 0.18 program still valid.)
+New language *capability* is over; that is stage 1's job. The next compiler is written
 fully in Luce, in its own repository, against this frozen seed.
 Original ratified direction (2026-08-19) follows.
 
