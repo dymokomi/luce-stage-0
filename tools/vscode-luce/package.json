@@ -2,7 +2,7 @@
   "name": "luce-language",
   "displayName": "Luce Language",
   "description": "Syntax highlighting, brace-aware editing, and the Luce language server for VS Code.",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "publisher": "luciaos",
   "license": "UNLICENSED",
   "engines": {

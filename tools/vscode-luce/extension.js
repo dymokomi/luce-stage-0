@@ -146,7 +146,11 @@ function lineEndsWithColon(line) {
 // its first non-blank content is the comment — a `# mark:` inside code or a
 // string never starts with `#` at the line's head, so no scan of those is
 // needed (Luce strings do not span lines).
-const MARK_LINE = /^[ \t]*#[ \t]*mark:/i;
+//
+// Spacing and case are all elastic, so a mark reads the same however it is
+// tabulated: any indent before `#`, any run of spaces or tabs between `#`,
+// `mark`, and `:`, and any casing of the word (`# mark:`, `   #  MARK :`).
+const MARK_LINE = /^[ \t]*#[ \t]*mark[ \t]*:/i;
 
 function markFoldingRanges(text) {
   const lines = text.split("\n");

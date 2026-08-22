@@ -58,6 +58,28 @@ test("marks fold at any indent, ignore case and spacing, and never span a string
   assert.deepEqual(markFoldingRanges(source), [{ start: 1, end: 3 }]);
 });
 
+test("spacing is elastic around #, mark, and the colon", () => {
+  // Every spelling below is one section head: indent before #, runs of
+  // spaces or tabs between the parts, a space before the colon, mixed case.
+  const heads = [
+    "# mark: a",
+    "   # mark: a",
+    "\t#\tMARK\t: a",
+    "#   MaRk : a",
+    "      #mark:a",
+  ];
+  for (const head of heads) {
+    assert.deepEqual(
+      markFoldingRanges(head + "\nx = 1\ny = 2\n"),
+      [{ start: 0, end: 2 }],
+      head,
+    );
+  }
+  // "marked:" and "mark up:" are not marks — the word must be exactly mark.
+  assert.deepEqual(markFoldingRanges("# marked: x\ny = 1\n"), []);
+  assert.deepEqual(markFoldingRanges("# mark up: x\ny = 1\n"), []);
+});
+
 test("a mark with nothing under it makes no fold, and none means no ranges", () => {
   assert.deepEqual(markFoldingRanges("# mark: a\n# mark: b\nx\n"), [
     { start: 1, end: 2 },
