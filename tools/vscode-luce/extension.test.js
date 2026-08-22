@@ -6,6 +6,7 @@ const {
   indentationCorrection,
   layoutDepth,
   lineEndsWithColon,
+  markFoldingRanges,
 } = require("./extension.js");
 
 test("layout depth follows grouping and ignores comments and strings", () => {
@@ -38,4 +39,28 @@ test("on-type correction leaves nonblank lines and settled indentation alone", (
   const source = "let values = {\n    \"key\":";
   assert.equal(indentationCorrection(source, "    \"key\":", "    "), null);
   assert.equal(indentationCorrection(source, "    \"key\":", "        value"), null);
+});
+
+test("# mark: opens a section that folds to the next mark or the file end", () => {
+  const source =
+    "# mark: first\nlet a = 1\nlet b = 2\n\n# mark: second\nfunc f():\n    return\n\n";
+  assert.deepEqual(markFoldingRanges(source), [
+    { start: 0, end: 2 },
+    { start: 4, end: 6 },
+  ]);
+});
+
+test("marks fold at any indent, ignore case and spacing, and never span a string", () => {
+  // Indented mark, a caps/spacing variant, and a `# mark:` sitting inside
+  // code — which never starts a line and so is not a section head.
+  const source =
+    "func f():\n    #  MARK: inner\n    let a = 1\n    let s = \"# mark: text\"\n";
+  assert.deepEqual(markFoldingRanges(source), [{ start: 1, end: 3 }]);
+});
+
+test("a mark with nothing under it makes no fold, and none means no ranges", () => {
+  assert.deepEqual(markFoldingRanges("# mark: a\n# mark: b\nx\n"), [
+    { start: 1, end: 2 },
+  ]);
+  assert.deepEqual(markFoldingRanges("let a = 1\nlet b = 2\n"), []);
 });

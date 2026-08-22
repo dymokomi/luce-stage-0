@@ -10,7 +10,8 @@ step.
   Hand-written and deliberately word-free: the indent rule recognizes a line
   ending in a colon, which covers every ordinary layout block.
 - `extension.js` — a dependency-free on-type correction for colons inside
-  grouping delimiters, where Luce suspends layout.
+  grouping delimiters, where Luce suspends layout, and a folding provider for
+  `# mark:` sections (below).
 - `package.json` — what VS Code loads, plus the defaults below.
 
 Only `.luc` is claimed. A `.lc` is a compiled artifact and a `.lcm` a serialized
@@ -158,3 +159,23 @@ launch an Extension Development Host. There is no build step for the extension
 itself. Run `npm test` for the pure indentation scanner. A change to the grammar
 is a change to `tools/grammar.zig` followed by `zig build grammar`, never an edit
 to the JSON.
+
+## Section marks
+
+A comment of the form `# mark: title` opens a foldable section. It runs from
+the mark line to just above the next `# mark:` (at any indentation) or to the
+end of the file, so a whole section collapses to its title line:
+
+```luce
+# mark: parsing
+func lex(...): ...
+func parse(...): ...
+
+# mark: evaluation
+func eval(...): ...
+```
+
+The match is case-insensitive and tolerant of spacing (`#  MARK: …` works). A
+`# mark:` only opens a section when the comment is the first thing on the line;
+one written after code, or inside a string, is left alone. Folding is provided
+by `extension.js` — the compiler ignores the comment like any other.

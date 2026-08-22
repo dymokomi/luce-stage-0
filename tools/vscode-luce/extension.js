@@ -138,6 +138,33 @@ function lineEndsWithColon(line) {
   return lastCode === ":";
 }
 
+// `# mark: title` sections. A mark line opens a foldable region that runs
+// to the line just above the next mark (at any indent) or the end of the
+// file, so a reader can collapse a whole section and keep only its title.
+// Trailing blank lines are left out so the blank between two sections stays
+// visible when the section above is folded. A line only opens a section when
+// its first non-blank content is the comment — a `# mark:` inside code or a
+// string never starts with `#` at the line's head, so no scan of those is
+// needed (Luce strings do not span lines).
+const MARK_LINE = /^[ \t]*#[ \t]*mark:/i;
+
+function markFoldingRanges(text) {
+  const lines = text.split("\n");
+  const marks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (MARK_LINE.test(lines[index])) marks.push(index);
+  }
+  const ranges = [];
+  for (let mark = 0; mark < marks.length; mark += 1) {
+    const start = marks[mark];
+    const limit = mark + 1 < marks.length ? marks[mark + 1] : lines.length;
+    let end = limit - 1;
+    while (end > start && /^[ \t]*$/.test(lines[end])) end -= 1;
+    if (end > start) ranges.push({ start, end });
+  }
+  return ranges;
+}
+
 function indentationCorrection(textThroughPreviousLine, previousLine, currentLine) {
   if (!/^[ \t]*$/.test(currentLine)) return null;
   if (!lineEndsWithColon(previousLine)) return null;
@@ -170,6 +197,20 @@ function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerOnTypeFormattingEditProvider("luce", provider, "\n"),
   );
+  context.subscriptions.push(
+    vscode.languages.registerFoldingRangeProvider("luce", {
+      provideFoldingRanges(document) {
+        return markFoldingRanges(document.getText()).map(
+          (range) =>
+            new vscode.FoldingRange(
+              range.start,
+              range.end,
+              vscode.FoldingRangeKind.Region,
+            ),
+        );
+      },
+    }),
+  );
 }
 
 function deactivate() {}
@@ -180,4 +221,5 @@ module.exports = {
   indentationCorrection,
   layoutDepth,
   lineEndsWithColon,
+  markFoldingRanges,
 };
