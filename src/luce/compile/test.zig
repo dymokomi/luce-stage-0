@@ -3219,3 +3219,12 @@ test "an inline ':' body is one simple statement, not a compound one" {
         \\
     , "luce.parse.expected");
 }
+
+test "a bare typed lambda cannot infer its result, and is taught the two forms" {
+    try expectRejected(
+        \\func main():
+        \\    let f = (x: i64) => x > 0
+        \\    print(str(f(5)))
+        \\
+    , "luce.sema.type");
+}

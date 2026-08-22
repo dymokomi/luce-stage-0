@@ -1949,6 +1949,19 @@ pub const FunctionBuilder = struct {
     ) Error!?Typed {
         _ = expression;
         const index = wanted_function orelse {
+            // A lambda with typed parameters still cannot name its
+            // result — the `=>` body determines it, and that needs the
+            // landing context.  Point at the two forms that supply
+            // one (docs/FUNCTIONS.md).
+            if (written.parameter_types.len != 0) {
+                try self.fail(
+                    "luce.sema.type",
+                    written.span,
+                    "a lambda's result comes from where it lands: annotate the binding (let f: func(...) -> R = ...) or write a 'func(...) -> R:' block closure",
+                    .{},
+                );
+                return null;
+            }
             try self.fail(
                 "luce.sema.type",
                 written.span,

@@ -6050,3 +6050,38 @@ test "syntax: => lambdas capture, and _ is a match wildcard, on both engines" {
         \\
     );
 }
+
+test "typed params: a no-context closure carries its own types, both engines" {
+    try agree.prints(
+        \\func main():
+        \\    let positive = func(x: i64) -> bool:
+        \\        return x > 0
+        \\    print(str(positive(5)))
+        \\    print(str(positive(-3)))
+        \\    let scaled = func(x: i64, by: i64) -> i64:
+        \\        return x * by
+        \\    print(str(scaled(6, 7)))
+        \\
+    ,
+        \\true
+        \\false
+        \\42
+        \\
+    );
+}
+
+test "typed params: an explicit lambda parameter type is allowed with context" {
+    try agree.prints(
+        \\func keep(v: i64, p: func(i64) -> bool) -> bool:
+        \\    return p(v)
+        \\
+        \\func main():
+        \\    print(str(keep(7, (x: i64) => x > 5)))
+        \\    print(str(keep(3, (x: i64) => x > 5)))
+        \\
+    ,
+        \\true
+        \\false
+        \\
+    );
+}

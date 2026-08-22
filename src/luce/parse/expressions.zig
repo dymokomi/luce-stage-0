@@ -856,10 +856,23 @@ fn lambda(self: *Parser) Error!?*ast.Expression {
     const opener = self.advance(); // (
     var parameters: std.ArrayList(ast.Name) = .empty;
     defer parameters.deinit(self.arena);
+    var parameter_types: std.ArrayList(?ast.TypeName) = .empty;
+    defer parameter_types.deinit(self.arena);
+    var any_type = false;
     while (!endsList(self.peekKind(), .right_paren)) {
         const name = (try self.expect(.identifier, "a parameter name")) orelse return null;
         try self.refuseWildcardName(name);
         try parameters.append(self.arena, .{ .text = self.text(name), .span = name.span });
+        // `name: Type` gives the parameter its type where no landing
+        // context does (docs/FUNCTIONS.md); a bare name is
+        // context-typed as before.
+        if (self.accept(.colon) != null) {
+            const written = (try self.typeName()) orelse return null;
+            try parameter_types.append(self.arena, written);
+            any_type = true;
+        } else {
+            try parameter_types.append(self.arena, null);
+        }
         if (self.accept(.comma) == null) break;
     }
     if ((try self.expectClose(.right_paren, opener)) == null) return null;
@@ -893,6 +906,7 @@ fn lambda(self: *Parser) Error!?*ast.Expression {
     const body = (try expression(self)) orelse return null;
     return make(self, .{ .lambda = .{
         .parameters = try parameters.toOwnedSlice(self.arena),
+        .parameter_types = if (any_type) try parameter_types.toOwnedSlice(self.arena) else &.{},
         .body = body,
         .span = .{ .start = opener.span.start, .end = body.span().end },
     } });
@@ -970,17 +984,36 @@ fn blockClosure(self: *Parser, has_capture_list: bool) Error!?*ast.Expression {
     const opener = (try self.expect(.left_paren, "'(' after 'func'")) orelse return null;
     var parameters: std.ArrayList(ast.Name) = .empty;
     defer parameters.deinit(self.arena);
+    var parameter_types: std.ArrayList(?ast.TypeName) = .empty;
+    defer parameter_types.deinit(self.arena);
+    var any_type = false;
     while (!endsList(self.peekKind(), .right_paren)) {
         const name = (try self.expect(.identifier, "a parameter name")) orelse return null;
         try self.refuseWildcardName(name);
         try parameters.append(self.arena, .{ .text = self.text(name), .span = name.span });
+        if (self.accept(.colon) != null) {
+            const written = (try self.typeName()) orelse return null;
+            try parameter_types.append(self.arena, written);
+            any_type = true;
+        } else {
+            try parameter_types.append(self.arena, null);
+        }
         if (self.accept(.comma) == null) break;
     }
     if ((try self.expectClose(.right_paren, opener)) == null) return null;
+    // `-> R` before the block gives the result where no context does
+    // (docs/FUNCTIONS.md).  `-> !` and result shapes are not closure
+    // spellings; a plain result type or nothing.
+    var returns: ?ast.TypeName = null;
+    if (self.accept(.arrow) != null) {
+        returns = (try self.typeName()) orelse return null;
+    }
     const body = (try self.block("closure")) orelse return null;
     return make(self, .{ .closure = .{
         .captures = try captures.toOwnedSlice(self.arena),
         .parameters = try parameters.toOwnedSlice(self.arena),
+        .parameter_types = if (any_type) try parameter_types.toOwnedSlice(self.arena) else &.{},
+        .returns = returns,
         .body = body,
         .span = .{ .start = start, .end = body.span.end },
     } });

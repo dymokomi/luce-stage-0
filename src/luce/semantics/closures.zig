@@ -830,14 +830,44 @@ pub fn lowerClosure(
     written: ast.Closure,
     wanted_function: ?u32,
 ) Error!?Typed {
-    const signature_index = wanted_function orelse {
-        try self.fail(
-            "luce.sema.type",
-            written.span,
-            "a closure needs a place that expects a function: annotate the binding or return it from a function with a func(...) result",
-            .{},
-        );
-        return null;
+    const signature_index = wanted_function orelse synthesize: {
+        // No landing context.  A closure that wrote its own types
+        // builds its signature from them (docs/FUNCTIONS.md); one that
+        // did not still needs a place that expects a function.
+        if (written.parameter_types.len == 0 and written.returns == null) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "a closure needs a place that expects a function: annotate the binding or return it from a function with a func(...) result",
+                .{},
+            );
+            return null;
+        }
+        // From here every parameter must be typed, because nothing
+        // else can supply one.
+        if (written.parameter_types.len != written.parameters.len) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "with its own types, a closure needs a type on every parameter and a '-> R' result",
+                .{},
+            );
+            return null;
+        }
+        const params = try self.arena().alloc(types.Signature.Parameter, written.parameters.len);
+        for (written.parameter_types, written.parameters, params) |maybe, name, *slot| {
+            const ty = maybe orelse {
+                try self.fail("luce.sema.type", name.span, "with no landing context, every closure parameter needs a type", .{});
+                return null;
+            };
+            slot.* = .{ .value_type = (try resolve.resolveType(self.analyzer, self.module, ty)) orelse return null };
+        }
+        var result: Type = .none;
+        if (written.returns) |r| {
+            result = (try resolve.resolveType(self.analyzer, self.module, r)) orelse return null;
+        }
+        const made = try resolve.internSignature(self.analyzer, .{ .parameters = params, .result = result });
+        break :synthesize made.function;
     };
     const signature = self.analyzer.signatures.items[signature_index];
     if (written.parameters.len != signature.parameters.len) {

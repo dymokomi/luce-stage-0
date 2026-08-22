@@ -169,7 +169,11 @@ pub const Spawn = struct { call: *Expression, span: Span };
 /// rule the language already lives by for numbers, applied to one more
 /// literal.  The body is one expression because a body with room for
 /// statements immediately wants the enclosing scope, which is capture.
-pub const Lambda = struct { parameters: []Name, body: *Expression, span: Span };
+/// A lambda's explicit parameter types, parallel to `parameters` and
+/// the same length; a null entry is a parameter whose type the
+/// landing context supplies (docs/FUNCTIONS.md).  Empty means every
+/// parameter is context-typed, the concise form.
+pub const Lambda = struct { parameters: []Name, parameter_types: []?TypeName = &.{}, body: *Expression, span: Span };
 
 /// One entry in a block closure's optional capture list.
 ///
@@ -195,6 +199,12 @@ pub const ClosureCapture = struct {
 pub const Closure = struct {
     captures: []ClosureCapture,
     parameters: []Name,
+    /// Explicit parameter types, parallel to `parameters`; empty or a
+    /// null entry is context-typed (docs/FUNCTIONS.md).
+    parameter_types: []?TypeName = &.{},
+    /// A `-> R` written after the parameter list: the result type when
+    /// no landing context supplies one.  Null is context-typed.
+    returns: ?TypeName = null,
     body: Block,
     span: Span,
 };
