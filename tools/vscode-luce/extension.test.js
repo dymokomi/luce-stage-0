@@ -8,6 +8,7 @@ const {
   lineEndsWithColon,
   markFoldingRanges,
   markLineNumbers,
+  enclosingMarkHead,
   indentationFoldingRanges,
   combinedFoldingRanges,
 } = require("./extension.js");
@@ -127,4 +128,12 @@ test("combined folding keeps indentation blocks and marks the mark head", () => 
     { start: 0, end: 2, region: true },  // the section, over the block
     { start: 1, end: 2, region: false }, // the function's own indentation fold
   ]);
+});
+
+test("enclosingMarkHead finds the section the cursor is in, or -1 above them all", () => {
+  const source = "let top = 0\n# mark: a\nx = 1\ny = 2\n# mark: b\nz = 3\n";
+  assert.equal(enclosingMarkHead(source, 0), -1); // above the first mark
+  assert.equal(enclosingMarkHead(source, 1), 1);  // on the head itself
+  assert.equal(enclosingMarkHead(source, 3), 1);  // inside section a
+  assert.equal(enclosingMarkHead(source, 5), 4);  // inside section b
 });

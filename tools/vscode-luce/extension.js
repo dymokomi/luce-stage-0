@@ -191,6 +191,18 @@ function indentationFoldingRanges(text) {
   return ranges;
 }
 
+// The head line of the `# mark:` section that contains `line` — the nearest
+// mark at or above it — or -1 when the cursor sits above the first mark and
+// so is in no section.
+function enclosingMarkHead(text, line) {
+  let head = -1;
+  for (const mark of markLineNumbers(text)) {
+    if (mark > line) break;
+    head = mark;
+  }
+  return head;
+}
+
 function markFoldingRanges(text) {
   const lines = text.split("\n");
   const marks = markLineNumbers(text);
@@ -311,12 +323,26 @@ function activate(context) {
     if (selectionLines.length === 0) return undefined;
     return vscode.commands.executeCommand(command, { selectionLines });
   };
+  // Fold just the section the cursor is in — the enclosing `# mark:` head,
+  // not the innermost indentation block VS Code's own fold-at-cursor takes.
+  const foldCurrentMark = () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "luce") return undefined;
+    const text = editor.document.getText();
+    const head = enclosingMarkHead(text, editor.selection.active.line);
+    if (head < 0) return undefined;
+    if (!markFoldingRanges(text).some((range) => range.start === head)) {
+      return undefined; // this section has nothing under it to fold
+    }
+    return vscode.commands.executeCommand("editor.fold", { selectionLines: [head] });
+  };
   context.subscriptions.push(
     vscode.commands.registerCommand("luce.foldAllMarks", foldMarks("editor.fold")),
     vscode.commands.registerCommand(
       "luce.unfoldAllMarks",
       foldMarks("editor.unfold"),
     ),
+    vscode.commands.registerCommand("luce.foldCurrentMark", foldCurrentMark),
   );
 }
 
@@ -330,6 +356,7 @@ module.exports = {
   lineEndsWithColon,
   markFoldingRanges,
   markLineNumbers,
+  enclosingMarkHead,
   indentationFoldingRanges,
   combinedFoldingRanges,
 };
