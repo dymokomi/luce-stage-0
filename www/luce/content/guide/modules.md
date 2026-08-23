@@ -21,13 +21,13 @@ sample/
 ```
 
 ```luce module file=geometry.luc
-struct Point:
-    x: f64
-    y: f64
+pub struct Point:
+    pub x: f64
+    pub y: f64
 
-const unit = 1.0
+pub const unit = 1.0
 
-func distance(a: Point, b: Point) -> f64:
+pub func distance(a: Point, b: Point) -> f64:
     let dx = a.x - b.x
     let dy = a.y - b.y
     return sqrt(dx * dx + dy * dy)
@@ -73,11 +73,11 @@ writes one module's types in every signature — name the members themselves.
 file writes `Point`, not `geometry.Point`:
 
 ```luce module file=geometry.luc
-struct Point:
-    x: f64
-    y: f64
+pub struct Point:
+    pub x: f64
+    pub y: f64
 
-func distance(a: Point, b: Point) -> f64:
+pub func distance(a: Point, b: Point) -> f64:
     let dx = a.x - b.x
     let dy = a.y - b.y
     return sqrt(dx * dx + dy * dy)
@@ -182,7 +182,7 @@ version: 0.1.0
 ```
 
 ```luce module file=geo/shapes.luc
-func area(width: f64, height: f64) -> f64:
+pub func area(width: f64, height: f64) -> f64:
     return width * height
 ```
 
