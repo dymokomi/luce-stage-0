@@ -79,7 +79,18 @@ pub fn build(
     };
     defer gpa.free(bitcode);
 
-    const object = switch (try emit.compile(gpa, bitcode, .{ .triple = triple })) {
+    // A fast-codegen build trades the runtime speed of the emitted
+    // program for a much faster compile — it is the dev/test tool, not
+    // the shipping compiler (see build.zig's `fast-codegen`).  The `O1`
+    // pipeline drops the module inliner, DSE and alias analysis that
+    // dominate O3 (keeping mem2reg, which shrinks the IR), and the
+    // `none` machine level selects FastISel over the SelectionDAG
+    // instruction selector — the two together are what make it fast.
+    const emit_options: emit.Options = if (build_options.fast_codegen)
+        .{ .triple = triple, .passes = "default<O1>", .codegen = .none }
+    else
+        .{ .triple = triple };
+    const object = switch (try emit.compile(gpa, bitcode, emit_options)) {
         .object => |bytes| bytes,
         .failed => |why| return .{ .failed = why },
     };
