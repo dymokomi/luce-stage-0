@@ -15,7 +15,7 @@ install_root="${LUCE_INSTALL_DIR:-$HOME/.local/luce}"
 editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
 profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
-extension_version=0.6.1
+extension_version=0.6.6
 termui_version=0.5.0
 
 system=$(uname -s)
