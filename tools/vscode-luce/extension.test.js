@@ -8,6 +8,8 @@ const {
   lineEndsWithColon,
   markFoldingRanges,
   markLineNumbers,
+  indentationFoldingRanges,
+  combinedFoldingRanges,
 } = require("./extension.js");
 
 test("layout depth follows grouping and ignores comments and strings", () => {
@@ -91,4 +93,38 @@ test("a mark with nothing under it makes no fold, and none means no ranges", () 
 test("markLineNumbers finds every head, including one with nothing under it", () => {
   const source = "# mark: a\nx = 1\n# mark: b\n# mark: c\ny = 2\n";
   assert.deepEqual(markLineNumbers(source), [0, 2, 3]);
+});
+
+test("indentation folds a block to its last deeper line, blanks excluded", () => {
+  const source = [
+    "func main():",   // 0
+    "    let x = 1",   // 1
+    "    if x > 0:",   // 2
+    "        print(x)",// 3
+    "    return",      // 4
+    "",                // 5 (blank)
+    "func other():",   // 6
+    "    pass",        // 7
+    "",                // 8 (trailing blank)
+  ].join("\n");
+  const got = indentationFoldingRanges(source).sort((a, b) => a.start - b.start);
+  assert.deepEqual(got, [
+    { start: 0, end: 4 },
+    { start: 2, end: 3 },
+    { start: 6, end: 7 },
+  ]);
+});
+
+test("combined folding keeps indentation blocks and marks the mark head", () => {
+  const source = [
+    "# mark: core",    // 0  region head
+    "func main():",    // 1
+    "    return",      // 2
+    "# mark: rest",    // 3  region head, nothing under it
+  ].join("\n");
+  const got = combinedFoldingRanges(source).sort((a, b) => a.start - b.start);
+  assert.deepEqual(got, [
+    { start: 0, end: 2, region: true },  // the section, over the block
+    { start: 1, end: 2, region: false }, // the function's own indentation fold
+  ]);
 });

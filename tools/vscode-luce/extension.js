@@ -164,6 +164,33 @@ function markLineNumbers(text) {
   return marks;
 }
 
+// The ordinary indentation folds — a block runs from a line to the last
+// deeper line below it, trailing blanks excluded (the off-side rule Luce
+// lays out by). VS Code hands folding to a provider *instead of* its own
+// indentation folding once one is registered, so the mark provider has to
+// supply these too or every function and `if` stops folding.
+function indentationFoldingRanges(text) {
+  const lines = text.split("\n");
+  const ranges = [];
+  const stack = [];
+  let lastContent = -1;
+  const close = (indent) => {
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      const open = stack.pop();
+      if (lastContent > open.line) ranges.push({ start: open.line, end: lastContent });
+    }
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^[ \t]*$/.test(lines[index])) continue;
+    const indent = lines[index].match(/^[ \t]*/)[0].length;
+    close(indent);
+    stack.push({ indent, line: index });
+    lastContent = index;
+  }
+  close(-1);
+  return ranges;
+}
+
 function markFoldingRanges(text) {
   const lines = text.split("\n");
   const marks = markLineNumbers(text);
@@ -176,6 +203,21 @@ function markFoldingRanges(text) {
     if (end > start) ranges.push({ start, end });
   }
   return ranges;
+}
+
+// Every fold for a document: the indentation blocks and the `# mark:`
+// regions together, keyed by start line so a mark head that also opens an
+// indented block reads as one Region fold — to the next mark — rather than
+// two folds fighting over the same line.
+function combinedFoldingRanges(text) {
+  const byStart = new Map();
+  for (const range of indentationFoldingRanges(text)) {
+    byStart.set(range.start, { start: range.start, end: range.end, region: false });
+  }
+  for (const range of markFoldingRanges(text)) {
+    byStart.set(range.start, { start: range.start, end: range.end, region: true });
+  }
+  return [...byStart.values()];
 }
 
 function indentationCorrection(textThroughPreviousLine, previousLine, currentLine) {
@@ -213,12 +255,12 @@ function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerFoldingRangeProvider("luce", {
       provideFoldingRanges(document) {
-        return markFoldingRanges(document.getText()).map(
+        return combinedFoldingRanges(document.getText()).map(
           (range) =>
             new vscode.FoldingRange(
               range.start,
               range.end,
-              vscode.FoldingRangeKind.Region,
+              range.region ? vscode.FoldingRangeKind.Region : undefined,
             ),
         );
       },
@@ -255,6 +297,27 @@ function activate(context) {
       }
     }),
   );
+
+  // Fold or unfold every `# mark:` section at once. The lines fed to the
+  // built-in fold command are exactly the section heads that own a region,
+  // so this touches the mark sections and nothing else — never the ordinary
+  // indentation folds a file also has.
+  const markHeadLines = (editor) =>
+    markFoldingRanges(editor.document.getText()).map((range) => range.start);
+  const foldMarks = (command) => () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "luce") return undefined;
+    const selectionLines = markHeadLines(editor);
+    if (selectionLines.length === 0) return undefined;
+    return vscode.commands.executeCommand(command, { selectionLines });
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand("luce.foldAllMarks", foldMarks("editor.fold")),
+    vscode.commands.registerCommand(
+      "luce.unfoldAllMarks",
+      foldMarks("editor.unfold"),
+    ),
+  );
 }
 
 function deactivate() {}
@@ -267,4 +330,6 @@ module.exports = {
   lineEndsWithColon,
   markFoldingRanges,
   markLineNumbers,
+  indentationFoldingRanges,
+  combinedFoldingRanges,
 };

@@ -2,7 +2,7 @@
   "name": "luce-language",
   "displayName": "Luce Language",
   "description": "Syntax highlighting, brace-aware editing, and the Luce language server for VS Code.",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "publisher": "luciaos",
   "license": "UNLICENSED",
   "engines": {
@@ -89,6 +89,44 @@
           "description": "Command for the Luce language server; found on PATH when not absolute."
         }
       }
+    },
+    "commands": [
+      {
+        "command": "luce.foldAllMarks",
+        "title": "Fold All Section Marks",
+        "category": "Luce"
+      },
+      {
+        "command": "luce.unfoldAllMarks",
+        "title": "Unfold All Section Marks",
+        "category": "Luce"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "luce.foldAllMarks",
+        "key": "ctrl+k ctrl+m",
+        "mac": "cmd+k cmd+m",
+        "when": "editorTextFocus && editorLangId == luce"
+      },
+      {
+        "command": "luce.unfoldAllMarks",
+        "key": "ctrl+k ctrl+shift+m",
+        "mac": "cmd+k cmd+shift+m",
+        "when": "editorTextFocus && editorLangId == luce"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "luce.foldAllMarks",
+          "when": "editorLangId == luce"
+        },
+        {
+          "command": "luce.unfoldAllMarks",
+          "when": "editorLangId == luce"
+        }
+      ]
     }
   },
   "activationEvents": [

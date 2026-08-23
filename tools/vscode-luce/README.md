@@ -184,3 +184,9 @@ A mark line is also **painted bright and bold** — amber on a dark editor, a
 saturated magenta on a light one — so a section title reads over the muted grey
 the theme gives ordinary comments. Both folding and the accent are provided by
 `extension.js`; the compiler ignores the comment like any other.
+
+**Fold or unfold every section at once** with *Luce: Fold All Section Marks*
+(`⌘K ⌘M` / `Ctrl+K Ctrl+M`) and *Luce: Unfold All Section Marks*
+(`⌘K ⇧M` / `Ctrl+K Ctrl+Shift+M`). These collapse only the `# mark:` regions,
+leaving the ordinary indentation folds where they are; VS Code's built-in
+*Fold All Regions* (`⌘K ⌘8`) does the same, since mark folds are region folds.
