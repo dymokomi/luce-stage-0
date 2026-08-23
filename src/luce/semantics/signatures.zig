@@ -226,19 +226,11 @@ fn collectFunction(
     // an ordinary function nothing calls (docs/TESTING.md D1).
     const is_entry = self.options.entry == .declared and
         top_level and in_root and std.mem.eql(u8, declaration.name, "main");
-    // The entry is selected by name and called by the runtime
-    // through the ABI — there is no import edge for a marker to
-    // gate, so `private` on it could only assert something false
-    // (VISIBILITY.md D7).  `public` is inert-legal like any other
-    // restated default.
-    if (is_entry and declaration.visibility == .private) {
-        try self.fail(
-            "luce.sema.private",
-            declaration.name_span,
-            "main is the entry and cannot be private: the runtime starts it",
-            .{},
-        );
-    }
+    // The entry is selected by name and called by the runtime through
+    // the ABI — there is no import edge for a marker to gate, so its
+    // visibility is simply irrelevant (docs/VISIBILITY.md). An unmarked
+    // `func main()` carries the private default and is the ordinary way
+    // to write it; a redundant `pub` is inert-legal like any other.
     // Whether this declaration is part of the module's reachable
     // surface, for D4 below: a private function, or any member of
     // a private struct, publishes nothing.

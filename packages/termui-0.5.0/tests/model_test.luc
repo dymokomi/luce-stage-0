@@ -1,6 +1,6 @@
 import model
 
-func test_rectangles_clip_splits_and_points_at_every_edge():
+pub func test_rectangles_clip_splits_and_points_at_every_edge():
     let area = model.Rect(row = 2, column = 3, rows = 4, columns = 6)
     assert(area.contains(2, 3))
     assert(area.contains(5, 8))
@@ -10,7 +10,7 @@ func test_rectangles_clip_splits_and_points_at_every_edge():
     assert(head.rows == 4 and rest.rows == 0)
     assert(area.inset(99).is_empty())
 
-func test_a_line_is_styled_runs_measured_as_characters():
+pub func test_a_line_is_styled_runs_measured_as_characters():
     let spans: list[model.Span] = [
         model.Span(text = "hé", style = model.Style(foreground = 1)),
         model.Span(text = "llo", style = model.Style(foreground = 2)),
@@ -19,7 +19,7 @@ func test_a_line_is_styled_runs_measured_as_characters():
     assert(line.width() == 5)
     assert(model.plain("ok").width() == 2)
 
-func test_values_copy_without_hidden_terminal_state():
+pub func test_values_copy_without_hidden_terminal_state():
     let original = model.Cursor(row = 1, column = 2)
     var changed = original
     changed.row = 9

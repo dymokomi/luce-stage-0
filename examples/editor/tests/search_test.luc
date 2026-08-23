@@ -5,14 +5,14 @@
 from model import Model, Intent, Focus
 from document import Document
 
-func searching(content: str) -> Model:
+pub func searching(content: str) -> Model:
     var documents = list[Document]()
     documents.append(Document(path = "f.luc", content = content))
     let ed = Model(documents)
     ed.key(Intent.find, "", 10)
     return ed
 
-func test_scan_finds_every_occurrence():
+pub func test_scan_finds_every_occurrence():
     var ed = searching("the cat sat on the mat")
     ed.key(Intent.insert_text, "at", 10)
     # "cat", "sat", "mat" — the 'at' at scalars 5, 9, 20.
@@ -22,25 +22,25 @@ func test_scan_finds_every_occurrence():
     assert(ed.search_matches[2] == 20)
     assert(ed.document().cursor == 5)
 
-func test_scan_counts_overlapping_matches():
+pub func test_scan_counts_overlapping_matches():
     var ed = searching("aaa")
     ed.key(Intent.insert_text, "aa", 10)
     assert(len(ed.search_matches) == 2)
     assert(ed.search_matches[0] == 0)
     assert(ed.search_matches[1] == 1)
 
-func test_an_empty_query_matches_nothing():
+pub func test_an_empty_query_matches_nothing():
     var ed = searching("anything")
     assert(len(ed.search_matches) == 0)
     assert(ed.search_current == -1)
 
-func test_no_match_leaves_the_cursor_alone():
+pub func test_no_match_leaves_the_cursor_alone():
     var ed = searching("hello")
     ed.key(Intent.insert_text, "zzz", 10)
     assert(len(ed.search_matches) == 0)
     assert(ed.document().cursor == 0)
 
-func test_step_wraps_at_both_ends():
+pub func test_step_wraps_at_both_ends():
     var ed = searching("ab ab ab")
     ed.key(Intent.insert_text, "ab", 10)
     assert(ed.search_current == 0)

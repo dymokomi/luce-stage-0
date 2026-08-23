@@ -21,7 +21,7 @@
 # `start` defaults to the whole str: `find(s, needle)` is the
 # everyday call, and `find_from` was this function wearing the
 # default as a second declaration (docs/ARGS.md §9).
-func find(s: str, needle: str, start: i64 = 0) -> i64?:
+pub func find(s: str, needle: str, start: i64 = 0) -> i64?:
     let size = len(s)
     let needle_size = len(needle)
     if start < 0 or start > size:
@@ -36,22 +36,22 @@ func find(s: str, needle: str, start: i64 = 0) -> i64?:
         at += 1
     return none
 
-func contains(s: str, needle: str) -> bool:
+pub func contains(s: str, needle: str) -> bool:
     return find(s, needle) != none
 
-func starts_with(s: str, prefix: str) -> bool:
+pub func starts_with(s: str, prefix: str) -> bool:
     if len(prefix) > len(s):
         return false
     return s[0:len(prefix)] == prefix
 
-func ends_with(s: str, suffix: str) -> bool:
+pub func ends_with(s: str, suffix: str) -> bool:
     if len(suffix) > len(s):
         return false
     return s[len(s) - len(suffix):] == suffix
 
 # How many non-overlapping occurrences; an empty needle matches every
 # scalar boundary, including the two ends of an empty str.
-func count(s: str, needle: str) -> i64:
+pub func count(s: str, needle: str) -> i64:
     if len(needle) == 0:
         return len(s) + 1
     var found = 0
@@ -67,26 +67,26 @@ func count(s: str, needle: str) -> i64:
 # ASCII character classes. Non-ASCII scalars are in none of them;
 # Unicode-aware classification belongs in a Unicode library with a
 # named data version.
-func is_digit(c: char) -> bool:
+pub func is_digit(c: char) -> bool:
     return c >= '0' and c <= '9'
 
-func is_upper(c: char) -> bool:
+pub func is_upper(c: char) -> bool:
     return c >= 'A' and c <= 'Z'
 
-func is_lower(c: char) -> bool:
+pub func is_lower(c: char) -> bool:
     return c >= 'a' and c <= 'z'
 
-func is_alpha(c: char) -> bool:
+pub func is_alpha(c: char) -> bool:
     return is_upper(c) or is_lower(c)
 
-func is_alnum(c: char) -> bool:
+pub func is_alnum(c: char) -> bool:
     return is_alpha(c) or is_digit(c)
 
-func is_space(c: char) -> bool:
+pub func is_space(c: char) -> bool:
     return c == ' ' or c == '\t' or c == char(13) or c == '\n'
 
 # ASCII whitespace off both ends.
-func trim(s: str) -> str:
+pub func trim(s: str) -> str:
     var first = 0
     while first < len(s) and is_space(s[first]):
         first += 1
@@ -96,13 +96,13 @@ func trim(s: str) -> str:
     return s[first:last]
 
 # ASCII case folding; every other scalar passes through untouched.
-func lower(s: str) -> str:
+pub func lower(s: str) -> str:
     return fold_case(s, first = 'A', last = 'Z', shift = 32)
 
-func upper(s: str) -> str:
+pub func upper(s: str) -> str:
     return fold_case(s, first = 'a', last = 'z', shift = -32)
 
-private func fold_case(s: str, first: char, last: char, shift: i64) -> str:
+func fold_case(s: str, first: char, last: char, shift: i64) -> str:
     var out = builder()
     var run = 0
     var at = 0
@@ -126,7 +126,7 @@ private func fold_case(s: str, first: char, last: char, shift: i64) -> str:
 
 # Every occurrence of old replaced with replacement; an empty old
 # changes nothing.
-func replace(s: str, old: str, replacement: str) -> str:
+pub func replace(s: str, old: str, replacement: str) -> str:
     if len(old) == 0:
         return s
     var out = builder()
@@ -143,7 +143,7 @@ func replace(s: str, old: str, replacement: str) -> str:
     return out.build()
 
 # The text repeated `times` times; zero or fewer is "".
-func repeat(s: str, times: i64) -> str:
+pub func repeat(s: str, times: i64) -> str:
     if times <= 0 or len(s) == 0:
         return ""
     var out = builder()
@@ -154,7 +154,7 @@ func repeat(s: str, times: i64) -> str:
 # Split on a separator, keeping empty pieces ("a;;b" has three); an
 # empty separator splits on whitespace runs instead, dropping empties
 # (Python's bare split).
-func split(s: str, separator: str) -> list[str]:
+pub func split(s: str, separator: str) -> list[str]:
     var pieces: list[str] = []
     if len(separator) == 0:
         var at = 0
@@ -178,7 +178,7 @@ func split(s: str, separator: str) -> list[str]:
     return pieces
 
 # The pieces joined with a separator between each pair.
-func join(parts: list[str], separator: str) -> str:
+pub func join(parts: list[str], separator: str) -> str:
     var out = builder()
     for i, piece in parts:
         if i > 0:
@@ -199,7 +199,7 @@ func join(parts: list[str], separator: str) -> str:
 #
 # The characters of `s`, one str each, in order.  A fresh
 # `list[str]` the caller owns; an empty str has no characters.
-func characters(s: str) -> list[str]:
+pub func characters(s: str) -> list[str]:
     var out: list[str] = []
     var at: i64 = 0
     while at < len(s):
@@ -209,13 +209,13 @@ func characters(s: str) -> list[str]:
 
 # The display-width seam described above. In v0.1 it counts code
 # points, not terminal cells, so it currently equals `len(s)`.
-func width(s: str) -> i64:
+pub func width(s: str) -> i64:
     return len(s)
 
 # The longest prefix of `s` that fits in `cells` cells: the whole
 # str when it already fits, "" for a width of zero or less.  A
 # scalar is never cut, so the answer always ends where one ends.
-func take(s: str, cells: i64) -> str:
+pub func take(s: str, cells: i64) -> str:
     if cells <= 0:
         return ""
     var taken: i64 = 0
@@ -235,16 +235,16 @@ func take(s: str, cells: i64) -> str:
 # carrying a non-ASCII character lines up in a column instead of
 # losing a space per continuation u8.  For ASCII the two numbers are
 # the same, which is why this is a correction and not a change.
-func pad_left(s: str, cells: i64) -> str:
+pub func pad_left(s: str, cells: i64) -> str:
     return repeat(" ", cells - width(s)) + s
 
-func pad_right(s: str, cells: i64) -> str:
+pub func pad_right(s: str, cells: i64) -> str:
     return s + repeat(" ", cells - width(s))
 
 # A f64 as fixed-point text: format_float(2.5, 2) is "2.50",
 # rounded halfway away from zero.  Meant for display of ordinary
 # magnitudes; |value| past ~1e15 falls back to str(value).
-func format_float(value: f64, decimals: i64) -> str:
+pub func format_float(value: f64, decimals: i64) -> str:
     if decimals < 0:
         trap("format_float needs decimals >= 0")
     var magnitude = value
@@ -291,7 +291,7 @@ func format_float(value: f64, decimals: i64) -> str:
 # is nothing here that can fail and nothing to ask about.  The bytes
 # are the encoding, not the characters: `len(to_bytes("é"))` is 2
 # while `len("é")` is 1.
-func to_bytes(s: str) -> list[u8]:
+pub func to_bytes(s: str) -> list[u8]:
     var out = list[u8]()
     let encoded = bytes(s)
     var at: i64 = 0
@@ -308,5 +308,5 @@ func to_bytes(s: str) -> list[u8]:
 # is — the `parse_i64` precedent (docs/FAILURE.md).  The validator is
 # `libluce_rt`'s, so a compiled program and the test oracle agree
 # u8-for-u8 on what "not text" means.
-func from_bytes(xs: list[u8]) -> str?:
+pub func from_bytes(xs: list[u8]) -> str?:
     return parse_str(bytes(xs))

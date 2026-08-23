@@ -8,7 +8,7 @@
 # multiple of 1/8, so the sum is exact and both sides truncate to the
 # same integer.
 
-func main():
+pub func main():
     let n = 200000
     let reps = 400
     var a = array[f64](n)

@@ -18,7 +18,7 @@
 # then sums those exact integers into a `i64`, where 144 million is
 # nowhere near the top.  The C twin is bench/matmul32.c.
 
-func main():
+pub func main():
     let n = 400
     var a = array[f32](n * n)
     var b = array[f32](n * n)

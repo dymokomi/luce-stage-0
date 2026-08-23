@@ -2,7 +2,7 @@
 
 import history
 
-func test_undo_returns_the_prior_revision():
+pub func test_undo_returns_the_prior_revision():
     let stack = history.History()
     # Record the state before typing " world".
     stack.record("hello", 5)
@@ -21,12 +21,12 @@ func test_undo_returns_the_prior_revision():
     assert(ahead.content == "hello world")
     assert(ahead.cursor == 11)
 
-func test_undo_on_an_empty_stack_answers_none():
+pub func test_undo_on_an_empty_stack_answers_none():
     let stack = history.History()
     assert(stack.undo("x", 1) == none)
     assert(stack.redo("x", 1) == none)
 
-func test_a_new_edit_invalidates_redo():
+pub func test_a_new_edit_invalidates_redo():
     let stack = history.History()
     stack.record("a", 1)
     let undone = stack.undo("ab", 2)
@@ -36,7 +36,7 @@ func test_a_new_edit_invalidates_redo():
     stack.record("a", 1)
     assert(stack.redo("a", 1) == none)
 
-func test_the_stack_is_bounded():
+pub func test_the_stack_is_bounded():
     let stack = history.History()
     for i in range(0, history.depth + 50):
         stack.record("s" + str(i), i)

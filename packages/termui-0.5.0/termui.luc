@@ -25,32 +25,32 @@ import canvas
 import view
 import runtime as app_runtime
 
-alias Color = model.Color
-alias Style = model.Style
-alias Rect = model.Rect
-alias Span = model.Span
-alias Line = model.Line
-alias Cursor = model.Cursor
-alias Response = model.Response
-alias Edges = model.Edges
+pub alias Color = model.Color
+pub alias Style = model.Style
+pub alias Rect = model.Rect
+pub alias Span = model.Span
+pub alias Line = model.Line
+pub alias Cursor = model.Cursor
+pub alias Response = model.Response
+pub alias Edges = model.Edges
 
-alias Key = input.Key
-alias KeyPress = input.KeyPress
-alias Pointer = input.Pointer
-alias Mouse = input.Mouse
-alias Event = input.Event
+pub alias Key = input.Key
+pub alias KeyPress = input.KeyPress
+pub alias Pointer = input.Pointer
+pub alias Mouse = input.Mouse
+pub alias Event = input.Event
 
-alias View = view.View
-alias Surface = canvas.Surface
-alias Snapshot = canvas.Snapshot
-alias Application = app_runtime.Application
+pub alias View = view.View
+pub alias Surface = canvas.Surface
+pub alias Snapshot = canvas.Snapshot
+pub alias Application = app_runtime.Application
 
-func plain(content: str, style: Style = Style()) -> Line:
+pub func plain(content: str, style: Style = Style()) -> Line:
     return model.plain(content, style)
 
-func route(child: View, event: Event, area: Rect) -> Response:
+pub func route(child: View, event: Event, area: Rect) -> Response:
     return view.route(child, event, area)
 
-func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
+pub func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
     return view.snapshot(content, rows, columns)
 

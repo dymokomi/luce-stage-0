@@ -7,7 +7,7 @@
 # backs. On equal keys the right run moves first into the reversed
 # result, so popping that result restores the earlier left item first.
 # Every element crosses as the fresh result of pop, so nothing is copied.
-private func sort_by_template(values: list[i64], before: func(i64, i64) -> bool):
+func sort_by_template(values: list[i64], before: func(i64, i64) -> bool):
     if len(values) < 2:
         return
 

@@ -16,15 +16,14 @@
 
 import std.gpu
 
-class Window:
-    private:
-        raw: handle
+pub class Window:
+    raw: handle
 
     # Ask the host for a window.  The world decides whether one
     # opens, so construction is fallible.
-    init(title: str, width: i64, height: i64) -> !:
+    pub init(title: str, width: i64, height: i64) -> !:
         self.raw = try Builtin.ui_window_open(title, width, height)
 
-    func surface() -> gpu.Surface!:
+    pub func surface() -> gpu.Surface!:
         let raw = try Builtin.ui_window_surface(self.raw)
         return gpu.Surface.from_handle(raw)

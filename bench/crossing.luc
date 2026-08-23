@@ -14,13 +14,13 @@
 
 import std.os
 
-func sum_of(values: list[i64]) -> i64:
+pub func sum_of(values: list[i64]) -> i64:
     var total: i64 = 0
     for v in values:
         total = total + v
     return total
 
-func slice_sum(values: list[i64]) -> i64:
+pub func slice_sum(values: list[i64]) -> i64:
     # Deliberately arithmetic-bound rather than memory-bound: what is
     # under test is whether four workers use four cores, not how fast
     # one list walks.
@@ -30,13 +30,13 @@ func slice_sum(values: list[i64]) -> i64:
             total = total + (v * v) % 7919
     return total
 
-func chunk(source: list[i64], from: i64, upto: i64) -> list[i64]:
+pub func chunk(source: list[i64], from: i64, upto: i64) -> list[i64]:
     var made = list[i64]()
     for i in range(from, upto):
         made.append(source[i])
     return made
 
-func main():
+pub func main():
     let size: i64 = 1000000
     var numbers = list[i64]()
     for i in range(0, size):

@@ -2,7 +2,7 @@
 
 import document
 
-func test_boundaries_step_over_multibyte_characters():
+pub func test_boundaries_step_over_multibyte_characters():
     # "héllo" has five scalar positions; moving once crosses é no
     # matter how many bytes encode it.
     let value = "héllo"
@@ -11,7 +11,7 @@ func test_boundaries_step_over_multibyte_characters():
     assert(document.next_boundary(value, len(value)) == len(value))
     assert(document.previous_boundary(value, 0) == 0)
 
-func test_lines_and_columns():
+pub func test_lines_and_columns():
     let value = "ab\ncde\nf"
     assert(document.count_lines(value) == 3)
     assert(document.line_of(value, 0) == 0)
@@ -20,7 +20,7 @@ func test_lines_and_columns():
     assert(document.line_end(value, 3) == 6)
     assert(document.column_of(value, 5) == 2)
 
-func test_line_at_and_at_column():
+pub func test_line_at_and_at_column():
     let value = "ab\ncde\nf"
     assert(document.line_at(value, 1) == 3)
     let start = document.line_at(value, 1)
@@ -29,17 +29,17 @@ func test_line_at_and_at_column():
     # A column past the line's end clamps to the line end.
     assert(document.at_column(value, start, 99) == 6)
 
-func test_splice_and_erase():
+pub func test_splice_and_erase():
     assert(document.splice("world", 0, "hello ") == "hello world")
     assert(document.erase_before("abc", 2) == "ac")
     assert(document.erase_at("abc", 1) == "ac")
 
-func test_indentation_is_the_leading_whitespace():
+pub func test_indentation_is_the_leading_whitespace():
     let value = "    x = 1"
     assert(document.indentation(value, len(value)) == "    ")
     assert(document.indentation("no indent", 3) == "")
 
-func test_opens_block_sees_a_trailing_colon():
+pub func test_opens_block_sees_a_trailing_colon():
     assert(document.opens_block("if x:", 5))
     assert(document.opens_block("if x:  # note", 13))
     assert(not document.opens_block("x = 1", 5))

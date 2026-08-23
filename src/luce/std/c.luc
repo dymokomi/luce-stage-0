@@ -18,18 +18,18 @@ import std.strings
 #
 # The token must not outlive the call, and the buffer must not grow,
 # shrink, or die while it lives.
-func with_bytes(buffer: list[u8], body: func(foreign) -> i64) -> i64:
+pub func with_bytes(buffer: list[u8], body: func(foreign) -> i64) -> i64:
     return body(Builtin.buffer_address(buffer))
 
 # The same scope for a callee that answers a token — a constructor
 # taking a name, a parser taking bytes.
-func with_bytes_foreign(buffer: list[u8], body: func(foreign) -> foreign) -> foreign:
+pub func with_bytes_foreign(buffer: list[u8], body: func(foreign) -> foreign) -> foreign:
     return body(Builtin.buffer_address(buffer))
 
 # Text the way C expects it: the UTF-8 bytes with one terminating
 # zero.  The list is ordinary and its address is `with_bytes`'s to
 # hand over.
-func zstring(text: str) -> list[u8]:
+pub func zstring(text: str) -> list[u8]:
     var held = list[u8]()
     for b in strings.to_bytes(text):
         held.append(b)

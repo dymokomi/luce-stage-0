@@ -19,7 +19,7 @@
 
 import std.math
 
-func main():
+pub func main():
     let n = 2000000
     var a = array[f64](n)
     var b = array[f64](n)

@@ -13,18 +13,18 @@ import std.strings
 
 # One diagnostic the way the panes want it: 0-based positions against
 # the buffer the server was shown, and the sentence to show.
-struct Diagnostic:
-    line: i64 = 0
-    column: i64 = 0
-    end_line: i64 = 0
-    end_column: i64 = 0
-    message: str = ""
+pub struct Diagnostic:
+    pub line: i64 = 0
+    pub column: i64 = 0
+    pub end_line: i64 = 0
+    pub end_column: i64 = 0
+    pub message: str = ""
 
 # --- pure: frames out of accumulated bytes ---------------------------
 
 # Extract every complete `Content-Length` frame from `pending`,
 # leaving the incomplete tail in place.  Answers the message bodies.
-func extracted(pending: list[u8]) -> list[str]:
+pub func extracted(pending: list[u8]) -> list[str]:
     var bodies = list[str]()
     while true:
         let found = frame_end(pending)
@@ -45,7 +45,7 @@ func extracted(pending: list[u8]) -> list[str]:
             pending.append(byte)
 
 # Where the current frame's header separator sits, or -1.
-private func header_end(pending: list[u8]) -> i64:
+func header_end(pending: list[u8]) -> i64:
     var at: i64 = 0
     while at + 3 < len(pending):
         if pending[at] == 13 and pending[at + 1] == 10 and pending[at + 2] == 13 and pending[at + 3] == 10:
@@ -54,7 +54,7 @@ private func header_end(pending: list[u8]) -> i64:
     return -1
 
 # One past the current frame's body, or -1 when it is incomplete.
-private func frame_end(pending: list[u8]) -> i64:
+func frame_end(pending: list[u8]) -> i64:
     let split = header_end(pending)
     if split < 0:
         return -1
@@ -79,7 +79,7 @@ private func frame_end(pending: list[u8]) -> i64:
 
 # The diagnostics of a publishDiagnostics notification for `uri`, or
 # none when the body is something else (a response, another uri).
-func published_for(body: str, uri: str) -> list[Diagnostic]?:
+pub func published_for(body: str, uri: str) -> list[Diagnostic]?:
     let message = json.parse(body) catch reason:
         return none
     let method = message.member("method")
@@ -101,7 +101,7 @@ func published_for(body: str, uri: str) -> list[Diagnostic]?:
         rows.append(one_diagnostic(listed.element(index)))
     return rows
 
-private func one_diagnostic(row: json.Json) -> Diagnostic:
+func one_diagnostic(row: json.Json) -> Diagnostic:
     var made = Diagnostic()
     let message = row.member("message")
     if message != none:
@@ -119,7 +119,7 @@ private func one_diagnostic(row: json.Json) -> Diagnostic:
         made.end_column = number(finish, "character")
     return made
 
-private func number(row: json.Json, name: str) -> i64:
+func number(row: json.Json, name: str) -> i64:
     let held = row.member(name)
     if held == none:
         return 0
@@ -127,21 +127,20 @@ private func number(row: json.Json, name: str) -> i64:
 
 # --- the held server -------------------------------------------------
 
-class Client:
-    private:
-        server: os.Process?
-        pending: list[u8]
-        next_id: i64
-        broken: bool
+pub class Client:
+    server: os.Process?
+    pending: list[u8]
+    next_id: i64
+    broken: bool
 
-    command: str
-    uri: str
-    diagnostics: list[Diagnostic]
-    fresh: bool
+    pub command: str
+    pub uri: str
+    pub diagnostics: list[Diagnostic]
+    pub fresh: bool
 
     # `command` is data — any LSP server plugs in; `luce-lsp` is the
     # one the toolchain installs for Luce.
-    init(command: str):
+    pub init(command: str):
         self.command = command
         self.server = none
         self.pending = list[u8]()
@@ -153,7 +152,7 @@ class Client:
 
     # Spawn and shake hands on first use.  A world without the server
     # marks the client broken and the editor simply works without it.
-    private func ensure_started() -> bool:
+    func ensure_started() -> bool:
         if self.broken:
             return false
         if self.server != none:
@@ -166,13 +165,13 @@ class Client:
         self.post("initialized", "{}")
         return true
 
-    func opened_document(path: str, text: str):
+    pub func opened_document(path: str, text: str):
         if not self.ensure_started():
             return
         self.uri = "file://" + path
         self.post("textDocument/didOpen", "{\"textDocument\":{\"uri\":" + json.quote(self.uri) + ",\"languageId\":\"luce\",\"version\":1,\"text\":" + json.quote(text) + "}}")
 
-    func changed(text: str):
+    pub func changed(text: str):
         if self.uri == "" or not self.ensure_started():
             return
         self.post("textDocument/didChange", "{\"textDocument\":{\"uri\":" + json.quote(self.uri) + "},\"contentChanges\":[{\"text\":" + json.quote(text) + "}]}")
@@ -180,7 +179,7 @@ class Client:
     # Drain whatever the server has said so far; true when the
     # diagnostics changed.  Never blocks: the ready poll gates every
     # read, which is what makes this safe on the editor's tick.
-    func pump() -> bool:
+    pub func pump() -> bool:
         let held = self.server
         if held == none:
             return false
@@ -211,14 +210,14 @@ class Client:
 
     # --- wire helpers -------------------------------------------------
 
-    private func post(method: str, params: str):
+    func post(method: str, params: str):
         self.send("{\"jsonrpc\":\"2.0\",\"method\":" + json.quote(method) + ",\"params\":" + params + "}")
 
-    private func post_request(method: str, params: str):
+    func post_request(method: str, params: str):
         self.send("{\"jsonrpc\":\"2.0\",\"id\":" + str(self.next_id) + ",\"method\":" + json.quote(method) + ",\"params\":" + params + "}")
         self.next_id += 1
 
-    private func send(body: str):
+    func send(body: str):
         let held = self.server
         if held == none:
             return

@@ -12,7 +12,7 @@ import std.strings
 
 # The directory one level up from `here`.  `..` rather than a lexical
 # parent, because a lexical one is wrong across a symbolic link.
-private func parent_of(here: str) -> str:
+func parent_of(here: str) -> str:
     if here == ".":
         return ".."
     if paths.base(here) == "..":
@@ -21,7 +21,7 @@ private func parent_of(here: str) -> str:
 
 # `name`, as a path, from a pane showing `here`.  The bare name at the
 # start directory, so "./notes.txt" and "notes.txt" stay one file.
-private func under(here: str, name: str) -> str:
+func under(here: str, name: str) -> str:
     if here == ".":
         return name
     return paths.join(here, name)
@@ -30,7 +30,7 @@ private func under(here: str, name: str) -> str:
 # "/", a ".." row when not at the top, and the active file even when it
 # is new and not yet on disk (but only while its directory is shown).
 # Answers an error message, or none.
-func refresh(names: list[str], directory: str, active_path: str) -> str?:
+pub func refresh(names: list[str], directory: str, active_path: str) -> str?:
     names.clear()
     var found = list[files.Entry]()
     found = files.entries(directory) catch reason:
@@ -50,18 +50,18 @@ func refresh(names: list[str], directory: str, active_path: str) -> str?:
     return none
 
 # The row that names `path`, or 0 when it is not in the listing.
-func select_index(names: list[str], directory: str, path: str) -> i64:
+pub func select_index(names: list[str], directory: str, path: str) -> i64:
     for index in range(0, len(names)):
         if under(directory, names[index]) == path:
             return index
     return 0
 
 # What opening a row means: walking into a directory, or a file to open.
-union Opened:
+pub union Opened:
     entered(directory: str)
     file(path: str)
 
-func classify(row: str, directory: str) -> Opened:
+pub func classify(row: str, directory: str) -> Opened:
     if strings.ends_with(row, "/"):
         if row == "../":
             return Opened.entered(directory = parent_of(directory))

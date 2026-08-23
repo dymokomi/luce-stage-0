@@ -14,7 +14,7 @@
 # every operand is non-negative, so Luce's floor `//`/`%` and C's
 # truncating pair agree element for element.
 
-func main():
+pub func main():
     let n = 3000000
     # Prime, so it is coprime with both walk lengths below and the
     # stride visits every element exactly once — a whole pass over the

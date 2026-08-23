@@ -39,7 +39,7 @@ import std.paths
 #
 # There is no `symlink`: a link is what it points at (`kind` follows
 # them), and a broken one is nothing there.
-enum Kind:
+pub enum Kind:
     file
     directory
     other
@@ -67,7 +67,7 @@ enum Kind:
 #         directory: walk(p)
 #         file: visit(p)
 #         other: continue
-func kind(path: str) -> Kind?!:
+pub func kind(path: str) -> Kind?!:
     let code = try Builtin.path_kind(path)
     if code == 1:
         return Kind.file
@@ -90,12 +90,12 @@ func kind(path: str) -> Kind?!:
 #
 # It is still a question about the past, so it is still never a guard
 # for the call after it: read the file, and handle what the read says.
-func exists(path: str) -> bool!:
+pub func exists(path: str) -> bool!:
     let what = try kind(path)
     return what != none
 
 # Whether an ordinary file is there — `os.path.isfile`.
-func is_file(path: str) -> bool!:
+pub func is_file(path: str) -> bool!:
     let what = try kind(path)
     if what == none:
         return false
@@ -104,21 +104,21 @@ func is_file(path: str) -> bool!:
 # Whether a directory is there — `os.path.isdir`.  This is the
 # question `exists` is usually asked by mistake: a file holding the
 # name answers false here and true there.
-func is_dir(path: str) -> bool!:
+pub func is_dir(path: str) -> bool!:
     let what = try kind(path)
     if what == none:
         return false
     return what == Kind.directory
 
-func read(path: str) -> str!:
+pub func read(path: str) -> str!:
     return try Builtin.file_read(path)
 
-func write(path: str, text: str) -> !:
+pub func write(path: str, text: str) -> !:
     try Builtin.file_write(path, text)
 
 # The file's lines, without their newlines.  A trailing final newline
 # (the usual text-file ending) does not produce a phantom empty line.
-func read_lines(path: str) -> list[str]!:
+pub func read_lines(path: str) -> list[str]!:
     let text = try Builtin.file_read(path)
     var lines = text.split("\n")
     if len(lines) > 0 and lines[len(lines) - 1] == "":
@@ -127,7 +127,7 @@ func read_lines(path: str) -> list[str]!:
 
 # Write lines joined with newlines, ending with one (the text-file
 # convention); an empty list writes an empty file.
-func write_lines(path: str, lines: list[str]) -> !:
+pub func write_lines(path: str, lines: list[str]) -> !:
     if len(lines) == 0:
         try Builtin.file_write(path, "")
         return
@@ -138,23 +138,23 @@ func write_lines(path: str, lines: list[str]) -> !:
 # two calls with a window between them, and the second one throws away
 # whatever landed in the first one's shadow.
 #
-func append(path: str, text: str) -> !:
+pub func append(path: str, text: str) -> !:
     try Builtin.file_append(path, text)
 
 # The same, one line at a time, each ending in a newline.  An empty
 # list adds nothing at all rather than an empty line.
-func append_lines(path: str, lines: list[str]) -> !:
+pub func append_lines(path: str, lines: list[str]) -> !:
     if len(lines) == 0:
         return
     try Builtin.file_append(path, lines.join("\n") + "\n")
 
-func delete(path: str) -> !:
+pub func delete(path: str) -> !:
     try Builtin.file_delete(path)
 
 # Move a file.  Renaming onto an existing name replaces it, which is
 # what makes write-then-rename the way to replace a file without ever
 # leaving half of one on disk.
-func rename(from: str, to: str) -> !:
+pub func rename(from: str, to: str) -> !:
     try Builtin.file_rename(from, to)
 
 # -- the two stat facts ------------------------------------------------
@@ -167,7 +167,7 @@ func rename(from: str, to: str) -> !:
 # is about the past — sizing a file and then reading it is two calls
 # with a window between them — so the honest use is display and
 # bookkeeping, not a buffer size to trust.
-func size(path: str) -> i64!:
+pub func size(path: str) -> i64!:
     return try Builtin.path_size(path)
 
 # When the file or directory was last modified, in milliseconds since
@@ -176,7 +176,7 @@ func size(path: str) -> i64!:
 # It is wall-clock time: an operator may set the clock, a copied tree
 # keeps old stamps, and two machines disagree.  A build tool compares
 # two of these to each other and nothing else.
-func modified(path: str) -> i64!:
+pub func modified(path: str) -> i64!:
     return try Builtin.path_modified(path)
 
 # -- copy and move -----------------------------------------------------
@@ -187,7 +187,7 @@ func modified(path: str) -> i64!:
 # permissions and ownership are the operating-system surface Luce has
 # not taken up, and a copy that silently carried some of them would be
 # promising what it cannot keep.
-func copy(from: str, to: str) -> !:
+pub func copy(from: str, to: str) -> !:
     var source = try File(from)
     var sink = try File(to, Mode.create)
     var buffer = array[u8](4096)
@@ -214,7 +214,7 @@ func copy(from: str, to: str) -> !:
 # only by rename; carrying a tree across filesystems is a walk with
 # policy in it, and a program that needs one writes the loop where the
 # policy shows.
-func move(from: str, to: str) -> !:
+pub func move(from: str, to: str) -> !:
     rename(from, to) catch:
         if not (try is_file(from)):
             # Only a file falls back to copy.  Asking again re-raises
@@ -230,7 +230,7 @@ func move(from: str, to: str) -> !:
 # Remove one **empty** directory — `os.rmdir`, the precise tool.  A
 # directory with anything still in it is an error, which is the
 # safety: this call cannot take more than the one name it was given.
-func remove_directory(path: str) -> !:
+pub func remove_directory(path: str) -> !:
     try Builtin.dir_remove(path)
 
 # Remove whatever is at the path — a file, or a directory and
@@ -251,7 +251,7 @@ func remove_directory(path: str) -> !:
 # There is no undo.  The precise tools — `delete`, `remove_directory`
 # — refuse anything unexpected; this one is for the tree the program
 # itself laid out.
-func remove_all(path: str) -> !:
+pub func remove_all(path: str) -> !:
     try Builtin.tree_remove(path)
 
 # Make a directory, and every directory leading to it.
@@ -265,7 +265,7 @@ func remove_all(path: str) -> !:
 #
 # A *file* holding the name is an error: you asked for a directory and
 # there is not one.
-func make_directory(path: str) -> !:
+pub func make_directory(path: str) -> !:
     try Builtin.dir_create(path)
 
 # -- the u8 channel (docs/BYTES.md) ---------------------------------
@@ -283,7 +283,7 @@ func make_directory(path: str) -> !:
 # `io.send` behind a path.
 
 # How a file is opened: the three doors, named instead of numbered.
-enum Mode:
+pub enum Mode:
     # From the start; the file must be there.
     read
     # Write from the start, creating the file and emptying it.
@@ -296,34 +296,33 @@ enum Mode:
 # matters: the host's handle vocabulary stays behind the class that
 # owns it, the way a Swift descriptor stays behind the session object
 # wrapping it.
-class File: io.Reader, io.Writer:
-    private:
-        raw: handle
+pub class File: io.Reader, io.Writer:
+    raw: handle
 
     # Open a file: `try File(path)` to read,
     # `try File(path, files.Mode.append)` for a log.  The world
     # decides whether the open lands, so construction is fallible.
-    init(path: str, mode: Mode = Mode.read) -> !:
+    pub init(path: str, mode: Mode = Mode.read) -> !:
         self.raw = try Builtin.file_open(path, mode_code(mode))
 
     # Fill the buffer from where the last read stopped and answer how
     # many bytes landed.  Zero is the end of the file, not an error.
-    func read(buffer: array[u8, _]) -> i64!:
+    pub func read(buffer: array[u8, _]) -> i64!:
         return try Builtin.handle_read(self.raw, buffer)
 
     # Hand `count` bytes from the front of the buffer to the file and
     # answer how many landed.  A short write is ordinary — the next
     # round continues from where this one stopped — which is the whole
     # reason the count comes back.
-    func write(buffer: array[u8, _], count: i64) -> i64!:
+    pub func write(buffer: array[u8, _], count: i64) -> i64!:
         return try Builtin.handle_write(self.raw, buffer, count)
 
-    func flush() -> !:
+    pub func flush() -> !:
         try Builtin.handle_flush(self.raw)
 
 # How the doors number themselves for the host.  Private: a reader
 # writes `Mode.append`, never a number.
-private func mode_code(mode: Mode) -> i64:
+func mode_code(mode: Mode) -> i64:
     match mode:
         read:
             return 0
@@ -335,17 +334,17 @@ private func mode_code(mode: Mode) -> i64:
 # The whole file, as bytes.  Nothing here asks whether the bytes are
 # text — that is what `strings.from_bytes` is for — so this reads a
 # JPEG as happily as a note.
-func read_bytes(path: str) -> list[u8]!:
+pub func read_bytes(path: str) -> list[u8]!:
     var f = try File(path)
     return try io.drain(f)
 
 # Write bytes, replacing whatever was there.
-func write_bytes(path: str, data: list[u8]) -> !:
+pub func write_bytes(path: str, data: list[u8]) -> !:
     var f = try File(path, Mode.create)
     try io.send(f, data)
 
 # Add bytes to the end of a file, creating it if it is not there.
-func append_bytes(path: str, data: list[u8]) -> !:
+pub func append_bytes(path: str, data: list[u8]) -> !:
     var f = try File(path, Mode.append)
     try io.send(f, data)
 
@@ -357,10 +356,10 @@ func append_bytes(path: str, data: list[u8]) -> !:
 # A file pane prints `name`; a walk pushes `path`; neither writes a
 # join, and the join deleted from the top of every walk loop is the
 # one that was getting written wrong.
-struct Entry:
-    name: str
-    path: str
-    kind: Kind
+pub struct Entry:
+    pub name: str
+    pub path: str
+    pub kind: Kind
 
 # What is in a directory, sorted by name, each entry carrying its kind
 # — `os.scandir`.
@@ -384,7 +383,7 @@ struct Entry:
 # on top of the listing.  That is an implementation detail behind this
 # signature: a host that could answer the whole listing at once would
 # change this function and not one program that calls it.
-func entries(path: str) -> list[Entry]!:
+pub func entries(path: str) -> list[Entry]!:
     var names = try Builtin.dir_list(path)
     names.sort()
     var found = list[Entry]()
@@ -401,7 +400,7 @@ func entries(path: str) -> list[Entry]!:
 # and read `path`.  It survives beside `entries` for the reason Python
 # keeps both and PEP 471 says so — most callers only want the names —
 # and it asks the host for exactly that: the listing, and no kinds.
-func list(path: str) -> list[str]!:
+pub func list(path: str) -> list[str]!:
     var names = try Builtin.dir_list(path)
     names.sort()
     return names

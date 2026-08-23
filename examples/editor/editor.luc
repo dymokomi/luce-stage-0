@@ -21,7 +21,7 @@ from ui.console import Console
 from ui.statusbar import StatusBar
 from ui.workbench import Workbench
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     if len(args) == 0:
         print("usage: editor FILE [FILE ...]")
         return

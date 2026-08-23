@@ -1,5 +1,5 @@
 import std.strings
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let parts = ["luce", str(len(args))]
     print(strings.join(parts, "-"))

@@ -1,8 +1,8 @@
-func divide(total: i64, count: i64) -> i64!:
+pub func divide(total: i64, count: i64) -> i64!:
     if count == 0:
         error("count cannot be zero")
     return total // count
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let average = divide(42, len(args)) catch -1
     print(str(average))

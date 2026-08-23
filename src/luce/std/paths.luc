@@ -18,7 +18,7 @@
 # Python and unlike Go).
 
 # True when the path starts at the root.
-func is_absolute(path: str) -> bool:
+pub func is_absolute(path: str) -> bool:
     return len(path) > 0 and path[0] == '/'
 
 # head joined to tail with one separator at the seam.  An empty side
@@ -26,7 +26,7 @@ func is_absolute(path: str) -> bool:
 # way Python's join resets at an absolute part.  Separators already
 # piled at the seam collapse to one, and the root keeps its slash:
 # join("/", "etc") is "/etc".
-func join(head: str, tail: str) -> str:
+pub func join(head: str, tail: str) -> str:
     if len(head) == 0:
         return tail
     if len(tail) == 0:
@@ -55,7 +55,7 @@ func join(head: str, tail: str) -> str:
 # gets written wrong.  A list literal passes inline —
 # paths.joined([root, "build", name + ".out"]) — and is released after
 # the call.
-func joined(parts: list[str]) -> str:
+pub func joined(parts: list[str]) -> str:
     var whole = ""
     for part in parts:
         whole = join(whole, part)
@@ -64,7 +64,7 @@ func joined(parts: list[str]) -> str:
 # The last element: base("a/b.luc") is "b.luc".  Trailing separators
 # do not count — base("a/b/") is still "b" — the root's name is "/",
 # and the empty path's is "".
-func base(path: str) -> str:
+pub func base(path: str) -> str:
     if len(path) == 0:
         return ""
     var end = len(path)
@@ -81,7 +81,7 @@ func base(path: str) -> str:
 # name has no directory written down, and the honest answer that is
 # still a usable path is "." — join(dir(p), base(p)) names the same
 # file p does.  The root is its own directory.
-func dir(path: str) -> str:
+pub func dir(path: str) -> str:
     if len(path) == 0:
         return "."
     var end = len(path)
@@ -104,7 +104,7 @@ func dir(path: str) -> str:
 # The extension of the last element, dot included: ".luc" for
 # "main.luc", "" when there is none.  A leading dot is a hidden
 # file's name, not an extension — extension(".bashrc") is "".
-func extension(path: str) -> str:
+pub func extension(path: str) -> str:
     let name = base(path)
     var at = len(name)
     while at > 0 and name[at - 1] != '.':
@@ -116,7 +116,7 @@ func extension(path: str) -> str:
 # The last element without its extension: stem("a/main.luc") is
 # "main".  The pair puts a name back together: stem(p) +
 # extension(p) is always base(p).
-func stem(path: str) -> str:
+pub func stem(path: str) -> str:
     let name = base(path)
     let suffix = extension(path)
     return name[0:len(name) - len(suffix)]

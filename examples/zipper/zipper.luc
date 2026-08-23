@@ -39,11 +39,11 @@ import std.paths
 import std.strings
 import std.os
 
-const usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECTORY] | zipper zip ARCHIVE.zip FILE [FILE ...]"
+pub const usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECTORY] | zipper zip ARCHIVE.zip FILE [FILE ...]"
 
 # How many, said the way a person says it.  "1 entries" is the kind of
 # small dishonesty that makes a tool feel machine-written.
-func counted(amount: i64, one: str, many: str) -> str:
+pub func counted(amount: i64, one: str, many: str) -> str:
     if amount == 1:
         return "1 " + one
     return str(amount) + " " + many
@@ -59,7 +59,7 @@ func counted(amount: i64, one: str, many: str) -> str:
 # the directory it was asked to go into.  The two facts are the same
 # fact, which is why one gate can be both the format check and the
 # security check.
-func safe_name(name: str) -> str!:
+pub func safe_name(name: str) -> str!:
     if len(name) == 0:
         error("zipper: an entry with no name")
     if paths.is_absolute(name):
@@ -74,7 +74,7 @@ func safe_name(name: str) -> str!:
             error("zipper: " + name + " climbs out of the directory it would be extracted into")
     return name
 
-func is_letter(value: char) -> bool:
+pub func is_letter(value: char) -> bool:
     if value >= 'a' and value <= 'z':
         return true
     return value >= 'A' and value <= 'Z'
@@ -85,7 +85,7 @@ func is_letter(value: char) -> bool:
 # channel is the plain sentence a person reads at the prompt, so each
 # zip call catches the value and re-raises `zip.describe`'s rendering
 # — the visible conversion (docs/ERRORS.md).
-func list_archive(path: str) -> !:
+pub func list_archive(path: str) -> !:
     let raw = zip.read(path) catch reason:
         error(zip.describe(reason))
     let archive = zip.Archive(raw) catch reason:
@@ -102,7 +102,7 @@ func list_archive(path: str) -> !:
         line.append(entry.name())
         print(line.build())
 
-func method_of(entry: zip.Entry) -> str:
+pub func method_of(entry: zip.Entry) -> str:
     if entry.deflated():
         return "deflated"
     return "stored"
@@ -118,7 +118,7 @@ func method_of(entry: zip.Entry) -> str:
 # reaches it — `make_directory` makes the parents and does not mind one
 # that is already there, so this is a call and not a bookkeeping
 # problem.
-func unzip_archive(path: str, into: str) -> !:
+pub func unzip_archive(path: str, into: str) -> !:
     let raw = zip.read(path) catch reason:
         error(zip.describe(reason))
     let archive = zip.Archive(raw) catch reason:
@@ -163,7 +163,7 @@ func unzip_archive(path: str, into: str) -> !:
 #
 # Every entry is offered to DEFLATE and keeps whichever of the two is
 # smaller (`Writer.add`), so an entry never grows by being compressed.
-func zip_files(path: str, sources: list[str]) -> !:
+pub func zip_files(path: str, sources: list[str]) -> !:
     var maker = zip.Writer()
     var total: i64 = 0
     for source in sources:
@@ -180,7 +180,7 @@ func zip_files(path: str, sources: list[str]) -> !:
 
 # --- the command line ------------------------------------------------
 
-func main(args: list[str]) -> !:
+pub func main(args: list[str]) -> !:
     if len(args) == 0:
         os.print_error(usage)
         exit(2)

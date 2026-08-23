@@ -1,8 +1,8 @@
-func clamp_double(value: i64, limit: i64) -> i64:
+pub func clamp_double(value: i64, limit: i64) -> i64:
     let doubled = value * 2
     if doubled > limit:
         return limit
     return doubled
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     print(str(clamp_double(len(args), 10)))

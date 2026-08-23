@@ -7,26 +7,26 @@
 # own.  The coalescing rule that decides when to `record` lives in the
 # editor, which knows the sequence of keys.
 
-struct Revision:
-    content: str
-    cursor: i64
+pub struct Revision:
+    pub content: str
+    pub cursor: i64
 
 # Keep undo bounded so a long session over a large file does not grow
 # without limit; the oldest revision is the first to go.
-const depth = 200
+pub const depth = 200
 
-class History:
-    private past: list[Revision]
-    private future: list[Revision]
+pub class History:
+    past: list[Revision]
+    future: list[Revision]
 
-    init():
+    pub init():
         self.past = list[Revision]()
         self.future = list[Revision]()
 
     # Record the state *before* an edit.  A new edit invalidates redo,
     # so the future stack is cleared.  Call this once per undo group —
     # the editor coalesces a run of plain insertions into one group.
-    func record(content: str, cursor: i64):
+    pub func record(content: str, cursor: i64):
         self.past.append(Revision(content = content, cursor = cursor))
         self.future.clear()
         while len(self.past) > depth:
@@ -34,14 +34,14 @@ class History:
 
     # Undo: move the current state onto the redo stack and answer the
     # prior revision to apply, or `none` when there is nothing to undo.
-    func undo(content: str, cursor: i64) -> Revision?:
+    pub func undo(content: str, cursor: i64) -> Revision?:
         if len(self.past) == 0:
             return none
         self.future.append(Revision(content = content, cursor = cursor))
         return self.past.pop()
 
     # Redo: the mirror of undo.
-    func redo(content: str, cursor: i64) -> Revision?:
+    pub func redo(content: str, cursor: i64) -> Revision?:
         if len(self.future) == 0:
             return none
         self.past.append(Revision(content = content, cursor = cursor))

@@ -12,7 +12,7 @@ import std.network
 import std.os
 import std.strings
 
-func test_a_luce_server_answers_a_luce_get() -> !:
+pub func test_a_luce_server_answers_a_luce_get() -> !:
     let server = spawn serve(18661, plain_reply())
     let page = try fetch(18661)
     try server.wait()
@@ -21,21 +21,21 @@ func test_a_luce_server_answers_a_luce_get() -> !:
     assert(kind == "text/plain")
     assert(body_text(page) == "from luce")
 
-func test_a_chunked_reply_crosses_a_real_socket() -> !:
+pub func test_a_chunked_reply_crosses_a_real_socket() -> !:
     let server = spawn serve(18662, chunked_reply())
     let page = try fetch(18662)
     try server.wait()
     assert(page.status == 200)
     assert(body_text(page) == "hello world")
 
-func test_a_404_is_an_answer() -> !:
+pub func test_a_404_is_an_answer() -> !:
     let server = spawn serve(18663, missing_reply())
     let page = try fetch(18663)
     try server.wait()
     assert(page.status == 404)
     assert(len(page.body) == 0)
 
-func test_a_client_carries_base_and_headers_over_loopback() -> !:
+pub func test_a_client_carries_base_and_headers_over_loopback() -> !:
     let server = spawn serve(18664, json_reply())
     var api = http.Client("http://127.0.0.1:18664")
     api.header("x-luce-test", "loopback")
@@ -52,7 +52,7 @@ func test_a_client_carries_base_and_headers_over_loopback() -> !:
     assert((ready.as_bool() else false) == true)
     assert((answer.text() else "") == "{\"ready\": true}")
 
-func fetch_with(api: http.Client) -> http.Response!:
+pub func fetch_with(api: http.Client) -> http.Response!:
     var tries = 0
     while true:
         let answer = try_client(api) catch none
@@ -63,10 +63,10 @@ func fetch_with(api: http.Client) -> http.Response!:
             error("the server never came up")
         os.sleep_ms(10)
 
-func try_client(api: http.Client) -> http.Response? ! http.HttpError:
+pub func try_client(api: http.Client) -> http.Response? ! http.HttpError:
     return try api.get("/status")
 
-func test_refusals_carry_their_reasons():
+pub func test_refusals_carry_their_reasons():
     # The refusal is an `HttpError` member: https is `unsupported`, an
     # unreadable address is `bad_url` with the address in its own
     # payload, and `describe` renders the one-line sentence.
@@ -88,15 +88,15 @@ func test_refusals_carry_their_reasons():
         said = http.describe(reason)
     assert(said == "not an http url: gopher://old.test/")
 
-func fetch_https() -> ! http.HttpError:
+pub func fetch_https() -> ! http.HttpError:
     let held = try http.get("https://example.test/")
 
-func fetch_elsewhere() -> ! http.HttpError:
+pub func fetch_elsewhere() -> ! http.HttpError:
     let held = try http.get("gopher://old.test/")
 
 # -- the server half, in ordinary Luce --------------------------------
 
-func serve(port: i64, reply: str) -> !:
+pub func serve(port: i64, reply: str) -> !:
     let door = try network.Listener(port)
     let guest = try door.accept()
     var request = array[u8](2048)
@@ -114,7 +114,7 @@ func serve(port: i64, reply: str) -> !:
         sent += landed
     try guest.flush()
 
-func fetch(port: i64) -> http.Response!:
+pub func fetch(port: i64) -> http.Response!:
     let not_yet = http.Response(
         status = 0,
         headers = map[str, str](),
@@ -130,7 +130,7 @@ func fetch(port: i64) -> http.Response!:
             error("the server never came up")
         os.sleep_ms(10)
 
-func body_text(page: http.Response) -> str:
+pub func body_text(page: http.Response) -> str:
     var held = list[u8]()
     for b in page.body:
         held.append(b)
@@ -139,10 +139,10 @@ func body_text(page: http.Response) -> str:
         return ""
     return text
 
-func line_end() -> str:
+pub func line_end() -> str:
     return str(char(13)) + "\n"
 
-func plain_reply() -> str:
+pub func plain_reply() -> str:
     let crlf = line_end()
     var reply = "HTTP/1.1 200 OK" + crlf
     reply = reply + "Content-Type: text/plain" + crlf
@@ -150,7 +150,7 @@ func plain_reply() -> str:
     reply = reply + "from luce"
     return reply
 
-func chunked_reply() -> str:
+pub func chunked_reply() -> str:
     let crlf = line_end()
     var reply = "HTTP/1.1 200 OK" + crlf
     reply = reply + "Transfer-Encoding: chunked" + crlf + crlf
@@ -159,13 +159,13 @@ func chunked_reply() -> str:
     reply = reply + "0" + crlf + crlf
     return reply
 
-func missing_reply() -> str:
+pub func missing_reply() -> str:
     let crlf = line_end()
     var reply = "HTTP/1.1 404 Not Found" + crlf
     reply = reply + "Content-Length: 0" + crlf + crlf
     return reply
 
-func json_reply() -> str:
+pub func json_reply() -> str:
     let crlf = line_end()
     var reply = "HTTP/1.1 200 OK" + crlf
     reply = reply + "Content-Type: application/json" + crlf

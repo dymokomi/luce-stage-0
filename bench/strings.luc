@@ -5,7 +5,7 @@
 
 import std.strings
 
-func main():
+pub func main():
     var b = builder()
     for i in range(0, 400000):
         b.append("item-")

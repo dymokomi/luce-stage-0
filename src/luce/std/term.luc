@@ -17,37 +17,37 @@
 
 # Terminal cells, not bytes or Unicode scalars.  Ask again after a
 # resize event.
-func rows() -> i64:
+pub func rows() -> i64:
     return Builtin.term_rows()
 
-func cols() -> i64:
+pub func cols() -> i64:
     return Builtin.term_cols()
 
 # Reset style, clear the alternate screen, and move home.
-func clear():
+pub func clear():
     Builtin.term_clear()
 
 # Place the cursor at a zero-based cell.
-func move(row: i64, column: i64):
+pub func move(row: i64, column: i64):
     Builtin.term_move(row, column)
 
 # Reset style, then select 256-color foreground and background and
 # bold.  A negative color uses the terminal default.
-func style(foreground: i64, background: i64 = -1, bold: bool = false):
+pub func style(foreground: i64, background: i64 = -1, bold: bool = false):
     Builtin.term_style(fg = foreground, bg = background, bold = bold)
 
 # Append sanitized text to the pending frame.
-func write(text: str):
+pub func write(text: str):
     Builtin.term_write(text)
 
 # Present the pending frame and make the cursor visible.
-func flush():
+pub func flush():
     Builtin.term_flush()
 
 # Hand text to the system clipboard.  The terminal carries it (OSC 52),
 # so a copy works over SSH and inside a multiplexer; the surrounding
 # terminal owns what "the clipboard" means.
-func copy(text: str):
+pub func copy(text: str):
     Builtin.term_copy(text)
 
 # --- input -----------------------------------------------------------
@@ -56,7 +56,7 @@ func copy(text: str):
 # this vocabulary does not know arrives as `unknown` rather than being
 # dropped: the program learns a key happened even when it cannot say
 # which.
-enum Key:
+pub enum Key:
     unknown
     enter
     tab
@@ -102,14 +102,14 @@ enum Key:
 # is not spelled here — the terminal sends it as its own byte and it
 # stays the distinct `Key.ctrl_a`..`ctrl_z` it always was; `control`
 # marks ctrl held with a named key (ctrl+left, ctrl+home).
-struct KeyPress:
-    key: Key = Key.unknown
-    shift: bool = false
-    alt: bool = false
-    control: bool = false
+pub struct KeyPress:
+    pub key: Key = Key.unknown
+    pub shift: bool = false
+    pub alt: bool = false
+    pub control: bool = false
 
 # What a mouse did.
-enum Pointer:
+pub enum Pointer:
     press
     release
     drag
@@ -119,27 +119,27 @@ enum Pointer:
 # One mouse action, coordinates zero-based.  Buttons are left=0,
 # middle=1, right=2; a wheel event carries the direction in `wheel`,
 # +1 up and -1 down.
-struct Mouse:
-    kind: Pointer = Pointer.move
-    row: i64 = 0
-    column: i64 = 0
-    button: i64 = 0
-    modifiers: i64 = 0
-    wheel: i64 = 0
+pub struct Mouse:
+    pub kind: Pointer = Pointer.move
+    pub row: i64 = 0
+    pub column: i64 = 0
+    pub button: i64 = 0
+    pub modifiers: i64 = 0
+    pub wheel: i64 = 0
 
-    func has_shift() -> bool:
+    pub func has_shift() -> bool:
         return (self.modifiers & 1) != 0
 
-    func has_alt() -> bool:
+    pub func has_alt() -> bool:
         return (self.modifiers & 2) != 0
 
-    func has_control() -> bool:
+    pub func has_control() -> bool:
         return (self.modifiers & 4) != 0
 
 # One terminal event.  `resize` carries no size: geometry is a fact of
 # the terminal, so a program asks `rows()` and `cols()` when it hears
 # the terminal moved.
-union Event:
+pub union Event:
     resize
     # A timed `read` in which nothing arrived: input is still alive,
     # there is simply nothing to route yet — the turn a program uses
@@ -159,7 +159,7 @@ union Event:
 # The host keeps event details in mutable slots; this copies every
 # slot into the value before returning, so the event a program holds
 # is its own.
-func read(timeout_ms: i64 = -1) -> Event?:
+pub func read(timeout_ms: i64 = -1) -> Event?:
     let name = Builtin.key_read(timeout_ms)
     if name == none:
         return none
@@ -190,7 +190,7 @@ func read(timeout_ms: i64 = -1) -> Event?:
                 control = (modifiers & 4) != 0,
             ))
 
-private func pointer_of(name: str) -> Pointer?:
+func pointer_of(name: str) -> Pointer?:
     match name:
         "mouse_press":
             return Pointer.press
@@ -205,13 +205,13 @@ private func pointer_of(name: str) -> Pointer?:
         else:
             return none
 
-private func key_of(name: str) -> Key:
+func key_of(name: str) -> Key:
     let named = NAMES.get(name)
     if named == none:
         return Key.unknown
     return named
 
-private const NAMES = {
+const NAMES = {
     "enter": Key.enter,
     "tab": Key.tab,
     "backspace": Key.backspace,
@@ -260,20 +260,20 @@ private const NAMES = {
 # choose the correct intersection instead of overwriting one border
 # with another.
 
-const horizontal = "─"
-const vertical = "│"
-const top_left = "┌"
-const top_right = "┐"
-const bottom_left = "└"
-const bottom_right = "┘"
+pub const horizontal = "─"
+pub const vertical = "│"
+pub const top_left = "┌"
+pub const top_right = "┐"
+pub const bottom_left = "└"
+pub const bottom_right = "┘"
 
 # A light block makes a reliable one-cell shadow even on terminals
 # that do not render faint background colours consistently; programs
 # can combine it with a dim style for a softer shadow.
-const shadow = "░"
-const shadow_dark = "▒"
+pub const shadow = "░"
+pub const shadow_dark = "▒"
 
-func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
+pub func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
     if top and right and bottom and left:
         return "┼"
     if top and right and bottom:

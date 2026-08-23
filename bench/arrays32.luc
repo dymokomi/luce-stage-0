@@ -16,7 +16,7 @@
 # 205 billion does not fit anywhere else.  The C twin is
 # bench/arrays32.c.
 
-func main():
+pub func main():
     let n = 200000
     let reps = 400
     var a = array[i32](n)

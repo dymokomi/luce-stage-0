@@ -7,17 +7,17 @@ import std.strings
 
 # A Reader serving scripted bytes in fixed-size chunks, so the tests
 # drive exactly the arrival patterns a pipe produces.
-class Chunked: io.Reader:
-    private held: list[u8]
-    private at: i64
-    private chunk: i64
+pub class Chunked: io.Reader:
+    held: list[u8]
+    at: i64
+    chunk: i64
 
-    init(wire: list[u8], chunk: i64):
+    pub init(wire: list[u8], chunk: i64):
         self.held = wire
         self.at = 0
         self.chunk = chunk
 
-    func read(buffer: array[u8, _]) -> i64!:
+    pub func read(buffer: array[u8, _]) -> i64!:
         var given: i64 = 0
         while given < self.chunk and self.at < len(self.held) and given < len(buffer):
             buffer[given] = self.held[self.at]
@@ -25,7 +25,7 @@ class Chunked: io.Reader:
             self.at += 1
         return given
 
-func test_one_message_round_trips() -> !:
+pub func test_one_message_round_trips() -> !:
     var wire = framed("{\"method\":\"ping\"}")
     var frames = Frames(Chunked(wire, 4096))
     let body = try frames.next()
@@ -33,7 +33,7 @@ func test_one_message_round_trips() -> !:
     let ended = try frames.next()
     assert(ended == none)
 
-func test_tiny_chunks_and_back_to_back_messages() -> !:
+pub func test_tiny_chunks_and_back_to_back_messages() -> !:
     var wire = framed("first body")
     for byte in framed("second"):
         wire.append(byte)
@@ -43,13 +43,13 @@ func test_tiny_chunks_and_back_to_back_messages() -> !:
     let second = try frames.next()
     assert((second else "") == "second")
 
-func test_the_length_counts_bytes_not_scalars() -> !:
+pub func test_the_length_counts_bytes_not_scalars() -> !:
     var wire = framed("héllo")
     var frames = Frames(Chunked(wire, 4096))
     let body = try frames.next()
     assert((body else "") == "héllo")
 
-func test_a_truncated_body_is_an_error():
+pub func test_a_truncated_body_is_an_error():
     var wire = framed("promised text")
     var cut = list[u8]()
     for at in range(0, len(wire) - 5):

@@ -1,14 +1,14 @@
-union State:
+pub union State:
     idle
     running(progress: i64)
 
-func score(state: State) -> i64:
+pub func score(state: State) -> i64:
     match state:
         idle:
             return 0
         running(progress):
             return progress
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let state = State.running(progress = len(args))
     print(str(score(state)))

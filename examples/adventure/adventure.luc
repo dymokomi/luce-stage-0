@@ -33,15 +33,15 @@ import std.strings
 import std.os
 
 # Where `save` and `load` with no name of their own go.
-const save_file = "adventure.sav"
+pub const save_file = "adventure.sav"
 
 # The player: where they are, how i64 they have been at it, and
 # whether the story is over.  A turn writes those value fields through
 # its implied receiver, while the whole realm is borrowed beside it.
-struct Play:
-    at: i64
-    moves: i64 = 0
-    done: bool = false
+pub struct Play:
+    pub at: i64
+    pub moves: i64 = 0
+    pub done: bool = false
 
     # One turn.
     #
@@ -49,7 +49,7 @@ struct Play:
     # writes happen as their statements run, so a later disk error does
     # not roll back the move already attempted; the loop reports the
     # reason and asks for the next command.
-    func act(realm: world.Realm, order: command.Order) -> !:
+    pub func act(realm: world.Realm, order: command.Order) -> !:
         if order.empty():
             print("Say what you want to do, or type help.")
             return
@@ -98,10 +98,10 @@ struct Play:
 
     # -- the verbs, one method each ------------------------------------
 
-    func look(realm: world.Realm):
+    pub func look(realm: world.Realm):
         print(realm.look(self.at))
 
-    func travel(realm: world.Realm, direction: str):
+    pub func travel(realm: world.Realm, direction: str):
         if len(direction) == 0:
             print("Go where?")
             return
@@ -121,7 +121,7 @@ struct Play:
         realm.visit(self.at)
         print(realm.look(self.at, brief = not arriving))
 
-    func take(realm: world.Realm, name: str):
+    pub func take(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Take what?")
             return
@@ -137,7 +137,7 @@ struct Play:
         else:
             print("The " + name + " is not going anywhere.")
 
-    func put_down(realm: world.Realm, name: str):
+    pub func put_down(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Drop what?")
             return
@@ -146,7 +146,7 @@ struct Play:
         else:
             print("You are not carrying a " + name + ".")
 
-    func examine(realm: world.Realm, name: str):
+    pub func examine(realm: world.Realm, name: str):
         if len(name) == 0:
             print("Examine what?")
             return
@@ -156,7 +156,7 @@ struct Play:
             return
         print(close)
 
-    func inventory(realm: world.Realm):
+    pub func inventory(realm: world.Realm):
         let held = realm.carrying()
         if len(held) == 0:
             print("You are carrying nothing.")
@@ -165,12 +165,12 @@ struct Play:
 
 # "1 room", "4 rooms".  English needs the count and both words, and
 # there is nowhere better to keep them than the sentence that asks.
-private func counted(count: i64, one: str, many: str) -> str:
+func counted(count: i64, one: str, many: str) -> str:
     if count == 1:
         return f"{count} {one}"
     return f"{count} {many}"
 
-func help() -> str:
+pub func help() -> str:
     var lines = builder()
     lines.append("look                  what is here\n")
     lines.append("north south east      or n s e w, up, down — walking\n")
@@ -183,7 +183,7 @@ func help() -> str:
     lines.append("quit                  stop playing")
     return lines.build()
 
-func main(args: list[str]) -> !:
+pub func main(args: list[str]) -> !:
     var realm = story.build()
     var play = Play(at = story.start(realm))
 

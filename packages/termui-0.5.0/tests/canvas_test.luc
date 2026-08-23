@@ -1,7 +1,7 @@
 import canvas
 import model
 
-func test_writes_clip_to_the_assigned_rectangle():
+pub func test_writes_clip_to_the_assigned_rectangle():
     let surface = canvas.Surface(3, 6)
     surface.clear()
     let right = model.Rect(row = 0, column = 3, rows = 2, columns = 3)
@@ -12,7 +12,7 @@ func test_writes_clip_to_the_assigned_rectangle():
     assert(frame.cell(0, 0).text == " ")
     assert(frame.cell(0, 3).style.foreground == 2)
 
-func test_a_snapshot_owns_characters_styles_and_cursor():
+pub func test_a_snapshot_owns_characters_styles_and_cursor():
     let surface = canvas.Surface(2, 5)
     surface.clear()
     surface.write(surface.area(), 0, 0, "hé", model.Style(foreground = 3))
@@ -26,7 +26,7 @@ func test_a_snapshot_owns_characters_styles_and_cursor():
     surface.put(0, 0, "x", model.Style())
     assert(frame.cell(0, 0).text == "h")
 
-func test_crossing_strokes_merge_into_the_right_junction():
+pub func test_crossing_strokes_merge_into_the_right_junction():
     # Two borders laid independently share cells; the second stroke
     # reads what the first left and the union picks the glyph, so a
     # `─` crossed by a `│` is a `┼` and a corner meeting an edge is a
@@ -46,7 +46,7 @@ func test_crossing_strokes_merge_into_the_right_junction():
     surface.stroke(area, 2, 2, left = true)
     assert(surface.cell_at(2, 2).text == "╴")
 
-func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
+pub func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
     let screen = canvas.Screen(2, 3)
     screen.surface.clear()
     assert(screen.present().cells == 6)
@@ -55,7 +55,7 @@ func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
     screen.surface.clear()
     assert(screen.present().cells == 12)
 
-func test_a_one_cell_change_is_one_diff_run():
+pub func test_a_one_cell_change_is_one_diff_run():
     let screen = canvas.Screen(2, 4)
     screen.surface.clear()
     screen.present()

@@ -12,27 +12,27 @@ from syntax.definition import Syntax
 
 # --- one character, before anything decides what it means ----------
 
-private func is_digit(code: char) -> bool:
+func is_digit(code: char) -> bool:
     return code >= '0' and code <= '9'
 
-private func is_hex_digit(code: char) -> bool:
+func is_hex_digit(code: char) -> bool:
     return is_digit(code) or (code >= 'A' and code <= 'F') or (code >= 'a' and code <= 'f')
 
-private func is_upper(code: char) -> bool:
+func is_upper(code: char) -> bool:
     return code >= 'A' and code <= 'Z'
 
-private func is_alpha(code: char) -> bool:
+func is_alpha(code: char) -> bool:
     return is_upper(code) or (code >= 'a' and code <= 'z')
 
-private func is_word_start(code: char) -> bool:
+func is_word_start(code: char) -> bool:
     return is_alpha(code) or code == '_' or u32(code) >= 128
 
-private func is_word(code: char) -> bool:
+func is_word(code: char) -> bool:
     return is_word_start(code) or is_digit(code)
 
 # Where a quoted run that opens at `opening` closes, bounded by
 # `finish`.  A backslash escapes the next scalar.
-private func quoted_end(value: str, finish: i64, opening: i64, quote: char) -> i64:
+func quoted_end(value: str, finish: i64, opening: i64, quote: char) -> i64:
     var close = opening + 1
     var closed = false
     while close < finish and not closed:
@@ -49,7 +49,7 @@ private func quoted_end(value: str, finish: i64, opening: i64, quote: char) -> i
 # What a run of source is.  A `match` on this in `theme` and `paint`
 # has an arm for every member and no `else`, so a new kind cannot be
 # added without the compiler naming those sites.
-enum TokenKind:
+pub enum TokenKind:
     keyword
     type_name
     builtin
@@ -59,11 +59,11 @@ enum TokenKind:
     number
     punct
 
-struct Token:
-    text: str
-    kind: TokenKind
+pub struct Token:
+    pub text: str
+    pub kind: TokenKind
 
-private func listed(words: list[str], text: str) -> bool:
+func listed(words: list[str], text: str) -> bool:
     for word in words:
         if word == text:
             return true
@@ -72,7 +72,7 @@ private func listed(words: list[str], text: str) -> bool:
 # Which of the four word kinds a word is under `language`.  A reserved
 # word is a keyword before anything else, and where the convention
 # holds, a capitalized name is a type before a builtin.
-private func classify_word(language: Syntax, text: str) -> TokenKind:
+func classify_word(language: Syntax, text: str) -> TokenKind:
     if listed(language.keywords, text):
         return TokenKind.keyword
     if listed(language.types, text):
@@ -84,7 +84,7 @@ private func classify_word(language: Syntax, text: str) -> TokenKind:
     return TokenKind.plain
 
 # Whether `content` opens a line comment at `at`.
-private func opens_comment(language: Syntax, content: str, at: i64, to: i64) -> bool:
+func opens_comment(language: Syntax, content: str, at: i64, to: i64) -> bool:
     let marker = language.line_comment
     if len(marker) == 0:
         return false
@@ -97,13 +97,13 @@ private func opens_comment(language: Syntax, content: str, at: i64, to: i64) -> 
         offset += 1
     return true
 
-private func is_quote(language: Syntax, code: char) -> bool:
+func is_quote(language: Syntax, code: char) -> bool:
     for quote in language.quotes:
         if code == quote:
             return true
     return false
 
-private func is_quote_prefix(language: Syntax, code: char) -> bool:
+func is_quote_prefix(language: Syntax, code: char) -> bool:
     for prefix in language.quote_prefixes:
         if code == prefix:
             return true
@@ -112,7 +112,7 @@ private func is_quote_prefix(language: Syntax, code: char) -> bool:
 # Tokenize the scalar range `[from, to)` of `content` under
 # `language`.  Whole tokens are produced without clipping — display
 # clipping is the surface's job at draw time.
-func tokens(language: Syntax, content: str, from: i64, to: i64) -> list[Token]:
+pub func tokens(language: Syntax, content: str, from: i64, to: i64) -> list[Token]:
     var out = list[Token]()
     var at = from
     while at < to:

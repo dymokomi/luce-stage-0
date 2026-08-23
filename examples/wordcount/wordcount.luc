@@ -4,7 +4,7 @@
 
 import std.files
 
-func is_word_char(code: char) -> bool:
+pub func is_word_char(code: char) -> bool:
     if code >= 'a' and code <= 'z':
         return true
     if code >= 'A' and code <= 'Z':
@@ -14,7 +14,7 @@ func is_word_char(code: char) -> bool:
     return code == '_' or u32(code) >= 128
 
 # Collect every word of `content` into the counts map.
-func count_words(content: str, counts: map[str, i64]):
+pub func count_words(content: str, counts: map[str, i64]):
     var at = 0
     while at < len(content):
         if is_word_char(content[at]):
@@ -34,7 +34,7 @@ func count_words(content: str, counts: map[str, i64]):
 # The most frequent remaining word, and how often (first seen wins
 # ties).  It computed both and could answer only one, so every caller
 # did a second hash lookup for the count this already had.
-func heaviest(counts: map[str, i64]) -> (str, i64):
+pub func heaviest(counts: map[str, i64]) -> (str, i64):
     var best = ""
     var best_count: i64 = 0
     for word in counts:
@@ -43,7 +43,7 @@ func heaviest(counts: map[str, i64]) -> (str, i64):
             best_count = counts[word]
     return best, best_count
 
-func main(args: list[str]) -> !:
+pub func main(args: list[str]) -> !:
     if len(args) == 0:
         print("usage: wordcount FILE [TOP_N]")
         return

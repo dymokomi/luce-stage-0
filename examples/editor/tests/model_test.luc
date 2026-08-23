@@ -4,12 +4,12 @@
 from model import Model, Intent, Focus
 from document import Document
 
-func fresh() -> Model:
+pub func fresh() -> Model:
     var documents = list[Document]()
     documents.append(Document(path = "f.luc"))
     return Model(documents)
 
-func test_typing_then_undo_and_redo():
+pub func test_typing_then_undo_and_redo():
     var ed = fresh()
     ed.key(Intent.insert_text, "hello", 10)
     assert(ed.document().content == "hello")
@@ -19,7 +19,7 @@ func test_typing_then_undo_and_redo():
     ed.key(Intent.redo, "", 10)
     assert(ed.document().content == "hello")
 
-func test_a_run_of_insertions_is_one_undo():
+pub func test_a_run_of_insertions_is_one_undo():
     var ed = fresh()
     ed.key(Intent.insert_text, "a", 10)
     ed.key(Intent.insert_text, "b", 10)
@@ -28,7 +28,7 @@ func test_a_run_of_insertions_is_one_undo():
     ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
 
-func test_a_movement_breaks_the_undo_run():
+pub func test_a_movement_breaks_the_undo_run():
     var ed = fresh()
     ed.key(Intent.insert_text, "ab", 10)
     ed.key(Intent.move_left, "", 10)
@@ -39,14 +39,14 @@ func test_a_movement_breaks_the_undo_run():
     ed.key(Intent.undo, "", 10)
     assert(ed.document().content == "")
 
-func test_newline_reindents_inside_a_block():
+pub func test_newline_reindents_inside_a_block():
     var ed = fresh()
     ed.key(Intent.insert_text, "if x:", 10)
     ed.key(Intent.newline, "", 10)
     # The new line keeps the block's indent plus one level.
     assert(ed.document().content == "if x:\n    ")
 
-func test_search_steps_through_matches():
+pub func test_search_steps_through_matches():
     var ed = fresh()
     ed.key(Intent.insert_text, "one two two", 10)
     ed.key(Intent.find, "", 10)
@@ -60,7 +60,7 @@ func test_search_steps_through_matches():
 
 # A search jumps the cursor, so text typed after closing it is a fresh
 # undo group rather than coalescing across the jump.
-func test_search_starts_a_fresh_undo_group():
+pub func test_search_starts_a_fresh_undo_group():
     var ed = fresh()
     ed.key(Intent.insert_text, "ab", 10)
     ed.key(Intent.find, "", 10)
@@ -75,7 +75,7 @@ func test_search_starts_a_fresh_undo_group():
 # The file pane's scroll window is persisted on `self.files`, so a mouse
 # click and the frame read the same `top` — it is not recomputed on a
 # throwaway copy.
-func test_adjust_files_persists_the_scroll_window():
+pub func test_adjust_files_persists_the_scroll_window():
     var ed = fresh()
     for i in range(0, 20):
         ed.names.append("file" + str(i))

@@ -1,8 +1,8 @@
-func make_adder(start: i64) -> func(i64) -> i64:
+pub func make_adder(start: i64) -> func(i64) -> i64:
     let add: func(i64) -> i64 = func(value):
         return start + value
     return add
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let add = make_adder(len(args))
     print(str(add(2)))

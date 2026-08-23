@@ -1,11 +1,11 @@
-struct Point:
-    x: i64
-    y: i64
+pub struct Point:
+    pub x: i64
+    pub y: i64
 
-    func moved(dx: i64, dy: i64) -> Point:
+    pub func moved(dx: i64, dy: i64) -> Point:
         return Point(x = self.x + dx, y = self.y + dy)
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let start = Point(x = len(args), y = 2)
     let end = start.moved(3, 4)
     print(str(end.x + end.y))

@@ -132,28 +132,28 @@
 # RFC 8259 §2: the six structural characters, the two quoting marks,
 # and nothing else in this module is written as a bare number.
 
-private const quote_mark: char = '"'
-private const backslash: char = '\\'
-private const brace_open: char = '{'
-private const brace_close: char = '}'
-private const bracket_open: char = '['
-private const bracket_close: char = ']'
-private const colon: char = ':'
-private const comma: char = ','
-private const minus: char = '-'
-private const plus: char = '+'
-private const point: char = '.'
-private const digit_zero: char = '0'
-private const digit_nine: char = '9'
-private const letter_e: char = 'e'
-private const letter_e_capital: char = 'E'
-private const letter_u: char = 'u'
+const quote_mark: char = '"'
+const backslash: char = '\\'
+const brace_open: char = '{'
+const brace_close: char = '}'
+const bracket_open: char = '['
+const bracket_close: char = ']'
+const colon: char = ':'
+const comma: char = ','
+const minus: char = '-'
+const plus: char = '+'
+const point: char = '.'
+const digit_zero: char = '0'
+const digit_nine: char = '9'
+const letter_e: char = 'e'
+const letter_e_capital: char = 'E'
+const letter_u: char = 'u'
 
 # RFC 8259 §9 leaves the limit to the parser. This one is half of
 # loom's call-depth policy, because a tree is walked by recursion and
 # both ends of that walk — this module and its caller — have to fit
 # inside the one budget.
-private const max_depth = 64
+const max_depth = 64
 
 # --- what a value is -------------------------------------------------
 
@@ -170,7 +170,7 @@ private const max_depth = 64
 # conversion constructor named for it), so JSON's str is spelled
 # `text` here — the same word `strings.from_bytes` uses for the same
 # thing.
-union Json:
+pub union Json:
     null
     boolean(value: bool)
     integer(value: i64)
@@ -182,7 +182,7 @@ union Json:
     # True for JSON's `null` and nothing else — which is a different
     # question from "is this value missing", and that is the point of
     # having both (`member` answers absence).
-    func is_null() -> bool:
+    pub func is_null() -> bool:
         match self:
             null:
                 return true
@@ -190,7 +190,7 @@ union Json:
                 return false
 
     # `true` or `false`; absent for every other member.
-    func as_bool() -> bool?:
+    pub func as_bool() -> bool?:
         match self:
             boolean(value):
                 return value
@@ -203,7 +203,7 @@ union Json:
     # real is a real, and answering absence says so, where truncating
     # would throw information away silently and rounding would invent
     # it.
-    func as_i64() -> i64?:
+    pub func as_i64() -> i64?:
         match self:
             integer(value):
                 return value
@@ -212,7 +212,7 @@ union Json:
 
     # The number as f64, whichever numeric member it uses. Integer
     # payloads are converted explicitly here.
-    func as_f64() -> f64?:
+    pub func as_f64() -> f64?:
         match self:
             integer(value):
                 return f64(value)
@@ -224,7 +224,7 @@ union Json:
     # The str, decoded — the escapes were spent on the way in, so
     # this is the text the document meant.  Absent for every other
     # member.
-    func as_text() -> str?:
+    pub func as_text() -> str?:
         match self:
             text(value):
                 return value
@@ -233,7 +233,7 @@ union Json:
 
     # How many members an object has, or elements an array has.  A
     # leaf answers 0.
-    func count() -> i64:
+    pub func count() -> i64:
         match self:
             array(items):
                 return len(items)
@@ -250,7 +250,7 @@ union Json:
     # is a number or a str, or a subtree whose inner containers are
     # references shared with the document.  A walk that only means to
     # *read* should say `match` and reach the map itself directly.
-    func member(name: str) -> Json?:
+    pub func member(name: str) -> Json?:
         match self:
             object(fields):
                 if fields.has(name):
@@ -268,7 +268,7 @@ union Json:
     # A copy, for `member`'s reason — and on an object it also walks
     # the names to find the position, so a loop that wants every
     # member should `match` and iterate the map once instead.
-    func element(index: i64) -> Json:
+    pub func element(index: i64) -> Json:
         match self:
             array(items):
                 if index < 0 or index >= len(items):
@@ -288,7 +288,7 @@ union Json:
     # value is what survived that parse — but a re-encoding of the
     # value itself, so `parse(j.write())` is a value equal to `j` and
     # writing *that* gives the same bytes again.
-    func write() -> str:
+    pub func write() -> str:
         let printer = Printer(out = builder(), spaces = 0)
         printer.put(self, 0)
         return printer.out.build()
@@ -296,7 +296,7 @@ union Json:
     # The same, indented: every member and element on its own line,
     # `spaces` further in than its container.  `spaces` of 0 is
     # `write`.
-    func pretty(spaces: i64) -> str:
+    pub func pretty(spaces: i64) -> str:
         if spaces < 0:
             trap("json: pretty needs spaces >= 0")
         let printer = Printer(out = builder(), spaces = spaces)
@@ -308,12 +308,12 @@ union Json:
 # What the parse path fails with: one member, because every way a
 # document can be wrong is the same kind of news — a reason, and the
 # Unicode-scalar position where the parser met it.
-union Malformed:
+pub union Malformed:
     syntax(reason: str, at: i64)
 
 # The refusal as one sentence: the reason, then the position.  For the
 # caller that prints rather than reads the payloads apart.
-func describe(failed: Malformed) -> str:
+pub func describe(failed: Malformed) -> str:
     match failed:
         syntax(reason, at):
             return "json: " + reason + ", at position " + str(at)
@@ -327,7 +327,7 @@ func describe(failed: Malformed) -> str:
 # the scalar position where it happened.  The document's boundaries
 # are checked here — a text with no value in it, and a text with more
 # after its one value — and everything between them is the Parser's.
-func parse(content: str) -> Json ! Malformed:
+pub func parse(content: str) -> Json ! Malformed:
     var reader = Parser(content = content, at = 0)
     reader.skip_blank()
     if reader.at >= len(content):
@@ -343,9 +343,9 @@ func parse(content: str) -> Json ! Malformed:
 # `at`, so a value and the position after it never travel as a pair —
 # the cursor *is* the second half of every answer, and the position a
 # diagnostic names is the one the parser genuinely holds.
-private struct Parser:
-    private content: str
-    private at: i64
+struct Parser:
+    content: str
+    at: i64
 
     # One value, with the read head left after it.
     #
@@ -362,7 +362,7 @@ private struct Parser:
     # number worth having.  This is the one place in the module where a
     # function is longer than its parts because the parts would cost
     # something real (docs/CODING_GUIDE.md).
-    private func read_value(depth: i64) -> Json ! Malformed:
+    func read_value(depth: i64) -> Json ! Malformed:
         self.skip_blank()
         if self.at >= len(self.content):
             error(Malformed.syntax(reason = "a value was expected", at = self.at))
@@ -461,7 +461,7 @@ private struct Parser:
     # horizontal tab, line feed and carriage return.  Nothing else is
     # whitespace, which is why a vertical tab or a form feed between
     # two tokens is an error rather than a shrug.
-    private func skip_blank():
+    func skip_blank():
         while self.at < len(self.content):
             let c = self.content[self.at]
             if c != ' ' and c != '\t' and c != '\n' and c != char(13):
@@ -471,7 +471,7 @@ private struct Parser:
     # True when `spelling` stands at the read head, which then moves
     # past it.  A miss moves nothing, so the refusal after the last
     # miss still names the position a value was expected at.
-    private func word(spelling: str) -> bool:
+    func word(spelling: str) -> bool:
         if self.at + len(spelling) > len(self.content):
             return false
         for i in range(0, len(spelling)):
@@ -492,7 +492,7 @@ private struct Parser:
     # because they are asking different questions of the same scalars;
     # folding them together would mean building a str for every token
     # that did not need one.
-    private func read_string() -> str ! Malformed:
+    func read_string() -> str ! Malformed:
         let opened = self.at
         self.at += 1
         while self.at < len(self.content):
@@ -513,7 +513,7 @@ private struct Parser:
     # The rest of a str token, decoded, with the read head on its
     # first backslash.  `opened` is the opening quote, kept for the
     # sentence a str that never closes deserves.
-    private func read_escaped(opened: i64) -> str ! Malformed:
+    func read_escaped(opened: i64) -> str ! Malformed:
         var out = builder()
         out.append(self.content[opened + 1:self.at])
         while self.at < len(self.content):
@@ -540,7 +540,7 @@ private struct Parser:
     # spells into `out`; the read head stands on the backslash and is
     # left after the whole escape.  The diagnostics name the backslash,
     # so its position is kept even as the head moves past it.
-    private func decode_escape(out: builder) -> ! Malformed:
+    func decode_escape(out: builder) -> ! Malformed:
         let slash = self.at
         if slash + 1 >= len(self.content):
             error(Malformed.syntax(reason = "the text ends inside an escape", at = slash))
@@ -588,7 +588,7 @@ private struct Parser:
 
     # Four hexadecimal digits at the read head, as the number they
     # spell.
-    private func read_hex4() -> i64 ! Malformed:
+    func read_hex4() -> i64 ! Malformed:
         let start = self.at
         if start + 4 > len(self.content):
             error(Malformed.syntax(reason = "an escape wants four hexadecimal digits and the text ends first", at = start))
@@ -621,7 +621,7 @@ private struct Parser:
     # because that is where its precision honestly is — and a number
     # too large for a `f64` is refused, since there is nothing left to
     # hold it with.
-    private func read_number() -> Json ! Malformed:
+    func read_number() -> Json ! Malformed:
         let start = self.at
         if self.content[self.at] == minus:
             self.at += 1
@@ -661,7 +661,7 @@ private struct Parser:
             return Json.real(value = measured)
         error(Malformed.syntax(reason = "the number is past what an f64 can hold", at = start))
 
-private func is_digit(c: char) -> bool:
+func is_digit(c: char) -> bool:
     return c >= digit_zero and c <= digit_nine
 
 # --- writing ---------------------------------------------------------
@@ -679,7 +679,7 @@ private func is_digit(c: char) -> bool:
 # This is the door for a program that builds JSON text of its own out
 # of a builder rather than a value, and it is the same escaping
 # `write` puts around a str and a member name.
-func quote(content: str) -> str:
+pub func quote(content: str) -> str:
     let printer = Printer(out = builder(), spaces = 0)
     printer.put_quoted(content)
     return printer.out.build()
@@ -688,9 +688,9 @@ func quote(content: str) -> str:
 # the caller asked for — `spaces` of 0 is the compact form.  Both are
 # settled at construction, and the builder is a reference, so nothing
 # here writes a field: a Printer sits happily in a `let`.
-private struct Printer:
-    private out: builder
-    private spaces: i64
+struct Printer:
+    out: builder
+    spaces: i64
 
     # One value and everything under it, as JSON text.
     #
@@ -698,7 +698,7 @@ private struct Printer:
     # the walk.  Every member of the union is written here and there is
     # no `else`, so the day a member is added this function stops
     # compiling and names it.
-    private func put(held: Json, depth: i64):
+    func put(held: Json, depth: i64):
         match held:
             null:
                 self.out.append("null")
@@ -746,7 +746,7 @@ private struct Printer:
     # A str's text between its quotes, escaped as §7 asks — the one
     # quoting path, shared by a value's text, a member's name, and the
     # free `quote`.
-    private func put_quoted(content: str):
+    func put_quoted(content: str):
         self.out.append_ascii(i64(u32(quote_mark)))
         var run = 0
         var at = 0
@@ -761,7 +761,7 @@ private struct Printer:
         self.out.append(content[run:])
         self.out.append_ascii(i64(u32(quote_mark)))
 
-    private func put_escape(c: char):
+    func put_escape(c: char):
         self.out.append_ascii(i64(u32(backslash)))
         if c == quote_mark or c == backslash:
             self.out.append_ascii(i64(u32(c)))
@@ -800,7 +800,7 @@ private struct Printer:
     # this module owes.  Shortening it is a job for `str(f64)`, where
     # every other caller would get it too, and not for a private helper
     # here.
-    private func put_real(value: f64):
+    func put_real(value: f64):
         let written = str(value)
         if written == "inf" or written == "-inf" or written == "nan":
             # "inf", "-inf", "nan": RFC 8259 §6 has no grammar for any
@@ -814,14 +814,14 @@ private struct Printer:
 
     # A line break and one level of indentation, or nothing at all when
     # the printer was built for no spaces.
-    private func put_break(depth: i64):
+    func put_break(depth: i64):
         if self.spaces <= 0:
             return
         self.out.append_ascii(10)
         for i in range(0, self.spaces * depth):
             self.out.append_ascii(32)
 
-private func hex_digit(value: i64) -> i64:
+func hex_digit(value: i64) -> i64:
     if value < 10:
         return i64(u32(digit_zero)) + value
     return 97 + value - 10

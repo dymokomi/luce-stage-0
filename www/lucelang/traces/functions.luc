@@ -1,7 +1,7 @@
-func factorial(value: i64) -> i64:
+pub func factorial(value: i64) -> i64:
     if value <= 1:
         return 1
     return value * factorial(value - 1)
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     print(str(factorial(len(args) + 1)))

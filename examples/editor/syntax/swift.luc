@@ -2,7 +2,7 @@
 
 from syntax.definition import Syntax
 
-func syntax() -> Syntax:
+pub func syntax() -> Syntax:
     return Syntax(
         name = "Swift",
         line_comment = "//",

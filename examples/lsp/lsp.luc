@@ -13,15 +13,15 @@ from server import Server, Compiler
 
 # The real toolchain behind the Compiler seam: feed the buffer to
 # `luce query diagnostics -` and answer the JSON array it prints.
-class Toolchain: Compiler:
-    init():
+pub class Toolchain: Compiler:
+    pub init():
         return
 
-    func diagnostics(content: str) -> str!:
+    pub func diagnostics(content: str) -> str!:
         let transcript = try os.run("luce query diagnostics -", content)
         return first_line(transcript)
 
-func main() -> !:
+pub func main() -> !:
     let input = try os.stdin()
     let out = try os.stdout()
     let server = Server(Toolchain())
@@ -38,7 +38,7 @@ func main() -> !:
 
 # `os.run` appends the exit-status line to the captured output; the
 # query's answer is the JSON array on the first line.
-func first_line(transcript: str) -> str:
+pub func first_line(transcript: str) -> str:
     var at: i64 = 0
     while at < len(transcript) and transcript[at] != '\n':
         at += 1

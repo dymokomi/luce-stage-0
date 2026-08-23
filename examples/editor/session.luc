@@ -11,7 +11,7 @@ import std.os
 import std.strings
 from document import Document
 
-private func draft_path(path: str) -> str:
+func draft_path(path: str) -> str:
     return path + ".draft"
 
 # What `load` answers: the buffer to open, the file's on-disk content,
@@ -19,10 +19,10 @@ private func draft_path(path: str) -> str:
 # with the file so recovering a draft is reversible — Ctrl-Z returns to
 # exactly what is on disk, which is the safety net for a draft that is
 # offered but not wanted.
-struct Loaded:
-    opened: Document
-    base: str
-    recovered: bool
+pub struct Loaded:
+    pub opened: Document
+    pub base: str
+    pub recovered: bool
 
 # Open `path`.  A file that will not read is a new file, not an error.
 # A draft that differs from the file is offered as recovered unsaved
@@ -33,7 +33,7 @@ struct Loaded:
 # by being reversible (`base` seeds undo) rather than by guessing which
 # is newer; a real "newer than the file" test waits on a host mtime
 # service.
-func load(path: str) -> Loaded:
+pub func load(path: str) -> Loaded:
     var content = ""
     var message = ""
     content = files.read(path) catch:
@@ -62,7 +62,7 @@ func load(path: str) -> Loaded:
 # destroy the previous good one — the rename is atomic on one
 # filesystem.  A draft that cannot be written is silently skipped: it is
 # a safety net, not the save itself.
-func save_draft(path: str, content: str):
+pub func save_draft(path: str, content: str):
     let draft = draft_path(path)
     let temporary = draft + ".tmp"
     files.write(temporary, content) catch:
@@ -70,25 +70,25 @@ func save_draft(path: str, content: str):
     files.rename(temporary, draft) catch:
         return
 
-func discard_draft(path: str):
+pub func discard_draft(path: str):
     files.delete(draft_path(path)) catch:
         return
 
 # --- the build shell --------------------------------------------------
 
 # One shell word, including paths with spaces or shell punctuation.
-private func shell_quote(value: str) -> str:
+func shell_quote(value: str) -> str:
     return "'" + strings.replace(value, "'", "'\\''") + "'"
 
 # Compile `path` to a sibling executable and run it, so a person sees
 # both the compiler's diagnostics and the program's output in one pass.
-func build_command(path: str) -> str:
+pub func build_command(path: str) -> str:
     let output = path + ".run"
     return "luce build " + shell_quote(path) + " --emit=exe -o " + shell_quote(output) + " && " + shell_quote(output)
 
 # Run a command and answer its combined output, or the failure message
 # if the shell service itself refused.
-func run(command: str) -> str:
+pub func run(command: str) -> str:
     var output = ""
     output = os.run(command) catch reason:
         return reason

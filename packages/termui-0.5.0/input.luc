@@ -9,12 +9,12 @@
 
 import std.term
 
-alias Key = term.Key
-alias KeyPress = term.KeyPress
-alias Pointer = term.Pointer
-alias Mouse = term.Mouse
+pub alias Key = term.Key
+pub alias KeyPress = term.KeyPress
+pub alias Pointer = term.Pointer
+pub alias Mouse = term.Mouse
 
-union Event:
+pub union Event:
     closed
     resize
     # A timed wait in which nothing arrived — the tick a retained
@@ -28,11 +28,11 @@ union Event:
 # terminal has nothing more to say.  `term.read()` copies every host
 # slot before returning, so a held Event never changes under a later
 # read.
-class Stream:
-    init():
+pub class Stream:
+    pub init():
         return
 
-    func next(timeout_ms: i64 = -1) -> Event:
+    pub func next(timeout_ms: i64 = -1) -> Event:
         let read = term.read(timeout_ms)
         if read == none:
             return Event.closed

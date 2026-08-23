@@ -6,7 +6,7 @@
 # are quarter-integers, so every product and sum is exact and the
 # checksum compares exactly.  The C twin is bench/matmul.c.
 
-func main():
+pub func main():
     let n = 400
     var a = array[f64](n * n)
     var b = array[f64](n * n)

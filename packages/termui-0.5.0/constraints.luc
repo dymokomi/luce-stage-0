@@ -8,7 +8,7 @@ from model import Rect
 # What one child asks of its axis.  Any conformer lays out: the
 # shipped Fixed, Grow, Ratio, and Preferred are the common shapes, and
 # a program's own constraint composes exactly the same way.
-interface Constraint:
+pub interface Constraint:
     # The floor this child never gives up until the axis itself runs
     # out.
     func minimum() -> i64
@@ -24,102 +24,102 @@ interface Constraint:
 
 # Exactly `cells` — never more, never less, until the axis itself is
 # smaller than everything's minimums.
-class Fixed: Constraint:
-    private cells: i64
+pub class Fixed: Constraint:
+    cells: i64
 
-    init(cells: i64):
+    pub init(cells: i64):
         self.cells = cells
 
-    func minimum() -> i64:
+    pub func minimum() -> i64:
         return max(self.cells, 0)
 
-    func maximum() -> i64?:
+    pub func maximum() -> i64?:
         return max(self.cells, 0)
 
-    func weight() -> i64:
+    pub func weight() -> i64:
         return 0
 
-    func preference(axis: i64) -> i64?:
+    pub func preference(axis: i64) -> i64?:
         return none
 
 # Keep at least `minimum`, then take surplus in proportion to
 # `weight`.  The default is the main content of a screen: everything
 # the siblings leave.
-class Grow: Constraint:
-    private share: i64
-    private floor: i64
+pub class Grow: Constraint:
+    share: i64
+    floor: i64
 
-    init(weight: i64 = 1, minimum: i64 = 0):
+    pub init(weight: i64 = 1, minimum: i64 = 0):
         self.share = weight
         self.floor = minimum
 
-    func minimum() -> i64:
+    pub func minimum() -> i64:
         return max(self.floor, 0)
 
-    func maximum() -> i64?:
+    pub func maximum() -> i64?:
         return none
 
-    func weight() -> i64:
+    pub func weight() -> i64:
         return max(self.share, 0)
 
-    func preference(axis: i64) -> i64?:
+    pub func preference(axis: i64) -> i64?:
         return none
 
 # A pane that scales with the terminal: `percent` of the axis, kept
 # between `low` and `high`.
-class Ratio: Constraint:
-    private low: i64
-    private high: i64
-    private percent: i64
+pub class Ratio: Constraint:
+    low: i64
+    high: i64
+    percent: i64
 
-    init(low: i64, high: i64, percent: i64):
+    pub init(low: i64, high: i64, percent: i64):
         self.low = low
         self.high = high
         self.percent = percent
 
-    func minimum() -> i64:
+    pub func minimum() -> i64:
         return max(self.low, 0)
 
-    func maximum() -> i64?:
+    pub func maximum() -> i64?:
         return max(self.high, max(self.low, 0))
 
-    func weight() -> i64:
+    pub func weight() -> i64:
         return 0
 
-    func preference(axis: i64) -> i64?:
+    pub func preference(axis: i64) -> i64?:
         return floor_div(axis * clamp(self.percent, 0, 100), 100)
 
 # A pane with a remembered size — after a person drags a divider —
 # kept between `low` and `high`.
-class Preferred: Constraint:
-    private low: i64
-    private ideal: i64
-    private high: i64
+pub class Preferred: Constraint:
+    low: i64
+    ideal: i64
+    high: i64
 
-    init(low: i64, ideal: i64, high: i64):
+    pub init(low: i64, ideal: i64, high: i64):
         self.low = low
         self.ideal = ideal
         self.high = high
 
-    func minimum() -> i64:
+    pub func minimum() -> i64:
         return max(self.low, 0)
 
-    func maximum() -> i64?:
+    pub func maximum() -> i64?:
         return max(self.high, max(self.low, 0))
 
-    func weight() -> i64:
+    pub func weight() -> i64:
         return 0
 
-    func preference(axis: i64) -> i64?:
+    pub func preference(axis: i64) -> i64?:
         return self.ideal
 
-private func floor_div(numerator: i64, denominator: i64) -> i64:
+func floor_div(numerator: i64, denominator: i64) -> i64:
     return i64(floor(numerator / denominator))
 
 # Turn one Constraint per child into non-negative sizes.  Preferences
 # compress before growers, growers before rigid children, and nothing
 # is ever negative or beyond the axis.
-func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i64]:
+pub func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i64]:
     let count = len(constraints)
     var sizes = list[i64]()
     if count == 0:
@@ -205,7 +205,7 @@ func resolve(total: i64, spacing: i64, constraints: list[Constraint]) -> list[i6
         over -= cut
     return sizes
 
-func row(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
+pub func row(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
     let widths = resolve(area.columns, spacing, constraints)
     var rectangles = list[Rect]()
     var at_column = area.column
@@ -215,7 +215,7 @@ func row(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
         at_column += width + gap
     return rectangles
 
-func column(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
+pub func column(area: Rect, spacing: i64, constraints: list[Constraint]) -> list[Rect]:
     let heights = resolve(area.rows, spacing, constraints)
     var rectangles = list[Rect]()
     var at_row = area.row

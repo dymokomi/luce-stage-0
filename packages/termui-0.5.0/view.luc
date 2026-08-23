@@ -10,7 +10,7 @@ from model import Rect, Response, Cursor
 from input import Event
 from canvas import Surface, Snapshot
 
-interface View:
+pub interface View:
     func draw(surface: Surface, area: Rect) -> Cursor?
     func dispatch(event: Event, area: Rect) -> Response
 
@@ -22,7 +22,7 @@ interface View:
 # pointer.  Keyboard and text events continue until a child accepts
 # them.  Because the checks live here, a user container written
 # against `route` gets the same discipline as the shipped ones.
-func route(child: View, event: Event, area: Rect) -> Response:
+pub func route(child: View, event: Event, area: Rect) -> Response:
     match event:
         closed:
             return Response.ignored
@@ -37,7 +37,7 @@ func route(child: View, event: Event, area: Rect) -> Response:
 
 # Render one tree host-free: tests and previews see exactly the cells
 # the live loop would present.
-func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
+pub func snapshot(content: View, rows: i64, columns: i64) -> Snapshot:
     let surface = Surface(rows, columns)
     surface.clear()
     let cursor = content.draw(surface, surface.area())

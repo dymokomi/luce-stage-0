@@ -9,7 +9,7 @@ from termui.widgets import Label, Fill, CursorHost
 from model import Model, Focus
 from ui.theme import palette
 
-private func focus_label(where: Focus) -> str:
+func focus_label(where: Focus) -> str:
     match where:
         editor:
             return "  [editor]"
@@ -20,13 +20,13 @@ private func focus_label(where: Focus) -> str:
         search:
             return "  [search]"
 
-class StatusBar: View:
-    private model: Model
+pub class StatusBar: View:
+    model: Model
 
-    init(shared: Model):
+    pub init(shared: Model):
         self.model = shared
 
-    func status_text() -> str:
+    pub func status_text() -> str:
         if self.model.focus == Focus.search:
             var prompt = f" find: {self.model.search_query}"
             if len(self.model.search_matches) > 0:
@@ -51,7 +51,7 @@ class StatusBar: View:
                 left += f"  — {problem.message}"
         return left + focus_label(self.model.focus)
 
-    func status_cursor(area: Rect) -> Cursor?:
+    pub func status_cursor(area: Rect) -> Cursor?:
         if self.model.focus != Focus.search or area.is_empty():
             return none
         return Cursor(
@@ -61,7 +61,7 @@ class StatusBar: View:
 
     # --- the View contract ------------------------------------------
 
-    private func composed() -> View:
+    func composed() -> View:
         let line = self.status_text()
         let background = Fill(" ", palette.status)
         if self.model.focus == Focus.search:
@@ -78,8 +78,8 @@ class StatusBar: View:
         layered.add(pieces)
         return CursorHost(layered, self.status_cursor)
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         return self.composed().draw(surface, area)
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored

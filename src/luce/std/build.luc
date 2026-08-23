@@ -22,19 +22,18 @@ import std.json
 # One step of the plan.  Made by the Plan's own constructors, never
 # directly; held by reference, so `needs` edges added after
 # construction are seen by the plan that holds it.
-class Step:
-    private:
-        name: str
-        kind: str
-        source: str
-        emit_kind: str
-        output: str
-        release: bool
-        argv: list[str]
-        carried: list[str]
-        wants: list[str]
+pub class Step:
+    name: str
+    kind: str
+    source: str
+    emit_kind: str
+    output: str
+    release: bool
+    argv: list[str]
+    carried: list[str]
+    wants: list[str]
 
-    init(name: str, kind: str):
+    pub init(name: str, kind: str):
         self.name = name
         self.kind = kind
         self.source = ""
@@ -46,7 +45,7 @@ class Step:
         self.wants = list[str]()
 
     # This step runs only after `other` has finished.
-    func needs(other: Step):
+    pub func needs(other: Step):
         self.wants.append(other.step_name())
 
     # This step's native link also carries `input` — an object, an
@@ -54,17 +53,17 @@ class Step:
     # spells it.  Only a program or a library step runs a native
     # link: a command step runs, and an object step stops before
     # linking, so both refuse here, where the author is.
-    func link(input: str):
+    pub func link(input: str):
         if self.kind != "luce" or self.emit_kind == "object":
             trap("step " + self.name + " has no native link")
         self.carried.append(input)
 
-    func step_name() -> str:
+    pub func step_name() -> str:
         return self.name
 
     # The step as a Json object — `emit`'s half, kept beside the
     # fields it reads.
-    func described() -> json.Json:
+    pub func described() -> json.Json:
         var fields = map[str, json.Json]()
         fields["name"] = json.Json.text(value = self.name)
         fields["kind"] = json.Json.text(value = self.kind)
@@ -88,13 +87,13 @@ class Step:
         fields["needs"] = json.Json.array(items = wants)
         return json.Json.object(fields = fields)
 
-    private func fill(source: str, emit_kind: str, output: str, release: bool):
+    func fill(source: str, emit_kind: str, output: str, release: bool):
         self.source = source
         self.emit_kind = emit_kind
         self.output = output
         self.release = release
 
-    private func speak(argv: list[str]):
+    func speak(argv: list[str]):
         self.argv = argv
 
 # The plan under construction.  Construct one, declare steps, connect
@@ -108,12 +107,11 @@ class Step:
 #         var app = b.program("app", "src/app.luc")
 #         app.needs(tool)
 #         b.emit()
-class Plan:
-    private:
-        steps: list[Step]
-        chosen: str
+pub class Plan:
+    steps: list[Step]
+    chosen: str
 
-    init():
+    pub init():
         self.steps = list[Step]()
         self.chosen = ""
 
@@ -122,19 +120,19 @@ class Plan:
     # empty means the tool's default, the executable named after the
     # source.  `release` strips source locations exactly as
     # `--release` does.
-    func program(name: str, source: str, output: str = "", release: bool = false) -> Step:
+    pub func program(name: str, source: str, output: str = "", release: bool = false) -> Step:
         var step = self.claim(name, "luce")
         step.fill(source, "exe", output, release)
         return step
 
     # The same compile, emitting the `.lc` library loom loads.
-    func library(name: str, source: str, output: str = "", release: bool = false) -> Step:
+    pub func library(name: str, source: str, output: str = "", release: bool = false) -> Step:
         var step = self.claim(name, "luce")
         step.fill(source, "library", output, release)
         return step
 
     # The same compile, emitting a relocatable object.
-    func object(name: str, source: str, output: str = "", release: bool = false) -> Step:
+    pub func object(name: str, source: str, output: str = "", release: bool = false) -> Step:
         var step = self.claim(name, "luce")
         step.fill(source, "object", output, release)
         return step
@@ -142,7 +140,7 @@ class Plan:
     # One host command, run in the project root — a C compiler, a
     # code generator.  The tool runs it as given: no shell, no
     # splitting, the argv is the argv.
-    func command(name: str, argv: list[str]) -> Step:
+    pub func command(name: str, argv: list[str]) -> Step:
         var step = self.claim(name, "command")
         step.speak(argv)
         return step
@@ -150,12 +148,12 @@ class Plan:
     # The step a bare `luce build` builds.  Without a choice, a plan
     # with exactly one step builds it, and a plan with several refuses
     # and names them.
-    func default(step: Step):
+    pub func default(step: Step):
         self.chosen = step.step_name()
 
     # Print the plan, one JSON document on standard output.  The last
     # thing a build script does.
-    func emit():
+    pub func emit():
         var fields = map[str, json.Json]()
         fields["plan"] = json.Json.integer(value = 1)
         fields["default"] = json.Json.text(value = self.chosen)
@@ -166,7 +164,7 @@ class Plan:
         print(json.Json.object(fields = fields).write())
 
     # Every step enters here: one name, one step, said once.
-    private func claim(name: str, kind: str) -> Step:
+    func claim(name: str, kind: str) -> Step:
         if len(name) == 0:
             trap("a step needs a name")
         for step in self.steps:

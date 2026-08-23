@@ -4,7 +4,7 @@
 
 import std.strings
 
-func main():
+pub func main():
     var values = [42, 7, -3, 99, 0, 13, -40, 8, 77, 1]
     values.sort()
 

@@ -1,2 +1,2 @@
-func main():
+pub func main():
     print("hello from the host")

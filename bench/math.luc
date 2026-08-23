@@ -2,7 +2,7 @@
 # comparisons — no library calls in either language, so this measures
 # raw f32 work.  The C twin is bench/math.c.
 
-func main():
+pub func main():
     let size = 2236
     let max_iter = 60
     var inside = 0

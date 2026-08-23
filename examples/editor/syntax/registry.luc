@@ -13,7 +13,7 @@ import syntax.python
 import syntax.swift
 import syntax.go
 
-func for_path(path: str) -> Syntax:
+pub func for_path(path: str) -> Syntax:
     let lowered = strings.lower(path)
     if strings.ends_with(lowered, ".luc"):
         return luce.syntax()
@@ -28,7 +28,7 @@ func for_path(path: str) -> Syntax:
     return plain()
 
 # The syntax of a file nothing claims: every word is plain text.
-func plain() -> Syntax:
+pub func plain() -> Syntax:
     return Syntax(
         name = "Plain",
         line_comment = "",

@@ -15,14 +15,14 @@
 
 import world
 
-private const gate_room = "Gate"
-private const dome_room = "Dome"
-private const eyepiece = "glass lens"
-private const brass_key = "brass key"
-private const iron_crank = "iron crank"
+const gate_room = "Gate"
+const dome_room = "Dome"
+const eyepiece = "glass lens"
+const brass_key = "brass key"
+const iron_crank = "iron crank"
 
 # Build the whole realm; the caller owns it (OWNERSHIP.md S28).
-func build() -> world.Realm:
+pub func build() -> world.Realm:
     var realm = world.Realm.empty()
 
     let gate = realm.add_room(world.Room.make(
@@ -119,15 +119,15 @@ func build() -> world.Realm:
 # is only a name until a realm has been asked; this realm was built
 # three lines above with that room in it, and `else` says what to do
 # if it somehow were not (docs/LANGUAGE.md).
-func start(realm: world.Realm) -> i64:
+pub func start(realm: world.Realm) -> i64:
     return realm.where(gate_room) else 0
 
-func opening() -> str:
+pub func opening() -> str:
     return "THE SHUTTER\nAn observatory, thirty years shut. Type help if you have not\nbeen here before.\n"
 
 # The end of the story, or "" while it is still going.  One condition:
 # the lens, in the dome, in the player's own hands.
-func ending(realm: world.Realm, at: i64, moves: i64) -> str:
+pub func ending(realm: world.Realm, at: i64, moves: i64) -> str:
     if realm.name_at(at) != dome_room or not realm.holding(eyepiece):
         return ""
     return "You unwrap the lens and press it into the empty socket. It seats\nwith a sound like a latch. The shutter above is still shut, but the\neyepiece holds the whole dark of it now, and thirty years late the\nobservatory is looking again.\n\nYou finished the story in " + str(moves) + " turns."

@@ -5,7 +5,7 @@
 
 import mathx
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     if len(args) == 0:
         print("usage: stats NUMBER [NUMBER ...]")
         return

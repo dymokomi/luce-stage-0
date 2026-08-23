@@ -1,2 +1,2 @@
-func twice(value: i64) -> i64:
+pub func twice(value: i64) -> i64:
     return value * 2

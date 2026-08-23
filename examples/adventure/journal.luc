@@ -33,28 +33,27 @@ import std.strings
 
 # The first line, and the only version there is: a file that does not
 # open with it is not a save of this game.
-const tag = "adventure 1"
+pub const tag = "adventure 1"
 
 # A save file that has been read and understood, but not yet put back
 # into a realm.  It carries two lists, so it is object-carrying: the
 # `make` below takes them with `give` and the `return` moves the whole
 # tree to the caller (OWNERSHIP.md S27, S28).
-struct Save:
-    room: str
-    moves: i64
+pub struct Save:
+    pub room: str
+    pub moves: i64
 
-    private:
-        held: list[str]
-        seen: list[str]
+    held: list[str]
+    seen: list[str]
 
-    static func make(room: str, moves: i64, held: list[str], seen: list[str]) -> Save:
+    pub static func make(room: str, moves: i64, held: list[str], seen: list[str]) -> Save:
         return Save(room = room, moves = moves, held = held, seen = seen)
 
     # What a realm would save as, right now.  `carrying()` and
     # `visited()` hand over lists they have just built, so they fill
     # the `give` slots above with no verb at the call site: there is
     # no other name for either of them to poison (OWNERSHIP.md S27).
-    static func of(realm: world.Realm, at: i64, moves: i64) -> Save:
+    pub static func of(realm: world.Realm, at: i64, moves: i64) -> Save:
         return Save.make(
             room = realm.name_at(at),
             moves = moves,
@@ -63,7 +62,7 @@ struct Save:
         )
 
     # The five lines, which `read` below is the inverse of.
-    func text() -> str:
+    pub func text() -> str:
         var out = builder()
         out.append(tag + "\n")
         out.append("room " + self.room + "\n")
@@ -77,14 +76,14 @@ struct Save:
     # (OWNERSHIP.md S17) — the list belongs to the save, and a caller
     # holding the same one could outlive it.  `copy` is the answer,
     # and it is written where its cost is (S31).
-    func carried() -> list[str]:
+    pub func carried() -> list[str]:
         return self.held
 
     # Put this save back into a realm and answer the room it left the
     # player in.  Everything the realm was is forgotten first: a
     # restore that only added would hand the player a second brass key
     # for every load.
-    func into(realm: world.Realm) -> i64!:
+    pub func into(realm: world.Realm) -> i64!:
         realm.forget()
         for name in self.held:
             try realm.hold(name)
@@ -98,18 +97,18 @@ struct Save:
 
 # The name a save is kept under: a bare one gets the game's own
 # extension, an explicit one is taken exactly as written.
-func named(path: str) -> str:
+pub func named(path: str) -> str:
     if len(paths.extension(path)) == 0:
         return path + ".sav"
     return path
 
 # Write the realm's changeable f16 to `path`.
-func write(path: str, realm: world.Realm, at: i64, moves: i64) -> !:
+pub func write(path: str, realm: world.Realm, at: i64, moves: i64) -> !:
     let save = Save.of(realm, at, moves)
     try files.write(path, save.text())
 
 # Read `path` and understand it, or say what is wrong with it.
-func read(path: str) -> Save!:
+pub func read(path: str) -> Save!:
     let text = try files.read(path)
     let lines = text.split("\n")
     if len(lines) == 0 or lines[0].trim() != tag:
@@ -140,18 +139,18 @@ func read(path: str) -> Save!:
 
 # A bar-separated field, and the empty one that means nothing at all
 # rather than one empty name.
-private func pieces(text: str) -> list[str]:
+func pieces(text: str) -> list[str]:
     if len(text) == 0:
         return list[str]()
     return text.split("|")
 
-private func first_word(line: str) -> str:
+func first_word(line: str) -> str:
     let space = strings.find(line, " ") else -1
     if space < 0:
         return line
     return line[0:space]
 
-private func after_first(line: str) -> str:
+func after_first(line: str) -> str:
     let space = strings.find(line, " ") else -1
     if space < 0:
         return ""

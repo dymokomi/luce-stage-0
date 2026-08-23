@@ -12,7 +12,7 @@ from positions import lines_of, position
 # The params of one publishDiagnostics notification.  `json.parse`
 # fails with its `Malformed` union; this module's callers speak the
 # plain error channel, so the refusal is re-raised as the sentence.
-func published(uri: str, content: str, answer: str) -> json.Json!:
+pub func published(uri: str, content: str, answer: str) -> json.Json!:
     let rows = json.parse(answer) catch reason:
         error(json.describe(reason))
     let lines = lines_of(content)
@@ -25,7 +25,7 @@ func published(uri: str, content: str, answer: str) -> json.Json!:
     params["diagnostics"] = json.Json.array(items = out)
     return json.Json.object(fields = params)
 
-private func diagnostic(lines: list[str], row: json.Json) -> json.Json:
+func diagnostic(lines: list[str], row: json.Json) -> json.Json:
     let line = number(row, "line")
     let column = number(row, "column")
     let end_line = number(row, "end_line")
@@ -43,19 +43,19 @@ private func diagnostic(lines: list[str], row: json.Json) -> json.Json:
     fields["message"] = json.Json.text(value = text(row, "message"))
     return json.Json.object(fields = fields)
 
-private func place(line: i64, character: i64) -> json.Json:
+func place(line: i64, character: i64) -> json.Json:
     var fields = map[str, json.Json]()
     fields["line"] = json.Json.integer(value = line)
     fields["character"] = json.Json.integer(value = character)
     return json.Json.object(fields = fields)
 
-private func number(row: json.Json, name: str) -> i64:
+func number(row: json.Json, name: str) -> i64:
     let held = row.member(name)
     if held == none:
         return 0
     return held.as_i64() else 0
 
-private func text(row: json.Json, name: str) -> str:
+func text(row: json.Json, name: str) -> str:
     let held = row.member(name)
     if held == none:
         return ""

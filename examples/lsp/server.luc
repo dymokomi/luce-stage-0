@@ -15,26 +15,26 @@ from diagnostics import published
 # diagnostics, as `luce query diagnostics` JSON.  An interface rather
 # than a function value because the asking can fail, and a function
 # type carries no fallibility.
-interface Compiler:
+pub interface Compiler:
     func diagnostics(content: str) -> str!
 
 # What one incoming message produces: zero, one, or two frames to
 # send (a response, and sometimes a diagnostics notification), and
 # whether the server should leave its loop.
-class Outcome:
-    frames: list[list[u8]]
-    leaving: bool
+pub class Outcome:
+    pub frames: list[list[u8]]
+    pub leaving: bool
 
-    init(leaving: bool = false):
+    pub init(leaving: bool = false):
         self.frames = list[list[u8]]()
         self.leaving = leaving
 
-class Server:
-    private compiler: Compiler
-    private documents: map[str, str]
-    private leaving_asked: bool
+pub class Server:
+    compiler: Compiler
+    documents: map[str, str]
+    leaving_asked: bool
 
-    init(compiler: Compiler):
+    pub init(compiler: Compiler):
         self.compiler = compiler
         self.documents = map[str, str]()
         self.leaving_asked = false
@@ -42,13 +42,13 @@ class Server:
     # One message, dispatched.  A request (it has an id) always gets a
     # response; a notification never does.  A body that is not JSON is
     # dropped: there is no id to answer with.
-    func handle(body: str) -> Outcome:
+    pub func handle(body: str) -> Outcome:
         var outcome = Outcome()
         self.dispatch(outcome, body) catch reason:
             return outcome
         return outcome
 
-    private func dispatch(outcome: Outcome, body: str) -> !:
+    func dispatch(outcome: Outcome, body: str) -> !:
         let message = json.parse(body) catch reason:
             error(json.describe(reason))
         let method_held = message.member("method")
@@ -79,11 +79,11 @@ class Server:
     # A changed buffer publishes fresh diagnostics.  A compiler or a
     # parse that fails publishes nothing this round — stale squiggles
     # beat a dead server — which is what the swallowed catch means.
-    private func changed(outcome: Outcome, message: json.Json):
+    func changed(outcome: Outcome, message: json.Json):
         self.publish(outcome, message) catch reason:
             return
 
-    private func publish(outcome: Outcome, message: json.Json) -> !:
+    func publish(outcome: Outcome, message: json.Json) -> !:
         let uri = uri_of(message)
         if uri == "":
             return
@@ -97,7 +97,7 @@ class Server:
         let params = try published(uri, content, answer)
         outcome.frames.append(framed(notification("textDocument/publishDiagnostics", params)))
 
-    private func closed(outcome: Outcome, message: json.Json):
+    func closed(outcome: Outcome, message: json.Json):
         let uri = uri_of(message)
         if uri == "" or not self.documents.has(uri):
             return
@@ -112,14 +112,14 @@ class Server:
 
     # --- answering ---------------------------------------------------
 
-    private func reply(outcome: Outcome, id: json.Json?, result: json.Json):
+    func reply(outcome: Outcome, id: json.Json?, result: json.Json):
         var fields = map[str, json.Json]()
         fields["jsonrpc"] = json.Json.text(value = "2.0")
         fields["id"] = id else json.Json.null
         fields["result"] = result
         outcome.frames.append(framed(json.Json.object(fields = fields).write()))
 
-    private func refuse(outcome: Outcome, id: json.Json?, code: i64, message: str):
+    func refuse(outcome: Outcome, id: json.Json?, code: i64, message: str):
         var failure = map[str, json.Json]()
         failure["code"] = json.Json.integer(value = code)
         failure["message"] = json.Json.text(value = message)
@@ -131,7 +131,7 @@ class Server:
 
 # --- the shapes ------------------------------------------------------
 
-private func initialize_result() -> json.Json:
+func initialize_result() -> json.Json:
     var sync = map[str, json.Json]()
     # Full-document sync: every change carries the whole text, which
     # is what `luce query diagnostics -` wants anyway.
@@ -144,14 +144,14 @@ private func initialize_result() -> json.Json:
     fields["serverInfo"] = json.Json.object(fields = info)
     return json.Json.object(fields = fields)
 
-private func notification(method: str, params: json.Json) -> str:
+func notification(method: str, params: json.Json) -> str:
     var fields = map[str, json.Json]()
     fields["jsonrpc"] = json.Json.text(value = "2.0")
     fields["method"] = json.Json.text(value = method)
     fields["params"] = params
     return json.Json.object(fields = fields).write()
 
-private func uri_of(message: json.Json) -> str:
+func uri_of(message: json.Json) -> str:
     let params = message.member("params")
     if params == none:
         return ""
@@ -166,7 +166,7 @@ private func uri_of(message: json.Json) -> str:
 # The buffer a change carries: didOpen's textDocument.text, or the
 # last full-sync element of didChange's contentChanges; absent for
 # didSave, whose buffer the server already holds.
-private func text_of(message: json.Json) -> str?:
+func text_of(message: json.Json) -> str?:
     let params = message.member("params")
     if params == none:
         return none

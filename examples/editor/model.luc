@@ -23,22 +23,22 @@ from lsp_client import Client, Diagnostic
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
-const indent_unit = "    "
+pub const indent_unit = "    "
 
 # The file pane's ordinary domain state. Geometry belongs to the declarative
 # view; this value only remembers which result is selected and where its
 # visible window begins.
-class Selection:
-    count: i64
-    top: i64
-    selected: i64
+pub class Selection:
+    pub count: i64
+    pub top: i64
+    pub selected: i64
 
-    init():
+    pub init():
         self.count = 0
         self.top = 0
         self.selected = 0
 
-    func adjust(height: i64):
+    pub func adjust(height: i64):
         if self.count <= 0:
             self.top = 0
             self.selected = 0
@@ -50,7 +50,7 @@ class Selection:
             self.top = self.selected - height + 1
         self.top = clamp(self.top, 0, max(self.count - 1, 0))
 
-    func move_by(steps: i64):
+    pub func move_by(steps: i64):
         self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
 
 # Which pane the keyboard is talking to.
@@ -58,7 +58,7 @@ class Selection:
 # The application uses this one value to style the active view, route keys and
 # decide which cursor to expose. Search is a mode over the status line rather
 # than a separate region.
-enum Focus:
+pub enum Focus:
     editor
     files
     output
@@ -67,7 +67,7 @@ enum Focus:
 # What a key does.  A key the editor does not bind is `ignored` — a
 # member, so the `match` that handles it must say so out loud, and an
 # intent added later is a compile error at every match that missed it.
-enum Intent:
+pub enum Intent:
     move_left
     move_right
     move_up
@@ -112,14 +112,14 @@ enum Intent:
     quit
     ignored
 
-const STEPS = {
+pub const STEPS = {
     Intent.move_up: -1,
     Intent.move_down: 1,
     Intent.page_up: -8,
     Intent.page_down: 8,
 }
 
-func steps_of(intent: Intent) -> i64:
+pub func steps_of(intent: Intent) -> i64:
     let steps = STEPS.get(intent)
     if steps == none:
         return 0
@@ -128,7 +128,7 @@ func steps_of(intent: Intent) -> i64:
 # Refill `matches` with the scalar position of every occurrence of `query`
 # in `content`.  An empty query matches nothing.  Overlapping matches
 # advance by one scalar, so "aa" in "aaa" finds two.
-private func scan(matches: list[i64], content: str, query: str):
+func scan(matches: list[i64], content: str, query: str):
     matches.clear()
     if query == "":
         return
@@ -142,7 +142,7 @@ private func scan(matches: list[i64], content: str, query: str):
 
 # The match index after moving `direction` (+1 next, -1 previous) from
 # `current`, wrapping at the ends; -1 when there are no matches.
-private func step(count: i64, current: i64, direction: i64) -> i64:
+func step(count: i64, current: i64, direction: i64) -> i64:
     if count <= 0:
         return -1
     var next = current + direction
@@ -156,38 +156,38 @@ private func step(count: i64, current: i64, direction: i64) -> i64:
 # pane's, because the pane that starts a drag (a border press) and the
 # component that applies it (the workbench resizing slots) are
 # different objects sharing only this model.
-enum Drag:
+pub enum Drag:
     idle
     files
     output
 
-class Model:
-    documents: list[Document]
-    names: list[str]
-    search_matches: list[i64]
-    files: Selection
-    directory: str = "."
-    output: str = ""
-    search_query: str = ""
-    clipboard: str = ""
-    active: i64 = 0
-    output_scroll: i64 = 0
-    search_current: i64 = -1
-    last_draft_ms: i64 = 0
-    file_pane: bool = false
-    output_pane: bool = false
-    quit_pending: bool = false
-    coalescing: bool = false
-    quit: bool = false
-    focus: Focus = Focus.editor
-    dragging: Drag = Drag.idle
-    files_width: i64 = 0
-    output_height: i64 = 0
-    lsp: Client?
-    private last_sent: str = ""
-    private watchers: list[(func())?]
+pub class Model:
+    pub documents: list[Document]
+    pub names: list[str]
+    pub search_matches: list[i64]
+    pub files: Selection
+    pub directory: str = "."
+    pub output: str = ""
+    pub search_query: str = ""
+    pub clipboard: str = ""
+    pub active: i64 = 0
+    pub output_scroll: i64 = 0
+    pub search_current: i64 = -1
+    pub last_draft_ms: i64 = 0
+    pub file_pane: bool = false
+    pub output_pane: bool = false
+    pub quit_pending: bool = false
+    pub coalescing: bool = false
+    pub quit: bool = false
+    pub focus: Focus = Focus.editor
+    pub dragging: Drag = Drag.idle
+    pub files_width: i64 = 0
+    pub output_height: i64 = 0
+    pub lsp: Client?
+    last_sent: str = ""
+    watchers: list[(func())?]
 
-    init(documents: list[Document]):
+    pub init(documents: list[Document]):
         self.documents = documents
         self.names = list[str]()
         self.search_matches = list[i64]()
@@ -198,7 +198,7 @@ class Model:
     # The active file.  A Document is a reference, so panes and model
     # read and mutate the same one; switching files is switching which
     # reference this answers.
-    func document() -> Document:
+    pub func document() -> Document:
         return self.documents[self.active]
 
     # --- subscriptions ------------------------------------------------
@@ -208,10 +208,10 @@ class Model:
     # told after every compound change: a routed keystroke, an opened
     # row, a finished build.  Watchers update their own derived state;
     # the frame that follows reads the result.
-    func subscribe(watcher: func()):
+    pub func subscribe(watcher: func()):
         self.watchers.append(watcher)
 
-    private func notify():
+    func notify():
         for held in self.watchers:
             let watcher = held
             if watcher != none:
@@ -224,20 +224,20 @@ class Model:
     # model's cross-file state starts fresh — the autosave debounce is
     # per working file, so the next edit to the file just entered
     # writes its own draft without waiting on the one before it.
-    private func switched():
+    func switched():
         self.quit_pending = false
         self.coalescing = false
         self.last_draft_ms = 0
 
     # The provider the file pane reads its labels through.
-    func name_at(index: i64) -> str:
+    pub func name_at(index: i64) -> str:
         if index < 0 or index >= len(self.names):
             return ""
         return self.names[index]
 
     # --- the file pane -----------------------------------------------
 
-    func refresh_files():
+    pub func refresh_files():
         let doc = self.document()
         let failure = listing.refresh(self.names, self.directory, doc.path)
         if failure != none:
@@ -249,11 +249,11 @@ class Model:
     # Keep the file pane's scroll window on its selection.  `files` is
     # a class, so the frame and a mouse click read the same window this
     # writes — no copy-out, no copy-back.
-    func adjust_files(height: i64):
+    pub func adjust_files(height: i64):
         self.files.count = len(self.names)
         self.files.adjust(height)
 
-    func open_row(index: i64):
+    pub func open_row(index: i64):
         if index < 0 or index >= len(self.names):
             return
         match listing.classify(self.names[index], self.directory):
@@ -265,7 +265,7 @@ class Model:
                 self.open_file(path)
         self.notify()
 
-    func open_file(path: str):
+    pub func open_file(path: str):
         if path == self.document().path:
             self.focus = Focus.editor
             return
@@ -292,14 +292,14 @@ class Model:
     # Record the state before an edit.  A run of plain insertions is one
     # undo group: the first records, the rest coalesce.  Any other edit
     # records and breaks the run.
-    func begin_edit(coalesce: bool):
+    pub func begin_edit(coalesce: bool):
         if coalesce and self.coalescing:
             return
         let doc = self.document()
         doc.history.record(doc.content, doc.cursor)
         self.coalescing = coalesce
 
-    func undo():
+    pub func undo():
         let doc = self.document()
         let prior = doc.history.undo(doc.content, doc.cursor)
         if prior == none:
@@ -311,7 +311,7 @@ class Model:
         doc.dirty = true
         self.coalescing = false
 
-    func redo():
+    pub func redo():
         let doc = self.document()
         let ahead = doc.history.redo(doc.content, doc.cursor)
         if ahead == none:
@@ -325,7 +325,7 @@ class Model:
 
     # --- search ------------------------------------------------------
 
-    func open_search():
+    pub func open_search():
         self.focus = Focus.search
         self.search_query = ""
         self.search_matches.clear()
@@ -335,12 +335,12 @@ class Model:
         # group rather than coalescing with text typed before the search.
         self.coalescing = false
 
-    func close_search():
+    pub func close_search():
         self.focus = Focus.editor
         self.document().set_message("")
         self.coalescing = false
 
-    func rescan():
+    pub func rescan():
         let doc = self.document()
         doc.drop_selection()
         scan(self.search_matches, doc.content, self.search_query)
@@ -350,7 +350,7 @@ class Model:
         else:
             self.search_current = -1
 
-    func jump_match(direction: i64):
+    pub func jump_match(direction: i64):
         let next = step(len(self.search_matches), self.search_current, direction)
         if next < 0:
             return
@@ -359,7 +359,7 @@ class Model:
         doc.drop_selection()
         doc.cursor = self.search_matches[next]
 
-    func search_key(intent: Intent, inserted: str):
+    pub func search_key(intent: Intent, inserted: str):
         if intent == Intent.escape:
             self.close_search()
         elif intent == Intent.newline or intent == Intent.move_down or intent == Intent.move_right:
@@ -377,7 +377,7 @@ class Model:
 
     # --- the other panes ---------------------------------------------
 
-    func file_key(intent: Intent):
+    pub func file_key(intent: Intent):
         if len(self.names) == 0:
             return
         if intent == Intent.newline:
@@ -392,28 +392,28 @@ class Model:
         self.files.count = len(self.names)
         self.files.move_by(steps)
 
-    func output_key(intent: Intent):
+    pub func output_key(intent: Intent):
         let steps = steps_of(intent)
         if steps == 0:
             return
         let total = count_lines(self.output)
         self.output_scroll = clamp(self.output_scroll + steps, 0, max(total - 1, 0))
 
-    func toggle_files():
+    pub func toggle_files():
         self.file_pane = not self.file_pane
         if self.file_pane:
             self.refresh_files()
         elif self.focus == Focus.files:
             self.focus = Focus.editor
 
-    func toggle_output():
+    pub func toggle_output():
         self.output_pane = not self.output_pane
         if self.output_pane:
             self.focus = Focus.output
         elif self.focus == Focus.output:
             self.focus = Focus.editor
 
-    func next_pane():
+    pub func next_pane():
         if self.focus == Focus.editor:
             if self.file_pane:
                 self.focus = Focus.files
@@ -432,7 +432,7 @@ class Model:
 
     # --- build and save ----------------------------------------------
 
-    func build():
+    pub func build():
         self.save()
         let doc = self.document()
         if doc.dirty:
@@ -444,7 +444,7 @@ class Model:
         self.output_pane = true
         self.focus = Focus.output
 
-    func save():
+    pub func save():
         let doc = self.document()
         files.write(doc.path, doc.content) catch reason:
             doc.message = reason
@@ -458,7 +458,7 @@ class Model:
 
     # Write a draft when the file has been dirty past a short idle, so
     # a crash loses at most a second or two of edits.
-    func autosave(now: i64):
+    pub func autosave(now: i64):
         let doc = self.document()
         if not doc.dirty:
             return
@@ -473,7 +473,7 @@ class Model:
     # line is copied whole — the everyday "grab this line" gesture —
     # and the system clipboard receives the same text through the
     # terminal (OSC 52), so a copy here pastes anywhere.
-    private func copied() -> str:
+    func copied() -> str:
         let doc = self.document()
         if doc.has_selection():
             return doc.selected_text()
@@ -483,11 +483,11 @@ class Model:
             finish = finish + 1
         return doc.content[start:finish]
 
-    private func copy():
+    func copy():
         self.clipboard = self.copied()
         term.copy(self.clipboard)
 
-    private func cut():
+    func cut():
         let doc = self.document()
         self.clipboard = self.copied()
         term.copy(self.clipboard)
@@ -504,7 +504,7 @@ class Model:
         doc.cursor = start
         doc.dirty = true
 
-    private func paste():
+    func paste():
         if self.clipboard == "":
             return
         self.begin_edit(false)
@@ -515,7 +515,7 @@ class Model:
     # Hold `command` as this editor's language server.  The command is
     # data — any LSP server; `luce-lsp` is the toolchain's — and a
     # world without it leaves the editor exactly as it was.
-    func attach_lsp(command: str):
+    pub func attach_lsp(command: str):
         let client = Client(command)
         self.lsp = client
         let doc = self.document()
@@ -525,7 +525,7 @@ class Model:
     # The idle tick's work: drain the server, and repaint when the
     # diagnostics moved.  Also where an edited buffer is sent — once
     # per quiet moment rather than once per keystroke.
-    func pump_lsp():
+    pub func pump_lsp():
         let client = self.lsp
         if client == none:
             return
@@ -537,7 +537,7 @@ class Model:
             self.notify()
 
     # The active document's diagnostics — empty when no server holds.
-    func diagnostics() -> list[Diagnostic]:
+    pub func diagnostics() -> list[Diagnostic]:
         let client = self.lsp
         if client == none:
             return list[Diagnostic]()
@@ -545,7 +545,7 @@ class Model:
 
     # The diagnostic under the cursor's line, if any — what the status
     # bar says when the cursor stands on a problem.
-    func diagnostic_here() -> Diagnostic?:
+    pub func diagnostic_here() -> Diagnostic?:
         let doc = self.document()
         let line = doc.line_of(doc.cursor)
         for row in self.diagnostics():
@@ -555,11 +555,11 @@ class Model:
 
     # --- the keystroke router ----------------------------------------
 
-    func key(intent: Intent, inserted: str, visible: i64):
+    pub func key(intent: Intent, inserted: str, visible: i64):
         self.routed(intent, inserted, visible)
         self.notify()
 
-    private func routed(intent: Intent, inserted: str, visible: i64):
+    func routed(intent: Intent, inserted: str, visible: i64):
         if intent == Intent.quit:
             let doc = self.document()
             if doc.dirty and not self.quit_pending:
@@ -618,7 +618,7 @@ class Model:
     # text change records undo first.  The undo-grouping policy stays
     # here — the model knows the sequence of keys — and the Document
     # owns the text arithmetic each arm asks for.
-    func edit(intent: Intent, inserted: str, visible: i64):
+    pub func edit(intent: Intent, inserted: str, visible: i64):
         let doc = self.document()
         let line = doc.line_of(doc.cursor)
         self.quit_pending = false
@@ -770,7 +770,7 @@ class Model:
 
 # Build a model from command-line paths.  File and draft loading
 # belongs at this boundary; the components receive the finished model.
-func open(paths: list[str]) -> Model:
+pub func open(paths: list[str]) -> Model:
     var documents = list[Document]()
     for path in paths:
         let loaded = session.load(path)

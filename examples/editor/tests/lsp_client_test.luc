@@ -4,10 +4,10 @@
 import std.strings
 from lsp_client import Diagnostic, extracted, published_for
 
-private func wire(body: str) -> list[u8]:
+func wire(body: str) -> list[u8]:
     return strings.to_bytes("Content-Length: " + str(len(strings.to_bytes(body))) + "\r\n\r\n" + body)
 
-func test_frames_survive_arbitrary_chunk_boundaries():
+pub func test_frames_survive_arbitrary_chunk_boundaries():
     var pending = list[u8]()
     var whole = wire("{\"a\":1}")
     for byte in wire("{\"b\":2}"):
@@ -29,7 +29,7 @@ func test_frames_survive_arbitrary_chunk_boundaries():
     assert(second[0] == "{\"b\":2}")
     assert(len(pending) == 0)
 
-func test_published_diagnostics_arrive_for_the_right_uri():
+pub func test_published_diagnostics_arrive_for_the_right_uri():
     let body = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file://a.luc\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":2,\"character\":4},\"end\":{\"line\":2,\"character\":9}},\"message\":\"unknown name x\"}]}}"
     let rows = published_for(body, "file://a.luc")
     assert(rows != none)

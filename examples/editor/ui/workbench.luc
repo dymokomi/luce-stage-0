@@ -11,7 +11,7 @@ from termui.constraints import Constraint, Fixed, Ratio, Preferred
 from model import Model, Drag, Intent
 from ui.keymap import intent_of
 
-private func is_global(intent: Intent) -> bool:
+func is_global(intent: Intent) -> bool:
     match intent:
         save:
             return true
@@ -36,13 +36,13 @@ private func is_global(intent: Intent) -> bool:
         else:
             return false
 
-class Workbench: View:
-    private model: Model
-    private across: HStack
-    private screen: VStack
-    private subscribed: bool
+pub class Workbench: View:
+    model: Model
+    across: HStack
+    screen: VStack
+    subscribed: bool
 
-    init(shared: Model, across: HStack, screen: VStack):
+    pub init(shared: Model, across: HStack, screen: VStack):
         self.model = shared
         self.across = across
         self.screen = screen
@@ -50,7 +50,7 @@ class Workbench: View:
 
     # A component may not capture itself while it is being built, so
     # the subscription lands on first use instead of in init.
-    private func attach():
+    func attach():
         if self.subscribed:
             return
         self.subscribed = true
@@ -63,7 +63,7 @@ class Workbench: View:
 
     # The retained tree's shape, derived from the model: a hidden pane
     # is a zero-cell slot, a dragged divider is a preferred size.
-    func apply_layout():
+    pub func apply_layout():
         var files_size: Constraint = Fixed(0)
         if self.model.file_pane:
             files_size = Ratio(8, 24, 25)
@@ -77,11 +77,11 @@ class Workbench: View:
                 output_size = Preferred(3, self.model.output_height, 80)
         self.screen.resize(1, output_size)
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         self.attach()
         return self.screen.draw(surface, area)
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         self.attach()
         self.model.autosave(os.clock_ms())
         match event:

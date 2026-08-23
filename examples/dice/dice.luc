@@ -11,10 +11,10 @@ import std.math
 import std.files
 import std.strings
 
-func bar(count: i64) -> str:
+pub func bar(count: i64) -> str:
     return "#".repeat(count)
 
-func main(args: list[str]) -> !:
+pub func main(args: list[str]) -> !:
     var seed: i64 = 2026
     var count: i64 = 20
     if len(args) > 0:

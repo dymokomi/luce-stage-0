@@ -5,16 +5,16 @@ import highlight
 from highlight import TokenKind
 from syntax.registry import for_path
 
-private func kinds(path: str, line: str) -> list[TokenKind]:
+func kinds(path: str, line: str) -> list[TokenKind]:
     var out = list[TokenKind]()
     for token in highlight.tokens(for_path(path), line, 0, len(line)):
         out.append(token.kind)
     return out
 
-private func kind_of(path: str, line: str, index: i64) -> TokenKind:
+func kind_of(path: str, line: str, index: i64) -> TokenKind:
     return kinds(path, line)[index]
 
-func test_the_registry_routes_extensions():
+pub func test_the_registry_routes_extensions():
     assert(for_path("main.luc").name == "Luce")
     assert(for_path("main.c").name == "C")
     assert(for_path("header.h").name == "C")
@@ -23,7 +23,7 @@ func test_the_registry_routes_extensions():
     assert(for_path("server.go").name == "Go")
     assert(for_path("notes.txt").name == "Plain")
 
-func test_c_speaks_c():
+pub func test_c_speaks_c():
     # `int` is a type, `//` a comment, `printf` a builtin.
     assert(kind_of("a.c", "int x; // count", 0) == TokenKind.type_name)
     let listed = kinds("a.c", "int x; // count")
@@ -32,14 +32,14 @@ func test_c_speaks_c():
     # And a `#` line is not a comment in C.
     assert(kind_of("a.c", "#include", 0) == TokenKind.punct)
 
-func test_python_speaks_python():
+pub func test_python_speaks_python():
     assert(kind_of("t.py", "def go():", 0) == TokenKind.keyword)
     assert(kind_of("t.py", "# note", 0) == TokenKind.comment)
     assert(kind_of("t.py", "f'x'", 0) == TokenKind.string_literal)
     # Capitalized names are not types in Python.
     assert(kind_of("t.py", "Widget", 0) == TokenKind.plain)
 
-func test_swift_and_go_share_the_capital_convention():
+pub func test_swift_and_go_share_the_capital_convention():
     assert(kind_of("a.swift", "guard", 0) == TokenKind.keyword)
     assert(kind_of("a.swift", "Window", 0) == TokenKind.type_name)
     assert(kind_of("a.go", "chan", 0) == TokenKind.keyword)
@@ -47,7 +47,7 @@ func test_swift_and_go_share_the_capital_convention():
     # Go's raw strings quote with a backtick.
     assert(kind_of("a.go", "`raw`", 0) == TokenKind.string_literal)
 
-func test_plain_files_stay_plain():
+pub func test_plain_files_stay_plain():
     let listed = kinds("notes.txt", "if x = \"y\" # z")
     for kind in listed:
         assert(kind != TokenKind.keyword)

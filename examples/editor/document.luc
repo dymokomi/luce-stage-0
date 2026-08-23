@@ -17,21 +17,21 @@ from history import History
 # forced is simply gone.  The pure str arithmetic below stays free:
 # it answers questions about any text (the output pane's transcript
 # included), while a Document owns one text and moves it.
-class Document:
-    path: str
-    content: str
-    message: str
-    cursor: i64
-    scroll: i64
-    dirty: bool
-    history: History
+pub class Document:
+    pub path: str
+    pub content: str
+    pub message: str
+    pub cursor: i64
+    pub scroll: i64
+    pub dirty: bool
+    pub history: History
     # Where a selection began, or `none` when nothing is selected.  The
     # selection is everything between the anchor and the cursor, in
     # whichever order the two sit; extending a selection moves only the
     # cursor, so shift+arrow and a mouse drag are the same gesture.
-    anchor: i64?
+    pub anchor: i64?
 
-    init(
+    pub init(
         path: str = "",
         content: str = "",
         message: str = "",
@@ -52,48 +52,48 @@ class Document:
     # says one thing about the active document in passing —
     # `self.document().set_message(...)` — and Luce assigns fields
     # through a binding, not through a call's result.
-    func set_message(text: str):
+    pub func set_message(text: str):
         self.message = text
 
     # --- the selection -------------------------------------------------
 
-    func has_selection() -> bool:
+    pub func has_selection() -> bool:
         let anchor = self.anchor
         if anchor == none:
             return false
         return anchor != self.cursor
 
-    func selection_start() -> i64:
+    pub func selection_start() -> i64:
         let anchor = self.anchor
         if anchor == none:
             return self.cursor
         return min(anchor, self.cursor)
 
-    func selection_end() -> i64:
+    pub func selection_end() -> i64:
         let anchor = self.anchor
         if anchor == none:
             return self.cursor
         return max(anchor, self.cursor)
 
-    func selected_text() -> str:
+    pub func selected_text() -> str:
         return self.content[self.selection_start():self.selection_end()]
 
-    func select_all():
+    pub func select_all():
         self.anchor = 0
         self.cursor = len(self.content)
 
-    func drop_selection():
+    pub func drop_selection():
         self.anchor = none
 
     # Pin the anchor before an extending motion.  The first extension
     # anchors where the cursor stands; later ones keep the anchor and
     # move only the cursor.
-    func extend():
+    pub func extend():
         if self.anchor == none:
             self.anchor = self.cursor
 
     # Erase the selected range, landing the cursor where it began.
-    func erase_selection():
+    pub func erase_selection():
         if not self.has_selection():
             return
         let start = self.selection_start()
@@ -105,54 +105,54 @@ class Document:
 
     # --- questions about this text -----------------------------------
 
-    func line_of(at: i64) -> i64:
+    pub func line_of(at: i64) -> i64:
         return line_of(self.content, at)
 
-    func line_start(at: i64) -> i64:
+    pub func line_start(at: i64) -> i64:
         return line_start(self.content, at)
 
-    func line_end(at: i64) -> i64:
+    pub func line_end(at: i64) -> i64:
         return line_end(self.content, at)
 
-    func line_at(index: i64) -> i64:
+    pub func line_at(index: i64) -> i64:
         return line_at(self.content, index)
 
-    func at_column(start: i64, column: i64) -> i64:
+    pub func at_column(start: i64, column: i64) -> i64:
         return at_column(self.content, start, column)
 
-    func column_of(at: i64) -> i64:
+    pub func column_of(at: i64) -> i64:
         return column_of(self.content, at)
 
-    func count_lines() -> i64:
+    pub func count_lines() -> i64:
         return count_lines(self.content)
 
     # --- cursor motion ------------------------------------------------
 
-    func move_left():
+    pub func move_left():
         self.cursor = previous_boundary(self.content, self.cursor)
 
-    func move_right():
+    pub func move_right():
         self.cursor = next_boundary(self.content, self.cursor)
 
-    func to_line_start():
+    pub func to_line_start():
         self.cursor = line_start(self.content, self.cursor)
 
-    func to_line_end():
+    pub func to_line_end():
         self.cursor = line_end(self.content, self.cursor)
 
     # Land on `target_line`, keeping the column the cursor had where
     # the landing line is long enough to offer it.
-    func vertical(target_line: i64):
+    pub func vertical(target_line: i64):
         let total = count_lines(self.content)
         let wanted = column_of(self.content, self.cursor)
         let landing = clamp(target_line, 0, total - 1)
         let start = line_at(self.content, landing)
         self.cursor = at_column(self.content, start, wanted)
 
-    func to_word_left():
+    pub func to_word_left():
         self.cursor = previous_word(self.content, self.cursor)
 
-    func to_word_right():
+    pub func to_word_right():
         self.cursor = next_word(self.content, self.cursor)
 
     # --- editing ------------------------------------------------------
@@ -161,7 +161,7 @@ class Document:
     # while a selection silently survives: typing replaces the
     # selection, and an erase with a selection erases exactly it.
 
-    func insert(extra: str):
+    pub func insert(extra: str):
         self.erase_selection()
         self.content = splice(self.content, self.cursor, extra)
         self.cursor = self.cursor + len(extra)
@@ -169,7 +169,7 @@ class Document:
 
     # Open a new line, carrying the current line's indentation and one
     # more unit after a code colon.
-    func break_line(unit: str):
+    pub func break_line(unit: str):
         self.erase_selection()
         let current_indent = indentation(self.content, self.cursor)
         var line_break = "\n" + current_indent
@@ -184,7 +184,7 @@ class Document:
     # the erase, the byte at the old cursor's left belongs to what
     # followed, and measuring against it lands wrong in exactly one
     # multi-byte shape the differential suite pins.
-    func erase_left():
+    pub func erase_left():
         if self.has_selection():
             self.erase_selection()
             return
@@ -195,7 +195,7 @@ class Document:
         self.cursor = previous_boundary(before, self.cursor)
         self.dirty = true
 
-    func erase_right():
+    pub func erase_right():
         if self.has_selection():
             self.erase_selection()
             return
@@ -206,7 +206,7 @@ class Document:
 
     # Erase from the previous word boundary to the cursor — one word,
     # or the separators behind the cursor when it sits between words.
-    func erase_word_left():
+    pub func erase_word_left():
         if self.has_selection():
             self.erase_selection()
             return
@@ -219,12 +219,12 @@ class Document:
 
 # --- cursor motion over Unicode scalars ------------------------------
 
-func previous_boundary(value: str, cursor: i64) -> i64:
+pub func previous_boundary(value: str, cursor: i64) -> i64:
     if cursor <= 0:
         return 0
     return cursor - 1
 
-func next_boundary(value: str, cursor: i64) -> i64:
+pub func next_boundary(value: str, cursor: i64) -> i64:
     if cursor >= len(value):
         return len(value)
     return cursor + 1
@@ -233,7 +233,7 @@ func next_boundary(value: str, cursor: i64) -> i64:
 
 # A word scalar the way the highlighter counts one: letters, digits,
 # underscore, and everything beyond ASCII.
-func is_word_scalar(code: char) -> bool:
+pub func is_word_scalar(code: char) -> bool:
     if code >= '0' and code <= '9':
         return true
     if code >= 'A' and code <= 'Z':
@@ -244,7 +244,7 @@ func is_word_scalar(code: char) -> bool:
 
 # The start of the word behind `at`: separators first, then the word
 # they end.  Behind the first word this is position zero.
-func previous_word(value: str, at: i64) -> i64:
+pub func previous_word(value: str, at: i64) -> i64:
     var here = at
     while here > 0 and not is_word_scalar(value[here - 1]):
         here = here - 1
@@ -253,7 +253,7 @@ func previous_word(value: str, at: i64) -> i64:
     return here
 
 # The end of the word ahead of `at`, skipping separators to reach it.
-func next_word(value: str, at: i64) -> i64:
+pub func next_word(value: str, at: i64) -> i64:
     var here = at
     let finish = len(value)
     while here < finish and not is_word_scalar(value[here]):
@@ -264,29 +264,29 @@ func next_word(value: str, at: i64) -> i64:
 
 # --- lines and columns -----------------------------------------------
 
-func line_start(value: str, cursor: i64) -> i64:
+pub func line_start(value: str, cursor: i64) -> i64:
     var at = cursor
     while at > 0 and value[at - 1] != '\n':
         at = at - 1
     return at
 
-func line_end(value: str, cursor: i64) -> i64:
+pub func line_end(value: str, cursor: i64) -> i64:
     var at = cursor
     while at < len(value) and value[at] != '\n':
         at = at + 1
     return at
 
-func line_of(value: str, cursor: i64) -> i64:
+pub func line_of(value: str, cursor: i64) -> i64:
     var line = 0
     for at in range(0, cursor):
         if value[at] == '\n':
             line = line + 1
     return line
 
-func count_lines(value: str) -> i64:
+pub func count_lines(value: str) -> i64:
     return line_of(value, len(value)) + 1
 
-func column_of(value: str, cursor: i64) -> i64:
+pub func column_of(value: str, cursor: i64) -> i64:
     var at = line_start(value, cursor)
     var column = 0
     while at < cursor:
@@ -295,7 +295,7 @@ func column_of(value: str, cursor: i64) -> i64:
     return column
 
 # The scalar position where line `wanted` begins.
-func line_at(value: str, wanted: i64) -> i64:
+pub func line_at(value: str, wanted: i64) -> i64:
     var at = 0
     var line = 0
     while line < wanted and at < len(value):
@@ -305,7 +305,7 @@ func line_at(value: str, wanted: i64) -> i64:
     return at
 
 # The scalar position at display `column` in the line beginning at `start`.
-func at_column(value: str, start: i64, column: i64) -> i64:
+pub func at_column(value: str, start: i64, column: i64) -> i64:
     var at = start
     var current = 0
     let finish = line_end(value, start)
@@ -318,7 +318,7 @@ func at_column(value: str, start: i64, column: i64) -> i64:
 
 # The leading whitespace of the line at the cursor, borrowed from
 # `value` and safe to use while the caller decides the next line.
-func indentation(value: str, cursor: i64) -> str:
+pub func indentation(value: str, cursor: i64) -> str:
     let start = line_start(value, cursor)
     var at = start
     while at < cursor:
@@ -331,7 +331,7 @@ func indentation(value: str, cursor: i64) -> str:
 # Whether the code before the cursor opens an indented block.  A small
 # lexical scan is enough: comments and quoted strings are not layout,
 # but a colon before a trailing comment is.
-func opens_block(value: str, cursor: i64) -> bool:
+pub func opens_block(value: str, cursor: i64) -> bool:
     let start = line_start(value, cursor)
     var at = start
     var quoted = false
@@ -357,13 +357,13 @@ func opens_block(value: str, cursor: i64) -> bool:
 
 # --- editing (str in, str out) ---------------------------------
 
-func splice(value: str, cursor: i64, extra: str) -> str:
+pub func splice(value: str, cursor: i64, extra: str) -> str:
     return value[0:cursor] + extra + value[cursor:len(value)]
 
-func erase_before(value: str, cursor: i64) -> str:
+pub func erase_before(value: str, cursor: i64) -> str:
     let before = previous_boundary(value, cursor)
     return value[0:before] + value[cursor:len(value)]
 
-func erase_at(value: str, cursor: i64) -> str:
+pub func erase_at(value: str, cursor: i64) -> str:
     let after = next_boundary(value, cursor)
     return value[0:cursor] + value[after:len(value)]

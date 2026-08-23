@@ -5,17 +5,17 @@ from constraints import Fixed
 
 # A retained component: constructed once, drawing its current state
 # each frame and updating that state in place when routed an event.
-class Ticker: termui.View:
-    value: i64
+pub class Ticker: termui.View:
+    pub value: i64
 
-    init(value: i64):
+    pub init(value: i64):
         self.value = value
 
-    func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
+    pub func draw(surface: termui.Surface, area: termui.Rect) -> termui.Cursor?:
         surface.write(area, 0, 0, "count " + str(self.value), termui.Style())
         return none
 
-    func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
+    pub func dispatch(event: termui.Event, area: termui.Rect) -> termui.Response:
         match event:
             key(press):
                 if press.key == termui.Key.enter:
@@ -25,7 +25,7 @@ class Ticker: termui.View:
                 return termui.Response.ignored
         return termui.Response.ignored
 
-func test_a_retained_layout_updates_in_place():
+pub func test_a_retained_layout_updates_in_place():
     var stack = VStack()
     stack.add(Fill("."))
     stack.add(Ticker(41), size = Fixed(1))

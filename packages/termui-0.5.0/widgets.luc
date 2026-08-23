@@ -12,7 +12,7 @@ from input import Event
 from model import Rect, Style, Response, Cursor, Line, Edges, plain
 from view import View, route
 
-private func draw_line(
+func draw_line(
     surface: Surface,
     area: Rect,
     row: i64,
@@ -31,7 +31,7 @@ private func draw_line(
 
 # --- framed and leaf content ----------------------------------------
 
-private func frame_interior(area: Rect, edges: Edges) -> Rect:
+func frame_interior(area: Rect, edges: Edges) -> Rect:
     var at_row = area.row
     var at_column = area.column
     var rows = area.rows
@@ -53,7 +53,7 @@ private func frame_interior(area: Rect, edges: Edges) -> Rect:
         columns = max(columns, 0),
     )
 
-private func draw_frame(
+func draw_frame(
     surface: Surface,
     area: Rect,
     title: str,
@@ -83,13 +83,13 @@ private func draw_frame(
 
 # A junction-aware border around one child.  Adjacent panels share
 # clean tees because strokes merge in the surface, not here.
-class Panel: View:
-    private title: str
-    private content: View
-    private style: Style
-    private edges: Edges
+pub class Panel: View:
+    title: str
+    content: View
+    style: Style
+    edges: Edges
 
-    init(
+    pub init(
         title: str,
         content: View,
         style: Style = Style(),
@@ -100,57 +100,57 @@ class Panel: View:
         self.style = style
         self.edges = edges
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         let interior = draw_frame(surface, area, self.title, self.style, self.edges)
         return self.content.draw(surface, interior)
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return route(self.content, event, frame_interior(area, self.edges))
 
-class Label: View:
-    private lines: list[Line]
+pub class Label: View:
+    lines: list[Line]
 
-    init(text: str, style: Style = Style()):
+    pub init(text: str, style: Style = Style()):
         let one: list[Line] = [plain(text, style)]
         self.lines = one
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         for at_row, line in self.lines:
             if at_row >= area.rows:
                 break
             draw_line(surface, area, at_row, line, none)
         return none
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored
 
-class StyledText: View:
-    private lines: list[Line]
+pub class StyledText: View:
+    lines: list[Line]
 
-    init(lines: list[Line]):
+    pub init(lines: list[Line]):
         self.lines = lines
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         for at_row, line in self.lines:
             if at_row >= area.rows:
                 break
             draw_line(surface, area, at_row, line, none)
         return none
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored
 
 # A lazily rendered window over indexed lines.  The application owns
 # `top`, the selection, and the data; Rows owns no hidden collection.
-class Rows: View:
-    private total: i64
-    private render: func(i64) -> Line
-    private top: i64
-    private anchor: i64?
-    private selected: i64?
-    private selected_style: Style
+pub class Rows: View:
+    total: i64
+    render: func(i64) -> Line
+    top: i64
+    anchor: i64?
+    selected: i64?
+    selected_style: Style
 
-    init(
+    pub init(
         total: i64,
         render: func(i64) -> Line,
         top: i64 = 0,
@@ -168,7 +168,7 @@ class Rows: View:
     # The visible first row for a scrolling set. When a selection
     # exists, keep it inside the window.  Public so pointer and cursor
     # callbacks can interpret the exact same window the renderer used.
-    static func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
+    pub static func visible_top(top: i64, total: i64, selected: i64?, height: i64) -> i64:
         if total <= 0 or height <= 0:
             return 0
         var result = clamp(top, 0, max(total - height, 0))
@@ -181,7 +181,7 @@ class Rows: View:
             result = chosen - height + 1
         return clamp(result, 0, max(total - height, 0))
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         let provider = self.render
         let start = Rows.visible_top(self.top, self.total, self.anchor, area.rows)
         let chosen = self.selected else -1
@@ -201,33 +201,33 @@ class Rows: View:
                 draw_line(surface, area, at_row, line, none)
         return none
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored
 
-class Fill: View:
-    private glyph: str
-    private style: Style
+pub class Fill: View:
+    glyph: str
+    style: Style
 
-    init(glyph: str = " ", style: Style = Style()):
+    pub init(glyph: str = " ", style: Style = Style()):
         self.glyph = glyph
         self.style = style
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         surface.fill(area, self.glyph, self.style)
         return none
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored
 
 # Intentional absence: a slot that reserves space and does nothing.
-class Empty: View:
-    init():
+pub class Empty: View:
+    pub init():
         return
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         return none
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return Response.ignored
 
 # --- hosts -----------------------------------------------------------
@@ -235,18 +235,18 @@ class Empty: View:
 # Behavior wraps content.  The host's responder sees the event before
 # its child — outer before inner — so a root host can own global
 # commands.
-class EventHost: View:
-    private content: View
-    private respond: func(Event, Rect) -> Response
+pub class EventHost: View:
+    content: View
+    respond: func(Event, Rect) -> Response
 
-    init(content: View, respond: func(Event, Rect) -> Response):
+    pub init(content: View, respond: func(Event, Rect) -> Response):
         self.content = content
         self.respond = respond
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         return self.content.draw(surface, area)
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         let responder = self.respond
         let response = responder(event, area)
         if response != Response.ignored:
@@ -255,15 +255,15 @@ class EventHost: View:
 
 # Cursor placement wraps content.  The child's request is computed
 # first and the host's `locate` overrides it when it answers one.
-class CursorHost: View:
-    private content: View
-    private locate: func(Rect) -> Cursor?
+pub class CursorHost: View:
+    content: View
+    locate: func(Rect) -> Cursor?
 
-    init(content: View, locate: func(Rect) -> Cursor?):
+    pub init(content: View, locate: func(Rect) -> Cursor?):
         self.content = content
         self.locate = locate
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         let child = self.content.draw(surface, area)
         let provider = self.locate
         let own = provider(area)
@@ -271,5 +271,5 @@ class CursorHost: View:
             return own
         return child
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return route(self.content, event, area)

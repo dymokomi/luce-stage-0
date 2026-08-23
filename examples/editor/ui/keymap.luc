@@ -11,7 +11,7 @@
 from termui import Key, KeyPress
 from model import Intent
 
-const INTENTS = {
+pub const INTENTS = {
     Key.left: Intent.move_left,
     Key.right: Intent.move_right,
     Key.up: Intent.move_up,
@@ -41,7 +41,7 @@ const INTENTS = {
 }
 
 # Shift held: the same motions, extending the selection.
-const EXTENDS = {
+pub const EXTENDS = {
     Key.left: Intent.extend_left,
     Key.right: Intent.extend_right,
     Key.up: Intent.extend_up,
@@ -55,7 +55,7 @@ const EXTENDS = {
 # What a key means with what was held.  An unbound combination falls
 # back to the bare key, and a key the editor does not bind at all is
 # `ignored`, never dropped.
-func intent_of(press: KeyPress) -> Intent:
+pub func intent_of(press: KeyPress) -> Intent:
     if press.alt or press.control:
         if press.key == Key.left:
             if press.shift:

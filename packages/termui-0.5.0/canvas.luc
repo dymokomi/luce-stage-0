@@ -4,29 +4,29 @@ import std.term
 import std.strings
 from model import Rect, Style, Cursor
 
-struct Cell:
-    text: str = " "
-    style: Style = Style()
+pub struct Cell:
+    pub text: str = " "
+    pub style: Style = Style()
 
-struct Painted:
-    cells: i64 = 0
-    runs: i64 = 0
-    moves: i64 = 0
+pub struct Painted:
+    pub cells: i64 = 0
+    pub runs: i64 = 0
+    pub moves: i64 = 0
 
 # A read-only rendered frame for tests and previews. The cell array is owned
 # by the snapshot; callers inspect it through `cell` and `line`.
-struct Snapshot:
-    private cells: array[Cell, _, _]
-    rows: i64
-    columns: i64
-    cursor: Cursor?
+pub struct Snapshot:
+    cells: array[Cell, _, _]
+    pub rows: i64
+    pub columns: i64
+    pub cursor: Cursor?
 
-    func cell(row: i64, column: i64) -> Cell:
+    pub func cell(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return Cell()
         return self.cells[row, column]
 
-    func line(index: i64) -> str:
+    pub func line(index: i64) -> str:
         if index < 0 or index >= self.rows:
             return ""
         var result = builder()
@@ -39,38 +39,38 @@ struct Snapshot:
 # the live loop hands out the screen's, and `snapshot` builds a private
 # one — so a user component draws for tests and for the terminal with
 # the same calls.
-class Surface:
-    private cells: array[Cell, _, _]
-    rows: i64
-    columns: i64
+pub class Surface:
+    cells: array[Cell, _, _]
+    pub rows: i64
+    pub columns: i64
 
-    init(rows: i64, columns: i64):
+    pub init(rows: i64, columns: i64):
         let high = max(rows, 1)
         let wide = max(columns, 1)
         self.cells = array[Cell](high, wide)
         self.rows = high
         self.columns = wide
 
-    func area() -> Rect:
+    pub func area() -> Rect:
         return Rect(rows = self.rows, columns = self.columns)
 
-    func clear():
+    pub func clear():
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):
                 self.cells[at_row, at_column] = Cell()
 
-    func put(row: i64, column: i64, content: str, style: Style):
+    pub func put(row: i64, column: i64, content: str, style: Style):
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return
         self.cells[row, column] = Cell(text = content, style = style)
 
-    func cell_at(row: i64, column: i64) -> Cell:
+    pub func cell_at(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
             return Cell()
         return self.cells[row, column]
 
     # Offsets are relative to `area`; both the area and canvas clip writes.
-    func write(area: Rect, row: i64, column: i64, content: str, style: Style):
+    pub func write(area: Rect, row: i64, column: i64, content: str, style: Style):
         if row < 0 or row >= area.rows:
             return
         var at_column = column
@@ -81,7 +81,7 @@ class Surface:
                 self.put(area.row + row, area.column + at_column, character, style)
             at_column += 1
 
-    func fill(area: Rect, content: str, style: Style):
+    pub func fill(area: Rect, content: str, style: Style):
         for at_row in range(0, area.rows):
             for at_column in range(0, area.columns):
                 self.put(area.row + at_row, area.column + at_column, content, style)
@@ -92,7 +92,7 @@ class Surface:
     # union.  This is why two adjacent panels share one clean `┬` — and
     # because it reads the surface, it composes with any component's
     # borders, not only the shipped ones.
-    func stroke(
+    pub func stroke(
         area: Rect,
         row: i64,
         column: i64,
@@ -110,7 +110,7 @@ class Surface:
         let added = Strokes(up = up, right = right, down = down, left = left)
         self.put(absolute_row, absolute_column, added.merged(prior).glyph(), style)
 
-    func snapshot(cursor: Cursor?) -> Snapshot:
+    pub func snapshot(cursor: Cursor?) -> Snapshot:
         let cells = array[Cell](self.rows, self.columns)
         for at_row in range(0, self.rows):
             for at_column in range(0, self.columns):
@@ -119,16 +119,16 @@ class Surface:
 
 # The sides continuing through one cell, and the merge that keeps
 # junctions honest when two borders cross.
-private struct Strokes:
-    up: bool = false
-    right: bool = false
-    down: bool = false
-    left: bool = false
+struct Strokes:
+    pub up: bool = false
+    pub right: bool = false
+    pub down: bool = false
+    pub left: bool = false
 
-    func glyph() -> str:
+    pub func glyph() -> str:
         return term.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
 
-    func merged(other: Strokes) -> Strokes:
+    pub func merged(other: Strokes) -> Strokes:
         return Strokes(
             up = self.up or other.up,
             right = self.right or other.right,
@@ -136,7 +136,7 @@ private struct Strokes:
             left = self.left or other.left,
         )
 
-private const STROKES = {
+const STROKES = {
     "┼": Strokes(up = true, right = true, down = true, left = true),
     "├": Strokes(up = true, right = true, down = true),
     "┤": Strokes(up = true, down = true, left = true),
@@ -154,7 +154,7 @@ private const STROKES = {
     "╴": Strokes(left = true),
 }
 
-private func strokes_of(glyph: str) -> Strokes:
+func strokes_of(glyph: str) -> Strokes:
     let found = STROKES.get(glyph)
     if found == none:
         return Strokes()
@@ -164,12 +164,12 @@ private func strokes_of(glyph: str) -> Strokes:
 # stale flag a resize raises, and the diff that turns a described
 # frame into terminal writes.  Only the runtime holds one; components
 # never see it, which is what keeps `draw` host-free.
-class Screen:
-    surface: Surface
-    private front: array[Cell, _, _]
-    private stale: bool
+pub class Screen:
+    pub surface: Surface
+    front: array[Cell, _, _]
+    stale: bool
 
-    init(rows: i64, columns: i64):
+    pub init(rows: i64, columns: i64):
         self.surface = Surface(rows, columns)
         self.front = array[Cell](self.surface.rows, self.surface.columns)
         self.stale = true
@@ -177,7 +177,7 @@ class Screen:
     # A new size replaces both grids: the described frame is meaningless
     # at the old shape, and the terminal's contents are unknown at the
     # new one, so the first frame after a resize is always complete.
-    func resize(rows: i64, columns: i64):
+    pub func resize(rows: i64, columns: i64):
         let high = max(rows, 1)
         let wide = max(columns, 1)
         if high == self.surface.rows and wide == self.surface.columns:
@@ -187,7 +187,7 @@ class Screen:
         self.stale = true
 
     # Commit changed horizontal style runs.
-    func present() -> Painted:
+    pub func present() -> Painted:
         var painted = Painted()
         let surface = self.surface
         for at_row in range(0, surface.rows):

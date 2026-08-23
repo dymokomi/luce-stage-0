@@ -7,22 +7,22 @@
 # a file's extension to it.  Adding a language is adding a file — the
 # engine in `highlight.luc` never changes.
 
-struct Syntax:
+pub struct Syntax:
     # The language's name, for a status line or a picker.
-    name: str
+    pub name: str
     # What opens a line comment; "" for a language without one.
-    line_comment: str
+    pub line_comment: str
     # The quotes that open a string; each runs to its match on the
     # same line, with backslash escaping the next scalar.
-    quotes: list[char]
+    pub quotes: list[char]
     # A quote prefix like Luce's f-strings or Python's f/r-strings:
     # a word character that may sit immediately before a quote and
     # belong to the string.  Empty for most languages.
-    quote_prefixes: list[char]
+    pub quote_prefixes: list[char]
     # The word tables.  A capitalized word outside every table is
     # still classified a type when `capitalized_types` says so — the
     # convention Luce, Swift, and Go share.
-    keywords: list[str]
-    types: list[str]
-    builtins: list[str]
-    capitalized_types: bool
+    pub keywords: list[str]
+    pub types: list[str]
+    pub builtins: list[str]
+    pub capitalized_types: bool

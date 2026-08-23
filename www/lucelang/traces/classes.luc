@@ -1,14 +1,14 @@
-class Counter:
-    value: i64
+pub class Counter:
+    pub value: i64
 
-    init(start: i64):
+    pub init(start: i64):
         self.value = start
 
-    func next() -> i64:
+    pub func next() -> i64:
         self.value += 1
         return self.value
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let counter = Counter(start = len(args))
     let same = counter
     print(str(same.next()))

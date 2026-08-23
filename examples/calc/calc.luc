@@ -42,14 +42,14 @@
 
 import std.os
 
-struct Scan:
-    static func skip_spaces(text: str, at: i64) -> i64:
+pub struct Scan:
+    pub static func skip_spaces(text: str, at: i64) -> i64:
         var here = at
         while here < len(text) and text[here] == ' ':
             here = here + 1
         return here
 
-    static func number(text: str, at: i64) -> (f64, i64)!:
+    pub static func number(text: str, at: i64) -> (f64, i64)!:
         var stop = at
         while stop < len(text) and text[stop] >= '0' and text[stop] <= '9':
             stop = stop + 1
@@ -58,9 +58,9 @@ struct Scan:
         let digits = text[at:stop]
         return f64(parse_i64(digits) else error("not a number: " + digits)), stop
 
-struct Parse:
+pub struct Parse:
     # expression = term (("+" | "-") term)*
-    static func expression(text: str, at: i64) -> (f64, i64)!:
+    pub static func expression(text: str, at: i64) -> (f64, i64)!:
         var value, stopped = try Parse.term(text, at)
         var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text[here] == '+' or text[here] == '-'):
@@ -83,7 +83,7 @@ struct Parse:
     # trap, because these are Floats — which is the right answer for a
     # calculator: a user who divides by zero has asked a question, not
     # broken the program.
-    static func term(text: str, at: i64) -> (f64, i64)!:
+    pub static func term(text: str, at: i64) -> (f64, i64)!:
         var value, stopped = try Parse.factor(text, at)
         var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text[here] == '*' or text[here] == '/' or text[here] == '%'):
@@ -101,7 +101,7 @@ struct Parse:
         return value, stopped
 
     # factor = number | "(" expression ")" | "-" factor
-    static func factor(text: str, at: i64) -> (f64, i64)!:
+    pub static func factor(text: str, at: i64) -> (f64, i64)!:
         let here = Scan.skip_spaces(text, at)
         if here < len(text) and text[here] == '-':
             let inner_value, inner_at = try Parse.factor(text, here + 1)
@@ -120,7 +120,7 @@ struct Parse:
 
 # Evaluate one line and print what it came to.  Fallible, so every
 # `error(...)` four frames down arrives here whole.
-func evaluate(text: str) -> !:
+pub func evaluate(text: str) -> !:
     let value, stopped = try Parse.expression(text, 0)
     let rest = Scan.skip_spaces(text, stopped)
     if rest != len(text):
@@ -142,7 +142,7 @@ func evaluate(text: str) -> !:
 # the loop says the same thing the one-shot path below says.  Before
 # it existed this printed "cannot compute:" and the line back, which
 # told the user only what they had already typed (docs/FAILURE.md).
-func repl():
+pub func repl():
     print("calc — an expression a line, blank line to quit")
     var running = true
     while running:
@@ -153,7 +153,7 @@ func repl():
             evaluate(typed) catch reason:
                 os.print_error("cannot compute: " + reason)
 
-func main(args: list[str]) -> !:
+pub func main(args: list[str]) -> !:
     if len(args) == 0:
         repl()
         return

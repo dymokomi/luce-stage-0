@@ -7,40 +7,40 @@ from widgets import CursorHost
 
 # A test-local component: the openness the interface buys.  It takes
 # part in layout, drawing, and routing exactly like a shipped class.
-class Meter: view.View:
-    filled: i64
+pub class Meter: view.View:
+    pub filled: i64
 
-    init(filled: i64):
+    pub init(filled: i64):
         self.filled = filled
 
-    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+    pub func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
         for at_column in range(0, min(self.filled, area.columns)):
             surface.write(area, 0, at_column, "#", model.Style())
         return none
 
-    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+    pub func dispatch(event: input.Event, area: model.Rect) -> model.Response:
         return model.Response.ignored
 
-func test_a_user_component_draws_through_the_same_contract():
+pub func test_a_user_component_draws_through_the_same_contract():
     var stack = VStack()
     stack.add(Meter(3))
     let frame = view.snapshot(stack, 1, 5)
     assert(frame.line(0) == "###  ")
 
-class Tally: view.View:
-    seen: i64
+pub class Tally: view.View:
+    pub seen: i64
 
-    init():
+    pub init():
         self.seen = 0
 
-    func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
+    pub func draw(surface: canvas.Surface, area: model.Rect) -> model.Cursor?:
         return none
 
-    func dispatch(event: input.Event, area: model.Rect) -> model.Response:
+    pub func dispatch(event: input.Event, area: model.Rect) -> model.Response:
         self.seen += 1
         return model.Response.handled
 
-func test_route_screens_lifecycle_events_before_any_dispatch():
+pub func test_route_screens_lifecycle_events_before_any_dispatch():
     let tally = Tally()
     let area = model.Rect(rows = 2, columns = 4)
     assert(view.route(tally, input.Event.closed, area) == model.Response.ignored)
@@ -49,7 +49,7 @@ func test_route_screens_lifecycle_events_before_any_dispatch():
     assert(view.route(tally, input.Event.key(press = input.KeyPress(key = input.Key.enter)), area) == model.Response.handled)
     assert(tally.seen == 1)
 
-func test_route_contains_pointer_events_to_the_child_rectangle():
+pub func test_route_contains_pointer_events_to_the_child_rectangle():
     let tally = Tally()
     let area = model.Rect(row = 1, column = 1, rows = 2, columns = 2)
     let outside = input.Event.mouse(pointer = input.Mouse(kind = input.Pointer.press, row = 0, column = 0))
@@ -59,11 +59,11 @@ func test_route_contains_pointer_events_to_the_child_rectangle():
     assert(view.route(tally, inside, area) == model.Response.handled)
     assert(tally.seen == 1)
 
-func test_snapshot_carries_the_cursor_a_component_requests():
+pub func test_snapshot_carries_the_cursor_a_component_requests():
     let placed = CursorHost(Meter(1), locate_end)
     let frame = view.snapshot(placed, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)
 
-func locate_end(area: model.Rect) -> model.Cursor?:
+pub func locate_end(area: model.Rect) -> model.Cursor?:
     return model.Cursor(row = area.row + area.rows - 1, column = area.column + area.columns - 1)

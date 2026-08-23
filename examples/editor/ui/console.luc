@@ -8,29 +8,29 @@ from model import Model, Drag, Focus, Intent
 from ui.keymap import intent_of
 from ui.theme import palette, pane_style
 
-class Console: View:
-    private model: Model
+pub class Console: View:
+    model: Model
 
-    init(shared: Model):
+    pub init(shared: Model):
         self.model = shared
 
     # --- data provider ----------------------------------------------
 
-    func output_line(index: i64) -> Line:
+    pub func output_line(index: i64) -> Line:
         let start = line_at(self.model.output, index)
         let finish = line_end(self.model.output, start)
         return plain(self.model.output[start:finish], palette.plain)
 
     # --- cursor projection ------------------------------------------
 
-    func output_cursor(area: Rect) -> Cursor?:
+    pub func output_cursor(area: Rect) -> Cursor?:
         if self.model.focus != Focus.output or area.is_empty():
             return none
         return Cursor(row = area.row, column = area.column)
 
     # --- events ------------------------------------------------------
 
-    func frame_event(event: Event, area: Rect) -> Response:
+    pub func frame_event(event: Event, area: Rect) -> Response:
         match event:
             mouse(pointer):
                 if pointer.kind == Pointer.press and pointer.button == 0 and pointer.row == area.row:
@@ -40,7 +40,7 @@ class Console: View:
                 return Response.ignored
         return Response.ignored
 
-    func output_event(event: Event, area: Rect) -> Response:
+    pub func output_event(event: Event, area: Rect) -> Response:
         match event:
             key(press):
                 if self.model.focus != Focus.output:
@@ -65,7 +65,7 @@ class Console: View:
 
     # --- the View contract ------------------------------------------
 
-    private func composed() -> View:
+    func composed() -> View:
         let rows = Rows(
             count_lines(self.model.output),
             self.output_line,
@@ -83,8 +83,8 @@ class Console: View:
         )
         return EventHost(framed, self.frame_event)
 
-    func draw(surface: Surface, area: Rect) -> Cursor?:
+    pub func draw(surface: Surface, area: Rect) -> Cursor?:
         return self.composed().draw(surface, area)
 
-    func dispatch(event: Event, area: Rect) -> Response:
+    pub func dispatch(event: Event, area: Rect) -> Response:
         return route(self.composed(), event, area)

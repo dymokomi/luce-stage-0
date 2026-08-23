@@ -7,21 +7,21 @@ from frames import framed
 from server import Server, Compiler
 
 # The toolchain as a script: whatever the test says the compiler said.
-class Scripted: Compiler:
-    answer: str
+pub class Scripted: Compiler:
+    pub answer: str
 
-    init(answer: str):
+    pub init(answer: str):
         self.answer = answer
 
-    func diagnostics(content: str) -> str!:
+    pub func diagnostics(content: str) -> str!:
         return self.answer
 
-private func body_of(frame: list[u8]) -> str:
+func body_of(frame: list[u8]) -> str:
     let text = strings.from_bytes(frame) else ""
     let split = strings.find(text, "\r\n\r\n") else -1
     return text[split + 2:len(text)]
 
-func test_initialize_answers_capabilities():
+pub func test_initialize_answers_capabilities():
     let server = Server(Scripted("[]"))
     let outcome = server.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")
     assert(len(outcome.frames) == 1)
@@ -30,7 +30,7 @@ func test_initialize_answers_capabilities():
     assert(strings.contains(reply, "\"textDocumentSync\":1"))
     assert(strings.contains(reply, "\"id\":1"))
 
-func test_did_open_publishes_the_compilers_findings():
+pub func test_did_open_publishes_the_compilers_findings():
     let server = Server(Scripted("[{\"code\":\"luce.sema.name\",\"severity\":\"error\",\"message\":\"unknown name x\",\"path\":\"<stdin>\",\"line\":2,\"column\":5,\"end_line\":2,\"end_column\":6}]"))
     let opened = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///f.luc\",\"text\":\"func main():\\n    x\\n\"}}}"
     let outcome = server.handle(opened)
@@ -43,7 +43,7 @@ func test_did_open_publishes_the_compilers_findings():
     assert(strings.contains(told, "\"line\":1"))
     assert(strings.contains(told, "\"character\":4"))
 
-func test_did_close_publishes_nothing_outstanding():
+pub func test_did_close_publishes_nothing_outstanding():
     let server = Server(Scripted("[]"))
     let opened = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///f.luc\",\"text\":\"\"}}}"
     var outcome = server.handle(opened)
@@ -52,7 +52,7 @@ func test_did_close_publishes_nothing_outstanding():
     assert(len(outcome.frames) == 1)
     assert(strings.contains(body_of(outcome.frames[0]), "\"diagnostics\":[]"))
 
-func test_an_unknown_request_is_refused_and_a_notification_ignored():
+pub func test_an_unknown_request_is_refused_and_a_notification_ignored():
     let server = Server(Scripted("[]"))
     var outcome = server.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/hover\",\"params\":{}}")
     assert(len(outcome.frames) == 1)
@@ -60,7 +60,7 @@ func test_an_unknown_request_is_refused_and_a_notification_ignored():
     outcome = server.handle("{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{}}")
     assert(len(outcome.frames) == 0)
 
-func test_shutdown_then_exit_leaves():
+pub func test_shutdown_then_exit_leaves():
     let server = Server(Scripted("[]"))
     var outcome = server.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}")
     assert(len(outcome.frames) == 1)

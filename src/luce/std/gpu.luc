@@ -12,34 +12,33 @@
 # CPU-backed window when it is not. Other hosts may leave this channel absent;
 # calling one of these functions there fails closed with `host_unavailable`.
 
-enum Backend:
+pub enum Backend:
     metal
     vulkan
     headless
 
-class Surface:
-    private:
-        raw: handle
+pub class Surface:
+    raw: handle
 
-    private init(raw: handle):
+    init(raw: handle):
         self.raw = raw
 
     # The cross-std construction seam: `handle` is a std-only
     # spelling, so this door is unreachable from programs while
     # letting `ui` hand a window's drawing state over.
-    static func from_handle(raw: handle) -> Surface:
+    pub static func from_handle(raw: handle) -> Surface:
         return Surface(raw)
 
-    func width() -> i64!:
+    pub func width() -> i64!:
         return try Builtin.gpu_surface_size(self.raw, 0)
 
-    func height() -> i64!:
+    pub func height() -> i64!:
         return try Builtin.gpu_surface_size(self.raw, 1)
 
-    func clear(red: i64, green: i64, blue: i64, alpha: i64 = 255) -> !:
+    pub func clear(red: i64, green: i64, blue: i64, alpha: i64 = 255) -> !:
         try Builtin.gpu_surface_clear(self.raw, red, green, blue, alpha)
 
-    func fill_rect(
+    pub func fill_rect(
         x: i64,
         y: i64,
         width: i64,
@@ -61,10 +60,10 @@ class Surface:
             alpha,
         )
 
-    func present() -> !:
+    pub func present() -> !:
         try Builtin.gpu_surface_present(self.raw)
 
-func backend() -> Backend:
+pub func backend() -> Backend:
     match Builtin.gpu_backend():
         0:
             return Backend.metal

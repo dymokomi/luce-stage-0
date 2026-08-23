@@ -8,7 +8,7 @@
 import std.strings
 
 # The UTF-16 code-unit offset of 1-based scalar `column` in `line`.
-func utf16_column(line: str, column: i64) -> i64:
+pub func utf16_column(line: str, column: i64) -> i64:
     var units: i64 = 0
     var at: i64 = 0
     let stop = min(column - 1, len(line))
@@ -22,11 +22,11 @@ func utf16_column(line: str, column: i64) -> i64:
 
 # One end of a diagnostic span as an LSP position, against the
 # buffer's lines.  Lines beyond the buffer clamp to its last line.
-func position(lines: list[str], line: i64, column: i64) -> (i64, i64):
+pub func position(lines: list[str], line: i64, column: i64) -> (i64, i64):
     if len(lines) == 0:
         return 0, 0
     let index = clamp(line - 1, 0, len(lines) - 1)
     return index, utf16_column(lines[index], column)
 
-func lines_of(content: str) -> list[str]:
+pub func lines_of(content: str) -> list[str]:
     return strings.split(content, "\n")

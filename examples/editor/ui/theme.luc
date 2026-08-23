@@ -9,29 +9,29 @@
 from termui import Style
 import highlight
 
-struct Theme:
-    keyword: Style
-    type_name: Style
-    builtin: Style
-    text: Style
-    number: Style
-    comment: Style
-    plain: Style
-    punct: Style
-    gutter: Style
-    gutter_current: Style
-    gutter_diagnostic: Style
-    status: Style
-    status_key: Style
-    selected: Style
+pub struct Theme:
+    pub keyword: Style
+    pub type_name: Style
+    pub builtin: Style
+    pub text: Style
+    pub number: Style
+    pub comment: Style
+    pub plain: Style
+    pub punct: Style
+    pub gutter: Style
+    pub gutter_current: Style
+    pub gutter_diagnostic: Style
+    pub status: Style
+    pub status_key: Style
+    pub selected: Style
     # The text-selection background; `in_selection` keeps each token's
     # own foreground over it.
-    selection: i64
-    pane_border: Style
-    pane_active: Style
-    match_here: Style
+    pub selection: i64
+    pub pane_border: Style
+    pub pane_active: Style
+    pub match_here: Style
 
-const palette = Theme(
+pub const palette = Theme(
     keyword = Style(foreground = 176, bold = true),
     type_name = Style(foreground = 80),
     builtin = Style(foreground = 74),
@@ -54,7 +54,7 @@ const palette = Theme(
 
 # The colour for a highlighter token.  Every member has an arm and there
 # is no `else`, so a new token kind is a compile error here.
-func style_for(theme: Theme, kind: highlight.TokenKind) -> Style:
+pub func style_for(theme: Theme, kind: highlight.TokenKind) -> Style:
     match kind:
         keyword:
             return theme.keyword
@@ -75,13 +75,13 @@ func style_for(theme: Theme, kind: highlight.TokenKind) -> Style:
 
 # A token's style over the selection background: the syntax colour
 # stays, the background says "selected".
-func in_selection(theme: Theme, style: Style) -> Style:
+pub func in_selection(theme: Theme, style: Style) -> Style:
     return Style(foreground = style.foreground, background = theme.selection, bold = style.bold)
 
 # The pane-border style for a pane that does or does not hold focus.
 # Here rather than in each component, because every framed pane asks
 # the same question of the same palette.
-func pane_style(active: bool) -> Style:
+pub func pane_style(active: bool) -> Style:
     if active:
         return palette.pane_active
     return palette.pane_border

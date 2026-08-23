@@ -1,13 +1,13 @@
 import constraints
 import model
 
-func total(values: list[i64]) -> i64:
+pub func total(values: list[i64]) -> i64:
     var result: i64 = 0
     for value in values:
         result += value
     return result
 
-func test_fixed_and_minimum_grow_fill_the_axis():
+pub func test_fixed_and_minimum_grow_fill_the_axis():
     var lengths = list[constraints.Constraint]()
     lengths.append(constraints.Fixed(5))
     lengths.append(constraints.Grow(minimum = 6))
@@ -15,7 +15,7 @@ func test_fixed_and_minimum_grow_fill_the_axis():
     assert(sizes[0] == 5 and sizes[1] == 75)
     assert(total(sizes) == 80)
 
-func test_grows_share_surplus_by_weight_and_keep_rounding_total():
+pub func test_grows_share_surplus_by_weight_and_keep_rounding_total():
     var lengths = list[constraints.Constraint]()
     lengths.append(constraints.Grow())
     lengths.append(constraints.Grow(weight = 3))
@@ -23,7 +23,7 @@ func test_grows_share_surplus_by_weight_and_keep_rounding_total():
     assert(sizes[0] == 11 and sizes[1] == 30)
     assert(total(sizes) == 41)
 
-func test_ratio_and_preferred_lengths_are_clamped():
+pub func test_ratio_and_preferred_lengths_are_clamped():
     var automatic = list[constraints.Constraint]()
     automatic.append(constraints.Ratio(18, 24, 25))
     automatic.append(constraints.Grow(minimum = 6))
@@ -35,7 +35,7 @@ func test_ratio_and_preferred_lengths_are_clamped():
     let held = constraints.resolve(80, 0, dragged)
     assert(held[0] == 21 and held[1] == 59)
 
-func test_optional_panes_compress_before_primary_content():
+pub func test_optional_panes_compress_before_primary_content():
     var lengths = list[constraints.Constraint]()
     lengths.append(constraints.Preferred(8, 20, 24))
     lengths.append(constraints.Grow(minimum = 6))
@@ -44,7 +44,7 @@ func test_optional_panes_compress_before_primary_content():
     let tiny = constraints.resolve(3, 0, lengths)
     assert(tiny[0] == 0 and tiny[1] == 3)
 
-func test_spacing_is_part_of_the_total_and_zero_is_total():
+pub func test_spacing_is_part_of_the_total_and_zero_is_total():
     var lengths = list[constraints.Constraint]()
     lengths.append(constraints.Grow())
     lengths.append(constraints.Grow())
@@ -52,7 +52,7 @@ func test_spacing_is_part_of_the_total_and_zero_is_total():
     assert(spaced[0] == 10 and spaced[1] == 10)
     assert(total(constraints.resolve(0, 8, lengths)) == 0)
 
-func test_rows_and_columns_preserve_origin_and_order():
+pub func test_rows_and_columns_preserve_origin_and_order():
     let area = model.Rect(row = 2, column = 3, rows = 20, columns = 40)
     var lengths = list[constraints.Constraint]()
     lengths.append(constraints.Fixed(10))

@@ -6,7 +6,7 @@ import view
 from layout import VStack, HStack, ZStack
 from widgets import Label, Fill, Empty, Panel, Rows, EventHost, CursorHost
 
-func test_rows_and_columns_describe_nested_geometry():
+pub func test_rows_and_columns_describe_nested_geometry():
     var across = HStack()
     across.add(Fill("L"), size = Fixed(3))
     across.add(Fill("R"))
@@ -18,13 +18,13 @@ func test_rows_and_columns_describe_nested_geometry():
     assert(frame.line(1) == "LLLRRRRR")
     assert(frame.line(2) == "status  ")
 
-struct Names:
-    values: list[str]
+pub struct Names:
+    pub values: list[str]
 
-    func at(index: i64) -> model.Line:
+    pub func at(index: i64) -> model.Line:
         return model.plain(self.values[index], model.Style(foreground = index + 1))
 
-func test_rows_follow_selection_and_apply_the_selection_style():
+pub func test_rows_follow_selection_and_apply_the_selection_style():
     let names = Names(values = ["zero", "one", "two", "three", "four"])
     let content = Rows(
         total = 5,
@@ -41,7 +41,7 @@ func test_rows_follow_selection_and_apply_the_selection_style():
     assert(frame.cell(1, 6).style.background == 4)
     assert(Rows.visible_top(0, 5, 4, 2) == 3)
 
-func test_rows_can_follow_an_anchor_without_painting_a_selection():
+pub func test_rows_can_follow_an_anchor_without_painting_a_selection():
     let names = Names(values = ["zero", "one", "two", "three", "four"])
     let content = Rows(
         total = 5,
@@ -54,7 +54,7 @@ func test_rows_can_follow_an_anchor_without_painting_a_selection():
     assert(frame.line(1) == "four   ")
     assert(frame.cell(1, 0).style.background == -1)
 
-func test_a_panel_owns_its_interior_title_and_edges():
+pub func test_a_panel_owns_its_interior_title_and_edges():
     let content = Panel("box", Label("inside"), style = model.Style(foreground = 3))
     let frame = view.snapshot(content, 4, 10)
     assert(frame.cell(0, 0).text == "┌")
@@ -64,7 +64,7 @@ func test_a_panel_owns_its_interior_title_and_edges():
     assert(frame.cell(0, 3).text == "b")
     assert(frame.cell(1, 1).text == "i")
 
-func test_overlapping_panels_merge_without_application_glyph_logic():
+pub func test_overlapping_panels_merge_without_application_glyph_logic():
     let surface = canvas.Surface(5, 10)
     surface.clear()
     let one = Panel("", Empty())
@@ -74,33 +74,33 @@ func test_overlapping_panels_merge_without_application_glyph_logic():
     assert(surface.cell_at(2, 5).text == "├")
     assert(surface.cell_at(4, 5).text == "┴")
 
-class Recorder:
-    trace: str
-    left: i64
-    right: i64
+pub class Recorder:
+    pub trace: str
+    pub left: i64
+    pub right: i64
 
-    init():
+    pub init():
         self.trace = ""
         self.left = 0
         self.right = 0
 
-    func outer(event: input.Event, area: model.Rect) -> model.Response:
+    pub func outer(event: input.Event, area: model.Rect) -> model.Response:
         self.trace += "outer "
         return model.Response.ignored
 
-    func inner(event: input.Event, area: model.Rect) -> model.Response:
+    pub func inner(event: input.Event, area: model.Rect) -> model.Response:
         self.trace += "inner"
         return model.Response.handled
 
-    func left_event(event: input.Event, area: model.Rect) -> model.Response:
+    pub func left_event(event: input.Event, area: model.Rect) -> model.Response:
         self.left += 1
         return model.Response.handled
 
-    func right_event(event: input.Event, area: model.Rect) -> model.Response:
+    pub func right_event(event: input.Event, area: model.Rect) -> model.Response:
         self.right += 1
         return model.Response.handled
 
-func test_event_hosts_capture_then_continue_when_ignored():
+pub func test_event_hosts_capture_then_continue_when_ignored():
     let recorder = Recorder()
     let content = EventHost(
         EventHost(Label("ok"), recorder.inner),
@@ -110,7 +110,7 @@ func test_event_hosts_capture_then_continue_when_ignored():
     assert(response == model.Response.handled)
     assert(recorder.trace == "outer inner")
 
-func test_pointer_events_enter_only_the_allocated_child():
+pub func test_pointer_events_enter_only_the_allocated_child():
     let recorder = Recorder()
     var across = HStack()
     across.add(EventHost(Label("left"), recorder.left_event), size = Fixed(4))
@@ -119,7 +119,7 @@ func test_pointer_events_enter_only_the_allocated_child():
     assert(view.route(across, event, model.Rect(rows = 2, columns = 10)) == model.Response.handled)
     assert(recorder.left == 0 and recorder.right == 1)
 
-func test_overlay_dispatches_the_visually_topmost_child_first():
+pub func test_overlay_dispatches_the_visually_topmost_child_first():
     let recorder = Recorder()
     var overlay = ZStack()
     overlay.add(EventHost(Label("bottom"), recorder.left_event))
@@ -127,12 +127,12 @@ func test_overlay_dispatches_the_visually_topmost_child_first():
     view.route(overlay, input.Event.key(press = input.KeyPress(key = input.Key.enter)), model.Rect(rows = 2, columns = 10))
     assert(recorder.left == 0 and recorder.right == 1)
 
-func test_a_cursor_host_uses_the_rectangle_the_view_received():
+pub func test_a_cursor_host_uses_the_rectangle_the_view_received():
     let recorder = Recorder()
     let content = CursorHost(Label("ok"), at_end)
     let frame = view.snapshot(content, 3, 7)
     let cursor = frame.cursor else model.Cursor()
     assert(cursor.row == 2 and cursor.column == 6)
 
-func at_end(area: model.Rect) -> model.Cursor?:
+pub func at_end(area: model.Rect) -> model.Cursor?:
     return model.Cursor(row = area.row + area.rows - 1, column = area.column + area.columns - 1)

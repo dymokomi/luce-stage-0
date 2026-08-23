@@ -1,4 +1,4 @@
-func main(args: list[str]):
+pub func main(args: list[str]):
     let count = str(len(args))
     let message = "arguments: " + count
     print(message)

@@ -1,7 +1,7 @@
 # Tight integer loops: multiply, remainder, accumulate.  The C twin
 # is bench/loops.c; both print the same checksum.
 
-func main():
+pub func main():
     let n = 13416
     var total: i64 = 0
     for i in range(0, n):

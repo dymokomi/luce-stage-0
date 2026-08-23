@@ -14,17 +14,17 @@ from input import Stream
 from canvas import Screen
 from view import View, route
 
-class Application:
-    private root: View?
-    private tick_ms: i64
+pub class Application:
+    root: View?
+    tick_ms: i64
 
-    init():
+    pub init():
         self.root = none
         self.tick_ms = -1
 
     # The retained tree.  Calling it again replaces the layout whole,
     # which is the retained model's one honest reshape.
-    func set_layout(child: View):
+    pub func set_layout(child: View):
         self.root = child
 
     # Ask the loop to wake at most this often even with no input, and
@@ -32,13 +32,13 @@ class Application:
     # to pump held work (a language server, an animation).  Negative
     # turns ticking off, which is the default: an application that
     # holds nothing sleeps in the read.
-    func set_tick(milliseconds: i64):
+    pub func set_tick(milliseconds: i64):
         self.tick_ms = milliseconds
 
     # Run until input closes or a routed event answers `quit`.  The
     # same tree is drawn and then receives the event, so pointer
     # geometry can never be newer or older than what the person saw.
-    func start():
+    pub func start():
         let root = self.root
         if root == none:
             return

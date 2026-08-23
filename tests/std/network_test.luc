@@ -11,7 +11,7 @@ import std.network
 import std.os
 import std.strings
 
-func test_listen_dial_accept_carry_bytes_both_ways() -> !:
+pub func test_listen_dial_accept_carry_bytes_both_ways() -> !:
     let door = try network.Listener(0)
     let port = try door.port()
     assert(port > 0)
@@ -44,7 +44,7 @@ func test_listen_dial_accept_carry_bytes_both_ways() -> !:
     assert(try client.read(back) == 1)
     assert(back[0] == 111)
 
-func test_a_dropped_peer_reads_as_end_of_stream() -> !:
+pub func test_a_dropped_peer_reads_as_end_of_stream() -> !:
     let door = try network.Listener(0)
     let served = try dial_send_and_hang_up(door)
     var buffer = array[u8](8)
@@ -56,7 +56,7 @@ func test_a_dropped_peer_reads_as_end_of_stream() -> !:
         drained += landed
     assert(drained == 1)
 
-func dial_send_and_hang_up(door: network.Listener) -> network.Connection!:
+pub func dial_send_and_hang_up(door: network.Listener) -> network.Connection!:
     let client = try network.Connection.dial("127.0.0.1", try door.port())
     let served = try door.accept()
     var one = array[u8](1)
@@ -65,7 +65,7 @@ func dial_send_and_hang_up(door: network.Listener) -> network.Connection!:
     try client.flush()
     return served
 
-func test_a_worker_blocks_in_accept_until_a_peer_arrives() -> !:
+pub func test_a_worker_blocks_in_accept_until_a_peer_arrives() -> !:
     # The worker owns its listener on a fixed port and blocks for a
     # peer; the client cannot know the door is open except by
     # knocking, so it retries.  The exchange proves real cross-thread
@@ -81,7 +81,7 @@ func test_a_worker_blocks_in_accept_until_a_peer_arrives() -> !:
         os.sleep_ms(10)
     try server.wait()
 
-func serve_one_byte(port: i64) -> !:
+pub func serve_one_byte(port: i64) -> !:
     let door = try network.Listener(port)
     let guest = try door.accept()
     var one = array[u8](1)
@@ -89,14 +89,14 @@ func serve_one_byte(port: i64) -> !:
     assert(try guest.write(one, 1) == 1)
     try guest.flush()
 
-func knock(port: i64) -> bool!:
+pub func knock(port: i64) -> bool!:
     let conn = try network.Connection.dial("127.0.0.1", port)
     var one = array[u8](1)
     assert(try conn.read(one) == 1)
     assert(one[0] == 7)
     return true
 
-func test_a_connection_travels_as_io_reader_and_writer() -> !:
+pub func test_a_connection_travels_as_io_reader_and_writer() -> !:
     # The conformance claim over real sockets: io.send drives the
     # client side as a bare io.Writer, and once the client's last
     # reference dies with its helper frame, io.drain empties the
@@ -107,17 +107,17 @@ func test_a_connection_travels_as_io_reader_and_writer() -> !:
     assert(len(all) == 3)
     assert(all[0] == 104 and all[2] == 33)
 
-func connect_push_and_hang_up(door: network.Listener) -> network.Connection!:
+pub func connect_push_and_hang_up(door: network.Listener) -> network.Connection!:
     let client = try network.Connection.dial("127.0.0.1", try door.port())
     let served = try door.accept()
     try io.send(client, [104, 105, 33])
     return served
 
-func test_a_refused_dial_is_a_catchable_error() -> !:
+pub func test_a_refused_dial_is_a_catchable_error() -> !:
     var refused = false
     dial_nowhere() catch reason:
         refused = strings.starts_with(reason, "cannot connect to ")
     assert(refused)
 
-func dial_nowhere() -> !:
+pub func dial_nowhere() -> !:
     let held = try network.Connection.dial("127.0.0.1", 1)

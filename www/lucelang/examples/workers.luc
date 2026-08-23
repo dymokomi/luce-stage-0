@@ -1,6 +1,6 @@
-func square(value: i64) -> i64:
+pub func square(value: i64) -> i64:
     return value * value
 
-func main(args: list[str]):
+pub func main(args: list[str]):
     let work = spawn square(len(args) + 2)
     print(str(work.wait()))

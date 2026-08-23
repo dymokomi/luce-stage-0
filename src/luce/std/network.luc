@@ -35,27 +35,26 @@ import std.io
 # A connection has two doors — dialing out, and being accepted — and
 # both are functions rather than a public init, because neither is
 # "make me a connection from parts": each asks the world.
-class Connection: io.Reader, io.Writer:
-    private:
-        raw: handle
+pub class Connection: io.Reader, io.Writer:
+    raw: handle
 
-    private init(raw: handle):
+    init(raw: handle):
         self.raw = raw
 
     # Dial `host:port` and answer the connection.  The host resolves
     # the name — "localhost", a DNS name, a literal address — and
     # tries what it finds; a world that refuses every road answers the
     # error with the reason it gave.
-    static func dial(host: str, port: i64) -> Connection!:
+    pub static func dial(host: str, port: i64) -> Connection!:
         return Connection(raw = try Builtin.socket_connect(host, port))
 
-    func read(buffer: array[u8, _]) -> i64!:
+    pub func read(buffer: array[u8, _]) -> i64!:
         return try Builtin.handle_read(self.raw, buffer)
 
-    func write(buffer: array[u8, _], count: i64) -> i64!:
+    pub func write(buffer: array[u8, _], count: i64) -> i64!:
         return try Builtin.handle_write(self.raw, buffer, count)
 
-    func flush() -> !:
+    pub func flush() -> !:
         try Builtin.handle_flush(self.raw)
 
 # A door peers arrive through.  `try Listener(port)` opens it on
@@ -64,17 +63,16 @@ class Connection: io.Reader, io.Writer:
 # world saying no.  `accept` waits for one connection and answers it;
 # several workers may accept on their own listeners at once, and a
 # server loops on `accept` for as long as it means to serve.
-class Listener:
-    private:
-        raw: handle
+pub class Listener:
+    raw: handle
 
-    init(port: i64) -> !:
+    pub init(port: i64) -> !:
         self.raw = try Builtin.socket_listen(port)
 
-    func accept() -> Connection!:
+    pub func accept() -> Connection!:
         return Connection(raw = try Builtin.socket_accept(self.raw))
 
     # The port this listener actually holds — the answer to
     # `Listener(0)`, which asks the host for any free port.
-    func port() -> i64!:
+    pub func port() -> i64!:
         return try Builtin.socket_port(self.raw)
