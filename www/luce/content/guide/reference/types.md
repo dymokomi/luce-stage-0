@@ -46,11 +46,11 @@ or `file`. See [`std.files`](/library/files/).
 
 ```text
 alias UserId = u64
-public alias Rows = list[str]
-private alias Handler = func(i64) -> i64
+pub alias Rows = list[str]
+alias Handler = func(i64) -> i64
 ```
 
-The unmarked form is public. An alias creates no wrapper, conversion, nominal
+The unmarked form is private to its file. An alias creates no wrapper, conversion, nominal
 identity, allocation, layout, runtime tag, or dispatch rule. It works anywhere
 its target works: annotations, signatures, fields, optionals, containers,
 interface conformance lists, enum backing types, constructors, constants,
@@ -275,8 +275,8 @@ not declare a receiver parameter. A `static func` has no receiver and is
 called through the type name. The compiler infers whether a method writes
 `self`; a writing method requires a mutable value receiver today.
 
-Fields and methods are public by default. `private`/`public` regions and
-per-member marks follow the ordinary file visibility rules.
+Fields and methods are private to the file unless marked `pub`, following
+the ordinary file visibility rules.
 
 ## Classes {#classes}
 

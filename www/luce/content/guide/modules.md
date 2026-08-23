@@ -49,7 +49,7 @@ func main():
 ```
 
 The module name qualifies functions, structs, methods, constants, and type
-annotations. Declarations marked `private` are not reachable from an
+annotations. Declarations that are not marked `pub` are not reachable from an
 importer; [Access Control](/guide/access-control/) explains that boundary.
 Imports are case-sensitive. The file name, import spelling, and filesystem
 entry must agree exactly even on a host whose filesystem would otherwise
@@ -69,7 +69,7 @@ are not part of Luce.
 
 When the qualification is noise rather than information — a program that
 writes one module's types in every signature — name the members themselves.
-`from name import a, b` binds the named public declarations bare, so the
+`from name import a, b` binds the named `pub` declarations bare, so the
 file writes `Point`, not `geometry.Point`:
 
 ```luce module file=geometry.luc
@@ -96,13 +96,13 @@ func main():
 5
 ```
 
-Any public file-scope declaration can be named: a function, struct, class,
+Any `pub` file-scope declaration can be named: a function, struct, class,
 interface, enum, union, constant, or type alias. `as` renames one member,
 which is also the escape hatch when a member's name is already taken. The
 member import binds only its members — the module namespace stays unbound,
 so `geometry.Point` needs a plain `import geometry`, and the two forms may
 coexist in one file. Every member is checked where the import is written:
-an unknown or `private` member is refused on that line, and a member
+an unknown or unexposed member is refused on that line, and a member
 binding that collides with any other name in the file is a duplicate.
 
 ## The standard library
@@ -221,11 +221,11 @@ declaration:
 
 ```text
 alias PointId = i64
-private alias Cache = map[PointId, str]
+alias Cache = map[PointId, str]
 ```
 
-A public type alias is reachable as `module.PointId` and may deliberately
-re-export an imported public type. A private one stays inside its file. See
+A `pub` type alias is reachable as `module.PointId` and may deliberately
+re-export an imported `pub` type. An unmarked one stays inside its file. See
 [Naming a type](/guide/basics/#naming-a-type) for the first use and the
 [type-alias reference](/guide/reference/types/#type-aliases) for exact rules.
 
@@ -260,7 +260,7 @@ has the same internal layout under `.luce/packages/paint-VERSION/`; it is a
 resolved dependency and should not be edited in place.
 
 Package imports are namespaced by the package: `import paint` loads its entry
-module and `import paint.brushes` loads another public module inside it. A
+module and `import paint.brushes` loads another `pub` module inside it. A
 package resolves its own imports and dependencies within its package context,
 not by accidentally reaching into the consuming project.
 

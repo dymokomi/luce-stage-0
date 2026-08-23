@@ -117,10 +117,11 @@ A new embedded module costs all of these surfaces:
 6. Run focused std/spec/site lanes, then the complete release gate at the phase
    boundary.
 
-A public function rename is a language-facing change even though it lives in
+A `pub` function rename is a language-facing change even though it lives in
 `.luc`. A compiler-only `Builtin` row or host-table change additionally pays
 the runtime/ABI cost described in [CODEGEN.md](CODEGEN.md). An internal helper
-remains `private` and does not belong in the public coverage roster.
+stays unmarked — private to its file — and does not belong in the public
+coverage roster.
 
 ## Verification boundary
 

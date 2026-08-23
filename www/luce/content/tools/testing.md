@@ -10,7 +10,7 @@ program, but it should keep files and other external state explicit.
 
 ## Write a test
 
-The runner discovers public, top-level, zero-parameter `func test_*()`
+The runner discovers `pub`, top-level, zero-parameter `func test_*()`
 declarations. A test returns nothing, or declares `-> !` when it needs to
 propagate a fallible operation. Helpers can have any other name.
 
@@ -18,10 +18,10 @@ propagate a fallible operation. Helpers can have any other name.
 func square(side: i64) -> i64:
     return side * side
 
-func test_square_of_three():
+pub func test_square_of_three():
     assert(square(3) == 9)
 
-func test_square_of_zero():
+pub func test_square_of_zero():
     assert(square(0) == 0)
 ```
 
@@ -60,7 +60,7 @@ struct Case:
     text: str
     expected: i64
 
-func test_valid_integers():
+pub func test_valid_integers():
     let cases = [
         Case(text = "0", expected = 0),
         Case(text = "-7", expected = -7),
@@ -95,11 +95,11 @@ If a test is checking a fallible operation, handle it explicitly:
 ```luce module file=tests/files_test.luc
 import std.files
 
-func test_missing_file_is_reported():
+pub func test_missing_file_is_reported():
     let text = files.read("does-not-exist.txt") catch ""
     assert(text == "")
 
-func test_writes_a_file() -> !:
+pub func test_writes_a_file() -> !:
     try files.write("result.txt", "ok")
 ```
 
@@ -120,7 +120,7 @@ smaller set of filesystem, terminal, or process tests in clearly named files.
 
 The runner refuses a `test_*` declaration that could never be called:
 
-- a private function;
+- a function that is not `pub`;
 - a function with parameters;
 - a function that returns a value instead of nothing or `!`;
 - a function nested in a `struct`, `class`, `enum`, or `union`.

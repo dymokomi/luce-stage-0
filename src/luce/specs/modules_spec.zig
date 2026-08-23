@@ -26,46 +26,46 @@ const agree = @import("agree.zig");
 const luce = @import("luce");
 
 const geo: agree.File = .{ .name = "geo", .source =
-    \\struct Point:
-    \\    x: f64
-    \\    y: f64
+    \\pub struct Point:
+    \\    pub x: f64
+    \\    pub y: f64
     \\
-    \\struct Text:
-    \\    static func twice(value: i64) -> i64:
+    \\pub struct Text:
+    \\    pub static func twice(value: i64) -> i64:
     \\        return value * 2
     \\
-    \\func make(x: f64, y: f64) -> Point:
+    \\pub func make(x: f64, y: f64) -> Point:
     \\    return Point(x = x, y = y)
     \\
-    \\func length(p: Point) -> f64:
+    \\pub func length(p: Point) -> f64:
     \\    return sqrt(p.x * p.x + p.y * p.y)
     \\
 };
 
 const member_kit: agree.File = .{ .name = "shapes", .source =
-    \\struct Point:
-    \\    x: i64
-    \\    y: i64
+    \\pub struct Point:
+    \\    pub x: i64
+    \\    pub y: i64
     \\
-    \\class Widget:
-    \\    width: i64
+    \\pub class Widget:
+    \\    pub width: i64
     \\
-    \\enum Color:
+    \\pub enum Color:
     \\    red
     \\    green
     \\
-    \\union Figure:
+    \\pub union Figure:
     \\    circle(radius: i64)
     \\    dot
     \\
-    \\const origin = 7
+    \\pub const origin = 7
     \\
-    \\func span(p: Point) -> i64:
+    \\pub func span(p: Point) -> i64:
     \\    return p.x + p.y
     \\
-    \\alias Spot = Point
+    \\pub alias Spot = Point
     \\
-    \\interface Sized:
+    \\pub interface Sized:
     \\    func size() -> i64
     \\
 };
@@ -173,7 +173,7 @@ test "a file is a module: imports, qualified names, and shared types run" {
 
 test "an interface and its witness can cross a module boundary" {
     const drawing: agree.File = .{ .name = "drawing", .source =
-        \\interface Drawable:
+        \\pub interface Drawable:
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
@@ -181,7 +181,7 @@ test "an interface and its witness can cross a module boundary" {
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
-        \\func make() -> Drawable:
+        \\pub func make() -> Drawable:
         \\    return Button(offset = 2)
         \\
     };
@@ -202,7 +202,7 @@ test "an interface and its witness can cross a module boundary" {
 
 test "a private interface cannot leak through a module's type surface" {
     const hidden: agree.File = .{ .name = "hidden", .source =
-        \\private interface Secret:
+        \\interface Secret:
         \\    func value() -> i64
         \\
         \\struct Thing: Secret:
@@ -226,7 +226,7 @@ test "a private interface cannot leak through a module's type surface" {
 
 test "a private type alias stays inside its declaring module" {
     const hidden: agree.File = .{ .name = "hidden", .source =
-        \\private alias Secret = i64
+        \\alias Secret = i64
         \\
         \\func reveal() -> Secret:
         \\    return 42
@@ -244,14 +244,12 @@ test "a private type alias stays inside its declaring module" {
 
 test "class: a private initializer is usable only inside its module" {
     const models: agree.File = .{ .name = "models", .source =
-        \\class Token:
+        \\pub class Token:
         \\    value: i64
-        \\    private:
-        \\        init(value: i64):
-        \\            self.value = value
-        \\    public:
-        \\        static func make(value: i64) -> Token:
-        \\            return Token(value)
+        \\    init(value: i64):
+        \\        self.value = value
+        \\    pub static func make(value: i64) -> Token:
+        \\        return Token(value)
         \\
     };
     try expectProjectPrivate(
@@ -323,7 +321,7 @@ const agreeFiles = struct {
 test "an imported module compiles and runs the same with CRLF line endings" {
     // The layout rules run on the loaded text, so a module edited on
     // Windows blocks and dedents exactly like any other file.
-    const windows: agree.File = .{ .name = "geo", .source = "func area() -> i64:\r\n    var total: i64 = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
+    const windows: agree.File = .{ .name = "geo", .source = "pub func area() -> i64:\r\n    var total: i64 = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
     var program = try agree.project(
         \\import geo
         \\
@@ -339,7 +337,7 @@ test "modules may import each other; mutual recursion crosses files" {
     const even: agree.File = .{ .name = "even", .source =
         \\import odd
         \\
-        \\func check(value: i64) -> bool:
+        \\pub func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return true
         \\    return odd.check(value - 1)
@@ -348,7 +346,7 @@ test "modules may import each other; mutual recursion crosses files" {
     const odd: agree.File = .{ .name = "odd", .source =
         \\import even
         \\
-        \\func check(value: i64) -> bool:
+        \\pub func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -380,9 +378,9 @@ test "an import cycle is allowed: a three-file ring loads, compiles, and runs" {
         \\    assert(a.step(9) == 0)
         \\
     , &.{
-        .{ .name = "a", .source = "import b\n\nfunc step(v: i64) -> i64:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
-        .{ .name = "b", .source = "import c\n\nfunc step(v: i64) -> i64:\n    return c.step(v)\n" },
-        .{ .name = "c", .source = "import a\n\nfunc step(v: i64) -> i64:\n    return a.step(v)\n" },
+        .{ .name = "a", .source = "import b\n\npub func step(v: i64) -> i64:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\npub func step(v: i64) -> i64:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\npub func step(v: i64) -> i64:\n    return a.step(v)\n" },
     });
     defer program.deinit();
     try agree.okProgram(&program, .{});
@@ -394,13 +392,13 @@ test "constants reach across modules through imports" {
     // `module.name`.  Program-root containers cross by shared handle
     // under S46.  ownership_spec proves the rest within one file.
     const config: agree.File = .{ .name = "config", .source =
-        \\struct Size:
-        \\    rows: i64
-        \\    cols: i64
+        \\pub struct Size:
+        \\    pub rows: i64
+        \\    pub cols: i64
         \\
-        \\const version = "2.0"
-        \\const rows = 24
-        \\const screen = Size(rows = rows, cols = 80)
+        \\pub const version = "2.0"
+        \\pub const rows = 24
+        \\pub const screen = Size(rows = rows, cols = 80)
         \\
     };
     var program = try agree.project(
@@ -441,27 +439,27 @@ test "two packages' same-named internals stay their own (docs/PACKAGES.md D4, D7
             .name = "alpha",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/alpha.luc",
-            .source = "import util\n\nfunc scaled(v: i64) -> i64:\n    return util.factor() * v\n",
+            .source = "import util\n\npub func scaled(v: i64) -> i64:\n    return util.factor() * v\n",
         },
         .{
             .name = "beta",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/beta.luc",
-            .source = "import util\n\nfunc shifted(v: i64) -> i64:\n    return util.factor() + v\n",
+            .source = "import util\n\npub func shifted(v: i64) -> i64:\n    return util.factor() + v\n",
         },
         .{
             .name = "util",
             .from = "alpha-1.0.0",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/util.luc",
-            .source = "func factor() -> i64:\n    return 10\n",
+            .source = "pub func factor() -> i64:\n    return 10\n",
         },
         .{
             .name = "util",
             .from = "beta-1.0.0",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/util.luc",
-            .source = "func factor() -> i64:\n    return 100\n",
+            .source = "pub func factor() -> i64:\n    return 100\n",
         },
     });
     defer program.deinit();
@@ -489,21 +487,21 @@ test "a package module reached from outside and inside is one module: one struct
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import shapes\n\nfunc unit() -> shapes.Rect:\n    return shapes.Rect(width = 1.0, height = 1.0)\n",
+            .source = "import shapes\n\npub func unit() -> shapes.Rect:\n    return shapes.Rect(width = 1.0, height = 1.0)\n",
         },
         .{
             .name = "geo.shapes",
             .from = "",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
-            .source = "struct Rect:\n    width: f64\n    height: f64\n\nfunc area(r: Rect) -> f64:\n    return r.width * r.height\n",
+            .source = "pub struct Rect:\n    pub width: f64\n    pub height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
         },
         .{
             .name = "shapes",
             .from = "geo-1.2.0",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
-            .source = "struct Rect:\n    width: f64\n    height: f64\n\nfunc area(r: Rect) -> f64:\n    return r.width * r.height\n",
+            .source = "pub struct Rect:\n    pub width: f64\n    pub height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
         },
     });
     defer program.deinit();
@@ -529,14 +527,14 @@ test "a transitive package chain runs: a dependency's dependency answers inside 
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import mathx\n\nconst label = \"geo\"\n\nfunc area(w: f64, h: f64) -> f64:\n    return mathx.scale(w * h)\n",
+            .source = "import mathx\n\npub const label = \"geo\"\n\npub func area(w: f64, h: f64) -> f64:\n    return mathx.scale(w * h)\n",
         },
         .{
             .name = "mathx",
             .from = "geo-1.2.0",
             .root = "mathx-1.1.0",
             .path = ".luce/packages/mathx-1.1.0/mathx.luc",
-            .source = "func scale(v: f64) -> f64:\n    return v * 10.0\n",
+            .source = "pub func scale(v: f64) -> f64:\n    return v * 10.0\n",
         },
     });
     defer program.deinit();
@@ -562,14 +560,14 @@ test "a trap inside a package is one report: same frames on both engines, the pa
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import util\n\nfunc sample() -> i64:\n    return util.pick()\n",
+            .source = "import util\n\npub func sample() -> i64:\n    return util.pick()\n",
         },
         .{
             .name = "util",
             .from = "geo-1.2.0",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/util.luc",
-            .source = "func pick() -> i64:\n    var xs = [1, 2, 3]\n    var index = 7\n    return xs[index]\n",
+            .source = "pub func pick() -> i64:\n    var xs = [1, 2, 3]\n    var index = 7\n    return xs[index]\n",
         },
     });
     defer program.deinit();
@@ -588,18 +586,18 @@ test "subfolder modules run: dots map to folders, and as picks the binding" {
     // purpose (`shapes` twice), which is exactly what the alias is
     // for.
     const shapes: agree.File = .{ .name = "geo.shapes", .source =
-        \\struct Rect:
-        \\    width: f64
-        \\    height: f64
+        \\pub struct Rect:
+        \\    pub width: f64
+        \\    pub height: f64
         \\
-        \\func area(r: Rect) -> f64:
+        \\pub func area(r: Rect) -> f64:
         \\    return r.width * r.height
         \\
     };
     const blocks: agree.File = .{ .name = "blocks.shapes", .source =
-        \\const faces = 6
+        \\pub const faces = 6
         \\
-        \\func volume(edge: f64) -> f64:
+        \\pub func volume(edge: f64) -> f64:
         \\    return edge * edge * edge
         \\
     };

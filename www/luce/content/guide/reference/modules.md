@@ -1,7 +1,7 @@
 # Modules
 
 Each `.luc` file is a module. Imports are explicit, and declarations are
-public unless marked `private`.
+private to their file unless marked `pub`.
 
 ## import
 
@@ -28,11 +28,11 @@ name.Struct(field = expr, ...)
 name.Struct.member(args)
 name.constant
 p: name.Struct              in an annotation
-p: name.Alias               a public type alias
+p: name.Alias               a `pub` type alias
 ```
 
-An import exposes the imported file's public top-level declarations.
-Private declarations remain available inside their defining file only.
+An import exposes the imported file's `pub` top-level declarations.
+Unmarked declarations remain available inside their defining file only.
 Using an unimported namespace is `luce.sema.import`.
 
 Modules may import one another; each file is loaded once, so mutual
@@ -42,8 +42,8 @@ recursion across files is allowed. A self-import is
 ## Member imports
 
 `from name import a, b` loads the module exactly as `import name` loads
-it, and binds the named public declarations bare instead of binding the
-module namespace. A member may be any public file-scope declaration:
+it, and binds the named `pub` declarations bare instead of binding the
+module namespace. A member may be any `pub` file-scope declaration:
 function, struct, class, interface, enum, union, constant, or type alias.
 `as` renames one member. There is no wildcard form.
 
@@ -51,7 +51,7 @@ The rules, each checked on the import line:
 
 - an unknown member is `luce.sema.import` ("name has no declaration
   named member");
-- a `private` member is `luce.sema.private` — private is not unknown;
+- an unexposed member is `luce.sema.private` — private is not unknown;
 - a member binding that collides with a local declaration, another
   import's member, or an import's namespace binding is
   `luce.sema.duplicate`;
@@ -74,10 +74,10 @@ from, with the source line and a caret.
 
 ## Visibility
 
-A declaration is public unless it says `private`. `public` may be
-written explicitly. Inside a struct, `private:` and `public:` open an
-indented region that assigns visibility to its members. The syntax and
-parse restrictions are listed on [statements](../statements/#visibility).
+A declaration is private to its file unless it says `pub`. `pub` is the
+one visibility word; there is no region form, so each declaration and
+member states its own visibility. The syntax and parse restrictions are
+listed on [statements](../statements/#visibility).
 
 Visibility is checked at the module boundary, not by the call graph.
 Code in a module may use that module's private declarations. An outside
@@ -91,23 +91,23 @@ construction, and the `s.method(...)` string sugar that routes to
 
 | Written, from outside | Said |
 |---|---|
-| `geo.helper()`, marked | `helper is private to geo` |
-| `geo.seed`, marked constant | `seed is private to geo` |
-| `p: store.Inner`, marked struct | `Inner is private to store` |
-| `p: store.InternalId`, marked alias | `InternalId is private to store` |
-| `h.slot`, marked field | `slot of Handle is private to handle` |
-| `session.Session(token = 7)`, marked field named | `token of Session is private to session` |
-| `geo.helperr`, a typo near a marked name | `unknown function helperr` — and no suggestion names a private one |
+| `geo.helper()`, not `pub` | `helper is private to geo` |
+| `geo.seed`, private constant | `seed is private to geo` |
+| `p: store.Inner`, private struct | `Inner is private to store` |
+| `p: store.InternalId`, private alias | `InternalId is private to store` |
+| `h.slot`, private field | `slot of Handle is private to handle` |
+| `session.Session(token = 7)`, private field named | `token of Session is private to session` |
+| `geo.helperr`, a typo near a private name | `unknown function helperr` — and no suggestion names a private one |
 
 ```luce module file=geo.luc
-private func helper() -> i64:
+func helper() -> i64:
     return 41
 
-func visible() -> i64:
+pub func visible() -> i64:
     return helper() + 1
 
-private const seed = 41
-const answer = seed + 1
+const seed = 41
+pub const answer = seed + 1
 ```
 
 ```luce fail
@@ -147,12 +147,12 @@ default or the struct is not constructible outside its module — the
 factory pattern, named in the diagnostic.
 
 ```luce module file=session.luc
-struct Session:
-    name: str
-    private id: i64
-    private token: i64 = 0
+pub struct Session:
+    pub name: str
+    id: i64
+    token: i64 = 0
 
-func open(name: str) -> Session:
+pub func open(name: str) -> Session:
     return Session(name = name, id = 7)
 ```
 
@@ -166,7 +166,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:13: Session cannot be constructed here: id is marked private in session and has no default; construction belongs to a public function of session [luce.sema.private]
+main.luc:4:13: Session cannot be constructed here: id is private in session and has no default; construction belongs to a public function of session [luce.sema.private]
         let s = session.Session(name = "dy")
                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
@@ -187,30 +187,30 @@ A private field *with* a default is filled from it silently; only a
 required one closes construction. A struct with no marked fields
 constructs from outside exactly as it always did.
 
-A public declaration's surface may name only public types: a public
+A `pub` declaration's surface may name only `pub` types: a `pub`
 function whose parameter or result mentions a private struct is
 refused at the declaration, on the line that can fix it, naming both
 edits that would restore honesty. The check follows containers and
 every nested parameter and result of a function type. A private
-field's type is not part of the public surface and may be private —
+field's type is not part of the public surface and may stay private —
 which is what lets a struct hide an implementation type entirely.
 
-A public constant container is a public surface too: its element or
+A `pub` constant container is a public surface too: its element or
 map-value type may not be private. A private constant may use the
-private type, and a public folded value may still be computed from a
+private type, and a `pub` folded value may still be computed from a
 private constant because that exposes the value rather than its name.
 
-A public type alias is itself part of the module surface. It may name or
-re-export a public local or imported type. It may not expose a private nominal
-type; the declaration is refused with the two available fixes. A
-`private alias` may name a private type and remains usable throughout its own
+A `pub` type alias is itself part of the module surface. It may name or
+re-export a `pub` local or imported type. It may not expose a private nominal
+type; the declaration is refused with the two available fixes. A private
+alias may name a private type and remains usable throughout its own
 file.
 
 ```luce fail
-private struct Inner:
+struct Inner:
     n: i64
 
-func read() -> Inner:
+pub func read() -> Inner:
     return Inner(n = 1)
 
 func main():
@@ -219,27 +219,14 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:16: read is public and answers Inner, which is marked private in this file; mark read private or remove the mark on Inner [luce.sema.private]
-    func read() -> Inner:
-                   ^~~~~
+main.luc:4:20: read is public and answers Inner, which is private in this file; remove pub from read or mark Inner pub [luce.sema.private]
+    pub func read() -> Inner:
+                       ^~~~~
 ```
 
 `main` never needs marking. The runtime starts it by name rather than
-through an import, so `public` on it is inert like any other restated
-default and `private` on it is refused: an entry the world cannot
-start is a contradiction.
-
-```luce fail
-private func main():
-    print("x")
-```
-
-```output
-luce: compile failed
-main.luc:1:14: main is the entry and cannot be private: the runtime starts it [luce.sema.private]
-    private func main():
-                 ^~~~
-```
+through an import, so the default — private, like any unmarked
+declaration — is exactly right, and `pub` on it is inert.
 
 ## Sibling resolution
 
@@ -314,16 +301,16 @@ The modules are [`io`](/library/io/), [`math`](/library/math/),
 ## Multi-file programs
 
 ```luce module file=shapes.luc
-const unit = 1.0
+pub const unit = 1.0
 
-struct Rect:
-    width: f64
-    height: f64
+pub struct Rect:
+    pub width: f64
+    pub height: f64
 
-    static func area(r: Rect) -> f64:
+    pub static func area(r: Rect) -> f64:
         return r.width * r.height
 
-func square(side: f64) -> Rect:
+pub func square(side: f64) -> Rect:
     return Rect(width = side, height = side)
 ```
 
@@ -381,7 +368,7 @@ version: 0.1.0
 ```
 
 ```luce module file=geo/shapes.luc
-func area(width: f64, height: f64) -> f64:
+pub func area(width: f64, height: f64) -> f64:
     return width * height
 ```
 
@@ -406,7 +393,7 @@ modules.  That is `luce.import.collision`, and the remedy is in the
 message: **`as`** binds a module under a name of your choosing.
 
 ```luce module file=blocks/shapes.luc
-func volume(edge: f64) -> f64:
+pub func volume(edge: f64) -> f64:
     return edge * edge * edge
 ```
 
@@ -524,18 +511,18 @@ version: 0.3.0
 import brushes
 import util
 
-func area(r: brushes.Rect) -> i64:
+pub func area(r: brushes.Rect) -> i64:
     return util.scale(r.width * r.height)
 ```
 
 ```luce module file=.luce/packages/paint-0.3.0/brushes.luc
-struct Rect:
-    width: i64
-    height: i64
+pub struct Rect:
+    pub width: i64
+    pub height: i64
 ```
 
 ```luce module file=.luce/packages/paint-0.3.0/util.luc
-func scale(v: i64) -> i64:
+pub func scale(v: i64) -> i64:
     return v * 10
 ```
 
@@ -592,7 +579,7 @@ packages:
 ```luce module file=.luce/packages/tint-1.2.0/tint.luc
 import mixer
 
-func area(w: i64, h: i64) -> i64:
+pub func area(w: i64, h: i64) -> i64:
     return mixer.mul(w, h)
 ```
 
@@ -605,7 +592,7 @@ packages:
 ```
 
 ```luce module file=.luce/packages/easel-0.4.1/easel.luc
-func escape() -> i64:
+pub func escape() -> i64:
     return 27
 ```
 
@@ -615,7 +602,7 @@ version: 1.1.0
 ```
 
 ```luce module file=.luce/packages/mixer-1.1.0/mixer.luc
-func mul(a: i64, b: i64) -> i64:
+pub func mul(a: i64, b: i64) -> i64:
     return a * b
 ```
 

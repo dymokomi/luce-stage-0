@@ -61,8 +61,8 @@ import std.io
 import std.strings
 
 class Feed: io.Reader:
-    private data: list[u8]
-    private at: i64
+    data: list[u8]
+    at: i64
 
     init(text: str):
         self.data = strings.to_bytes(text)

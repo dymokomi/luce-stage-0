@@ -107,7 +107,7 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
             try self.fail(
                 "luce.sema.private",
                 info.declaration.target.span,
-                "alias {s} is public and names {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                "alias {s} is public and names {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                 .{
                     info.declaration.name,
                     hidden,

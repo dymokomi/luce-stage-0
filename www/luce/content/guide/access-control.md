@@ -1,22 +1,23 @@
 # Access Control
 
-Top-level declarations and struct members are public unless marked
-`private`. The compiler enforces this at module boundaries. A leading
-underscore is not a visibility convention; identifiers must start with a
-letter.
+Top-level declarations and struct members are **private to their file**
+unless marked `pub`. The compiler enforces this at module boundaries. A
+leading underscore is not a visibility convention; identifiers must start
+with a letter.
 
 ## Private helpers
 
-`private` keeps a declaration available inside its own file while hiding it
-from importers:
+A declaration says nothing to expose itself; `pub` is the one marker, and
+without it a name is available inside its own file but hidden from
+importers:
 
 ```luce module file=tally.luc
 import std.strings
 
-private func clean(word: str) -> str:
+func clean(word: str) -> str:
     return strings.lower(strings.trim(word))
 
-func count(text: str, wanted: str) -> i64:
+pub func count(text: str, wanted: str) -> i64:
     let words = strings.split(text, " ")
     let target = clean(wanted)
     var found = 0
@@ -53,26 +54,25 @@ main.luc:4:11: clean is private to tally [luce.sema.private]
 
 The diagnostic distinguishes a private name from an unknown name.
 
-## Struct regions
+## Private fields
 
-Inside a struct, `private:` and `public:` introduce indented regions. A
-member outside a region uses the public default.
+A struct is exposed with `pub`, and each field states its own visibility.
+An unmarked field is private to the declaring file; `pub` on a field lets
+importers name it:
 
 ```luce module file=gauge.luc
-struct Gauge:
-    label: str
+pub struct Gauge:
+    pub label: str
+    reading: i64
+    scale: i64
 
-    private:
-        reading: i64
-        scale: i64
-
-    func show() -> str:
+    pub func show() -> str:
         return f"{self.label}: {self.reading * self.scale}"
 
-    func add(amount: i64):
+    pub func add(amount: i64):
         self.reading = self.reading + amount
 
-func open(label: str, scale: i64) -> Gauge:
+pub func open(label: str, scale: i64) -> Gauge:
     return Gauge(label = label, reading = 0, scale = scale)
 ```
 
@@ -92,7 +92,7 @@ power: 70
 power
 ```
 
-A required private field also prevents outside construction. A public
+A required private field also prevents outside construction. A `pub`
 factory inside the module can initialize it:
 
 ```luce fail
@@ -105,7 +105,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:13: Gauge cannot be constructed here: reading is marked private in gauge and has no default; construction belongs to a public function of gauge [luce.sema.private]
+main.luc:4:13: Gauge cannot be constructed here: reading is private in gauge and has no default; construction belongs to a public function of gauge [luce.sema.private]
         var g = gauge.Gauge(label = "power")
                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
@@ -131,27 +131,25 @@ main.luc:5:15: reading of Gauge is private to gauge [luce.sema.private]
 Visibility hides names, not the fact that a public struct value exists. An
 importer can store and pass the struct without naming its private fields.
 
-## Writing `public`
+## Marking `pub`
 
-`public` is allowed on declarations and members when a module wants to
-state its public API explicitly:
+`pub` goes immediately before the declaration or member it exposes. A file
+states its API by marking exactly the names that cross:
 
 ```luce run
-public const width = 40
+pub const width = 40
 
-public func banner(title: str) -> str:
+pub func banner(title: str) -> str:
     return title
 
-public struct Line:
-    public text: str
-
-    private:
-        marker: i64
+pub struct Line:
+    pub text: str
+    marker: i64
 
     func mark():
         self.marker = self.marker + 1
 
-public func main():
+func main():
     print(f"{banner("Luce")} {width}")
 ```
 
@@ -159,41 +157,43 @@ public func main():
 Luce 40
 ```
 
-`main` is the entry point and must not be private.
+`main` is the entry point: the runtime starts it by name, so it needs no
+marking and stays private like any unmarked declaration.
 
 Type aliases follow the same file boundary:
 
 ```text
-private alias InternalId = i64
-public alias UserId = i64
+alias InternalId = i64
+pub alias UserId = i64
 ```
 
-A public alias may re-export a public type. It cannot expose a private
+A `pub` alias may re-export a `pub` type. It cannot expose a private
 structure, enum, union, class, or interface under a new public name; the
 compiler points to the alias declaration and offers the two honest fixes.
 
-## Where visibility markers are valid
+## Where the marker is valid
 
-Visibility applies to file-scope declarations and struct members, not local
+`pub` applies to file-scope declarations and struct members, not local
 bindings:
 
 ```luce fail
 func main():
-    private let limit = 10
+    pub let limit = 10
     print(str(limit))
 ```
 
 ```output
 luce: compile failed
 main.luc:2:5: visibility applies to file-scope declarations and struct members [luce.parse.expected]
-        private let limit = 10
-        ^~~~~~~
+        pub let limit = 10
+        ^~~
 ```
 
-A region must be inside a struct:
+There is no region form: `pub` marks one declaration at a time, so a
+`pub:` block is refused with the sentence that names the fix:
 
 ```luce fail
-private:
+pub:
     const limit = 10
 
 func main():
@@ -202,9 +202,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: a visibility region belongs inside a struct; at file scope mark each declaration [luce.parse.top]
-    private:
-    ^~~~~~~~
+main.luc:1:1: `pub` marks one declaration; write it before each name, not as a region [luce.parse.top]
+    pub:
+    ^~~~
 ```
 
 Standard-library modules use the same rules. The exact boundary rules and

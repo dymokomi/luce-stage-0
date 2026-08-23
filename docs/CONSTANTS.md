@@ -43,7 +43,7 @@ before `main`, and held by the program root.
 ```luce
 const crc_table: list[i64] = [0, 1996959894, 3993919788]
 const length_bases: array[i64, _] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
-private const keywords = {"and": true, "break": true, "catch": true}
+const keywords = {"and": true, "break": true, "catch": true}
 ```
 
 The three written shapes:
@@ -108,7 +108,7 @@ The literal is legal in both positions: at file scope it folds into a
 constant map; inside a function it builds a fresh, mutable map.
 
 ```luce
-private const keywords: map[str, bool] = {
+const keywords: map[str, bool] = {
     "and": true, "break": true, "catch": true,
 }
 const method_names = {0: "stored", 8: "deflated"}
@@ -180,13 +180,13 @@ parameter traps `immutable_object` just as a direct one would.
 
 ## Visibility, imports, and threads
 
-A constant container obeys the ordinary file boundary (`private const`,
-`docs/VISIBILITY.md`), reachable through an import exactly as a scalar
-constant is. A public container may not expose a private element or
-map-value type; marking the container private, or making the type
-public, closes the surface. A public folded scalar may still be computed
-from a private constant, because the value crosses the boundary, not the
-name.
+A constant container obeys the ordinary file boundary (private by
+default, `pub` to expose, `docs/VISIBILITY.md`), reachable through an
+import exactly as a scalar constant is. A `pub` container may not expose a
+private element or map-value type; leaving the container private, or
+marking the type `pub`, closes the surface. A `pub` folded scalar may
+still be computed from a private constant, because the value crosses the
+boundary, not the name.
 
 A file-scope `const` container may be a parameter default — the same
 program-root reference at every call site (`docs/ARGS.md`) — and a

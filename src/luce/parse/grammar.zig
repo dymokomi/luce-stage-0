@@ -2205,7 +2205,7 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.static",
                     self.peek().span,
-                    "visibility comes before static: write 'private static func', not 'static private func'",
+                    "visibility comes before static: write 'pub static func', not 'static pub func'",
                     .{},
                 );
             } else if (self.peekKind() == .keyword_static) {

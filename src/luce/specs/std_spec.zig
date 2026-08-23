@@ -878,8 +878,8 @@ test "io: a program's own reader and writer feed drain and send" {
         \\import std.io
         \\
         \\class Feed: io.Reader:
-        \\    private data: list[u8]
-        \\    private at: i64
+        \\    data: list[u8]
+        \\    at: i64
         \\
         \\    init(data: list[u8]):
         \\        self.data = data
@@ -894,7 +894,7 @@ test "io: a program's own reader and writer feed drain and send" {
         \\        return filled
         \\
         \\class Sink: io.Writer:
-        \\    private got: list[u8]
+        \\    got: list[u8]
         \\
         \\    init():
         \\        self.got = list[u8]()

@@ -11,28 +11,28 @@ adds is only discovery, a synthesized entry, and a report.
 
 ## A test is `func test_*()` in an ordinary `.luc` file
 
-A test is a **top-level, public, zero-parameter `func test_*()`** whose
+A test is a **top-level, `pub`, zero-parameter `func test_*()`** whose
 return shape is nothing or `!`:
 
 ```text
 import geo
 
-func test_area_of_unit_square():
+pub func test_area_of_unit_square():
     assert(geo.area(1.0, 1.0) == 1.0)
 
-func test_open_refuses_missing_file() -> !:
+pub func test_open_refuses_missing_file() -> !:
     ...
 ```
 
-- **Discovery is by name.** Every top-level, public, zero-parameter
+- **Discovery is by name.** Every top-level, `pub`, zero-parameter
   `func test_*()` in the file is a test.
 - **A malformed `test_*` is refused by name, never silently skipped.**
   A `test_*` that takes parameters, sits inside a `struct`/`enum`/
   `union`, or answers a value other than nothing or `!` is refused, and
-  so — above all — is a **`private`** `test_*`, which would otherwise be
-  a test that never ran. Each refusal names its `path:line:column` and
-  the fix (for a private one: drop `private`, or rename the helper). A
-  test that cannot run is a mistake, not an absence.
+  so — above all — is a `test_*` that is **not `pub`**, which would
+  otherwise be a test that never ran. Each refusal names its
+  `path:line:column` and the fix (for an unmarked one: mark it `pub`, or
+  rename the helper). A test that cannot run is a mistake, not an absence.
 - **A test file is otherwise an ordinary module.** It imports the code
   under test the ordinary way, obeys the host gate, and may define
   helpers — a helper is any function not named `test_*`.
@@ -76,7 +76,7 @@ are answered *before* anything is compiled — otherwise a helper module
 would be compiled only to discover that it is a helper, and a syntax
 error in one would fail a run it is not part of. What keeps "what is a
 test" from living in two places is that the compiler validates the names
-by *calling* them: a name that does not exist, or is private, or takes a
+by *calling* them: a name that does not exist, or is not `pub`, or takes a
 parameter, refuses itself through ordinary name resolution.
 
 - **Anchoring.** A test file compiles with imports anchored at the

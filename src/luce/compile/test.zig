@@ -1175,64 +1175,63 @@ fn expectProjectCompiles(root: []const u8, modules: []const TestModule) !void {
 
 /// The memo's corpus in one module: every marked shape §8's rows need.
 const vault_module: TestModule = .{ .name = "vault", .source =
-    \\private func helper() -> i64:
+    \\func helper() -> i64:
     \\    return 41
     \\
-    \\func visible() -> i64:
+    \\pub func visible() -> i64:
     \\    return helper() + 1
     \\
-    \\private const seed = 41
-    \\const answer = seed + 1
+    \\const seed = 41
+    \\pub const answer = seed + 1
     \\
-    \\private struct Inner:
+    \\struct Inner:
     \\    n: i64
     \\
     \\    static func make() -> Inner:
     \\        return Inner(n = 1)
     \\
-    \\struct Handle:
-    \\    private:
-    \\        slot: i64
-    \\    label: i64
+    \\pub struct Handle:
+    \\    slot: i64
+    \\    pub label: i64
     \\
-    \\func fresh() -> Handle:
+    \\pub func fresh() -> Handle:
     \\    return Handle(slot = 1, label = 2)
     \\
-    \\struct Session:
-    \\    name: str
-    \\    private id: i64
-    \\    private token: i64 = 0
+    \\pub struct Session:
+    \\    pub name: str
+    \\    id: i64
+    \\    token: i64 = 0
     \\
-    \\    func title() -> str:
+    \\    pub func title() -> str:
     \\        return self.name
     \\
-    \\    private func stamp() -> i64:
+    \\    func stamp() -> i64:
     \\        return self.id
     \\
-    \\    private static func widest() -> i64:
+    \\    static func widest() -> i64:
     \\        return 64
     \\
-    \\func open(name: str) -> Session:
+    \\pub func open(name: str) -> Session:
     \\    return Session(name = name, id = 7)
     \\
-    \\struct Box:
-    \\    held: Handle
+    \\pub struct Box:
+    \\    pub held: Handle
     \\
-    \\private enum Hidden:
+    \\enum Hidden:
     \\    first
     \\    second
     \\
     \\    static func lead() -> Hidden:
     \\        return Hidden.first
     \\
-    \\enum Shown(u8):
+    \\pub enum Shown(u8):
     \\    open = 0
     \\    shut = 1
     \\
-    \\    private static func sealed() -> i64:
+    \\    static func sealed() -> i64:
     \\        return 7
     \\
-    \\func opened() -> Shown:
+    \\pub func opened() -> Shown:
     \\    return Shown.open
     \\
 };
@@ -1357,7 +1356,7 @@ test "luce.sema.private: a required private field forecloses outside constructio
         \\    let s = vault.Session(name = "x")
         \\    print(s.name)
         \\
-    , &.{vault_module}, "Session cannot be constructed here: id is marked private in vault and has no default; construction belongs to a public function of vault");
+    , &.{vault_module}, "Session cannot be constructed here: id is private in vault and has no default; construction belongs to a public function of vault");
     // The pattern the diagnostic names, working: the factory, the
     // public field, and the public method all cross the boundary.
     try expectProjectCompiles(
@@ -1592,17 +1591,17 @@ test "the private path is checked per module: A sees its own, B does not, one co
     // compile, which is what proves the check reads the *reference
     // site's* module and not some global mode.
     const a: TestModule = .{ .name = "a", .source =
-        \\private func inner() -> i64:
+        \\func inner() -> i64:
         \\    return 1
         \\
-        \\func outer() -> i64:
+        \\pub func outer() -> i64:
         \\    return inner()
         \\
     };
     const b: TestModule = .{ .name = "b", .source =
         \\import a
         \\
-        \\func steal() -> i64:
+        \\pub func steal() -> i64:
         \\    return a.inner()
         \\
     };
@@ -1624,11 +1623,11 @@ test "the private path is checked per module: A sees its own, B does not, one co
     try testing.expectEqualStrings("inner is private to a", found.message);
 }
 
-test "mutual recursion crosses files unmarked, and is refused by name when one is marked" {
+test "mutual recursion crosses files when pub, and is refused by name when one is left private" {
     const even: TestModule = .{ .name = "even", .source =
         \\import odd
         \\
-        \\func check(value: i64) -> bool:
+        \\pub func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return true
         \\    return odd.check(value - 1)
@@ -1637,7 +1636,7 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
     const odd_open: TestModule = .{ .name = "odd", .source =
         \\import even
         \\
-        \\func check(value: i64) -> bool:
+        \\pub func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -1654,7 +1653,7 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
     const odd_marked: TestModule = .{ .name = "odd", .source =
         \\import even
         \\
-        \\private func check(value: i64) -> bool:
+        \\func check(value: i64) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -1663,32 +1662,19 @@ test "mutual recursion crosses files unmarked, and is refused by name when one i
     try expectPrivateSaying(root, &.{ even, odd_marked }, "check is private to odd");
 }
 
-test "a private region and a per-declaration marker produce the same stage-4 facts" {
-    // The two spellings of Rng's wall, held to the same refusal
-    // sentence — which is the observable form of "regions die in
-    // stage 3" (D15).
-    const region: TestModule = .{ .name = "rng", .source =
-        \\struct Rng:
-        \\    private:
-        \\        state: i64
+test "an unmarked field is private, and the factory beside it crosses" {
+    // Rng's wall is the default, not a marker: an unmarked field is
+    // withheld across the boundary, while `pub func` beside it crosses
+    // (VISIBILITY.md: private is the floor, `pub` lifts one name).
+    const rng: TestModule = .{ .name = "rng", .source =
+        \\pub struct Rng:
+        \\    state: i64
         \\
-        \\    func next() -> i64:
+        \\    pub func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\func rng(seed: i64) -> Rng:
-        \\    return Rng(state = seed)
-        \\
-    };
-    const marker: TestModule = .{ .name = "rng", .source =
-        \\struct Rng:
-        \\    private state: i64
-        \\
-        \\    func next() -> i64:
-        \\        self.state = self.state * 48271 % 2147483647
-        \\        return self.state
-        \\
-        \\func rng(seed: i64) -> Rng:
+        \\pub func rng(seed: i64) -> Rng:
         \\    return Rng(state = seed)
         \\
     };
@@ -1708,10 +1694,8 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
         \\    print(str(r.next()))
         \\
     ;
-    for ([_]TestModule{ region, marker }) |shape| {
-        try expectPrivateSaying(stealing, &.{shape}, "state of Rng is private to rng");
-        try expectProjectCompiles(using, &.{shape});
-    }
+    try expectPrivateSaying(stealing, &.{rng}, "state of Rng is private to rng");
+    try expectProjectCompiles(using, &.{rng});
 }
 
 test "a namespaced constant resolves through the import that bound it" {
@@ -1726,7 +1710,7 @@ test "a namespaced constant resolves through the import that bound it" {
     // reaches it — every dotted call is parsed as a method and
     // resolved on the other path, which the next test covers.
     const constant_module: TestModule = .{ .name = "sizes", .source =
-        \\const width = 80
+        \\pub const width = 80
         \\
     };
     var files: TestLoader = .{ .modules = &.{constant_module} };
@@ -2201,7 +2185,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // A module whose bytes are not text is refused at the import that
     // asked for it, naming the file it could not become.
     var binary: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "func area() -> i64:\n    return \x00\n" },
+        .{ .name = "geo", .source = "pub func area() -> i64:\n    return \x00\n" },
     } };
     var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), script);
     defer not_text.deinit();
@@ -2230,7 +2214,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
 test "std is a namespace, not a reserved name: a sibling module may be called math" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> i64:\n    return 42\n" },
+        .{ .name = "math", .source = "pub func answer() -> i64:\n    return 42\n" },
     } };
 
     // `import math` is the file beside the program.  The library takes
@@ -2303,8 +2287,8 @@ test "two imports may not share a last segment, and the alias is the named remed
     // refusal offers `as`, and taking the offer compiles.
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
-        .{ .name = "blocks.shapes", .source = "func area() -> i64:\n    return 9\n" },
+        .{ .name = "geo.shapes", .source = "pub func area() -> i64:\n    return 4\n" },
+        .{ .name = "blocks.shapes", .source = "pub func area() -> i64:\n    return 9\n" },
     } };
 
     var collision = try compile_mod.compileProject(testing.allocator,
@@ -2340,7 +2324,7 @@ test "two imports may not share a last segment, and the alias is the named remed
 test "one module, one binding: a program cannot import geo.shapes under two names" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
+        .{ .name = "geo.shapes", .source = "pub func area() -> i64:\n    return 4\n" },
         .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> i64:\n    return gs.area()\n" },
     } };
 
@@ -2365,7 +2349,7 @@ test "an aliased module's hint spells the import with its alias" {
     // carries the alias too.
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo.shapes", .source = "func area() -> i64:\n    return 4\n" },
+        .{ .name = "geo.shapes", .source = "pub func area() -> i64:\n    return 4\n" },
         .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> i64:\n    return gs.area()\n" },
     } };
 
@@ -2404,7 +2388,7 @@ test "member imports are checked at the import line" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{.{
         .name = "geo",
-        .source = "struct Point:\n    x: i64\n\nprivate func hidden() -> i64:\n    return 1\n\nfunc span(p: Point) -> i64:\n    return p.x\n",
+        .source = "pub struct Point:\n    pub x: i64\n\nfunc hidden() -> i64:\n    return 1\n\npub func span(p: Point) -> i64:\n    return p.x\n",
     }} };
 
     // A member that does not exist is refused where it was asked for.
@@ -2530,8 +2514,8 @@ test "the routed list comparator requires std lists, not a sibling named lists" 
 test "a missing import is spelled the way the author would have to write it" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> i64:\n    return 42\n" },
-        .{ .name = "user", .source = "import math\n\nfunc go() -> i64:\n    return math.answer()\n" },
+        .{ .name = "math", .source = "pub func answer() -> i64:\n    return 42\n" },
+        .{ .name = "user", .source = "import math\n\npub func go() -> i64:\n    return math.answer()\n" },
     } };
 
     // A sibling math.luc is in the program, so the fix is `import
@@ -2636,9 +2620,9 @@ test "an import cycle compiles; what may not be circular is checked finer" {
     // `specs/modules_spec.zig`.
     const script: types.CompileOptions = .{};
     var ring: TestLoader = .{ .modules = &.{
-        .{ .name = "a", .source = "import b\n\nfunc step(v: i64) -> i64:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
-        .{ .name = "b", .source = "import c\n\nfunc step(v: i64) -> i64:\n    return c.step(v)\n" },
-        .{ .name = "c", .source = "import a\n\nfunc step(v: i64) -> i64:\n    return a.step(v)\n" },
+        .{ .name = "a", .source = "import b\n\npub func step(v: i64) -> i64:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\npub func step(v: i64) -> i64:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\npub func step(v: i64) -> i64:\n    return a.step(v)\n" },
     } };
     var looped = try compile_mod.compileProject(testing.allocator,
         \\import a
@@ -2655,8 +2639,8 @@ test "an import cycle compiles; what may not be circular is checked finer" {
     // means it: a constant that depends on itself through two files
     // terminates with a diagnostic rather than folding forever.
     var constants: TestLoader = .{ .modules = &.{
-        .{ .name = "a", .source = "import b\n\nconst width = b.height + 1\n" },
-        .{ .name = "b", .source = "import a\n\nconst height = a.width + 1\n" },
+        .{ .name = "a", .source = "import b\n\npub const width = b.height + 1\n" },
+        .{ .name = "b", .source = "import a\n\npub const height = a.width + 1\n" },
     } };
     var knotted = try compile_mod.compileProject(testing.allocator,
         \\import a
@@ -2931,27 +2915,27 @@ test "two packages shipping the same file name both load, apart (docs/PACKAGES.m
             .name = "alpha",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/alpha.luc",
-            .source = "import util\n\nfunc scaled(v: i64) -> i64:\n    return util.factor() * v\n",
+            .source = "import util\n\npub func scaled(v: i64) -> i64:\n    return util.factor() * v\n",
         },
         .{
             .name = "beta",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/beta.luc",
-            .source = "import util\n\nfunc shifted(v: i64) -> i64:\n    return util.factor() + v\n",
+            .source = "import util\n\npub func shifted(v: i64) -> i64:\n    return util.factor() + v\n",
         },
         .{
             .name = "util",
             .from = "alpha-1.0.0",
             .root = "alpha-1.0.0",
             .path = ".luce/packages/alpha-1.0.0/util.luc",
-            .source = "func factor() -> i64:\n    return 10\n",
+            .source = "pub func factor() -> i64:\n    return 10\n",
         },
         .{
             .name = "util",
             .from = "beta-1.0.0",
             .root = "beta-1.0.0",
             .path = ".luce/packages/beta-1.0.0/util.luc",
-            .source = "func factor() -> i64:\n    return 100\n",
+            .source = "pub func factor() -> i64:\n    return 100\n",
         },
     } };
     var result = try compile_mod.compileProject(testing.allocator,
@@ -3005,20 +2989,20 @@ test "a package's util and the project's util never answer for each other" {
         .{
             .name = "util",
             .from = "",
-            .source = "func factor() -> i64:\n    return 2\n",
+            .source = "pub func factor() -> i64:\n    return 2\n",
         },
         .{
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import util\n\nfunc measure() -> i64:\n    return util.factor()\n",
+            .source = "import util\n\npub func measure() -> i64:\n    return util.factor()\n",
         },
         .{
             .name = "util",
             .from = "geo-1.2.0",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/util.luc",
-            .source = "func factor() -> i64:\n    return 7\n",
+            .source = "pub func factor() -> i64:\n    return 7\n",
         },
     } };
     var result = try compile_mod.compileProject(testing.allocator,
@@ -3052,7 +3036,7 @@ fn encodePackaged(token: []const u8, util_source: []const u8) ![]u8 {
         .{
             .name = "geo",
             .root = token,
-            .source = "import util\n\nfunc measure() -> i64:\n    return util.factor()\n",
+            .source = "import util\n\npub func measure() -> i64:\n    return util.factor()\n",
         },
         .{
             .name = "util",
@@ -3089,8 +3073,8 @@ test "the artifact cache key moves with a package file and with its resolution (
     // names — so an edited package file moves the key, and so does a
     // resolution change that re-roots the very same bytes.  This test
     // is what the loom cache's invalidation story stands on.
-    const ten = "func factor() -> i64:\n    return 10\n";
-    const eleven = "func factor() -> i64:\n    return 11\n";
+    const ten = "pub func factor() -> i64:\n    return 10\n";
+    const eleven = "pub func factor() -> i64:\n    return 11\n";
 
     const baseline = try encodePackaged("geo-1.2.0", ten);
     defer testing.allocator.free(baseline);

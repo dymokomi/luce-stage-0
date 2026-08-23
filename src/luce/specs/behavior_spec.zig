@@ -5936,7 +5936,7 @@ test "failure: a call that raises leaves nothing where its value would have gone
     // — was fine.  This is the two engines saying the same thing.
     try agree.errors(
         \\struct Cursor:
-        \\    private position: i64
+        \\    position: i64
         \\
         \\    func take(data: list[i64]) -> i64!:
         \\        if self.position >= len(data):

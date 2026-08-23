@@ -333,18 +333,18 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
         \\import shapes
         \\import util
         \\
-        \\func area(r: shapes.Rect) -> i64:
+        \\pub func area(r: shapes.Rect) -> i64:
         \\    return util.scale(r.width * r.height)
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/shapes.luc",
-        \\struct Rect:
-        \\    width: i64
-        \\    height: i64
+        \\pub struct Rect:
+        \\    pub width: i64
+        \\    pub height: i64
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/util.luc",
-        \\func scale(v: i64) -> i64:
+        \\pub func scale(v: i64) -> i64:
         \\    return v * 10
         \\
     );
@@ -404,7 +404,7 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
     // however many times it changes.
     try install.scratch.dir.rename("luce.away", install.scratch.dir, "luce", io);
     try install.write("project/.luce/packages/geo-1.2.0/util.luc",
-        \\func scale(v: i64) -> i64:
+        \\pub func scale(v: i64) -> i64:
         \\    return v * 11
         \\
     );

@@ -241,14 +241,12 @@ test "custom init handles recursive references weak defaults static helpers and 
 
 test "a public custom initializer and private state cross a module boundary" {
     const models: agree.File = .{ .name = "models", .source =
-        \\class User:
-        \\    private:
-        \\        name: str
-        \\    public:
-        \\        init(name: str):
-        \\            self.name = name
-        \\        func greeting() -> str:
-        \\            return "Hello, " + self.name
+        \\pub class User:
+        \\    name: str
+        \\    pub init(name: str):
+        \\        self.name = name
+        \\    pub func greeting() -> str:
+        \\        return "Hello, " + self.name
         \\
     };
     var program = try agree.project(

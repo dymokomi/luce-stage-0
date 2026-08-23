@@ -369,82 +369,67 @@ test "luce.lex.name: a name starts with a letter, and the sentence names the wor
     try expectRejected("func main():\n    print(_x)\n", "luce.lex.name");
 }
 
-test "luce.sema.private: main is the entry and cannot be private" {
-    // VISIBILITY.md D7: the one caller main exists for is the runtime,
-    // which no marker can gate, so the marker could only assert
-    // something false.  `public` on it is inert-legal like any other
-    // restated default.
-    try expectOnlySayingAt(
-        "private func main():\n    return\n",
-        "luce.sema.private",
-        "main is the entry and cannot be private: the runtime starts it",
-        1,
-        14,
-    );
-    try expectCompiles("public func main():\n    return\n");
-}
-
 test "luce.sema.private: a public surface names public types, refused at the declaration" {
     // VISIBILITY.md D4 (Rust's side): only the author of the marks can
     // trip this, and the sentence names both edits that would restore
     // honesty.  The refusal fires in the root module too, where the
     // mark lives in "this file".
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: i64\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub func read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "read is public and answers Inner, which is marked private in this file; mark read private or remove the mark on Inner",
+        "read is public and answers Inner, which is private in this file; remove pub from read or mark Inner pub",
         4,
-        16,
+        20,
     );
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: i64\n\nfunc read(p: Inner) -> i64:\n    return 1\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub func read(p: Inner) -> i64:\n    return 1\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "read is public and takes Inner, which is marked private in this file; mark read private or remove the mark on Inner",
+        "read is public and takes Inner, which is private in this file; remove pub from read or mark Inner pub",
         4,
-        14,
+        18,
     );
     try expectOnlySayingAt(
-        "private struct Inner:\n    n: i64\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub struct Outer:\n    pub held: Inner\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "held of Outer is public and holds Inner, which is marked private in this file; mark held private or remove the mark on Inner",
+        "held of Outer is public and holds Inner, which is private in this file; remove pub from held or mark Inner pub",
         5,
-        11,
+        15,
     );
     // A container in the surface publishes its element exactly as the
     // bare name would.
     try expectRejected(
-        "private struct Inner:\n    n: i64\n\nfunc read() -> list[Inner]:\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub func read() -> list[Inner]:\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
         "luce.sema.private",
     );
     // A map's **key** publishes as its value does, now that a key can
     // be a declared type (docs/ENUMS.md, As built 2026-08-12).
     try expectSaying(
-        "private enum Key:\n    left\n\nfunc table() -> map[Key, i64]:\n    return map[Key, i64]()\n\nfunc main():\n    return\n",
+        "enum Key:\n    left\n\npub func table() -> map[Key, i64]:\n    return map[Key, i64]()\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "table is public and answers Key, which is marked private",
+        "table is public and answers Key, which is private",
     );
     // A function type publishes its complete nested signature too.
     // The outer `func` tag must not hide a private parameter or result
     // from the same D4 check containers receive above.
     try expectSaying(
-        "private struct Inner:\n    n: i64\n\nfunc use(callback: func(Inner) -> i64) -> i64:\n    return 0\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub func use(callback: func(Inner) -> i64) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "use is public and takes Inner, which is marked private",
+        "use is public and takes Inner, which is private",
     );
     try expectSaying(
-        "private struct Inner:\n    n: i64\n\nfunc use(callback: func(i64) -> func(i64) -> Inner) -> i64:\n    return 0\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\npub func use(callback: func(i64) -> func(i64) -> Inner) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "which is marked private",
+        "which is private",
     );
     try expectSaying(
-        "private struct Inner:\n    n: i64\n\nprivate func reveal(n: i64) -> Inner:\n    return Inner(n = n)\n\nfunc expose() -> func(i64) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
+        "struct Inner:\n    n: i64\n\nfunc reveal(n: i64) -> Inner:\n    return Inner(n = n)\n\npub func expose() -> func(i64) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
         "luce.sema.private",
-        "expose is public and answers Inner, which is marked private",
+        "expose is public and answers Inner, which is private",
     );
     // The quiet common case: a private function may traffic in the
     // private type freely, and a private field may hold one.
     try expectCompiles(
-        "private struct Inner:\n    n: i64\n\nprivate func read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    private held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
+        "struct Inner:\n    n: i64\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
     );
 }
 
@@ -3428,12 +3413,12 @@ test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
 
 test "luce.sema.private: a public alias cannot expose a private nominal type" {
     try expectSaying(
-        "private struct Secret:\n    value: i64\n\nalias PublicSecret = Secret\n\nfunc main():\n    return\n",
+        "struct Secret:\n    value: i64\n\npub alias PublicSecret = Secret\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "alias PublicSecret is public and names Secret",
     );
     try expectCompiles(
-        "private struct Secret:\n    value: i64\n\nprivate alias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
+        "struct Secret:\n    value: i64\n\nalias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
     );
 }
 
@@ -6972,14 +6957,14 @@ test "luce.sema.const: a member folds, and Method(n) does not" {
     );
 }
 
-test "private on an enum gates nothing inside its own file" {
+test "pub on an enum gates nothing inside its own file" {
     // Visibility is about the module boundary and there is no smaller
-    // one (VISIBILITY.md D1), so the mark is inert here.  What it does
-    // across a boundary — the type, a member, the constructor and a
-    // namespace function all withheld by name — needs two files, and
-    // is proved in `compile/test.zig`.
+    // one (VISIBILITY.md D1), so `pub` is inert here.  What withholding
+    // does across a boundary — the type, a member, the constructor and a
+    // namespace function all reached only when marked — needs two files,
+    // and is proved in `compile/test.zig`.
     try expectCompiles(
-        \\private enum Method:
+        \\pub enum Method:
         \\    stored
         \\    deflated
         \\
@@ -8960,7 +8945,7 @@ test "class: deinit has no parameters result fallibility or visibility" {
     , "luce.sema.class.lifecycle", "deinit takes no parameters or result");
     try expectSaying(
         \\class Resource:
-        \\    public deinit:
+        \\    pub deinit:
         \\        return
         \\func main():
         \\    return

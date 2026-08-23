@@ -6,8 +6,9 @@ A file may contain `import` lines and file-scope `alias`, `const`,
 `struct`, `class`, `interface`, `enum`, `union`, and `func` declarations in any
 order. It has no executable top-level statements and no top-level `var`.
 
-Each declaration form may carry a
-[visibility](#visibility) word. Without one it is public.
+Each declaration form may carry the
+[`pub`](#visibility) marker. Without it, the declaration is private to its
+file.
 
 ## Entry
 
@@ -30,7 +31,7 @@ These are the only entry forms.
 
 ```text
 alias Name = Type
-private alias Name = Type
+pub alias Name = Type
 ```
 
 An alias is a transparent second spelling for the complete type on the right.
@@ -38,8 +39,8 @@ It is checked eagerly and erased before runtime. Aliases may chain and refer
 forward; cycles, unknown targets, reserved names, top-level collisions, and
 privacy violations are rejected.
 
-The declaration is file-scoped and public by default. `private alias` keeps
-the name inside the file; `public alias` states the default explicitly. See
+The declaration is file-scoped and private by default. `pub alias` exposes
+the name to importers; an unmarked alias stays inside the file. See
 [Type aliases](../types/#type-aliases) for construction, namespaces, modules,
 and the exact diagnostic matrix.
 
@@ -78,24 +79,18 @@ declarations.
 ```
 struct Name:
     field: Type
-    private field: Type
+    pub field: Type
     ...
 
-    private:
-        field: Type
-        static func member(...):
-            ...
-
-    func method(...):
+    pub func method(...):
         ...
     static func member(...):
         ...
 ```
 
 Fields, implied-self methods and static namespace functions, in one indented block. Construction
-names every field. A member may carry a [visibility](#visibility) word
-of its own, or sit in a region that carries one for the group; without
-either it is public.
+names every field. A member may carry a [`pub`](#visibility) marker of
+its own; without it, the member is private to the file.
 
 ## class {#class}
 
@@ -323,65 +318,57 @@ the receiver is not hidden in the result shape.
 
 ## Visibility {#visibility}
 
-A declaration is **public** unless it says `private`. Both words are
-keywords, both are written in full, and `public` where public is
-already the default is legal and inert.
+A declaration is **private to its file** unless it says `pub`. `pub` is
+the one visibility word, written in full immediately before the name it
+exposes; there is no word for the default.
 
 ```
-private func name(...)        public func name(...)
-private alias Name = Type     public alias Name = Type
-private const name = expr     public const name = expr
-private struct Name:          public struct Name:
-private class Name:           public class Name:
-private field: Type           public field: Type
+pub func name(...)
+pub alias Name = Type
+pub const name = expr
+pub struct Name:
+pub class Name:
+pub field: Type
 ```
 
-Inside a `struct`, and nowhere else, a **region** label opens an
-indented block of members — fields and functions alike — and every
-member of the block takes the label's visibility.
+There is no region form. Each declaration and member states its own
+visibility on its own line, so reading any one line tells the whole truth
+about that member.
 
 ```
-struct Name:
-    private:
-        field: Type
+pub struct Name:
+    pub field: Type
+    hidden: Type
 
-        func member(...):
-            ...
+    pub func member(...):
+        ...
 ```
 
-Labels may repeat and appear in any order, and a member outside every
-region takes the default. The parser resolves each label onto its
-members, so a region and a per-declaration word produce exactly the
-same program.
-
-Exactly one word per declaration, and the word stands only where a
-declaration does.
+Exactly one `pub` per declaration, and it stands only where a declaration
+does.
 
 | Written | Refusal |
 |---|---|
-| `public private func f()` | `one visibility word per declaration` |
-| A word on a local `let`, `var` or parameter | `visibility applies to file-scope declarations and struct members` |
-| `private:` at file scope | `a visibility region belongs inside a struct; at file scope mark each declaration` |
-| A word on a member already inside a region | `NAME is inside a private region, which already says it` |
-| A region label with no member under it | the refusal every empty block gets |
+| `pub pub func f()` | `one `pub` per declaration` |
+| A `pub` on a local `let`, `var` or parameter | `visibility applies to file-scope declarations and struct members` |
+| `pub:` at file scope | `` `pub` marks one declaration; write it before each name, not as a region `` |
+| `static pub func f()` inside a struct | `visibility comes before static: write 'pub static func', not 'static pub func'` |
 
-All five are parse rules, under `luce.parse.*`.
+All are parse rules, under `luce.parse.*`.
 
 ```luce fail
-struct Box:
-    private:
-        private value: i64
+pub:
+    const value = 1
 
 func main():
-    var b = Box(value = 1)
-    print(str(b.value))
+    print(str(value))
 ```
 
 ```output
 luce: compile failed
-main.luc:3:9: value is inside a private region, which already says it [luce.parse.expected]
-            private value: i64
-            ^~~~~~~
+main.luc:1:1: `pub` marks one declaration; write it before each name, not as a region [luce.parse.top]
+    pub:
+    ^~~~
 ```
 
 What a marker *means* across a module boundary — reference sites,
@@ -653,8 +640,8 @@ because it remains immutable for the
 runtime's life. Direct or aliased mutation traps
 `immutable_object` before writing.
 
-Constants share the module namespace and visibility rules. A public
-container may not expose a private element type, just as a public
+Constants share the module namespace and visibility rules. A `pub`
+container may not expose a private element type, just as a `pub`
 function signature may not expose one.
 
 ## Scope

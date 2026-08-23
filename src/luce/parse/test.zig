@@ -233,8 +233,8 @@ test "member imports record their module, members, and renames" {
 test "type aliases parse their complete target and visibility" {
     var parsed = try expectClean(
         \\alias UserId = i64
-        \\private alias Names = list[str]
-        \\public alias Callback = func(UserId, Names) -> str
+        \\alias Names = list[str]
+        \\pub alias Callback = func(UserId, Names) -> str
         \\alias MaybeCallback = Callback?
         \\
         \\func main():
@@ -246,7 +246,7 @@ test "type aliases parse their complete target and visibility" {
     try testing.expectEqual(@as(usize, 4), parsed.program.aliases.len);
     try testing.expectEqualStrings("UserId", parsed.program.aliases[0].name);
     try testing.expectEqualStrings("i64", parsed.program.aliases[0].target.name);
-    try testing.expectEqual(ast.Visibility.none, parsed.program.aliases[0].visibility);
+    try testing.expectEqual(ast.Visibility.private, parsed.program.aliases[0].visibility);
 
     const names = parsed.program.aliases[1];
     try testing.expectEqual(ast.Visibility.private, names.visibility);
@@ -381,32 +381,32 @@ test "const is file-scope, while let and var are function-scope" {
     try expectDiagnostics("var counter = 0\n", &.{
         .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "file scope declares with const" },
     });
-    try expectDiagnostics("private let width = 80\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 9, .contains = "file scope declares with const" },
+    try expectDiagnostics("pub let width = 80\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 5, .contains = "file scope declares with const" },
     });
     try expectDiagnostics("func main():\n    const width = 80\n    let okay = 1\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "use let or var inside a function" },
     });
 }
 
-test "visibility markers parse onto every declaration form, and unmarked stays none" {
+test "visibility markers parse onto every declaration form, and unmarked stays private" {
     var parsed = try expectClean(
-        \\private const seed = 41
-        \\public const answer = seed + 1
+        \\const seed = 41
+        \\pub const answer = seed + 1
         \\const quiet = 0
         \\
-        \\private struct Inner:
+        \\struct Inner:
         \\    n: i64
         \\
         \\struct Session:
         \\    name: str
-        \\    private token: i64 = 0
-        \\    public func label() -> str:
+        \\    token: i64 = 0
+        \\    pub func label() -> str:
         \\        return self.name
-        \\    private func stamp() -> i64:
+        \\    func stamp() -> i64:
         \\        return self.token
         \\
-        \\private func helper() -> i64:
+        \\func helper() -> i64:
         \\    return 1
         \\
         \\func main():
@@ -417,140 +417,43 @@ test "visibility markers parse onto every declaration form, and unmarked stays n
     const program = parsed.program;
     try testing.expectEqual(ast.Visibility.private, program.constants[0].visibility);
     try testing.expectEqual(ast.Visibility.public, program.constants[1].visibility);
-    try testing.expectEqual(ast.Visibility.none, program.constants[2].visibility);
+    try testing.expectEqual(ast.Visibility.private, program.constants[2].visibility);
     try testing.expectEqual(ast.Visibility.private, program.structs[0].visibility);
-    try testing.expectEqual(ast.Visibility.none, program.structs[1].visibility);
+    try testing.expectEqual(ast.Visibility.private, program.structs[1].visibility);
     const session = program.structs[1];
-    try testing.expectEqual(ast.Visibility.none, session.fields[0].visibility);
+    try testing.expectEqual(ast.Visibility.private, session.fields[0].visibility);
     try testing.expectEqual(ast.Visibility.private, session.fields[1].visibility);
     try testing.expectEqual(ast.Visibility.public, session.functions[0].visibility);
     try testing.expectEqual(ast.Visibility.private, session.functions[1].visibility);
     try testing.expectEqual(ast.Visibility.private, program.functions[0].visibility);
-    try testing.expectEqual(ast.Visibility.none, program.functions[1].visibility);
-}
-
-test "a region dissolves onto its members, and equals the per-declaration marker" {
-    // The memo's own Rng shape: one private region over the field,
-    // members after the region back at the default (VISIBILITY.md §5).
-    var parsed = try expectClean(
-        \\struct Rng:
-        \\    private:
-        \\        state: i64
-        \\
-        \\    func next() -> i64:
-        \\        return self.state
-        \\
-        \\func main():
-        \\    return
-        \\
-    );
-    defer parsed.deinit();
-    const rng = parsed.program.structs[0];
-    try testing.expectEqual(ast.Visibility.private, rng.fields[0].visibility);
-    try testing.expectEqual(ast.Visibility.none, rng.functions[0].visibility);
-
-    // Labels repeat and appear in any order; funcs sit in regions too.
-    var mixed = try expectClean(
-        \\struct Handle:
-        \\    private:
-        \\        slot: i64
-        \\    public:
-        \\        label: str
-        \\    private:
-        \\        generation: i64
-        \\        func raw() -> i64:
-        \\            return self.slot
-        \\
-        \\func main():
-        \\    return
-        \\
-    );
-    defer mixed.deinit();
-    const handle = mixed.program.structs[0];
-    try testing.expectEqual(ast.Visibility.private, handle.fields[0].visibility);
-    try testing.expectEqual(ast.Visibility.public, handle.fields[1].visibility);
-    try testing.expectEqual(ast.Visibility.private, handle.fields[2].visibility);
-    try testing.expectEqual(ast.Visibility.private, handle.functions[0].visibility);
+    try testing.expectEqual(ast.Visibility.private, program.functions[1].visibility);
 }
 
 test "the visibility refusals land where the memo puts them" {
-    // A marker on a local, a parameter, or any statement (§5).
+    // `pub` marks a file-scope declaration or a struct member — not a
+    // local, a parameter, or any statement.
     const rule = "visibility applies to file-scope declarations and struct members";
-    try expectDiagnostics("func main():\n    public let x = 1\n", &.{
+    try expectDiagnostics("func main():\n    pub let x = 1\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = rule },
     });
-    try expectDiagnostics("func f(private x: i64):\n    return\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("func f(pub x: i64):\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = rule },
     });
-    // One visibility word per declaration — file scope and struct alike.
-    try expectDiagnostics("public private func f():\n    return\n", &.{
-        .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = "one visibility word" },
+    // One `pub` per declaration — file scope and struct alike.
+    try expectDiagnostics("pub pub func f():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 5, .contains = "one `pub` per declaration" },
     });
-    try expectDiagnostics("struct P:\n    public public n: i64\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.expected", .line = 2, .column = 12, .contains = "one visibility word" },
+    try expectDiagnostics("struct P:\n    pub pub n: i64\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = "one `pub` per declaration" },
     });
-    // A region label at module level points at per-declaration markers.
-    try expectDiagnostics("private:\n    func f():\n        return\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "a visibility region belongs inside a struct" },
+    // `pub` marks each name, not a region opened with a colon.
+    try expectDiagnostics("pub:\n    func f():\n        return\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "`pub` marks one declaration" },
     });
-    // A marker inside a region: the block already said it.
-    try expectDiagnostics(
-        "struct Rng:\n    private:\n        private state: i64\n\nfunc main():\n    return\n",
-        &.{.{
-            .code = "luce.parse.expected",
-            .line = 3,
-            .column = 9,
-            .contains = "state is inside a private region, which already says it",
-        }},
-    );
-    try expectDiagnostics(
-        "struct Rng:\n    private:\n        public func raw() -> i64:\n            return 1\n\nfunc main():\n    return\n",
-        &.{.{
-            .code = "luce.parse.expected",
-            .line = 3,
-            .column = 9,
-            .contains = "raw is inside a private region, which already says it",
-        }},
-    );
-    // An empty region is refused the way every empty block is; a
-    // region whose "members" sit at region level gets the block shape
-    // sentence every unindented block gets.
-    try expectDiagnostics(
-        "struct Rng:\n    private:\n\nfunc main():\n    return\n",
-        &.{.{
-            .code = "luce.parse.expected",
-            .line = 4,
-            .column = 1,
-            .contains = "this 'private:' block is empty",
-        }},
-    );
-    try expectDiagnostics(
-        "struct Rng:\n    private:\n    n: i64\n\nfunc main():\n    return\n",
-        &.{.{
-            .code = "luce.parse.expected",
-            .line = 3,
-            .column = 5,
-            .contains = "expected an indented block under 'private:'",
-        }},
-    );
     // A marker fronting something unmarkable names what it expected.
-    try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("pub import math\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, alias, const, struct, interface, enum, or union" },
     });
-}
-
-test "a marked member inside a region still parses, carrying the region's word" {
-    // One mistake, one message — and the member is not lost: it lands
-    // with the region's visibility, so recovery reads the struct the
-    // author meant.
-    var parsed = try parseText(
-        "struct Rng:\n    private:\n        private state: i64\n\nfunc main():\n    return\n",
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
-    const rng = parsed.program.structs[0];
-    try testing.expectEqual(@as(usize, 1), rng.fields.len);
-    try testing.expectEqual(ast.Visibility.private, rng.fields[0].visibility);
 }
 
 test "array shape wildcards parse in annotations" {
@@ -1891,7 +1794,7 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\    x: f64
         \\    func length() -> f64:
         \\        return self.x
-        \\    private static func origin() -> Point:
+        \\    static func origin() -> Point:
         \\        return Point(x = 0.0)
         \\
         \\func main():
@@ -2227,22 +2130,21 @@ test "plain members imply self and static is an AST distinction" {
     try testing.expect(!parsed.program.functions[0].is_static);
 }
 
-test "static composes with direct visibility, regions, and enums" {
+test "static composes with direct visibility and enums" {
     var parsed = try expectClean(
         \\struct Tools:
-        \\    private static func hidden(value: i64) -> i64:
+        \\    static func hidden(value: i64) -> i64:
         \\        return value
-        \\    public:
-        \\        static func shown() -> i64:
-        \\            return 1
-        \\        func read() -> i64:
-        \\            return 2
+        \\    pub static func shown() -> i64:
+        \\        return 1
+        \\    pub func read() -> i64:
+        \\        return 2
         \\
         \\enum Method:
         \\    stored
-        \\    private static func of(value: i64) -> Method:
+        \\    static func of(value: i64) -> Method:
         \\        return Method.stored
-        \\    public func compressed() -> bool:
+        \\    pub func compressed() -> bool:
         \\        return self != Method.stored
         \\
         \\func main():
@@ -2339,11 +2241,11 @@ test "static is member-only, ordered, and recovers at the next declaration" {
         }},
     );
     try expectDiagnostics(
-        "private static func helper():\n    return\n",
+        "pub static func helper():\n    return\n",
         &.{.{
             .code = "luce.parse.static",
             .line = 1,
-            .column = 9,
+            .column = 5,
             .contains = "file-scope function is already a namespace function",
         }},
     );
@@ -2357,7 +2259,7 @@ test "static is member-only, ordered, and recovers at the next declaration" {
         }},
     );
     try expectDiagnostics(
-        "struct Tools:\n    static private func hidden():\n        return\n",
+        "struct Tools:\n    static pub func hidden():\n        return\n",
         &.{.{
             .code = "luce.parse.static",
             .line = 2,
@@ -2393,16 +2295,6 @@ test "static is member-only, ordered, and recovers at the next declaration" {
     try testing.expectEqualStrings("okay", recovered.program.structs[0].functions[0].name);
     try testing.expect(recovered.program.structs[0].functions[0].is_static);
     try testing.expectEqualStrings("main", recovered.program.functions[0].name);
-
-    var redundant = try parseText(
-        "struct Tools:\n    private:\n        public static func shown():\n            return\n",
-    );
-    defer redundant.deinit();
-    try testing.expectEqual(@as(usize, 1), redundant.diagnostics.count());
-    try testing.expectEqualStrings("luce.parse.expected", redundant.diagnostics.at(0).?.code);
-    try testing.expectEqual(@as(usize, 1), redundant.program.structs[0].functions.len);
-    try testing.expect(redundant.program.structs[0].functions[0].is_static);
-    try testing.expectEqual(ast.Visibility.private, redundant.program.structs[0].functions[0].visibility);
 
     var enum_recovered = try parseText(
         "enum Method:\n    stored\n    static value\n    static func okay() -> Method:\n        return Method.stored\n\nfunc main():\n    return\n",
@@ -2473,7 +2365,7 @@ test "an enum declares members, a width, and the functions a struct declares" {
 
 test "an enum takes a visibility marker, and its members do not" {
     var parsed = try expectClean(
-        \\private enum Method:
+        \\pub enum Method:
         \\    stored
         \\
         \\func main():
@@ -2481,13 +2373,13 @@ test "an enum takes a visibility marker, and its members do not" {
         \\
     );
     defer parsed.deinit();
-    try testing.expectEqual(ast.Visibility.private, parsed.program.enums[0].visibility);
+    try testing.expectEqual(ast.Visibility.public, parsed.program.enums[0].visibility);
 
     // A member is what the type *is*, and a match arm cannot name one
     // the file it stands in cannot see.
     try expectDiagnostics(
         \\enum Method:
-        \\    private stored
+        \\    pub stored
         \\
         \\func main():
         \\    return
@@ -2497,20 +2389,6 @@ test "an enum takes a visibility marker, and its members do not" {
         .line = 2,
         .column = 5,
         .contains = "an enum member is part of the type and is always visible",
-    }});
-    try expectDiagnostics(
-        \\enum Method:
-        \\    private:
-        \\        stored
-        \\
-        \\func main():
-        \\    return
-        \\
-    , &.{.{
-        .code = "luce.parse.expected",
-        .line = 2,
-        .column = 5,
-        .contains = "an enum's members are the type and are always visible",
     }});
 }
 
@@ -2570,7 +2448,7 @@ test "a union declares members, field lists, and the functions a struct declares
 
 test "a union takes a visibility marker, and its members do not" {
     var parsed = try expectClean(
-        \\private union Shape:
+        \\pub union Shape:
         \\    circle(radius: f64)
         \\
         \\func main():
@@ -2578,13 +2456,13 @@ test "a union takes a visibility marker, and its members do not" {
         \\
     );
     defer parsed.deinit();
-    try testing.expectEqual(ast.Visibility.private, parsed.program.unions[0].visibility);
+    try testing.expectEqual(ast.Visibility.public, parsed.program.unions[0].visibility);
 
     // A member is what the type *is*, and a match arm cannot name one
     // the file it stands in cannot see.
     try expectDiagnostics(
         \\union Shape:
-        \\    private circle(radius: f64)
+        \\    pub circle(radius: f64)
         \\
         \\func main():
         \\    return
@@ -2594,20 +2472,6 @@ test "a union takes a visibility marker, and its members do not" {
         .line = 2,
         .column = 5,
         .contains = "a union member is part of the type and is always visible",
-    }});
-    try expectDiagnostics(
-        \\union Shape:
-        \\    private:
-        \\        circle(radius: f64)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , &.{.{
-        .code = "luce.parse.expected",
-        .line = 2,
-        .column = 5,
-        .contains = "a union's members are the type and are always visible",
     }});
 }
 

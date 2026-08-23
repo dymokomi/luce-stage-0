@@ -4,6 +4,42 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.20 — default-private and `pub`
+
+Visibility flips to match the language Luce is growing into: a declaration
+is now **private to its file unless it says `pub`**, and `pub` is the one
+visibility word — `public`, `private`, and the `private:`/`public:` struct
+regions are gone. The change is front-end only; nothing below checking
+gains a concept, and the module format and host ABI are untouched.
+
+- **Default private, `pub` to expose.** A file-scope `func`, `const`,
+  `struct`, `class`, `enum`, `union`, `interface`, or `alias`, and every
+  struct field, is private to its declaring file; write `pub` before it to
+  reach it through an `import`. The unit is still the file — a file always
+  trusts itself, and `pub` is inert within one file. The public-surface,
+  construction, opaque-type, and constant-folding rules are unchanged in
+  meaning; only the marker moved.
+
+- **One marker, no regions.** There is no word for the default and no
+  region form: each declaration and member states its own visibility on its
+  own line. `pub pub` is `one \`pub\` per declaration`; a `pub:` block is
+  refused with `\`pub\` marks one declaration; write it before each name,
+  not as a region`; `pub` on a local is still `visibility applies to
+  file-scope declarations and struct members`.
+
+- **`main` and tests.** `main` needs no marking — the runtime starts it by
+  name, so the default (private) is exactly right. A `luce test` case must
+  be `pub func test_*()`; an unmarked `test_*` is refused rather than
+  silently skipped: `test_x is not public and would never run; mark it pub,
+  or rename it if it is a helper`.
+
+- **Whole tree migrated.** The standard library, bundled packages,
+  examples, and the self-host seed are migrated behavior-preserving: every
+  name that was public is now `pub`, every internal says nothing. The
+  public-surface check still refuses a `pub` declaration that names a
+  private type, now worded `… which is private in this file; remove pub
+  from X or mark Y pub`.
+
 ## 0.19 — suites, lambdas, and value matches
 
 A coherent revision of the stage-0 seed around three arrows that no longer

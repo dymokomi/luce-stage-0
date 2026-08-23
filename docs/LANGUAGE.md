@@ -268,16 +268,16 @@ Constants are folded once; supported flat list/map/rank-one-array constants
 become immutable per-runtime program roots. [CONSTANTS.md](CONSTANTS.md)
 specifies what can fold and what may escape.
 
-Declarations are public unless marked `private`. Private access is file-scoped;
-public signatures cannot expose private types. Structure and class fields may
-use explicit visibility regions. [VISIBILITY.md](VISIBILITY.md) carries the
-complete rule.
+Declarations are private to their file unless marked `pub`. Privacy is
+file-scoped; `pub` signatures cannot expose private types. `pub` is the one
+visibility marker — there is no region form; each field states its own.
+[VISIBILITY.md](VISIBILITY.md) carries the complete rule.
 
 `import std.name` loads an embedded standard module. A rootless source imports
 single-segment sibling modules. A `luce.yaml` project enables root-relative
 dotted modules and exact-version package requirements. Imports may bind with
 `as`; each module is loaded once under an opaque root identity.
-`from name import a, b` binds the named public members bare — any
+`from name import a, b` binds the named `pub` members bare — any
 declaration kind, with an optional per-member `as` — while leaving the
 module namespace unbound; members are checked on the import line, and a
 member binding collides like any other name. The current

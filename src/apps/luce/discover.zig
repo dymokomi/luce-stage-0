@@ -304,7 +304,7 @@ fn collect(
     if (reached == .swept and !std.mem.endsWith(u8, path, claiming_suffix)) return .helper;
     return .{ .refused = try one(scratch, try std.fmt.allocPrint(
         scratch,
-        "{s}: no tests here; a test is a public func test_*() taking nothing",
+        "{s}: no tests here; a test is a pub func test_*() taking nothing",
         .{path},
     )) };
 }
@@ -317,10 +317,10 @@ fn refusalFor(
     declaration: ast.FuncDecl,
 ) Error!?[]const u8 {
     const at = try position(scratch, diagnostics, path, declaration.name_span);
-    if (declaration.visibility == .private) {
+    if (declaration.visibility != .public) {
         return try std.fmt.allocPrint(
             scratch,
-            "{s}: {s} is private and would never run; drop private, or rename it if it is a helper",
+            "{s}: {s} is not public and would never run; mark it pub, or rename it if it is a helper",
             .{ at, declaration.name },
         );
     }
@@ -406,24 +406,24 @@ test "a test is a top-level public zero-parameter test_* answering nothing or !"
     const scratch = arena.allocator();
 
     const decided = try decide(scratch, "tests/geo_test.luc",
-        \\func helper(value: i64) -> i64:
+        \\pub func helper(value: i64) -> i64:
         \\    return value
         \\
-        \\func test_plain():
+        \\pub func test_plain():
         \\    assert(helper(1) == 1)
         \\
-        \\func test_fallible() -> !:
+        \\pub func test_fallible() -> !:
         \\    assert(true)
         \\
-        \\public func test_said_so():
+        \\pub func test_said_so():
         \\    assert(true)
         \\
         \\func main():
         \\    print("ignored")
         \\
     , .swept);
-    // Declaration order, helpers and `main` left alone, and `public`
-    // is the default restated rather than a fourth thing.
+    // Declaration order, and a `pub func` that is not a test (`helper`)
+    // and `main` are both left alone: only the `test_*` names run.
     try testing.expectEqual(@as(usize, 3), decided.tests.len);
     try testing.expectEqualStrings("test_plain", decided.tests[0]);
     try testing.expectEqualStrings("test_fallible", decided.tests[1]);
@@ -439,15 +439,15 @@ test "a test that cannot run is refused by name, and the sentence names the fix"
         .{
             // The one that matters most: it would otherwise be a test
             // that silently never ran.
-            .source = "private func test_hidden():\n    assert(true)\n",
-            .says = "test_hidden is private and would never run",
+            .source = "func test_hidden():\n    assert(true)\n",
+            .says = "test_hidden is not public and would never run",
         },
         .{
-            .source = "func test_parameterized(value: i64):\n    assert(value == 1)\n",
+            .source = "pub func test_parameterized(value: i64):\n    assert(value == 1)\n",
             .says = "test_parameterized takes 1 parameter; a test takes none",
         },
         .{
-            .source = "func test_answers() -> i64:\n    return 1\n",
+            .source = "pub func test_answers() -> i64:\n    return 1\n",
             .says = "test_answers answers a value",
         },
         .{
@@ -506,7 +506,7 @@ test "a directory is walked bytewise, into its subdirectories, and dot entries a
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const root = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
 
-    const body = "func test_one():\n    assert(true)\n";
+    const body = "pub func test_one():\n    assert(true)\n";
     for ([_][]const u8{ "zeta_test.luc", "alpha_test.luc", "middle_test.luc" }) |name| {
         try scratch.dir.writeFile(testing.io, .{ .sub_path = name, .data = body });
     }

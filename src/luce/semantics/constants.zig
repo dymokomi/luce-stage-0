@@ -69,7 +69,7 @@ pub fn foldAll(analyzer: *Analyzer) Error!void {
                 try analyzer.fail(
                     "luce.sema.private",
                     info.declaration.name_span,
-                    "{s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                    "{s} is public and holds {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                     .{
                         info.declaration.name,
                         hidden,
@@ -1342,7 +1342,7 @@ fn foldConstruct(
             try analyzer.fail(
                 "luce.sema.private",
                 span,
-                "{s} cannot be constructed here: {s} is marked private in {s} and has no default; construction belongs to a public function of {s}",
+                "{s} cannot be constructed here: {s} is private in {s} and has no default; construction belongs to a public function of {s}",
                 .{
                     decl_info.declaration.name,
                     layout.fields[field_index].name,

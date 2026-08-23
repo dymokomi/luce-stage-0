@@ -173,18 +173,18 @@ program.
 
 ## 4. Choose the package's public surface
 
-Declarations are public unless marked `private`. Treat the entry module as
-the package's front door: keep `greet.hello` small, and keep representation
-helpers private or in separate modules.
+Declarations are private to their file unless marked `pub`. Treat the entry
+module as the package's front door: keep `greet.hello` small and `pub`, and
+leave representation helpers unmarked or in separate modules.
 
-```luce module file=private.luc
-private func normalize(name: str) -> str:
+```luce module file=internal.luc
+func normalize(name: str) -> str:
     return name
 ```
 
-A consumer cannot call a private declaration. A public function also cannot
+A consumer cannot call a private declaration. A `pub` function also cannot
 expose a private type in its signature. If callers need to create a value
-without knowing its fields, provide a public factory and keep the fields
+without knowing its fields, provide a `pub` factory and keep the fields
 private. [Access Control](/guide/access-control/) explains the language
 rules; the [modules reference](/guide/reference/modules/#visibility) lists every
 diagnostic.

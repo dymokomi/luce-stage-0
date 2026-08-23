@@ -186,10 +186,10 @@ test "an interface alias keeps heterogeneous list and map dispatch" {
 
 test "public aliases cross a module boundary without runtime identity" {
     const models: agree.File = .{ .name = "models", .source =
-        \\alias UserId = i64
-        \\alias Users = list[UserId]
+        \\pub alias UserId = i64
+        \\pub alias Users = list[UserId]
         \\
-        \\func answer() -> UserId:
+        \\pub func answer() -> UserId:
         \\    return 42
         \\
     };
@@ -209,16 +209,16 @@ test "public aliases cross a module boundary without runtime identity" {
 
 test "a public alias may re-export an imported nominal type" {
     const models: agree.File = .{ .name = "models", .source =
-        \\struct User:
-        \\    id: i64
+        \\pub struct User:
+        \\    pub id: i64
         \\
     };
     const facade: agree.File = .{ .name = "facade", .source =
         \\import models
         \\
-        \\alias User = models.User
+        \\pub alias User = models.User
         \\
-        \\func answer() -> User:
+        \\pub func answer() -> User:
         \\    return models.User(id = 42)
         \\
     };

@@ -317,7 +317,7 @@ test "what the root may not reach: the model's own fields, and the factory that 
         \\    let room = world.Room(name = "Cell")
         \\    print(room.name)
         \\
-    , "Room cannot be constructed here: description is marked private in world and has no default; construction belongs to a public function of world");
+    , "Room cannot be constructed here: description is private in world and has no default; construction belongs to a public function of world");
 }
 
 /// The program's own modules, as the compiler's loader sees them.

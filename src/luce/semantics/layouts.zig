@@ -587,7 +587,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                     try self.fail(
                         "luce.sema.private",
                         field.type_name.span,
-                        "{s} of {s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                        "{s} of {s} is public and holds {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                         .{
                             field.name,
                             declaration.name,
@@ -716,7 +716,7 @@ pub fn settleVariantMembers(self: *Analyzer) Error!void {
                         try self.fail(
                             "luce.sema.private",
                             field.type_name.span,
-                            "{s} of {s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                            "{s} of {s} is public and holds {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                             .{
                                 field.name,
                                 declaration.name,

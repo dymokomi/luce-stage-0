@@ -534,10 +534,12 @@ fn standardModule(repository: Repository, module: []const u8) !Names {
     while (lines.next()) |line| {
         // Every public top-level declaration is surface a page has to
         // name — the nominal types as much as the functions, now that
-        // a module's main door can be a class with an init.
+        // a module's main door can be a class with an init.  Exposure is
+        // `pub` and nothing else, so an unmarked top-level declaration is
+        // this module's own business and never reaches the page.
         for ([_][]const u8{
-            "func ",      "const ", "class ", "struct ",
-            "interface ", "enum ",  "union ", "alias ",
+            "pub func ",      "pub const ", "pub class ", "pub struct ",
+            "pub interface ", "pub enum ",  "pub union ", "pub alias ",
         }) |keyword| {
             if (!std.mem.startsWith(u8, line, keyword)) continue;
             const rest = line[keyword.len..];

@@ -272,7 +272,7 @@ fn collectFunction(
                 try self.fail(
                     "luce.sema.private",
                     parameter.type_name.span,
-                    "{s} is public and takes {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                    "{s} is public and takes {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                     .{ declaration.name, hidden, naming.markedIn(self, module), declaration.name, hidden },
                 );
                 continue;
@@ -313,7 +313,7 @@ fn collectFunction(
                 try self.fail(
                     "luce.sema.private",
                     written.span,
-                    "{s} is public and answers {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                    "{s} is public and answers {s}, which is private in {s}; remove pub from {s} or mark {s} pub",
                     .{ declaration.name, hidden, naming.markedIn(self, module), declaration.name, hidden },
                 );
                 continue;

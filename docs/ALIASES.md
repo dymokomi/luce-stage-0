@@ -32,13 +32,13 @@ An alias is a file-scope declaration:
 
 ```text
 alias Name = Type
-public alias Name = Type
-private alias Name = Type
+pub alias Name = Type
 ```
 
-It is public by default, like a function or structure. `private alias` keeps
-the name inside its declaring file. An importer that reaches a private alias
-gets `luce.sema.private`; private names are not hidden behind an “unknown
+It is private to its file by default, like a function or structure. `pub
+alias` exposes the name to importers; an unmarked alias stays inside its
+declaring file. An importer that reaches an unexposed alias gets
+`luce.sema.private`; private names are not hidden behind an “unknown
 type” diagnostic.
 
 A public alias may name any public type, including a type imported from

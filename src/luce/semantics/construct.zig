@@ -176,7 +176,7 @@ pub fn lowerConstruct(
             try self.fail(
                 "luce.sema.private",
                 span,
-                "{s} cannot be constructed here: {s} is marked private in {s} and has no default; construction belongs to a public function of {s}",
+                "{s} cannot be constructed here: {s} is private in {s} and has no default; construction belongs to a public function of {s}",
                 .{
                     decl_info.declaration.name,
                     layout.fields[field_index].name,

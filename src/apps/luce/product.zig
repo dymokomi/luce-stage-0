@@ -629,7 +629,7 @@ const OneArchive = struct {
 };
 
 const geo_entries = [_]ZipEntry{
-    .{ .name = "geo.luc", .data = "func area(size: i64) -> i64:\n    return size * size\n" },
+    .{ .name = "geo.luc", .data = "pub func area(size: i64) -> i64:\n    return size * size\n" },
     .{ .name = "luce.yaml", .data = "name: geo\nversion: 1.2.0\n" },
 };
 
@@ -778,7 +778,7 @@ test "package commands create a direct source package and version it" {
     try testing.expect(tree.exists("widget/widget.luc"));
     try testing.expect(!tree.exists("packages/widget/widget.luc"));
     try tree.write("widget/widget.luc",
-        \\func answer() -> i64:
+        \\pub func answer() -> i64:
         \\    return 42
         \\
     );
@@ -1354,10 +1354,10 @@ fn testedProject(gpa: Allocator) !Install {
         \\
     );
     try tree.write("geo.luc",
-        \\func area(width: i64, height: i64) -> i64:
+        \\pub func area(width: i64, height: i64) -> i64:
         \\    return width * height
         \\
-        \\func at(xs: list[i64], index: i64) -> i64:
+        \\pub func at(xs: list[i64], index: i64) -> i64:
         \\    return xs[index]
         \\
     );
@@ -1371,14 +1371,14 @@ fn testedProject(gpa: Allocator) !Install {
         \\func helper(side: i64) -> i64:
         \\    return geo.area(side, side)
         \\
-        \\func test_area_of_unit_square():
+        \\pub func test_area_of_unit_square():
         \\    assert(geo.area(1, 1) == 1)
         \\
-        \\func test_area_of_square():
+        \\pub func test_area_of_square():
         \\    print("checking 5 x 5")
         \\    assert(helper(5) == 25)
         \\
-        \\func test_reads_past_the_end():
+        \\pub func test_reads_past_the_end():
         \\    var xs: list[i64] = [1, 2, 3]
         \\    assert(geo.at(xs, 7) == 0)
         \\
@@ -1386,10 +1386,10 @@ fn testedProject(gpa: Allocator) !Install {
     // The two endings that are not a trap: an error the world raised,
     // and a test that walked out.
     try tree.write("tests/edge_test.luc",
-        \\func test_refuses() -> !:
+        \\pub func test_refuses() -> !:
         \\    error("the world said no")
         \\
-        \\func test_walks_out():
+        \\pub func test_walks_out():
         \\    exit(3)
         \\
     );
@@ -1484,7 +1484,7 @@ test "a green run says so and exits 0" {
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("tests/plain_test.luc",
-        \\func test_arithmetic():
+        \\pub func test_arithmetic():
         \\    assert(2 + 2 == 4)
         \\
     );
@@ -1509,18 +1509,18 @@ test "a discovery refusal and a compile failure are reported, and the healthy fi
     defer tree.deinit(gpa);
 
     try tree.write("tests/a_hidden_test.luc",
-        \\private func test_never_runs():
+        \\func test_never_runs():
         \\    assert(true)
         \\
     );
     try tree.write("tests/b_broken_test.luc",
-        \\func test_typed():
+        \\pub func test_typed():
         \\    let count: i64 = "seven"
         \\    assert(count == 7)
         \\
     );
     try tree.write("tests/c_healthy_test.luc",
-        \\func test_still_ran():
+        \\pub func test_still_ran():
         \\    assert(true)
         \\
     );
@@ -1530,9 +1530,9 @@ test "a discovery refusal and a compile failure are reported, and the healthy fi
     try testing.expectEqual(@as(u8, 1), ran.status);
 
     try testing.expect(ran.saysOut(
-        "tests/a_hidden_test.luc:1:14: test_never_runs is private and would never run",
+        "tests/a_hidden_test.luc:1:6: test_never_runs is not public and would never run",
     ));
-    try testing.expect(ran.saysOut("drop private, or rename it if it is a helper"));
+    try testing.expect(ran.saysOut("mark it pub, or rename it if it is a helper"));
     try testing.expect(ran.saysOut("tests/b_broken_test.luc:2:5:"));
     try testing.expect(ran.saysOut("[luce.sema.type]"));
     // The third file ran anyway, which is the claim.

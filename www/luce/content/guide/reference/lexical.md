@@ -88,12 +88,12 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array[i64, _]); a bindi
 alias    and      break    catch    class    const    continue deinit
 elif     else     enum     extern   false    for      func     if       import
 in       init     interface is     let      match    mutating none
-not      or       private  public  return   self     spawn    static
+not      or       pub      return   self     spawn    static
 struct   true     try      union   var      weak     while
 ```
 
-`private` and `public` mark visibility. Inside a struct they can also be
-region labels (`private:` and `public:`). `self` is the receiver of a
+`pub` marks visibility: a declaration is private to its file unless it says
+`pub`. `self` is the receiver of a
 method. `static` marks a namespace function declared inside a struct,
 enum, or union. `const` declares a file-scope constant; `let` and `var`
 are function-scope bindings. `weak` qualifies non-owning storage. `spawn`

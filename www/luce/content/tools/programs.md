@@ -22,9 +22,10 @@ Sorting, searching and joining a `list[i64]`.
 one program and one `.lc`.
 
 It is a small example of [access control](/guide/reference/modules/):
-`mathx.sorted` is marked `private`, because it exists for `median` and
-for nothing else. `stats.luc` reaches `mean`, `extremes`, `median` and
-`deviation`, and reaching `sorted` would be `luce.sema.private`.
+`mathx.sorted` is left unmarked — private to its file — because it exists
+for `median` and for nothing else, while `mean`, `extremes`, `median` and
+`deviation` are `pub`. `stats.luc` reaches those four, and reaching
+`sorted` would be `luce.sema.private`.
 
 ```luce module include=examples/stats/mathx.luc
 ```

@@ -340,11 +340,11 @@ test "constants: every flat element value survives materialization" {
 
 test "constants: public imports keep identity and private constants stay inside" {
     const tables: agree.File = .{ .name = "tables", .source =
-        \\private const SECRET = [99]
-        \\const PUBLIC = [1, 2, 3]
-        \\const PUBLIC_ALIAS = PUBLIC
+        \\const SECRET = [99]
+        \\pub const PUBLIC = [1, 2, 3]
+        \\pub const PUBLIC_ALIAS = PUBLIC
         \\
-        \\func secret_value() -> i64:
+        \\pub func secret_value() -> i64:
         \\    return SECRET[0]
         \\
     };
@@ -377,20 +377,20 @@ test "constants: public imports keep identity and private constants stay inside"
     , &.{.{ .name = "tables", .source = tables.source }}, "luce.sema.private", "SECRET is private to tables", "tables.SECRET");
 
     try expectRefusedAt(
-        \\private struct Hidden:
+        \\struct Hidden:
         \\    value: i64
         \\
-        \\const TABLE = [Hidden(value = 1)]
+        \\pub const TABLE = [Hidden(value = 1)]
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.private", "TABLE is public and holds Hidden, which is marked private in this file; mark TABLE private or remove the mark on Hidden", "TABLE =");
+    , "luce.sema.private", "TABLE is public and holds Hidden, which is private in this file; remove pub from TABLE or mark Hidden pub", "TABLE =");
 }
 
 test "constants: equal same-named imports remain distinct pool rows" {
-    const left: agree.File = .{ .name = "left", .source = "const TABLE: list[i64] = [1, 2]\n" };
-    const right: agree.File = .{ .name = "right", .source = "const TABLE: list[i64] = [1, 2]\n" };
+    const left: agree.File = .{ .name = "left", .source = "pub const TABLE: list[i64] = [1, 2]\n" };
+    const right: agree.File = .{ .name = "right", .source = "pub const TABLE: list[i64] = [1, 2]\n" };
     var program = try agree.project(
         \\import left
         \\import right

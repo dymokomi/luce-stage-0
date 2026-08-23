@@ -166,16 +166,16 @@ steps, not to recreate a partially initialized object convention.
 
 ## Visibility and module boundaries
 
-Structure declarations and fields are public by default. `private` can keep a
-declaration, individual field, or a field region inside its source file. A
-public signature cannot expose a private type.
+Structure declarations and fields are private to their file unless marked
+`pub`. Mark a declaration or an individual field `pub` to reach it from
+another module. A `pub` signature cannot expose a private type.
 
 Private fields let a module preserve an invariant while returning the
-structure value through a public function or static factory. Another module
+structure value through a `pub` function or static factory. Another module
 may hold, pass, return, and store that value without being able to name the
 private field.
 
-[Access Control](/guide/access-control/) covers field regions, public
+[Access Control](/guide/access-control/) covers `pub` fields, public
 signatures, construction, and import diagnostics in detail.
 
 ## Structures and interfaces
