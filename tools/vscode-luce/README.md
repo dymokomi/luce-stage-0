@@ -175,7 +175,12 @@ func parse(...): ...
 func eval(...): ...
 ```
 
-The match is case-insensitive and tolerant of spacing (`#  MARK: …` works). A
-`# mark:` only opens a section when the comment is the first thing on the line;
-one written after code, or inside a string, is left alone. Folding is provided
-by `extension.js` — the compiler ignores the comment like any other.
+The match is case-insensitive and tolerant of spacing — any indent before `#`,
+any run of spaces or tabs between `#`, `mark`, and the colon (`   #  MARK : …`).
+A `# mark:` only opens a section when the comment is the first thing on the
+line; one written after code, or inside a string, is left alone.
+
+A mark line is also **painted bright and bold** — amber on a dark editor, a
+saturated magenta on a light one — so a section title reads over the muted grey
+the theme gives ordinary comments. Both folding and the accent are provided by
+`extension.js`; the compiler ignores the comment like any other.

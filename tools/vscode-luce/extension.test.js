@@ -7,6 +7,7 @@ const {
   layoutDepth,
   lineEndsWithColon,
   markFoldingRanges,
+  markLineNumbers,
 } = require("./extension.js");
 
 test("layout depth follows grouping and ignores comments and strings", () => {
@@ -85,4 +86,9 @@ test("a mark with nothing under it makes no fold, and none means no ranges", () 
     { start: 1, end: 2 },
   ]);
   assert.deepEqual(markFoldingRanges("let a = 1\nlet b = 2\n"), []);
+});
+
+test("markLineNumbers finds every head, including one with nothing under it", () => {
+  const source = "# mark: a\nx = 1\n# mark: b\n# mark: c\ny = 2\n";
+  assert.deepEqual(markLineNumbers(source), [0, 2, 3]);
 });

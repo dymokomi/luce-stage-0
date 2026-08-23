@@ -152,12 +152,21 @@ function lineEndsWithColon(line) {
 // `mark`, and `:`, and any casing of the word (`# mark:`, `   #  MARK :`).
 const MARK_LINE = /^[ \t]*#[ \t]*mark[ \t]*:/i;
 
-function markFoldingRanges(text) {
+// The line numbers (0-based) of every section head, for the folding
+// provider and the bright decoration below. Every mark is a head, whether
+// or not it has content under it to fold.
+function markLineNumbers(text) {
   const lines = text.split("\n");
   const marks = [];
   for (let index = 0; index < lines.length; index += 1) {
     if (MARK_LINE.test(lines[index])) marks.push(index);
   }
+  return marks;
+}
+
+function markFoldingRanges(text) {
+  const lines = text.split("\n");
+  const marks = markLineNumbers(text);
   const ranges = [];
   for (let mark = 0; mark < marks.length; mark += 1) {
     const start = marks[mark];
@@ -215,6 +224,37 @@ function activate(context) {
       },
     }),
   );
+
+  // A `# mark:` head is a section title, not an aside, so it is painted
+  // bright and bold — an accent that reads over the muted grey the theme
+  // gives ordinary comments. Two variants keep it loud on either ground:
+  // amber on a dark editor, a saturated magenta on a light one.
+  const markDecoration = vscode.window.createTextEditorDecorationType({
+    fontWeight: "bold",
+    light: { color: "#C2185B" },
+    dark: { color: "#FFC400" },
+  });
+  context.subscriptions.push(markDecoration);
+  const paintMarks = (editor) => {
+    if (!editor || editor.document.languageId !== "luce") return;
+    const ranges = markLineNumbers(editor.document.getText()).map((line) => {
+      const length = editor.document.lineAt(line).text.length;
+      return new vscode.Range(line, 0, line, length);
+    });
+    editor.setDecorations(markDecoration, ranges);
+  };
+  const paintVisible = () => {
+    for (const editor of vscode.window.visibleTextEditors) paintMarks(editor);
+  };
+  paintVisible();
+  context.subscriptions.push(
+    vscode.window.onDidChangeVisibleTextEditors(paintVisible),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document === event.document) paintMarks(editor);
+      }
+    }),
+  );
 }
 
 function deactivate() {}
@@ -226,4 +266,5 @@ module.exports = {
   layoutDepth,
   lineEndsWithColon,
   markFoldingRanges,
+  markLineNumbers,
 };
