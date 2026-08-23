@@ -70,7 +70,7 @@ const Class = enum {
     /// `func`, `struct`, `const`, `let`, `var` — what a declaration
     /// opens with.
     storage,
-    /// `private`, `public`, `static` — declaration modifiers.
+    /// `pub`, `static` — declaration modifiers.
     /// `storage.modifier` is the scope existing grammars give this
     /// class, so themes already distinguish them from the `func` they
     /// precede (docs/VISIBILITY.md, docs/SELF.md).
@@ -166,8 +166,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_extern,
         => .storage,
 
-        .keyword_public,
-        .keyword_private,
+        .keyword_pub,
         .keyword_static,
         // `mutating` qualifies an interface requirement; concrete methods
         // infer receiver writes from their bodies.

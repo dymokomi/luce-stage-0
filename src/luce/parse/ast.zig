@@ -504,13 +504,12 @@ pub const Block = struct {
 // Declarations
 // ---------------------------------------------------------------------------
 
-/// The visibility a declaration wrote, three states so inert
-/// explicitness survives to be reasoned about (docs/VISIBILITY.md
-/// D13): `none` is an unmarked declaration — public by default —
-/// `public` a restated default, `private` the marked case.  A struct
-/// region label dissolves onto its members' markers here in stage 3;
-/// stage 4 never knows a region existed (D15).
-pub const Visibility = enum { none, public, private };
+/// A declaration's visibility (docs/VISIBILITY.md): `private` is the
+/// default an unmarked declaration carries, and `public` is what `pub`
+/// writes. The check gates a reference from another module against
+/// `private`, so the default withholds and `pub` is the one word that
+/// exports.
+pub const Visibility = enum { private, public };
 
 /// `alias Name = Type` — another source spelling for exactly one type.
 /// Resolution erases this node before HIR; aliases never become runtime
@@ -519,7 +518,7 @@ pub const AliasDecl = struct {
     name: []const u8,
     name_span: Span,
     target: TypeName,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 };
 
@@ -534,7 +533,7 @@ pub const Field = struct {
     /// Zeroing non-owning storage. The modifier belongs to the place, not
     /// to `type_name`, and therefore never appears in a `TypeName`.
     weak: bool = false,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 };
 
@@ -560,7 +559,7 @@ pub const StructDecl = struct {
     /// parser keeps the written type names; stage 4 checks the promise
     /// against the completed method table.
     interfaces: []TypeName = &.{},
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     /// `struct` → value, `class` → reference.  Ownership work reads this
     /// once ARC lands; today it is recorded and otherwise inert.
     kind: TypeKind = .value,
@@ -587,7 +586,7 @@ pub const InterfaceDecl = struct {
     name: []const u8,
     name_span: Span,
     methods: []InterfaceMethod,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 };
 
@@ -616,7 +615,7 @@ pub const EnumDecl = struct {
     backing: ?TypeName = null,
     members: []EnumMember,
     functions: []FuncDecl,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 };
 
@@ -643,7 +642,7 @@ pub const UnionDecl = struct {
     name_span: Span,
     members: []UnionMember,
     functions: []FuncDecl,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     /// `indirect union`: the payload lives behind a hidden ARC box, so
     /// a member may name the union itself and the value stays finite
     /// (docs/UNION.md D20).  The word is contextual, like `blocking`.
@@ -685,7 +684,7 @@ pub const FuncDecl = struct {
     /// (docs/FAILURE.md).
     fallible: bool = false,
     body: Block,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 
     /// The span of everything after `->`, for a diagnostic about the
@@ -737,7 +736,7 @@ pub const ConstDecl = struct {
     name_span: Span,
     annotation: ?TypeName,
     value: *Expression,
-    visibility: Visibility = .none,
+    visibility: Visibility = .private,
     span: Span,
 };
 

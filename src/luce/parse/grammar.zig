@@ -654,7 +654,7 @@ pub const Parser = struct {
                     );
                     self.recover();
                 },
-                .keyword_public, .keyword_private => {
+                .keyword_pub => {
                     try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions);
                 },
                 else => {
@@ -710,11 +710,10 @@ pub const Parser = struct {
         };
     }
 
-    /// A visibility marker at file scope: `public` or `private` before
-    /// func, const, or struct, and nowhere else (docs/VISIBILITY.md §5).
+    /// A `pub` marker at file scope, before func, const, alias, struct,
+    /// interface, enum, or union — and nowhere else (docs/VISIBILITY.md).
     /// The marker parses onto the declaration it fronts; the refusals —
-    /// a region label at module level, a second visibility word, a
-    /// marker fronting anything unmarkable — are §8's, wordings and all.
+    /// a second `pub`, a marker fronting anything unmarkable — follow.
     fn markedDeclaration(
         self: *Parser,
         aliases: *std.ArrayList(ast.AliasDecl),
@@ -726,8 +725,7 @@ pub const Parser = struct {
         functions: *std.ArrayList(ast.FuncDecl),
     ) Error!void {
         const marker = self.advance();
-        const visibility: ast.Visibility =
-            if (marker.kind == .keyword_private) .private else .public;
+        const visibility: ast.Visibility = .public;
         if (self.atIndirectUnion()) {
             if (try self.indirectUnion()) |declaration| {
                 var marked = declaration;
@@ -743,23 +741,22 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.top",
                     .{ .start = marker.span.start, .end = self.peek().span.end },
-                    "a visibility region belongs inside a struct; at file scope mark each declaration",
+                    "`pub` marks one declaration; write it before each name, not as a region",
                     .{},
                 );
                 _ = self.advance(); // the colon
-                // The region's body is ordinary declarations that
-                // happen to be indented: consume the layout tokens
-                // and let the program loop read them at file scope,
-                // unmarked — the marker is what was wrong, not the
-                // declarations under it.
+                // The body is ordinary declarations that happen to be
+                // indented: consume the layout tokens and let the
+                // program loop read them at file scope, private — the
+                // marker is what was wrong, not the declarations under it.
                 if (self.peekKind() == .newline) _ = self.advance();
                 if (self.peekKind() == .indent) _ = self.advance();
             },
-            .keyword_public, .keyword_private => {
+            .keyword_pub => {
                 try self.report(
                     "luce.parse.expected",
                     self.peek().span,
-                    "one visibility word per declaration",
+                    "one `pub` per declaration",
                     .{},
                 );
                 self.recover();
@@ -1362,29 +1359,32 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
-                // `private:` opens a region; `private` fronts one member.
+            if (self.peekKind() == .keyword_pub) {
                 if (self.peekAhead(1) == .colon) {
-                    try self.structRegion(&fields, &functions, &initializer, &deinitializer);
-                    continue;
-                }
-                const marker = self.advance();
-                if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
                     try self.report(
                         "luce.parse.expected",
                         self.peek().span,
-                        "one visibility word per declaration",
+                        "`pub` marks one member; write it before each name, not as a region",
                         .{},
                     );
                     self.recover();
                     continue;
                 }
-                const visibility: ast.Visibility =
-                    if (marker.kind == .keyword_private) .private else .public;
-                try self.structMember(&fields, &functions, &initializer, &deinitializer, visibility);
+                _ = self.advance();
+                if (self.peekKind() == .keyword_pub) {
+                    try self.report(
+                        "luce.parse.expected",
+                        self.peek().span,
+                        "one `pub` per declaration",
+                        .{},
+                    );
+                    self.recover();
+                    continue;
+                }
+                try self.structMember(&fields, &functions, &initializer, &deinitializer, .public);
                 continue;
             }
-            try self.structMember(&fields, &functions, &initializer, &deinitializer, .none);
+            try self.structMember(&fields, &functions, &initializer, &deinitializer, .private);
         }
         _ = self.accept(.dedent);
         return .{
@@ -1559,9 +1559,9 @@ pub const Parser = struct {
         };
     }
 
-    /// One struct member — a function or a field — carrying
-    /// `visibility`: its own marker's, its region's, or `.none` for the
-    /// unmarked default (docs/VISIBILITY.md §5).
+    /// One struct member — a function or a field — carrying `visibility`:
+    /// `.public` when `pub` fronts it, `.private` for the unmarked default
+    /// (docs/VISIBILITY.md).
     fn structMember(
         self: *Parser,
         fields: *std.ArrayList(ast.Field),
@@ -1639,7 +1639,7 @@ pub const Parser = struct {
                 self.recover();
                 return;
             };
-            if (visibility != .none) {
+            if (visibility == .public) {
                 try self.report(
                     "luce.sema.class.lifecycle",
                     parsed.span,
@@ -1729,59 +1729,6 @@ pub const Parser = struct {
         });
     }
 
-    /// `private:` or `public:` at member position — an indented block
-    /// of members that all take the label's visibility, the way every
-    /// colon in the language opens an indented block (docs/VISIBILITY.md
-    /// D14).  Labels may repeat and appear in any order; a marker on a
-    /// declaration inside is refused, because the block already said it;
-    /// and the region dissolves here, onto its members' markers — stage
-    /// 4 never knows a region existed (D15).
-    fn structRegion(
-        self: *Parser,
-        fields: *std.ArrayList(ast.Field),
-        functions: *std.ArrayList(ast.FuncDecl),
-        initializer: *?ast.FuncDecl,
-        deinitializer: *?ast.FuncDecl,
-    ) Error!void {
-        const label = self.advance(); // public or private
-        _ = self.advance(); // the colon
-        const word = keywordWord(label.kind).?;
-        const visibility: ast.Visibility =
-            if (label.kind == .keyword_private) .private else .public;
-        var opener_buffer: [16]u8 = undefined;
-        const opener = std.fmt.bufPrint(&opener_buffer, "{s}:", .{word}) catch unreachable;
-        if ((try self.expect(.newline, "end of line after ':'")) == null) {
-            self.recover();
-            return;
-        }
-        if ((try self.blockBody(opener)) == null) {
-            self.recover();
-            return;
-        }
-        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
-            if (self.accept(.newline) != null) continue;
-            if (self.peekKind() == .indent) {
-                try self.unexpectedIndent();
-                continue;
-            }
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
-                try self.markerInRegion(word);
-                if (self.peekKind() == .keyword_func or
-                    self.peekKind() == .keyword_static or
-                    self.peekKind() == .keyword_init or
-                    self.peekKind() == .keyword_deinit or
-                    self.peekKind() == .keyword_weak or
-                    self.peekKind() == .identifier)
-                {
-                    try self.structMember(fields, functions, initializer, deinitializer, visibility);
-                }
-                continue;
-            }
-            try self.structMember(fields, functions, initializer, deinitializer, visibility);
-        }
-        _ = self.accept(.dedent);
-    }
-
     /// `init(parameters):` or `init(parameters) -> !:`. The enclosing
     /// class is the implicit successful result; `!` is the only result
     /// marker source may write because it describes failure, not a value.
@@ -1847,53 +1794,6 @@ pub const Parser = struct {
         };
     }
 
-    /// A visibility word standing inside a region: one way to say a
-    /// thing, and the block already said it (docs/VISIBILITY.md D15).
-    /// The marker is consumed and reported; the member it fronted still
-    /// parses, under the region's visibility, so one mistake is one
-    /// message.  A nested label is the same refusal wearing a colon,
-    /// and takes the block it would have opened with it.
-    fn markerInRegion(self: *Parser, region_word: []const u8) Error!void {
-        const marker = self.advance();
-        if (self.peekKind() == .colon) {
-            try self.report(
-                "luce.parse.expected",
-                .{ .start = marker.span.start, .end = self.peek().span.end },
-                "'{s}:' is inside a {s} region, which already says it",
-                .{ keywordWord(marker.kind).?, region_word },
-            );
-            _ = self.advance(); // the colon
-            self.recover();
-            return;
-        }
-        // The member's name, for the sentence: past `func` for a
-        // method, at hand for a field.
-        const named: ?Token = switch (self.peekKind()) {
-            .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
-            .keyword_static => if (self.peekAhead(1) == .keyword_func and
-                self.peekAhead(2) == .identifier) self.tokenAhead(2) else null,
-            .keyword_init, .keyword_deinit => self.peek(),
-            .keyword_weak => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
-            .identifier => self.peek(),
-            else => null,
-        };
-        if (named) |item| {
-            try self.report(
-                "luce.parse.expected",
-                marker.span,
-                "{s} is inside a {s} region, which already says it",
-                .{ self.text(item), region_word },
-            );
-        } else {
-            try self.report(
-                "luce.parse.expected",
-                marker.span,
-                "this declaration is inside a {s} region, which already says it",
-                .{region_word},
-            );
-        }
-    }
-
     // -- declarations: enums ----------------------------------------------
 
     /// `enum Method:` / `enum Method(u8):` — the declaration form
@@ -1930,8 +1830,8 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
-            var visibility: ast.Visibility = .none;
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            var visibility: ast.Visibility = .private;
+            if (self.peekKind() == .keyword_pub) {
                 visibility = (try self.enumMarker()) orelse continue;
             }
             if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
@@ -1988,7 +1888,7 @@ pub const Parser = struct {
             self.recover();
             return null;
         }
-        if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+        if (self.peekKind() == .keyword_pub) {
             try self.report(
                 "luce.parse.expected",
                 self.peek().span,
@@ -1999,7 +1899,7 @@ pub const Parser = struct {
             return null;
         }
         if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
-            return if (marker.kind == .keyword_private) .private else .public;
+            return .public;
         }
         try self.report(
             "luce.parse.expected",
@@ -2007,7 +1907,7 @@ pub const Parser = struct {
             "an enum member is part of the type and is always visible; write '{s} enum' to withhold the whole set",
             .{word},
         );
-        return .none;
+        return .private;
     }
 
     /// One member line: `stored`, or `stored = 8`.
@@ -2082,8 +1982,8 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
-            var visibility: ast.Visibility = .none;
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            var visibility: ast.Visibility = .private;
+            if (self.peekKind() == .keyword_pub) {
                 visibility = (try self.unionMarker()) orelse continue;
             }
             if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
@@ -2180,7 +2080,7 @@ pub const Parser = struct {
             self.recover();
             return null;
         }
-        if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+        if (self.peekKind() == .keyword_pub) {
             try self.report(
                 "luce.parse.expected",
                 self.peek().span,
@@ -2191,7 +2091,7 @@ pub const Parser = struct {
             return null;
         }
         if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
-            return if (marker.kind == .keyword_private) .private else .public;
+            return .public;
         }
         try self.report(
             "luce.parse.expected",
@@ -2199,7 +2099,7 @@ pub const Parser = struct {
             "a union member is part of the type and is always visible; write '{s} union' to withhold the whole set",
             .{word},
         );
-        return .none;
+        return .private;
     }
 
     /// One member line: `null`, or `circle(radius: f64)` — a
@@ -2301,7 +2201,7 @@ pub const Parser = struct {
     fn staticFuncDecl(self: *Parser) Error!?ast.FuncDecl {
         const marker = self.advance(); // static
         if (self.peekKind() != .keyword_func) {
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            if (self.peekKind() == .keyword_pub) {
                 try self.report(
                     "luce.parse.static",
                     self.peek().span,
@@ -2485,7 +2385,7 @@ pub const Parser = struct {
             }
             // A marker on a parameter is the locals' mistake in a
             // parameter list (docs/VISIBILITY.md §5).
-            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            if (self.peekKind() == .keyword_pub) {
                 try self.report(
                     "luce.parse.expected",
                     self.peek().span,
@@ -2737,7 +2637,7 @@ pub const Parser = struct {
             // unmistakable, so it is read after the report — dropping
             // the binding too would turn one mistake into an unknown
             // name at every later use.
-            .keyword_public, .keyword_private => {
+            .keyword_pub => {
                 try self.report(
                     "luce.parse.expected",
                     self.peek().span,
@@ -3863,8 +3763,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_none => "'none'",
         .keyword_try => "the keyword 'try'",
         .keyword_catch => "the keyword 'catch'",
-        .keyword_public => "the keyword 'public'",
-        .keyword_private => "the keyword 'private'",
+        .keyword_pub => "the keyword 'pub'",
 
         .int_literal => "a number",
         .float_literal => "a number",
