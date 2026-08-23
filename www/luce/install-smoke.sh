@@ -72,7 +72,7 @@ test "$("$smoke/hello")" = "installer works"
 test "$("$smoke_install/bin/loom" run "$smoke/hello.lc")" = "installer works"
 
 printf '%s\n' \
-    'func test_installed_toolchain():' \
+    'pub func test_installed_toolchain():' \
     '    assert(6 * 7 == 42)' >"$smoke/toolchain_test.luc"
 (cd "$smoke" && "$smoke_install/bin/luce-0" test toolchain_test.luc >test-output.txt)
 grep -Fq '1 passed, 0 failed' "$smoke/test-output.txt"
