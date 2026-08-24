@@ -62,7 +62,7 @@ there is, and checks that every language word it actually uses has a class.
 | `keyword.operator.word.luce` | `and`, `or`, `not`, `is` |
 | `keyword.other.ownership.luce` | `new` and `spawn`, the two words that create a reference-bearing runtime object |
 | `storage.type.luce` | `func`, `struct`, `class`, `init`, `deinit`, `interface`, `alias`, `enum`, `union`, `const`, `let`, `var` |
-| `storage.modifier.luce` | `private`, `public`, `static`, `weak`, `mutating` |
+| `storage.modifier.luce` | `pub`, `static`, `weak`, `mutating` |
 | `variable.language.luce` | `self`, the receiver supplied by the language |
 | `constant.language.luce` | `true`, `false`, `none` |
 | `support.type.luce` | the builtin type names |
