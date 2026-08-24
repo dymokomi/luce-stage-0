@@ -302,6 +302,12 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         }
     }
 
+    try writer.int(u32, @intCast(program.extern_types.len));
+    for (program.extern_types) |declared| {
+        try writer.blob(declared.name);
+        try writer.int(u8, @intFromEnum(declared.representation));
+    }
+
     try writer.int(u32, @intCast(program.variants.len));
     for (program.variants) |declared| {
         try writer.blob(declared.name);
@@ -384,6 +390,14 @@ const Writer = struct {
         if (of == .enumeration) {
             try self.int(u32, of.enumeration.index);
             try self.int(u8, @intFromEnum(of.enumeration.backing));
+        }
+        // The representation travels with the index, as it does in
+        // memory: the decoder rebuilds the whole reference without
+        // reaching into the extern-type table, exactly as an enum's
+        // width does.
+        if (of == .extern_type) {
+            try self.int(u32, of.extern_type.index);
+            try self.int(u8, @intFromEnum(of.extern_type.representation));
         }
         // A `T?` writes its payload as a type of its own, which cannot
         // be optional in turn: one tag byte, then the payload's.
@@ -705,6 +719,14 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     }
     program.enums = enums;
 
+    const extern_type_count = try reader.count();
+    const extern_types = try arena.alloc(types.ExternType, extern_type_count);
+    for (extern_types) |*declared| {
+        declared.name = try arena.dupe(u8, try reader.blob());
+        declared.representation = try reader.enumTag(types.Type.ExternTypeRef.Representation);
+    }
+    program.extern_types = extern_types;
+
     const variant_count = try reader.count();
     const variants = try arena.alloc(types.VariantType, variant_count);
     for (variants) |*declared| {
@@ -858,6 +880,10 @@ const Reader = struct {
             .enumeration => .{ .enumeration = .{
                 .index = try self.int(u32),
                 .backing = try self.enumTag(types.Type.EnumRef.Backing),
+            } },
+            .extern_type => .{ .extern_type = .{
+                .index = try self.int(u32),
+                .representation = try self.enumTag(types.Type.ExternTypeRef.Representation),
             } },
             // `T??` has no representation, so a payload that decodes
             // as optional is a damaged module, not a nested one.
@@ -2327,9 +2353,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // join `Intrinsic` (the hash moves), and a foreign signature slot
     // may now be optional-of-foreign or `str` — encodings the wire
     // could already spell but no 71 decoder ever accepted, which is
-    // the silent-misreading case the bump exists for.
+    // the silent-misreading case the bump exists for.  Named handles
+    // land under the same bump: `extern_type` appends to `types.Type`
+    // and its payload set (the hash moves again), and the extern-type
+    // table joins the program after the enums.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 14083163962640641375), hasher.final());
+    try testing.expectEqual(@as(u64, 12563044881036113650), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
@@ -2396,6 +2425,52 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
     try testing.expectEqual(@intFromEnum(types.Type.EnumRef.Backing.u8), widened[table_at]);
     widened[table_at] = @intFromEnum(types.Type.EnumRef.Backing.i64);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, widened));
+}
+
+test "an extern type round-trips with its representation, and a lied one is rejected" {
+    var program = try compileScript(
+        \\extern type Window
+        \\extern type Device = i32
+        \\
+        \\extern func luce_ffi_probe_token() -> Window
+        \\extern func luce_ffi_probe_echo_i32(v: Device) -> Device
+        \\
+        \\func main():
+        \\    var d: Device
+        \\    let held = luce_ffi_probe_echo_i32(d)
+        \\    print(str(held == d))
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "extern type Window") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "extern type Device = i32") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    // **The representation in a type and the representation in the
+    // table are one fact** (`types.Type.ExternTypeRef`) — the enum
+    // width's rule, one table over.  A module where they disagree is
+    // damaged and must be refused rather than read at whichever of the
+    // two an engine happens to consult.
+    var lied = try testing.allocator.dupe(u8, encoded);
+    defer testing.allocator.free(lied);
+    const table_at = std.mem.indexOf(u8, lied, "Device").? + "Device".len;
+    try testing.expectEqual(@intFromEnum(types.Type.ExternTypeRef.Representation.i32), lied[table_at]);
+    lied[table_at] = @intFromEnum(types.Type.ExternTypeRef.Representation.u64);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, lied));
 }
 
 test "a union round-trips with its members and payload fields" {

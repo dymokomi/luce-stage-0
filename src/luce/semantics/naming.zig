@@ -299,6 +299,10 @@ fn declarationHome(self: *const Analyzer, qualified: []const u8) ?DeclarationHom
         const info = self.enum_decls.items[index];
         return .{ .module = info.module, .visibility = info.declaration.visibility };
     }
+    if (self.extern_type_names.get(qualified)) |index| {
+        const info = self.extern_type_decls.items[index];
+        return .{ .module = info.module, .visibility = info.declaration.visibility };
+    }
     if (self.variant_names.get(qualified)) |index| {
         const info = self.variant_decls.items[index];
         return .{ .module = info.module, .visibility = info.declaration.visibility };
@@ -396,6 +400,7 @@ pub fn declares(self: *const Analyzer, qualified: []const u8) bool {
         self.struct_names.contains(qualified) or
         self.interface_names.contains(qualified) or
         self.enum_names.contains(qualified) or
+        self.extern_type_names.contains(qualified) or
         self.variant_names.contains(qualified) or
         self.constant_names.contains(qualified);
 }
@@ -421,6 +426,10 @@ pub fn firstDeclarationOf(self: *Analyzer, qualified: []const u8) Error!?[]const
     }
     if (self.enum_names.get(qualified)) |index| {
         const info = self.enum_decls.items[index];
+        return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
+    }
+    if (self.extern_type_names.get(qualified)) |index| {
+        const info = self.extern_type_decls.items[index];
         return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
     }
     if (self.variant_names.get(qualified)) |index| {

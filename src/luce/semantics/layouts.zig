@@ -43,6 +43,98 @@ const Analyzer = @import("declarations.zig").Analyzer;
 
 // -- pass one: enums and unions, names then contents -------------------
 
+/// Register every declared extern type (docs/FFI.md): the name a
+/// boundary signature resolves, and the representation that answers
+/// every machine question about it.  Before `collectTypeNames`,
+/// because an enum or union payload may hold a handle just as a
+/// struct field may.
+pub fn collectExternTypes(self: *Analyzer) Error!void {
+    for (self.modules, 0..) |module, module_index| {
+        self.diagnostics.scope = module.file;
+        for (module.tree.extern_types) |*declaration| {
+            try collectExternTypeName(self, module, module_index, declaration);
+        }
+    }
+    self.diagnostics.scope = source_mod.root_file;
+}
+
+/// Register one declared extern type's name and representation.  The
+/// parser has already held the written representation to the four
+/// integer spellings; the default is the pointer-shaped token.
+fn collectExternTypeName(
+    self: *Analyzer,
+    module: ModuleTree,
+    module_index: usize,
+    declaration: *const ast.ExternTypeDecl,
+) Error!void {
+    if (isReserved(declaration.name)) {
+        try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+        return;
+    }
+    if (naming.visibleBuiltin(self, module_index, declaration.name) != null) {
+        try self.fail(
+            "luce.sema.reserved",
+            declaration.name_span,
+            "{s} is a builtin type; a handle of your own takes a name of its own",
+            .{declaration.name},
+        );
+        return;
+    }
+    const qualified = try naming.qualify(self, module.prefix, declaration.name);
+    if (try naming.firstDeclarationOf(self, qualified)) |where| {
+        try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+            declaration.name,
+            where,
+        });
+        return;
+    }
+    if (structDeclaredAbove(module.tree.*, declaration.name, declaration.name_span)) |first| {
+        try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+            declaration.name,
+            try naming.declaredAt(self, module.file, first.name_span),
+        });
+        return;
+    }
+    var representation: types.Type.ExternTypeRef.Representation = .foreign;
+    if (declaration.representation) |written| {
+        representation = representationNamed(written.name) orelse {
+            // The parser refuses every other spelling; this arm keeps
+            // the rule true for a tree that arrived another way.
+            try self.fail(
+                "luce.parse.extern",
+                written.span,
+                "an extern type representation must be `u32`, `i32`, `u64`, or `i64`",
+                .{},
+            );
+            return;
+        };
+    }
+    const index: u32 = @intCast(self.extern_types.items.len);
+    try self.extern_type_names.put(self.temporary, qualified, index);
+    try self.extern_type_decls.append(self.temporary, .{
+        .declaration = declaration,
+        .module = module_index,
+    });
+    try self.extern_types.append(self.arena, .{
+        .name = try self.arena.dupe(u8, qualified),
+        .representation = representation,
+    });
+}
+
+/// The integer representation a written spelling names, or null.
+fn representationNamed(text: []const u8) ?types.Type.ExternTypeRef.Representation {
+    const admitted = [_]struct { name: []const u8, is: types.Type.ExternTypeRef.Representation }{
+        .{ .name = "u32", .is = .u32 },
+        .{ .name = "i32", .is = .i32 },
+        .{ .name = "u64", .is = .u64 },
+        .{ .name = "i64", .is = .i64 },
+    };
+    for (admitted) |entry| {
+        if (std.mem.eql(u8, text, entry.name)) return entry.is;
+    }
+    return null;
+}
+
 /// Register every declared enum's and union's name, in source
 /// order per module, so a duplicate between the two kinds reports
 /// at whichever stands second in the file — the same promise the

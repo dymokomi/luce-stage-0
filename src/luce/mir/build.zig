@@ -445,6 +445,12 @@ pub const Lowering = struct {
             .f16, .f32, .f64 => try self.emit(.{ .const_float = 0.0 }, of),
             .char => try self.emit(.{ .const_integer = 0 }, .char),
             .foreign => try self.emit(.{ .const_integer = 0 }, .foreign),
+            // A handle's zero is its representation's zero: the null
+            // token, or an integer handle's ordinary 0 (docs/FFI.md).
+            // Only the extern boundary gives the pointer-shaped zero a
+            // meaning; a declared-but-unassigned slot holds it like any
+            // other scalar.
+            .extern_type => try self.emit(.{ .const_integer = 0 }, of),
             // **An enum's zero is its first declared member.**  Zero
             // itself would be a value no member holds — the one thing
             // an enum promises is that every value of it is a member,
@@ -861,6 +867,8 @@ pub const Lowered = struct {
     structs: []StructLayout,
     heap_types: []types.HeapType,
     enums: []types.EnumType = &.{},
+    /// One row per declared `extern type` (docs/FFI.md).
+    extern_types: []types.ExternType = &.{},
     /// One row per declared union (docs/UNION.md D18).
     variants: []types.VariantType = &.{},
     /// One row per distinct function type the program writes
@@ -920,6 +928,7 @@ pub fn build(
     program.structs = lowered.structs;
     program.heap_types = lowered.heap_types;
     program.enums = lowered.enums;
+    program.extern_types = lowered.extern_types;
     program.variants = lowered.variants;
     program.signatures = lowered.signatures;
     program.interface_witnesses = lowered.interface_witnesses;

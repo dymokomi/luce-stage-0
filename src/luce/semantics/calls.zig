@@ -359,6 +359,11 @@ pub fn lowerCall(
     // reserved names keep user declarations out of their way.
     if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
         if (conversionNamed(call.callee) != null) return construct.lowerConvert(self, call);
+        // `foreign(w)` — the handle escape (docs/FFI.md).  Beside the
+        // conversion constructors because it is one, and outside their
+        // table because `foreign` produces no storage and converts
+        // exactly one thing.
+        if (std.mem.eql(u8, call.callee, "foreign")) return construct.lowerForeignConvert(self, call);
         switch (try construct.lowerIntrinsic(self, call, as_statement, fallible_allowed, wanted, .prelude)) {
             .not_builtin => {},
             .failed => return null,

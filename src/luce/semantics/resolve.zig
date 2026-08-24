@@ -398,6 +398,19 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             }
             return .{ .variant = index };
         }
+        if (self.extern_type_names.get(key)) |index| {
+            const info = self.extern_type_decls.items[index];
+            if (!naming.reachable(info.module, info.declaration.visibility, module)) {
+                try self.fail(
+                    "luce.sema.private",
+                    written.span,
+                    "{s} is private to {s}",
+                    .{ info.declaration.name, naming.moduleName(self, info.module) },
+                );
+                return null;
+            }
+            return self.externType(index);
+        }
         try failUnknownType(self, module, written);
         return null;
     }
@@ -407,6 +420,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     if (self.struct_names.get(local)) |index| return try nominalType(self, index);
     if (self.enum_names.get(local)) |index| return self.enumType(index);
     if (self.variant_names.get(local)) |index| return .{ .variant = index };
+    if (self.extern_type_names.get(local)) |index| return self.externType(index);
     // A member import binds the bare name: after `from geo import
     // Point`, this is the qualified lookup with the member's own key.
     // Reachability was settled where the import was written, so no
@@ -417,6 +431,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         if (self.struct_names.get(key)) |index| return try nominalType(self, index);
         if (self.enum_names.get(key)) |index| return self.enumType(index);
         if (self.variant_names.get(key)) |index| return .{ .variant = index };
+        if (self.extern_type_names.get(key)) |index| return self.externType(index);
     }
     try failUnknownType(self, module, written);
     return null;

@@ -136,8 +136,9 @@ function hands back and takes — a library's handle, a pinned buffer's
 address inside a scope. It is a value type the width of a pointer; it
 supports `==` and `!=` and nothing else, its zero value is the null
 token, and what it points at is the foreign library's to manage. No
-conversion constructs one: only an extern's answer and the scoped buffer
-forms produce a `foreign`.
+conversion constructs one from ordinary data: an extern's answer, the
+scoped buffer forms, and the explicit `foreign(w)` escape from a
+pointer-shaped `extern type` handle produce a `foreign`.
 
 ```luce run
 func main():

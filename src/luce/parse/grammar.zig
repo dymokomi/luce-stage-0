@@ -536,6 +536,8 @@ pub const Parser = struct {
         defer functions.deinit(self.arena);
         var externs: std.ArrayList(ast.ExternDecl) = .empty;
         defer externs.deinit(self.arena);
+        var extern_types: std.ArrayList(ast.ExternTypeDecl) = .empty;
+        defer extern_types.deinit(self.arena);
 
         while (self.peekKind() != .end_of_file) {
             if (self.atIndirectUnion()) {
@@ -614,7 +616,13 @@ pub const Parser = struct {
                     }
                 },
                 .keyword_extern => {
-                    if (try self.externDecl()) |declaration| {
+                    if (self.atExternType()) {
+                        if (try self.externTypeDecl()) |declaration| {
+                            try extern_types.append(self.arena, declaration);
+                        } else {
+                            self.recover();
+                        }
+                    } else if (try self.externDecl()) |declaration| {
                         try externs.append(self.arena, declaration);
                     } else {
                         self.recover();
@@ -655,7 +663,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_pub => {
-                    try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions);
+                    try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions, &extern_types);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -707,6 +715,7 @@ pub const Parser = struct {
             .unions = try unions.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
             .externs = try externs.toOwnedSlice(self.arena),
+            .extern_types = try extern_types.toOwnedSlice(self.arena),
         };
     }
 
@@ -723,6 +732,7 @@ pub const Parser = struct {
         enums: *std.ArrayList(ast.EnumDecl),
         unions: *std.ArrayList(ast.UnionDecl),
         functions: *std.ArrayList(ast.FuncDecl),
+        extern_types: *std.ArrayList(ast.ExternTypeDecl),
     ) Error!void {
         const marker = self.advance();
         const visibility: ast.Visibility = .public;
@@ -850,6 +860,29 @@ pub const Parser = struct {
                     .{},
                 );
                 self.recover();
+            },
+            // `pub extern type Name` — a handle is a type declaration
+            // and takes the marker like one (docs/FFI.md).  An extern
+            // *function* stays unmarkable, exactly as it was before
+            // handles arrived, and earns the sentence below.
+            .keyword_extern => {
+                if (self.atExternType()) {
+                    if (try self.externTypeDecl()) |declaration| {
+                        var marked = declaration;
+                        marked.visibility = visibility;
+                        try extern_types.append(self.arena, marked);
+                    } else {
+                        self.recover();
+                    }
+                } else {
+                    try self.report(
+                        "luce.parse.top",
+                        marker.span,
+                        "'{s}' marks a declaration: expected func, alias, const, struct, interface, enum, union, or extern type after it, found {s}",
+                        .{ keywordWord(marker.kind).?, try self.found() },
+                    );
+                    self.recover();
+                }
             },
             else => {
                 try self.report(
@@ -2345,6 +2378,57 @@ pub const Parser = struct {
             .parameters = parameters,
             .returns = returns,
             .blocking = blocking,
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// Whether the cursor sits on `extern type` — the handle
+    /// declaration rather than an extern function.  `type` is a
+    /// contextual identifier, exactly as `blocking` is in
+    /// `externDecl`: a keyword only in this position, so a program
+    /// still owns the word everywhere else.
+    fn atExternType(self: *const Parser) bool {
+        if (self.peekKind() != .keyword_extern) return false;
+        const next = self.tokenAhead(1);
+        return next.kind == .identifier and std.mem.eql(u8, self.text(next), "type");
+    }
+
+    /// `extern type Name`, or `extern type Name = i32` — a nominal
+    /// opaque handle at the C boundary (docs/FFI.md).  No body: the
+    /// name is the whole declaration, and the optional `=` names the
+    /// integer width an integer-shaped handle crosses at.  Only the
+    /// four Tier-1 widths are representations; everything else is
+    /// refused here, where the spelling is, rather than left for the
+    /// resolver to call an unknown type.
+    fn externTypeDecl(self: *Parser) Error!?ast.ExternTypeDecl {
+        const start = self.advance(); // extern
+        _ = self.advance(); // type — the caller has already looked
+        const name = (try self.expect(.identifier, "a handle type's name")) orelse return null;
+        try self.refuseWildcardName(name);
+        var representation: ?ast.TypeName = null;
+        if (self.accept(.assign) != null) {
+            const written = (try self.typeName()) orelse return null;
+            const spellings = [_][]const u8{ "u32", "i32", "u64", "i64" };
+            var admitted = false;
+            for (spellings) |spelling| {
+                if (std.mem.eql(u8, written.name, spelling)) admitted = true;
+            }
+            if (!admitted or written.optional or written.arguments.len != 0 or written.wildcards != 0) {
+                try self.report(
+                    "luce.parse.extern",
+                    written.span,
+                    "an extern type representation must be `u32`, `i32`, `u64`, or `i64`",
+                    .{},
+                );
+                return null;
+            }
+            representation = written;
+        }
+        if ((try self.expect(.newline, "end of line after an extern type declaration")) == null) return null;
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .representation = representation,
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
     }

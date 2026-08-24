@@ -721,11 +721,12 @@ fn collectExtern(
     defer parameters.deinit(self.temporary);
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
-        if (!(tierOneParameter(resolved) or nullableForeign(resolved) or resolved == .str)) {
+        if (try refuseIntegerHandleOptional(self, resolved, parameter.type_name.span)) return;
+        if (!(tierOneParameter(resolved) or nullableHandle(resolved) or resolved == .str)) {
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a 32- or 64-bit integer, foreign, foreign?, or str; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a 32- or 64-bit integer, foreign, foreign?, a named handle, or str; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
@@ -735,11 +736,12 @@ fn collectExtern(
     var result: Type = .none;
     if (declaration.returns) |written| {
         const resolved = (try resolve.resolveType(self, module, written)) orelse return;
-        if (!(resolved == .f64 or resolved == .str or tierOneParameter(resolved) or nullableForeign(resolved))) {
+        if (try refuseIntegerHandleOptional(self, resolved, written.span)) return;
+        if (!(resolved == .f64 or resolved == .str or tierOneParameter(resolved) or nullableHandle(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 written.span,
-                "an extern answers a 32- or 64-bit integer, foreign, foreign?, str, f64, or nothing (docs/FFI.md)",
+                "an extern answers a 32- or 64-bit integer, foreign, foreign?, a named handle, str, f64, or nothing (docs/FFI.md)",
                 .{},
             );
             return;
@@ -758,17 +760,41 @@ fn collectExtern(
 
 /// The Tier-1 parameter vocabulary (docs/FFI.md), in semantic terms:
 /// the widths every emitted C ABI passes without extension
-/// attributes, and the opaque token.
+/// attributes, and the opaque token.  A named handle is its
+/// representation at the boundary, and every representation it may
+/// declare is Tier 1 by construction.
 fn tierOneParameter(of: Type) bool {
     return switch (of) {
-        .u32, .i32, .u64, .i64, .foreign => true,
+        .u32, .i32, .u64, .i64, .foreign, .extern_type => true,
         else => false,
     };
 }
 
-/// `foreign?` — the nullable handle (docs/FFI.md).  C's null decodes
-/// to `none` at the boundary; the bare `foreign` beside it is the
-/// enforced non-null contract.
-fn nullableForeign(of: Type) bool {
-    return of == .optional and of.optional.asType() == .foreign;
+/// `foreign?`, or a pointer-shaped handle's `?` (docs/FFI.md).  C's
+/// null decodes to `none` at the boundary; the bare form beside it is
+/// the enforced non-null contract.  An integer-shaped handle is not
+/// here on purpose — `refuseIntegerHandleOptional` owns that refusal.
+fn nullableHandle(of: Type) bool {
+    if (of != .optional) return false;
+    const payload = of.optional.asType();
+    return payload == .foreign or
+        (payload == .extern_type and payload.extern_type.representation == .foreign);
+}
+
+/// `Device?` at the boundary, where `Device` is integer-shaped: an
+/// integer-shaped handle's zero is a value — CUDA device 0 is the
+/// first GPU — so its optional has no C encoding, and the refusal has
+/// to say that rather than fall into the general vocabulary sentence.
+/// In ordinary Luce code the optional is legal like any other `T?`.
+fn refuseIntegerHandleOptional(self: *Analyzer, of: Type, span: source_mod.Span) Error!bool {
+    if (of != .optional) return false;
+    const payload = of.optional.asType();
+    if (payload != .extern_type or payload.extern_type.representation == .foreign) return false;
+    try self.fail(
+        "luce.sema.extern",
+        span,
+        "{s} does not cross the boundary: an integer-shaped handle's zero is a value, so its optional has no C encoding (docs/FFI.md)",
+        .{try self.typeName(of)},
+    );
+    return true;
 }

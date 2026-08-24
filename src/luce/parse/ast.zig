@@ -755,6 +755,23 @@ pub const ExternDecl = struct {
     span: Span,
 };
 
+/// `extern type Window`, `extern type Device = i32` — a nominal opaque
+/// handle at the C boundary (docs/FFI.md).  The default representation
+/// is the pointer-shaped token; `= u32|i32|u64|i64` declares an
+/// integer-shaped handle at that exact C width.  Like every type
+/// declaration it takes `pub`, shares the type namespace, and is a
+/// value type: no ARC, no members, `==`/`!=` and nothing else.
+pub const ExternTypeDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    /// The written representation, or null for the pointer-shaped
+    /// default.  The parser has already held it to the four integer
+    /// spellings an extern type may take.
+    representation: ?TypeName = null,
+    visibility: Visibility = .private,
+    span: Span,
+};
+
 pub const Program = struct {
     imports: []Import,
     aliases: []AliasDecl = &.{},
@@ -765,4 +782,5 @@ pub const Program = struct {
     unions: []UnionDecl = &.{},
     functions: []FuncDecl,
     externs: []ExternDecl = &.{},
+    extern_types: []ExternTypeDecl = &.{},
 };

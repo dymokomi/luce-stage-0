@@ -50,6 +50,10 @@ pub fn boxTag(of: Type) ?value.Tag {
         // runtime is handed a value and never a program's type table,
         // and what it has to know about one is its width.
         .enumeration => |reference| boxTag(reference.backing.asType()),
+        // A named handle boxes as its representation (docs/FFI.md):
+        // the runtime never learns extern types exist, exactly as it
+        // never learns enums do.
+        .extern_type => |reference| boxTag(reference.representation.asType()),
         // A function value is a two-slot field run — the function it
         // names and the receiver it carries (docs/BINDING.md D12) — and
         // it wears a **tag of its own**, not `strukt`.  The shape is a
@@ -1460,6 +1464,13 @@ pub const Program = struct {
     /// an enum-typed slot, `luce ir`, a diagnostic — and never on the
     /// execution path, where an enum is the integer it is stored as.
     enums: []types.EnumType = &.{},
+    /// One row per declared `extern type` (docs/FFI.md): its name and
+    /// its representation.  Read where a name is needed — `luce ir`, a
+    /// diagnostic — and by the verifier to hold a `Type.extern_type`'s
+    /// carried representation to the declared one; never on the
+    /// execution path, where a handle is the token or integer it is
+    /// stored as.
+    extern_types: []types.ExternType = &.{},
     /// One row per declared union: its name and its members with their
     /// payload fields (docs/UNION.md D18).  What the three `variant_*`
     /// instructions index, exactly as `structs` is what the `struct_*`

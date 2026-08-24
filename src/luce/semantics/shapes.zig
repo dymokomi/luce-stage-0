@@ -203,6 +203,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
             .bytes,
             .foreign,
             .enumeration,
+            .extern_type,
             => {},
         }
     }
@@ -314,6 +315,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
             .bytes,
             .foreign,
             .enumeration,
+            .extern_type,
             => {},
         }
     }

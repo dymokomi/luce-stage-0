@@ -456,7 +456,7 @@ const Module = struct {
             // carries (docs/BINDING.md D12).  A pointer to that run,
             // for the same reason a struct is one.
             .function => .ptr,
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -722,7 +722,7 @@ const Module = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -1110,7 +1110,7 @@ const Module = struct {
                 try self.variantZero(nested),
                 .i64,
             ) },
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // Compiler-generated interface layouts keep bound function
             // values in private dispatch fields.  A null function value is
             // the representation's zero; calling it follows the same null
@@ -1639,6 +1639,8 @@ const Module = struct {
             .char,
             .heap,
             .enumeration,
+            // A handle is a scalar token: its own storage, nothing owned.
+            .extern_type,
             .function,
             => false,
         };
@@ -2505,11 +2507,11 @@ const Module = struct {
                 // reaches here through a *type* rather than a width.
                 .u64, .i64, .f64, .strukt, .variant, .heap, .function => 16,
                 .str, .bytes => 24,
-                .none, .enumeration, .optional => unreachable, // a payload is a value of a width
+                .none, .enumeration, .extern_type, .optional => unreachable, // a payload is a value of a width
             },
             // Never reached: a function returning nothing has no slot.
             .none => 0,
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -3525,6 +3527,11 @@ const Body = struct {
                 &.{ try self.zeroValue(payload.asType()), .false },
                 "none",
             ),
+            // A handle's zero is its representation's zero — the null
+            // token, or an integer handle's ordinary 0 (docs/FFI.md).
+            // Only the extern boundary gives the pointer-shaped zero a
+            // meaning; a frame slot holds it like any other scalar.
+            .extern_type => |reference| try self.zeroValue(reference.representation.asType()),
             .enumeration => unreachable, // answered above
         };
     }
@@ -3756,7 +3763,7 @@ const Body = struct {
                 "box.bits",
             ),
             .optional => self.fail("the bits of a T? read from its type"),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -3804,7 +3811,7 @@ const Body = struct {
             .function => try builder.intValue(.i64, mir.function_run_length),
             .str, .bytes => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -3960,7 +3967,7 @@ const Body = struct {
             // address of the run travels back.
             .strukt, .variant, .function => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -4222,7 +4229,7 @@ const Body = struct {
         return switch (written.storage()) {
             .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => true,
             .none, .str, .bytes, .strukt, .variant, .function, .heap, .optional => false,
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
         };
     }
 
@@ -4482,7 +4489,7 @@ const Body = struct {
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
             .none, .str, .bytes, .strukt, .variant, .heap, .optional => self.module.value_type,
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
             // the `.optional` arm above (docs/BINDING.md D7).
@@ -4507,7 +4514,7 @@ const Body = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
             // the `.optional` arm above (docs/BINDING.md D7).
@@ -4533,7 +4540,7 @@ const Body = struct {
             // The boxed slot, whose size is `runtime.Value`'s and is
             // asserted against it by `runtime/test.zig`.
             .none, .str, .bytes, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
             // the `.optional` arm above (docs/BINDING.md D7).
@@ -4811,7 +4818,7 @@ const Body = struct {
                 address,
                 "element",
             ),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
             // the `.optional` arm above (docs/BINDING.md D7).
@@ -4845,7 +4852,7 @@ const Body = struct {
                 element,
                 held,
             ),
-            .enumeration => unreachable, // answered by storage() above
+            .enumeration, .extern_type => unreachable, // answered by storage() above
             // A bare function type is never an element type: the
             // storable form is `(func(...) -> R)?`, which arrives at
             // the `.optional` arm above (docs/BINDING.md D7).
@@ -6548,6 +6555,10 @@ const Body = struct {
             // program may operate on (docs/FUNCTIONS.md D3): both
             // arithmetic and comparison are refused before lowering.
             .function,
+            // A named handle takes `==`/`!=` and nothing else
+            // (docs/FFI.md): arithmetic is refused before lowering,
+            // whatever integer it is stored as.
+            .extern_type,
             .optional,
             => return self.fail("arithmetic on a type that has none"),
         }
@@ -6959,6 +6970,30 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
+            // A named handle compares as the token or integer it is
+            // stored as, and equality is the whole of it (docs/FFI.md):
+            // the analyzer refuses ordering and arithmetic on one.
+            .extern_type => switch (operation.op) {
+                .equal => .eq,
+                .not_equal => .ne,
+                .less,
+                .less_equal,
+                .greater,
+                .greater_equal,
+                => return self.fail("an ordering comparison on an extern type"),
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
+                .add,
+                .subtract,
+                .multiply,
+                .divide,
+                .floor_divide,
+                .modulo,
+                => return self.fail("arithmetic on the comparison path"),
+            },
             .f16, .f32, .f64, .str, .bytes, .strukt, .enumeration => unreachable, // answered above
             // A function value has no equality: its receiver is not part
             // of the function type, so comparing only the named slot would
@@ -7026,6 +7061,7 @@ const Body = struct {
                 .variant,
                 .heap,
                 .enumeration,
+                .extern_type,
                 .function,
                 .optional,
                 => return self.fail("negation of a type that has none"),
@@ -7062,7 +7098,12 @@ const Body = struct {
         defer borrowed.deinit(gpa);
         for (called.arguments, 0..) |argument, index| {
             const held = self.produced[argument].value;
-            switch (row.parameters[index]) {
+            // Through `storage()`, so a named handle takes the arm its
+            // representation earns (docs/FFI.md): pointer-shaped joins
+            // bare `foreign`'s non-null contract, integer-shaped passes
+            // as the ordinary integer it is, and the 0.21 phase-1 logic
+            // is reused rather than restated.
+            switch (row.parameters[index].storage()) {
                 // `foreign?` encodes at the boundary: `none` crosses
                 // as C's 0, a present token as itself (docs/FFI.md).
                 .optional => {
@@ -7106,7 +7147,10 @@ const Body = struct {
         for (borrowed.items) |token| {
             try self.callChecked(.luce_rt_cstring_free, &.{ self.runtime, token });
         }
-        switch (row.result) {
+        // Through `storage()` for the parameters' reason: a
+        // pointer-shaped handle result takes `foreign`'s trap and
+        // decode, an integer-shaped one is its integer.
+        switch (row.result.storage()) {
             .none => {},
             // `foreign?` decodes: C's 0 becomes `none`, anything else
             // is the present token beside a set bit.
@@ -7798,6 +7842,7 @@ const Body = struct {
             .variant,
             .heap,
             .enumeration,
+            .extern_type,
             .function,
             => false,
         };
@@ -8997,6 +9042,7 @@ const Body = struct {
             .enumeration,
             .function,
             .optional,
+            .extern_type,
             => self.fail("a math builtin on a type that has none"),
         };
     }

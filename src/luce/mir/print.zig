@@ -53,6 +53,20 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
     }
 
+    // A handle prints its declared representation, so a reader of a
+    // boundary call can see which shape a slot crosses at
+    // (docs/FFI.md).  The pointer-shaped default prints bare, the way
+    // it is written.
+    for (program.extern_types) |declared| {
+        switch (declared.representation) {
+            .foreign => try appendPrint(&text, allocator, "extern type {s}\n", .{declared.name}),
+            else => try appendPrint(&text, allocator, "extern type {s} = {s}\n", .{
+                declared.name,
+                @tagName(declared.representation),
+            }),
+        }
+    }
+
     // A union prints its members with their payload fields: the member
     // *index* is what `variant_make` and the compare trees below carry,
     // so the declaration order here is the key to reading them.
@@ -148,7 +162,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 }
 
 fn typeName(allocator: Allocator, program: *const Program, of: Type) error{OutOfMemory}![]u8 {
-    return types.typeName(allocator, program.structs, program.heap_types, program.enums, program.variants, program.signatures, of);
+    return types.typeName(allocator, program.structs, program.heap_types, program.enums, program.variants, program.signatures, program.extern_types, of);
 }
 
 fn appendPrint(

@@ -1285,8 +1285,13 @@ pub const Machine = struct {
                         // this call (docs/FFI.md).
                         var borrowed: [runtime.ffi.max_parameters]u64 = undefined;
                         var borrowed_count: usize = 0;
+                        // Through `storage()`, so a named handle takes
+                        // the arm its representation earns
+                        // (docs/FFI.md): pointer-shaped joins bare
+                        // `foreign`'s non-null contract, integer-shaped
+                        // crosses as the ordinary integer it is.
                         for (called.arguments, 0..) |argument, index| {
-                            words[index] = switch (row.parameters[index]) {
+                            words[index] = switch (row.parameters[index].storage()) {
                                 .u32 => registers[argument].asU32(),
                                 .i32 => @as(u32, @bitCast(registers[argument].asI32())),
                                 .u64 => registers[argument].asU64(),
@@ -1328,7 +1333,7 @@ pub const Machine = struct {
                         for (borrowed[0..borrowed_count]) |token| {
                             text.cstringFree(&self.runtime, token);
                         }
-                        registers[item] = switch (row.result) {
+                        registers[item] = switch (row.result.storage()) {
                             .none => .none,
                             .f64 => .ofF64(answer.real),
                             .u32 => .ofU32(@truncate(answer.integer)),
@@ -1769,6 +1774,11 @@ pub const Machine = struct {
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
+            // A handle's zero is its representation's zero — the null
+            // token, or an integer handle's ordinary 0 (docs/FFI.md).
+            // Only the extern boundary gives the pointer-shaped zero a
+            // meaning; a slot holds it like any other scalar.
+            .extern_type => |reference| try self.zeroValue(reference.representation.asType()),
             .enumeration => unreachable, // answered above
             // The slot fill of a function-typed local, which nothing a
             // program can write ever reads: stage 4 refuses the one

@@ -270,7 +270,7 @@ fn writesPlainElement(
         .foreign,
         => true,
         .none, .bytes, .strukt, .variant, .heap, .optional => false,
-        .enumeration => unreachable, // answered by storage() above
+        .enumeration, .extern_type => unreachable, // answered by storage() above
         .function => unreachable, // not an element type
     };
 }

@@ -131,6 +131,42 @@ pub const Type = union(enum) {
     /// nullable and only nullable; it never carries a reason.
     optional: Payload,
 
+    /// A nominal opaque handle declared by `extern type` (docs/FFI.md):
+    /// `Window` is not `Renderer` and neither is any integer, which is
+    /// what C's own pointer types promise and an untyped token cannot.
+    /// The index reaches the analyzer's extern-type table for the name;
+    /// the representation travels in the type — the EnumRef precedent —
+    /// because every machine question about a handle (what a register
+    /// holds, whether the null trap applies, how a boundary slot is
+    /// declared) is a question about the representation and nothing
+    /// else.  Appended, so no earlier tag renumbers on the wire.
+    extern_type: ExternTypeRef,
+
+    pub const ExternTypeRef = struct {
+        index: u32,
+        representation: Representation,
+
+        /// What C sees: the pointer-shaped token, or one of the four
+        /// integer widths an `extern type Name = i32` form declares
+        /// (docs/FFI.md).  Only the pointer-shaped kind carries the
+        /// `null_foreign` contract and admits `?` at the boundary —
+        /// an integer handle's zero is a value (CUDA device 0 is the
+        /// first GPU).
+        pub const Representation = enum {
+            foreign,
+            u32,
+            i32,
+            u64,
+            i64,
+
+            pub fn asType(self: Representation) Type {
+                return switch (self) {
+                    inline else => |tag| @unionInit(Type, @tagName(tag), {}),
+                };
+            }
+        };
+    };
+
     /// Which enum, and how wide its members are stored (docs/ENUMS.md
     /// D2, D10).
     ///
@@ -229,6 +265,12 @@ pub const Type = union(enum) {
         /// str?` is a function *answering* an optional, because a
         /// result type consumes its own `?` first.
         function: u32,
+        /// `Window?` in ordinary Luce code — an ordinary optional of a
+        /// named handle (docs/FFI.md).  Whether the *boundary* accepts
+        /// it is the extern signature check's ruling, not this type's:
+        /// in the language, a handle's optional behaves like any other
+        /// `T?`.  Appended, so no earlier payload tag renumbers.
+        extern_type: ExternTypeRef,
 
         pub fn asType(self: Payload) Type {
             return switch (self) {
@@ -253,6 +295,7 @@ pub const Type = union(enum) {
                 .enumeration => |reference| .{ .enumeration = reference },
                 .variant => |index| .{ .variant = index },
                 .function => |index| .{ .function = index },
+                .extern_type => |reference| .{ .extern_type = reference },
             };
         }
 
@@ -264,6 +307,8 @@ pub const Type = union(enum) {
                     other.enumeration.index == reference.index,
                 .variant => |index| other == .variant and other.variant == index,
                 .function => |index| other == .function and other.function == index,
+                .extern_type => |reference| other == .extern_type and
+                    other.extern_type.index == reference.index,
                 else => std.meta.activeTag(self) == std.meta.activeTag(other),
             };
         }
@@ -277,6 +322,12 @@ pub const Type = union(enum) {
                 other.enumeration.index == reference.index,
             .variant => |index| other == .variant and other.variant == index,
             .function => |index| other == .function and other.function == index,
+            // A handle's identity is its index — `Window` is never
+            // `Renderer`, `foreign`, or any integer, whatever it is
+            // stored as (docs/FFI.md).  The representation follows the
+            // index, the EnumRef discipline exactly.
+            .extern_type => |reference| other == .extern_type and
+                other.extern_type.index == reference.index,
             .optional => |payload| other == .optional and payload.eql(other.optional),
             else => std.meta.activeTag(self) == std.meta.activeTag(other),
         };
@@ -296,6 +347,11 @@ pub const Type = union(enum) {
     pub fn storage(self: Type) Type {
         return switch (self) {
             .enumeration => |reference| reference.backing.asType(),
+            // A named handle is its representation to every machine: the
+            // pointer-shaped token or a declared integer width
+            // (docs/FFI.md).  Nominality lives in `eql` and the
+            // diagnostics, never in a register.
+            .extern_type => |reference| reference.representation.asType(),
             // **A variant answers with itself, never as a `.strukt`
             // with a different index** (docs/UNION.md D8): a variant
             // index names a row of `Program.variants` and a struct
@@ -336,7 +392,7 @@ pub const Type = union(enum) {
             .u16, .i16, .f16 => 16,
             .u32, .i32, .f32 => 32,
             .u64, .i64, .f64 => 64,
-            .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => 0,
+            .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => 0,
         };
     }
 
@@ -356,7 +412,7 @@ pub const Type = union(enum) {
             .i16 => .{ .low = std.math.minInt(i16), .high = std.math.maxInt(i16) },
             .i32 => .{ .low = std.math.minInt(i32), .high = std.math.maxInt(i32) },
             .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
-            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
+            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => unreachable,
         };
     }
 
@@ -452,6 +508,10 @@ pub const Type = union(enum) {
             // optional the language makes without anybody writing `?`
             // (docs/ENUMS.md R2).
             .enumeration => |reference| .{ .optional = .{ .enumeration = reference } },
+            // `Window?` in-language is an ordinary optional; only the
+            // extern boundary rules on which handles admit it
+            // (docs/FFI.md).
+            .extern_type => |reference| .{ .optional = .{ .extern_type = reference } },
         };
     }
 
@@ -612,6 +672,17 @@ pub const EnumType = struct {
         }
         return null;
     }
+};
+
+/// One declared `extern type` (docs/FFI.md): the name diagnostics and
+/// `luce ir` render, and the representation the boundary declares.  The
+/// representation also travels inside every `Type.extern_type` for the
+/// reason `EnumRef` gives; the row here is the identity's home, and the
+/// two always agree because stage 4 builds the refs from this table in
+/// exactly one place.
+pub const ExternType = struct {
+    name: []const u8, // arena-owned by the program
+    representation: Type.ExternTypeRef.Representation,
 };
 
 pub const StructField = struct {
@@ -901,11 +972,12 @@ pub fn typeName(
     enums: []const EnumType,
     variants: []const VariantType,
     signatures: []const Signature,
+    extern_types: []const ExternType,
     of: Type,
 ) error{OutOfMemory}![]u8 {
     var written: std.ArrayList(u8) = .empty;
     errdefer written.deinit(allocator);
-    try writeTypeName(&written, allocator, layouts, heap_types, enums, variants, signatures, of);
+    try writeTypeName(&written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, of);
     return written.toOwnedSlice(allocator);
 }
 
@@ -917,6 +989,7 @@ fn writeTypeName(
     enums: []const EnumType,
     variants: []const VariantType,
     signatures: []const Signature,
+    extern_types: []const ExternType,
     of: Type,
 ) error{OutOfMemory}!void {
     switch (of) {
@@ -939,24 +1012,27 @@ fn writeTypeName(
         .bytes => try written.appendSlice(allocator, "bytes"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
+        // The declared name — the whole point of a nominal handle: a
+        // diagnostic says `Window`, never the token it is stored as.
+        .extern_type => |reference| try written.appendSlice(allocator, extern_types[reference.index].name),
         .variant => |index| try written.appendSlice(allocator, variants[index].name),
         .heap => |index| switch (heap_types[index]) {
             .class => |layout| try written.appendSlice(allocator, layouts[layout].name),
             .list => |element| {
                 try written.appendSlice(allocator, "list[");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, element);
                 try written.appendSlice(allocator, "]");
             },
             .map => |pair| {
                 try written.appendSlice(allocator, "map[");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, pair.key);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, pair.key);
                 try written.appendSlice(allocator, ", ");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, pair.value);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, pair.value);
                 try written.appendSlice(allocator, "]");
             },
             .array => |shape| {
                 try written.appendSlice(allocator, "array[");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, shape.element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, shape.element);
                 for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
                 try written.appendSlice(allocator, "]");
             },
@@ -964,14 +1040,14 @@ fn writeTypeName(
             .handle => try written.appendSlice(allocator, "handle"),
             .channel => |element| {
                 try written.appendSlice(allocator, "channel[");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, element);
                 try written.appendSlice(allocator, "]");
             },
             .task => |work| {
                 try written.appendSlice(allocator, "task");
                 if (work.result != .none) {
                     try written.appendSlice(allocator, "[");
-                    try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, work.result);
+                    try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, work.result);
                     if (work.fallible) try written.appendSlice(allocator, "!");
                     try written.appendSlice(allocator, "]");
                 } else if (work.fallible) try written.appendSlice(allocator, "[!]");
@@ -982,12 +1058,12 @@ fn writeTypeName(
             try written.appendSlice(allocator, "func(");
             for (signature.parameters, 0..) |parameter, at| {
                 if (at != 0) try written.appendSlice(allocator, ", ");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, parameter.value_type);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, parameter.value_type);
             }
             try written.appendSlice(allocator, ")");
             if (signature.result != .none) {
                 try written.appendSlice(allocator, " -> ");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, signature.result);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, signature.result);
                 if (signature.fallible) try written.appendSlice(allocator, "!");
             } else if (signature.fallible) {
                 try written.appendSlice(allocator, " -> !");
@@ -1002,7 +1078,7 @@ fn writeTypeName(
             // second spelling of every type into diagnostics.
             const parenthesized = payload == .function;
             if (parenthesized) try written.appendSlice(allocator, "(");
-            try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, payload.asType());
+            try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, payload.asType());
             if (parenthesized) try written.appendSlice(allocator, ")");
             try written.appendSlice(allocator, "?");
         },
@@ -1038,7 +1114,7 @@ test "an optional is its payload plus one level, and never two" {
 }
 
 test "an optional type writes the ? it was written with" {
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .i64 }}, &.{}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .i64 }}, &.{}, &.{}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list[i64]?", written);
 }
@@ -1070,7 +1146,7 @@ test "an enum is its own type, its own name, and its backing width underneath" {
         .{ .name = "Method", .backing = .u8, .members = &.{} },
         .{ .name = "Kind", .backing = .u8, .members = &.{} },
     };
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, &.{}, &.{}, .{ .heap = 0 });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, &.{}, &.{}, &.{}, .{ .heap = 0 });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list[Method]", written);
 }

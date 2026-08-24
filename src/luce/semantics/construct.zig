@@ -498,6 +498,53 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
     return lowerConvertAs(self, call, conversionNamed(call.callee).?);
 }
 
+/// `foreign(value)` — the one explicit escape from a named handle to
+/// the untyped token (docs/FFI.md): pointer-shaped only, never
+/// implicit, and never backwards.  `foreign` is not in the conversion
+/// table on purpose — it converts exactly one thing, and every other
+/// operand earns a sentence about what the escape is for.
+pub fn lowerForeignConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
+    if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
+        try self.fail("luce.sema.convert", call.span, "foreign(value) takes one argument", .{});
+        return null;
+    }
+    self.wanted = null;
+    const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
+    // The identity, by the numeric constructors' precedent: a
+    // redundant escape is not a mistake to report.
+    if (value.value_type == .foreign) return value;
+    if (value.value_type != .extern_type) {
+        try self.fail(
+            "luce.sema.convert",
+            call.span,
+            "foreign(value) converts a pointer-shaped handle to the untyped token; {s} is not a handle (docs/FFI.md)",
+            .{try self.analyzer.typeName(value.value_type)},
+        );
+        return null;
+    }
+    if (value.value_type.extern_type.representation != .foreign) {
+        try self.fail(
+            "luce.sema.convert",
+            call.span,
+            "{s} is an integer-shaped handle: its value is an integer, not a token, and foreign() has nothing to strip (docs/FFI.md)",
+            .{try self.analyzer.typeName(value.value_type)},
+        );
+        return null;
+    }
+    return .{
+        .node = try recorder.recordCallNode(
+            self,
+            .{ .conversion = .foreign },
+            &.{.{ .node = value.node, .slot = 0 }},
+            1,
+            false,
+            .foreign,
+            call.span,
+        ),
+        .value_type = .foreign,
+    };
+}
+
 /// A scalar alias used in constructor position.  The written alias stays in
 /// diagnostics, while conversion semantics are selected by the resolved
 /// target.  This is the expression-side half of alias transparency:

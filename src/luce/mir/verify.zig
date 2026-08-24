@@ -62,6 +62,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         }
         try verifyType(program, signature.result);
     }
+    // A foreign row is a type table too, and since named handles its
+    // slots can index one (docs/FFI.md).  Check every row, including
+    // rows no call happens to consume, for the signature-table reason
+    // above.
+    for (program.foreign_functions) |foreign| {
+        for (foreign.parameters) |parameter| try verifyType(program, parameter);
+        if (foreign.result != .none) try verifyType(program, foreign.result);
+    }
     for (program.heap_types) |descriptor| switch (descriptor) {
         .class => |layout| {
             if (layout >= program.structs.len or !program.structs[layout].reference)
@@ -276,6 +284,16 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
             const declared = program.enums[reference.index];
             if (declared.backing != reference.backing) return error.BadStruct;
             if (declared.members.len == 0) return error.BadStruct;
+        },
+        // A handle names a row of the extern-type table, and the
+        // representation it carries must be the one that row declares —
+        // the enum discipline exactly: a module that says otherwise
+        // would have an engine reading a slot at a width the boundary
+        // denies.
+        .extern_type => |reference| {
+            if (reference.index >= program.extern_types.len) return error.BadStruct;
+            const declared = program.extern_types[reference.index];
+            if (declared.representation != reference.representation) return error.BadStruct;
         },
         // A payload is a type in its own right and is bounded the same
         // way; it can never be optional itself, so this is one step.
@@ -705,7 +723,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .f64 => true,
         .f32 => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .f16 => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
+        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => false,
     };
 }
 
@@ -989,13 +1007,19 @@ fn verifyInstruction(
             // The zero token is `foreign`'s zero value (docs/FFI.md) —
             // the one integer constant the type admits.  Anything else
             // would be a forged pointer, so a hostile module offering
-            // one is refused.
-            if (result == .foreign) {
+            // one is refused.  A pointer-shaped handle takes the same
+            // rule; an integer-shaped one is its integer width, whose
+            // zero is `var d: Device`'s fill and whose other values
+            // only the boundary can produce — but a constant that fits
+            // the width forges nothing, so the width rule is enough.
+            if (result == .foreign or
+                (result == .extern_type and result.extern_type.representation == .foreign))
+            {
                 if (held != 0) return error.BadConstant;
                 return;
             }
-            if (!result.isInteger()) return error.TypeMismatch;
-            if (!fitsInteger(held, result)) return error.BadConstant;
+            if (!result.storage().isInteger()) return error.TypeMismatch;
+            if (!fitsInteger(held, result.storage())) return error.BadConstant;
         },
         .const_float => |held| {
             if (!result.isFloating()) return error.TypeMismatch;
@@ -1139,6 +1163,16 @@ fn verifyInstruction(
             // representation as `i32`; that is an engine fact, not a
             // source conversion.  Only a numeric value or an enum may
             // reach this instruction.
+            // `foreign(w)` — the one explicit escape from a
+            // pointer-shaped handle to the untyped token (docs/FFI.md),
+            // and the only conversion an extern type takes part in:
+            // never backwards, and an integer-shaped handle's value is
+            // an integer, not a token to strip.
+            if (operand == .extern_type) {
+                if (operand.extern_type.representation != .foreign or result != .foreign)
+                    return error.TypeMismatch;
+                return;
+            }
             if (!operand.isNumeric() and operand != .enumeration) return error.TypeMismatch;
             const from = operand.storage();
             if (!from.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
@@ -1463,14 +1497,24 @@ fn verifyInstruction(
 fn foreignParameter(of: Type) bool {
     return switch (of) {
         .u32, .i32, .u64, .i64, .foreign => true,
+        // A named handle is its representation at the boundary, and
+        // every representation it may declare is Tier 1 by
+        // construction (docs/FFI.md).
+        .extern_type => true,
         // `str` crosses seamlessly (docs/FFI.md): an argument becomes
         // a NUL-terminated temporary borrowed for the call; a result
         // is copied and validated at the boundary.
         .str => true,
         // `foreign?` — C's nullable pointer, decoded at the boundary
-        // (docs/FFI.md).  Only the foreign payload is admitted; an
-        // optional of anything else has no C encoding.
-        .optional => |payload| payload.asType() == .foreign,
+        // (docs/FFI.md).  The foreign payload and the pointer-shaped
+        // handle's are admitted; an optional of anything else has no C
+        // encoding — an integer-shaped handle's zero is a value, so
+        // its optional is refused here exactly as stage 4 refuses it.
+        .optional => |payload| switch (payload) {
+            .foreign => true,
+            .extern_type => |reference| reference.representation == .foreign,
+            else => false,
+        },
         else => false,
     };
 }
@@ -2438,6 +2482,7 @@ fn typeCanOwnStorage(of: Type) bool {
         .char,
         .heap,
         .enumeration,
+        .extern_type,
         => false,
     };
 }
@@ -2529,7 +2574,11 @@ fn typeCarriesWorker(
             .str,
             .bytes,
             .foreign,
+            // A handle crosses a worker as the value it is; whether
+            // that means anything is the library's contract
+            // (docs/FFI.md).
             .enumeration,
+            .extern_type,
             => {},
         }
     }

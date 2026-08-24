@@ -291,6 +291,172 @@ test "invalid C text refuses to become a str" {
     , .invalid_utf8, "C text is not valid UTF-8");
 }
 
+test "a named handle is nominal: Window is not Renderer, foreign, or an integer" {
+    // The whole point of `extern type` (docs/FFI.md): the type system
+    // carries what C's own pointer types carry, so a `Window` in a
+    // `Renderer` slot is a compile refusal, not a runtime mystery.
+    try expectRejected(
+        \\extern type Window
+        \\extern type Renderer
+        \\
+        \\extern func luce_ffi_probe_token() -> Window
+        \\extern func luce_ffi_probe_echo(token: Renderer) -> Renderer
+        \\
+        \\func main():
+        \\    let w = luce_ffi_probe_token()
+        \\    let r = luce_ffi_probe_echo(w)
+        \\    print(str(r == r))
+        \\
+    , "luce.sema.type");
+    // An integer is not a handle either, whatever the representation.
+    try expectRejected(
+        \\extern type Device = i32
+        \\
+        \\extern func luce_ffi_probe_echo_i32(v: Device) -> Device
+        \\
+        \\func main():
+        \\    let held: i32 = 3
+        \\    let back = luce_ffi_probe_echo_i32(held)
+        \\    print(str(back == back))
+        \\
+    , "luce.sema.type");
+    // A bare `foreign` does not become a handle implicitly: the
+    // conversion has one direction and it is not this one.
+    try expectRejected(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_token() -> foreign
+        \\extern func luce_ffi_probe_echo(token: Window) -> Window
+        \\
+        \\func main():
+        \\    let raw = luce_ffi_probe_token()
+        \\    let w = luce_ffi_probe_echo(raw)
+        \\    print(str(w == w))
+        \\
+    , "luce.sema.type");
+}
+
+test "a pointer-shaped handle round-trips, and its ? decodes null to none" {
+    try agree.prints(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_token() -> Window
+        \\extern func luce_ffi_probe_echo(token: Window) -> Window
+        \\extern func luce_ffi_probe_null() -> Window?
+        \\
+        \\func main():
+        \\    let w = luce_ffi_probe_token()
+        \\    let back = luce_ffi_probe_echo(w)
+        \\    print(str(back == w))
+        \\    let absent = luce_ffi_probe_null()
+        \\    print(str(absent == none))
+        \\
+    ,
+        \\true
+        \\true
+        \\
+    );
+}
+
+test "an integer-shaped handle's zero is a value and takes no trap" {
+    // `extern type Device = i32` crosses at C's exact `int` width, and
+    // zero is an ordinary value — CUDA device 0 is the first GPU — so
+    // the boundary neither traps it nor decodes it (docs/FFI.md).
+    try agree.prints(
+        \\extern type Device = i32
+        \\
+        \\extern func luce_ffi_probe_echo_i32(v: Device) -> Device
+        \\
+        \\func main():
+        \\    var first: Device
+        \\    let back = luce_ffi_probe_echo_i32(first)
+        \\    print(str(back == first))
+        \\
+    ,
+        \\true
+        \\
+    );
+    // Its `?` has no C encoding — a present zero and an absent slot
+    // would be indistinguishable — so the boundary refuses it.  In
+    // ordinary Luce code the optional stays legal like any other T?.
+    try expectRejected(
+        \\extern type Device = i32
+        \\
+        \\extern func broken() -> Device?
+        \\
+        \\func main():
+        \\    print(str(broken() == none))
+        \\
+    , "luce.sema.extern");
+}
+
+test "a bare pointer-shaped handle keeps the non-null contract" {
+    try agree.trap(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_echo(token: Window) -> Window
+        \\
+        \\func main():
+        \\    var zero: Window
+        \\    let back = luce_ffi_probe_echo(zero)
+        \\    print(str(back == back))
+        \\
+    , .null_foreign);
+}
+
+test "foreign(w) is the one explicit escape, and it has one direction" {
+    try agree.prints(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_token() -> Window
+        \\extern func luce_ffi_probe_echo(token: foreign) -> foreign
+        \\
+        \\func main():
+        \\    let w = luce_ffi_probe_token()
+        \\    let raw = foreign(w)
+        \\    let back = luce_ffi_probe_echo(raw)
+        \\    print(str(back == raw))
+        \\
+    ,
+        \\true
+        \\
+    );
+    // An integer-shaped handle has nothing to strip: its value is an
+    // integer, not a token (docs/FFI.md).
+    try expectRejected(
+        \\extern type Device = i32
+        \\
+        \\extern func luce_ffi_probe_echo_i32(v: Device) -> Device
+        \\
+        \\func main():
+        \\    var d: Device
+        \\    print(str(foreign(d) == foreign(d)))
+        \\
+    , "luce.sema.convert");
+}
+
+test "the extern type declaration's refusals" {
+    // The representation vocabulary is exactly the four Tier-1 widths.
+    try expectRejected(
+        \\extern type Bad = u8
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.parse.extern");
+    // A handle shares the type namespace: one name, one declaration.
+    try expectRejected(
+        \\struct Window:
+        \\    x: i64
+        \\
+        \\extern type Window
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.duplicate");
+}
+
 test "the C reads copy out of foreign memory" {
     // The buffer is Luce's own, handed out as a token and read back
     // through the two copy verbs — which is exactly the shape of

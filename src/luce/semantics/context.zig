@@ -79,7 +79,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .f16 => half_range_message,
         .f32 => float_range_message,
         .f64 => double_range_message,
-        .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
+        .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => long_range_message,
     };
 }
 
@@ -104,9 +104,9 @@ pub fn literalLandingType(expected: Type) ?Type {
             .f64 => .f64,
             // A number never lands on an enum: `Method` is a set of
             // names and `Method(8)` is the only way in (D4, R2).
-            .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function => null,
+            .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .extern_type => null,
         },
-        .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function => null,
+        .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .extern_type => null,
     };
 }
 
@@ -410,6 +410,14 @@ pub const EnumDeclInfo = struct {
     /// member of an enum still pending is refused rather than read at
     /// whatever its slot happens to hold.
     settled: bool = false,
+};
+
+/// A collected extern type declaration with its module (docs/FFI.md).
+/// The name and representation live in the program's `types.ExternType`
+/// beside it, the way an enum's members live in its row.
+pub const ExternTypeDeclInfo = struct {
+    declaration: *const ast.ExternTypeDecl,
+    module: usize,
 };
 
 /// A collected union declaration with its module (docs/UNION.md).  The

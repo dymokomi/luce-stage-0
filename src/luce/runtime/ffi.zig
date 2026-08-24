@@ -145,6 +145,14 @@ export fn luce_ffi_probe_echo(token: u64) callconv(.c) u64 {
     return token;
 }
 
+/// Echoes an `int`, so an integer-shaped handle (`extern type Device
+/// = i32`) is watched crossing at its exact C width — zero included,
+/// because an integer handle's zero is a value and takes no trap
+/// (docs/FFI.md).
+export fn luce_ffi_probe_echo_i32(v: i32) callconv(.c) i32 {
+    return v;
+}
+
 /// A C string the `-> str` boundary copies and validates.
 export fn luce_ffi_probe_greet() callconv(.c) [*:0]const u8 {
     return "hello from C";

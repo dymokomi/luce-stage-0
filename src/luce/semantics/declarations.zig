@@ -207,6 +207,13 @@ pub const Analyzer = struct {
     enums: std.ArrayList(types.EnumType) = .empty,
     enum_decls: std.ArrayList(context.EnumDeclInfo) = .empty,
     enum_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The declared extern types, in declaration order (docs/FFI.md).
+    /// They share the type-name space with structs, enums and unions —
+    /// one name, one declaration, whichever keyword wrote it — so
+    /// `firstDeclarationOf` reads all four.
+    extern_types: std.ArrayList(types.ExternType) = .empty,
+    extern_type_decls: std.ArrayList(context.ExternTypeDeclInfo) = .empty,
+    extern_type_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// The declared unions, in declaration order (docs/UNION.md).  They
     /// share the type-name space with structs and enums — one name, one
     /// declaration, whichever keyword wrote it — so `firstDeclarationOf`
@@ -277,6 +284,8 @@ pub const Analyzer = struct {
         self.conformances.deinit(self.temporary);
         self.enum_decls.deinit(self.temporary);
         self.enum_names.deinit(self.temporary);
+        self.extern_type_decls.deinit(self.temporary);
+        self.extern_type_names.deinit(self.temporary);
         self.variant_decls.deinit(self.temporary);
         self.variant_names.deinit(self.temporary);
         self.variant_shapes.deinit(self.temporary);
@@ -319,6 +328,7 @@ pub const Analyzer = struct {
         // member *fields* are resolved after the struct names are,
         // because a payload may hold one.
         try aliases.collectDeclarations(self);
+        try layouts.collectExternTypes(self);
         try layouts.collectTypeNames(self);
         try layouts.collectStructs(self);
         try layouts.settleVariantMembers(self);
@@ -395,6 +405,7 @@ pub const Analyzer = struct {
             .signatures = try self.signatures.toOwnedSlice(self.arena),
             .interface_witnesses = interface_witnesses,
             .enums = try self.enums.toOwnedSlice(self.arena),
+            .extern_types = try self.extern_types.toOwnedSlice(self.arena),
             .variants = try self.variants.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .foreign_functions = foreign_rows,
@@ -452,6 +463,17 @@ pub const Analyzer = struct {
         return .{ .enumeration = .{ .index = index, .backing = self.enums.items[index].backing } };
     }
 
+    /// The handle a written name resolves to, with its representation —
+    /// the one place an `ExternTypeRef` is built, so the representation
+    /// beside an index is always the one that index declares
+    /// (docs/FFI.md; the `enumType` discipline exactly).
+    pub fn externType(self: *const Analyzer, index: u32) Type {
+        return .{ .extern_type = .{
+            .index = index,
+            .representation = self.extern_types.items[index].representation,
+        } };
+    }
+
     /// The interface declaration owning a hidden struct layout, if any.
     pub fn interfaceForLayout(self: *const Analyzer, layout: u32) ?u32 {
         for (self.interface_decls.items, 0..) |decl, index| {
@@ -476,6 +498,7 @@ pub const Analyzer = struct {
             self.enums.items,
             self.variants.items,
             self.signatures.items,
+            self.extern_types.items,
             of,
         );
     }
