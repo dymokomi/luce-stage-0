@@ -1439,20 +1439,50 @@ pub const Function = struct {
     source: []const u8 = "",
 };
 
-/// One declared extern (docs/FFI.md): the symbol, its Tier-1 shape,
+/// One declared extern (docs/FFI.md): the symbol, its boundary shape,
 /// and its lock contract.
 pub const ForeignFunction = struct {
+    /// One C slot of the declaration.  An `out` slot takes no
+    /// argument at the call: the engines allocate the slot, pass its
+    /// address, and read the value back as an extra result in
+    /// declaration order after the declared return.
+    pub const Parameter = struct {
+        parameter_type: types.Type,
+        out: bool = false,
+    };
+
     /// The symbol as the linker sees it — the declared name, exactly.
     name: []const u8,
-    /// The parameter types, all integer-class in Tier 1 (integers,
-    /// bool, foreign), at most eight of them.
-    parameters: []types.Type = &.{},
-    /// What the call answers: an integer-class scalar, `f64`, or
-    /// `.none` for a C void.
+    /// The parameter slots, each a boundary scalar, handle, nullable
+    /// handle, or `str` (docs/FFI.md).  No arity cap: the target C
+    /// ABI decides register and stack assignment, exactly as for C.
+    parameters: []Parameter = &.{},
+    /// What the call answers before the out slots join it: a boundary
+    /// scalar, handle, `str`, or `.none` for a C void.
     result: types.Type = .none,
     /// Runs outside the effect lock; the callee must be thread-safe
     /// (the socket slots' contract).
     blocking: bool = false,
+
+    /// How many arguments a call writes — one per slot that is not
+    /// `out`.
+    pub fn argumentCount(self: *const ForeignFunction) usize {
+        var count: usize = 0;
+        for (self.parameters) |parameter| {
+            if (!parameter.out) count += 1;
+        }
+        return count;
+    }
+
+    /// How many values a call answers: the declared return, if any,
+    /// then one per `out` slot.
+    pub fn resultCount(self: *const ForeignFunction) usize {
+        var count: usize = @intFromBool(self.result != .none);
+        for (self.parameters) |parameter| {
+            if (parameter.out) count += 1;
+        }
+        return count;
+    }
 };
 
 pub const Program = struct {

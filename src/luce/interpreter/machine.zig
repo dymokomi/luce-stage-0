@@ -532,6 +532,76 @@ pub const Machine = struct {
         };
     }
 
+    // -- the FFI boundary's marshalling (docs/FFI.md) ------------------
+
+    /// The C shape of one boundary slot, in the shim's vocabulary.
+    /// Through `storage()`, so a named handle crosses as its
+    /// representation; every pointer-shaped crossing — token, C
+    /// string, nullable — is `pointer`.
+    fn foreignShape(of: types.Type) runtime.ffi.CType {
+        return switch (of.storage()) {
+            .boolean, .u8 => .uint8,
+            .i8 => .sint8,
+            .u16 => .uint16,
+            .i16 => .sint16,
+            .u32 => .uint32,
+            .i32 => .sint32,
+            .u64 => .uint64,
+            .i64 => .sint64,
+            .f32 => .float,
+            .f64 => .double,
+            // The verifier holds the vocabulary; everything else that
+            // crosses is pointer-shaped.
+            else => .pointer,
+        };
+    }
+
+    /// Read one `out` slot's raw bits after the call: C wrote through
+    /// a typed pointer, so the slot is read back through the same
+    /// type, and the bits land in the low end of the word exactly as
+    /// a return value's would.
+    fn foreignSlotRead(of: types.Type, cell: *const u64) u64 {
+        return switch (of.storage()) {
+            .boolean, .u8, .i8 => @as(*const u8, @ptrCast(cell)).*,
+            .u16, .i16 => @as(*const u16, @ptrCast(@alignCast(cell))).*,
+            .u32, .i32, .f32 => @as(*const u32, @ptrCast(@alignCast(cell))).*,
+            else => cell.*,
+        };
+    }
+
+    /// Decode one boundary value from its raw bits — a return
+    /// register or an `out` slot, same rules either way (docs/FFI.md):
+    /// a bare pointer-shaped handle enforces its non-null contract, a
+    /// `?` decodes C's 0 to `none`, `str` copies and validates, and a
+    /// scalar is masked to its declared width rather than trusted.
+    fn decodeForeign(self: *Machine, of: types.Type, word: u64) EvalError!RuntimeValue {
+        return switch (of.storage()) {
+            .boolean => .ofBoolean(@as(u8, @truncate(word)) != 0),
+            .u8 => .ofU8(@truncate(word)),
+            .i8 => .ofI8(@bitCast(@as(u8, @truncate(word)))),
+            .u16 => .ofU16(@truncate(word)),
+            .i16 => .ofI16(@bitCast(@as(u16, @truncate(word)))),
+            .u32 => .ofU32(@truncate(word)),
+            .i32 => .ofI32(@bitCast(@as(u32, @truncate(word)))),
+            .u64 => .ofU64(word),
+            .i64 => .ofI64(@bitCast(word)),
+            .f32 => .ofF32(@bitCast(@as(u32, @truncate(word)))),
+            .f64 => .ofF64(@bitCast(word)),
+            .foreign => if (word == 0)
+                self.runtime.fail(.null_foreign)
+            else
+                .ofI64(@bitCast(word)),
+            .optional => if (of.optional.asType() == .str)
+                text.cstringResultOpt(&self.runtime, word)
+            else if (word == 0)
+                RuntimeValue.none
+            else
+                .ofI64(@bitCast(word)),
+            .str => text.cstringResult(&self.runtime, word),
+            else => self.runtime.fail(.host_unavailable),
+        };
+    }
+
     /// Fill a trap's stack trace from the live frame stack, innermost
     /// first.  Each frame's current instruction resolves through the
     /// function's origins table when the module carries one (debug);
@@ -1268,34 +1338,62 @@ pub const Machine = struct {
                     // The FFI boundary (docs/FFI.md): resolve in this
                     // process — link-time symbols live in whatever
                     // carries the oracle — and dispatch through the
-                    // runtime shim, under the effect lock unless the
-                    // row says blocking.  A symbol nothing carries is
-                    // the host refusing, and says so.
+                    // runtime shim's libffi door, under the effect
+                    // lock unless the row says blocking.  A symbol
+                    // nothing carries is the host refusing, and says
+                    // so.
                     .call_foreign => |called| {
-                        const row = self.program.foreign_functions[called.foreign];
+                        const row = &self.program.foreign_functions[called.foreign];
                         var symbol_buffer: [256]u8 = undefined;
                         if (row.name.len >= symbol_buffer.len) return self.trap(.host_unavailable);
                         @memcpy(symbol_buffer[0..row.name.len], row.name);
                         symbol_buffer[row.name.len] = 0;
                         const target = runtime.ffi.resolve(symbol_buffer[0..row.name.len :0]) orelse
                             return self.trap(.host_unavailable);
-                        var words: [runtime.ffi.max_parameters]u64 = undefined;
+                        const shapes = try self.arena.alloc(runtime.ffi.CType, row.parameters.len);
+                        defer self.arena.free(shapes);
+                        const words = try self.arena.alloc(u64, row.parameters.len);
+                        defer self.arena.free(words);
+                        // One scratch word per `out` slot: C writes
+                        // through the address, the decode below reads
+                        // it back (docs/FFI.md).  Zeroed so a callee
+                        // that skips a slot is still deterministic.
+                        const out_slots = try self.arena.alloc(u64, row.parameters.len);
+                        defer self.arena.free(out_slots);
+                        @memset(out_slots, 0);
                         // The NUL-terminated temporaries `str`
                         // arguments cross as, borrowed for exactly
                         // this call (docs/FFI.md).
-                        var borrowed: [runtime.ffi.max_parameters]u64 = undefined;
-                        var borrowed_count: usize = 0;
+                        var borrowed: std.ArrayList(u64) = .empty;
+                        defer borrowed.deinit(self.arena);
                         // Through `storage()`, so a named handle takes
                         // the arm its representation earns
                         // (docs/FFI.md): pointer-shaped joins bare
                         // `foreign`'s non-null contract, integer-shaped
                         // crosses as the ordinary integer it is.
-                        for (called.arguments, 0..) |argument, index| {
-                            words[index] = switch (row.parameters[index].storage()) {
+                        var written: usize = 0;
+                        for (row.parameters, 0..) |parameter, index| {
+                            if (parameter.out) {
+                                shapes[index] = .pointer;
+                                words[index] = @intFromPtr(&out_slots[index]);
+                                continue;
+                            }
+                            const argument = called.arguments[written];
+                            written += 1;
+                            const of = parameter.parameter_type;
+                            shapes[index] = foreignShape(of);
+                            words[index] = switch (of.storage()) {
+                                .boolean => @intFromBool(registers[argument].asBoolean()),
+                                .u8 => registers[argument].asU8(),
+                                .i8 => @as(u8, @bitCast(registers[argument].asI8())),
+                                .u16 => registers[argument].asU16(),
+                                .i16 => @as(u16, @bitCast(registers[argument].asI16())),
                                 .u32 => registers[argument].asU32(),
                                 .i32 => @as(u32, @bitCast(registers[argument].asI32())),
                                 .u64 => registers[argument].asU64(),
                                 .i64 => @bitCast(registers[argument].asI64()),
+                                .f32 => @as(u32, @bitCast(registers[argument].asF32())),
+                                .f64 => @bitCast(registers[argument].asF64()),
                                 // A bare `foreign` is the enforced
                                 // non-null contract (docs/FFI.md): a
                                 // zero token stops at the call.
@@ -1304,9 +1402,17 @@ pub const Machine = struct {
                                     if (token == 0) return self.trap(.null_foreign);
                                     break :blk token;
                                 },
-                                // `foreign?` encodes: `none` crosses
-                                // as C's 0, a present token as itself.
-                                .optional => if (registers[argument].isNone())
+                                // The nullable crossings encode:
+                                // `none` is C's 0 or NULL; a present
+                                // `str?` takes the NUL-temporary
+                                // rules whole.
+                                .optional => if (of.optional.asType() == .str) blk: {
+                                    const made = text.cstringMakeOpt(&self.runtime, registers[argument]) catch |mistake|
+                                        return self.caught(mistake);
+                                    const token: u64 = @bitCast(made.asI64());
+                                    try borrowed.append(self.arena, token);
+                                    break :blk token;
+                                } else if (registers[argument].isNone())
                                     0
                                 else
                                     @bitCast(registers[argument].asI64()),
@@ -1314,48 +1420,46 @@ pub const Machine = struct {
                                     const made = text.cstringMake(&self.runtime, registers[argument]) catch |mistake|
                                         return self.caught(mistake);
                                     const token: u64 = @bitCast(made.asI64());
-                                    borrowed[borrowed_count] = token;
-                                    borrowed_count += 1;
+                                    try borrowed.append(self.arena, token);
                                     break :blk token;
                                 },
                                 else => return self.trap(.host_unavailable),
                             };
                         }
-                        const kind: runtime.ffi.ReturnKind = switch (row.result) {
-                            .none => .none,
-                            .f64 => .real,
-                            else => .integer,
-                        };
+                        const answers: runtime.ffi.CType = if (row.result == .none)
+                            .void
+                        else
+                            foreignShape(row.result);
                         if (!row.blocking) self.runtime.enterEffects();
-                        const answer = runtime.ffi.call(target, words[0..called.arguments.len], kind);
+                        const answer = try runtime.ffi.call(self.arena, target, shapes, words, answers);
                         if (!row.blocking) self.runtime.leaveEffects();
-                        // The borrows end with the call.
-                        for (borrowed[0..borrowed_count]) |token| {
+                        // The borrows end with the call; the zero
+                        // token a `none` crossed as frees nothing.
+                        for (borrowed.items) |token| {
                             text.cstringFree(&self.runtime, token);
                         }
-                        registers[item] = switch (row.result.storage()) {
-                            .none => .none,
-                            .f64 => .ofF64(answer.real),
-                            .u32 => .ofU32(@truncate(answer.integer)),
-                            .i32 => .ofI32(@bitCast(@as(u32, @truncate(answer.integer)))),
-                            .u64 => .ofU64(answer.integer),
-                            .i64 => .ofI64(@bitCast(answer.integer)),
-                            // A bare `foreign` result enforces its
-                            // non-null contract; `foreign?` decodes
-                            // C's 0 to `none` (docs/FFI.md).
-                            .foreign => if (answer.integer == 0)
-                                return self.trap(.null_foreign)
-                            else
-                                .ofI64(@bitCast(answer.integer)),
-                            .optional => if (answer.integer == 0)
-                                .none
-                            else
-                                .ofI64(@bitCast(answer.integer)),
-                            // `-> str` copies and validates at the
-                            // boundary (docs/FFI.md).
-                            .str => text.cstringResult(&self.runtime, answer.integer) catch |mistake|
+                        // The declared return first, then each out
+                        // slot in declaration order — the same values
+                        // and the same decodes on both engines
+                        // (docs/FFI.md).
+                        self.field_scratch.clearRetainingCapacity();
+                        if (row.result != .none) {
+                            const decoded = self.decodeForeign(row.result, answer) catch |mistake|
+                                return self.caught(mistake);
+                            try self.field_scratch.append(self.arena, decoded);
+                        }
+                        for (row.parameters, 0..) |parameter, index| {
+                            if (!parameter.out) continue;
+                            const raw = foreignSlotRead(parameter.parameter_type, &out_slots[index]);
+                            const decoded = self.decodeForeign(parameter.parameter_type, raw) catch |mistake|
+                                return self.caught(mistake);
+                            try self.field_scratch.append(self.arena, decoded);
+                        }
+                        registers[item] = switch (self.field_scratch.items.len) {
+                            0 => .none,
+                            1 => self.field_scratch.items[0],
+                            else => self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
                                 return self.caught(mistake),
-                            else => return self.trap(.host_unavailable),
                         };
                     },
                     .call => |called| {

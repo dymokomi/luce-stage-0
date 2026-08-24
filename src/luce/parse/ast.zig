@@ -658,6 +658,11 @@ pub const Parameter = struct {
     /// to a compile-time constant by stage 4 (docs/ARGS.md D2).  Null
     /// for a required parameter.
     default: ?*Expression = null,
+    /// `out name: T` in an extern declaration (docs/FFI.md): C fills
+    /// the slot and the value comes back as an extra result.  Only
+    /// the extern parameter list parses the modifier; everywhere else
+    /// `out` stays an ordinary parameter name.
+    out: bool = false,
     span: Span,
 };
 

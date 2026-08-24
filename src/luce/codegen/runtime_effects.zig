@@ -225,8 +225,10 @@ pub const Service = enum {
     luce_rt_bytes_at,
     luce_rt_cstring_at,
     luce_rt_cstring_make,
+    luce_rt_cstring_make_opt,
     luce_rt_cstring_free,
     luce_rt_cstring_result,
+    luce_rt_cstring_result_opt,
     luce_rt_append_ascii,
     luce_rt_pop,
     luce_rt_insert,
@@ -1068,7 +1070,7 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
         },
-        .luce_rt_cstring_make => .{
+        .luce_rt_cstring_make, .luce_rt_cstring_make_opt => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
         },
@@ -1076,7 +1078,7 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .plain },
         },
-        .luce_rt_cstring_result => .{
+        .luce_rt_cstring_result, .luce_rt_cstring_result_opt => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .plain, .value_out },
         },

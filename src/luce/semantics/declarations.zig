@@ -392,9 +392,13 @@ pub const Analyzer = struct {
 
         const foreign_rows = try self.arena.alloc(mir.ForeignFunction, self.foreigns.items.len);
         for (self.foreigns.items, foreign_rows) |declared, *row| {
+            const slots = try self.arena.alloc(mir.ForeignFunction.Parameter, declared.parameters.len);
+            for (declared.parameters, slots) |parameter, *slot| {
+                slot.* = .{ .parameter_type = parameter.parameter_type, .out = parameter.out };
+            }
             row.* = .{
                 .name = try self.arena.dupe(u8, declared.symbol),
-                .parameters = try self.arena.dupe(types.Type, declared.parameters),
+                .parameters = slots,
                 .result = declared.result,
                 .blocking = declared.blocking,
             };

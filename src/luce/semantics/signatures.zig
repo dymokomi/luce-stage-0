@@ -689,9 +689,16 @@ pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
 }
 
 /// One extern declaration (docs/FFI.md): resolve the shape, refuse
-/// what falls outside Tier 1 with the reason, and register the row
-/// under its qualified call spelling — the bare declared name stays
-/// the symbol the linker resolves.
+/// what falls outside the boundary vocabulary with the reason, and
+/// register the row under its qualified call spelling — the bare
+/// declared name stays the symbol the linker resolves.
+///
+/// A declaration with `out` slots also settles here what a *call*
+/// answers: the declared return first, then the out values in
+/// declaration order, riding the same synthesized return shape every
+/// multi-value function answers through (docs/RETURNS.md) — which is
+/// why this runs inside `collectFunctions`, in the same window where
+/// `synthesizeShapes` interns every other shape.
 fn collectExtern(
     self: *Analyzer,
     declaration: *const ast.ExternDecl,
@@ -708,77 +715,124 @@ fn collectExtern(
         );
         return;
     }
-    if (declaration.parameters.len > 8) {
-        try self.fail(
-            "luce.sema.extern",
-            declaration.name_span,
-            "an extern takes at most eight parameters (docs/FFI.md)",
-            .{},
-        );
-        return;
-    }
-    var parameters: std.ArrayList(Type) = .empty;
+    var parameters: std.ArrayList(context.ForeignDeclInfo.Parameter) = .empty;
     defer parameters.deinit(self.temporary);
+    var out_types: std.ArrayList(Type) = .empty;
+    defer out_types.deinit(self.temporary);
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
         if (try refuseIntegerHandleOptional(self, resolved, parameter.type_name.span)) return;
-        if (!(tierOneParameter(resolved) or nullableHandle(resolved) or resolved == .str)) {
+        if (parameter.out) {
+            if (!boundaryOut(resolved)) {
+                try self.fail(
+                    "luce.sema.extern",
+                    parameter.type_name.span,
+                    "an out parameter is a fixed-width integer, f32, f64, bool, foreign, or a handle — a value C writes into the slot the call allocates (docs/FFI.md)",
+                    .{},
+                );
+                return;
+            }
+            try out_types.append(self.temporary, resolved);
+        } else if (!(boundaryParameter(resolved) or nullableBoundary(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a 32- or 64-bit integer, foreign, foreign?, a named handle, or str; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a fixed-width integer, f32, f64, bool, foreign, a named handle, or str — the pointer-shaped handles and str also as their ? forms; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
         }
-        try parameters.append(self.temporary, resolved);
+        try parameters.append(self.temporary, .{ .parameter_type = resolved, .out = parameter.out });
     }
     var result: Type = .none;
     if (declaration.returns) |written| {
         const resolved = (try resolve.resolveType(self, module, written)) orelse return;
         if (try refuseIntegerHandleOptional(self, resolved, written.span)) return;
-        if (!(resolved == .f64 or resolved == .str or tierOneParameter(resolved) or nullableHandle(resolved))) {
+        if (!(boundaryParameter(resolved) or nullableBoundary(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 written.span,
-                "an extern answers a 32- or 64-bit integer, foreign, foreign?, a named handle, str, f64, or nothing (docs/FFI.md)",
+                "an extern answers a fixed-width integer, f32, f64, bool, foreign, a named handle, or str — the pointer-shaped handles and str also as their ? forms — or nothing (docs/FFI.md)",
                 .{},
             );
             return;
         }
         result = resolved;
     }
+    // What the call produces: nothing, one value, or the return shape
+    // the existing destructuring machinery receives (docs/RETURNS.md).
+    var channel: std.ArrayList(Type) = .empty;
+    defer channel.deinit(self.temporary);
+    if (result != .none) try channel.append(self.temporary, result);
+    try channel.appendSlice(self.temporary, out_types.items);
+    const answer: Type = switch (channel.items.len) {
+        0 => .none,
+        1 => channel.items[0],
+        else => (try internResultShape(
+            self,
+            channel.items,
+            declaration.name_span,
+            declaration.name,
+        )) orelse return,
+    };
     const index: u32 = @intCast(self.foreigns.items.len);
     try self.foreigns.append(self.temporary, .{
         .symbol = declaration.name,
-        .parameters = try self.arena.dupe(Type, parameters.items),
+        .parameters = try self.arena.dupe(context.ForeignDeclInfo.Parameter, parameters.items),
         .result = result,
+        .answer = answer,
         .blocking = declaration.blocking,
     });
     try self.foreign_names.put(self.temporary, qualified, index);
 }
 
-/// The Tier-1 parameter vocabulary (docs/FFI.md), in semantic terms:
-/// the widths every emitted C ABI passes without extension
-/// attributes, and the opaque token.  A named handle is its
-/// representation at the boundary, and every representation it may
-/// declare is Tier 1 by construction.
-fn tierOneParameter(of: Type) bool {
+/// The boundary scalar vocabulary (docs/FFI.md): the full fixed-width
+/// integer set, both floats, and `bool` — every width C itself
+/// passes, with the target's extension attributes where its ABI wants
+/// them.  `f16` and `char` are not C's and stay out.
+fn boundaryScalar(of: Type) bool {
     return switch (of) {
-        .u32, .i32, .u64, .i64, .foreign, .extern_type => true,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .boolean => true,
         else => false,
     };
 }
 
-/// `foreign?`, or a pointer-shaped handle's `?` (docs/FFI.md).  C's
-/// null decodes to `none` at the boundary; the bare form beside it is
-/// the enforced non-null contract.  An integer-shaped handle is not
-/// here on purpose — `refuseIntegerHandleOptional` owns that refusal.
-fn nullableHandle(of: Type) bool {
+/// What crosses bare in either direction (docs/FFI.md): the boundary
+/// scalars, the opaque token, a named handle, and `str`.  A named
+/// handle is its representation at the boundary, and every
+/// representation it may declare crosses by construction.
+fn boundaryParameter(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type, .str => true,
+        else => boundaryScalar(of),
+    };
+}
+
+/// The nullable crossings (docs/FFI.md): `foreign?` and a
+/// pointer-shaped handle's `?` decode C's null to `none`; `str?`
+/// crosses `none` as NULL and takes the NUL-temporary rules
+/// otherwise.  The bare forms beside them are the enforced non-null
+/// contract.  An integer-shaped handle is not here on purpose —
+/// `refuseIntegerHandleOptional` owns that refusal.
+fn nullableBoundary(of: Type) bool {
     if (of != .optional) return false;
     const payload = of.optional.asType();
-    return payload == .foreign or
+    return payload == .foreign or payload == .str or
         (payload == .extern_type and payload.extern_type.representation == .foreign);
+}
+
+/// What an `out` slot may carry back (docs/FFI.md): the scalars and
+/// the handles — bare, `foreign`, or nullable pointer-shaped.  Not
+/// `str`: C fills a caller-allocated word there, and text has no
+/// word.
+fn boundaryOut(of: Type) bool {
+    if (of == .foreign or of == .extern_type) return true;
+    if (of == .optional) {
+        const payload = of.optional.asType();
+        return payload == .foreign or
+            (payload == .extern_type and payload.extern_type.representation == .foreign);
+    }
+    return boundaryScalar(of);
 }
 
 /// `Device?` at the boundary, where `Device` is integer-shaped: an

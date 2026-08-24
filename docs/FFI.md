@@ -165,10 +165,12 @@ compiler derives them from the ABI, never hardcodes them.
 
 **There is no argument-count cap.**  The 0.20 nine-by-three thunk table
 is retired; the target C ABI decides register and stack assignment,
-exactly as it does for C.  The oracle's shim generalizes (libffi, which
-the test binary already links transitively).  Specs deliberately cover
-0, 1, 8, 9, 11, and 14 arguments — `cuLaunchKernel` is 11 and
-`cblas_dgemm` is 14, and both must be declarable verbatim.
+exactly as it does for C.  The oracle's shim generalizes (libffi,
+linked explicitly into the oracle-carrying test binaries and into
+nothing that ships — macOS carries it in the SDK, Linux uses the
+system library).  Specs deliberately cover 0, 1, 8, 9, 11, and 14
+arguments — `cuLaunchKernel` is 11 and `cblas_dgemm` is 14, and both
+must be declarable verbatim.
 
 ## Structs — `extern struct`, crossing by pointer
 

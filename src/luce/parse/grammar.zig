@@ -1769,7 +1769,7 @@ pub const Parser = struct {
         const marker = self.advance(); // init
         const opener = (try self.expect(.left_paren, "'(' opening the initializer parameter list")) orelse
             return null;
-        const parameters = (try self.parameterList(opener)) orelse return null;
+        const parameters = (try self.parameterList(opener, false)) orelse return null;
 
         var fallible = false;
         var error_type: ?*ast.TypeName = null;
@@ -2270,7 +2270,7 @@ pub const Parser = struct {
         try self.refuseWildcardName(name);
         const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse
             return null;
-        const parameters = (try self.parameterList(opener)) orelse return null;
+        const parameters = (try self.parameterList(opener, false)) orelse return null;
 
         // `-> T`, `-> T!`, `-> (A, B)`, `-> (A, B)!`, or a bare
         // `-> !`: the mark says the call may fail, the list says what
@@ -2311,11 +2311,12 @@ pub const Parser = struct {
         };
     }
 
-    /// `extern func name(a: T, ...) -> R`, with an optional `blocking`
-    /// between the two keywords (docs/FFI.md).  No body — the shape is
-    /// the whole declaration — no defaults, no fallibility mark, and
-    /// at most one return: the C shape is the whole truth, and every
-    /// refusal here says so.
+    /// `extern func name(a: T, out b: U, ...) -> R`, with an optional
+    /// `blocking` between the two keywords (docs/FFI.md).  No body —
+    /// the shape is the whole declaration — no defaults, no
+    /// fallibility mark, and at most one *declared* return: the C
+    /// shape is the whole truth, and every refusal here says so.  The
+    /// `out` slots widen what the call answers, not what C returns.
     fn externDecl(self: *Parser) Error!?ast.ExternDecl {
         const start = self.advance(); // extern
         var blocking = false;
@@ -2328,7 +2329,7 @@ pub const Parser = struct {
         try self.refuseWildcardName(name);
         const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse
             return null;
-        const parameters = (try self.parameterList(opener)) orelse return null;
+        const parameters = (try self.parameterList(opener, true)) orelse return null;
         for (parameters) |parameter| {
             if (parameter.default != null) {
                 try self.report(
@@ -2435,7 +2436,7 @@ pub const Parser = struct {
 
     /// The one parameter grammar shared by functions and class
     /// initializers. The opener has already been consumed.
-    fn parameterList(self: *Parser, opener: Token) Error!?[]ast.Parameter {
+    fn parameterList(self: *Parser, opener: Token, admit_out: bool) Error!?[]ast.Parameter {
         var parameters: std.ArrayList(ast.Parameter) = .empty;
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
@@ -2478,6 +2479,19 @@ pub const Parser = struct {
                 );
                 return null;
             }
+            // `out` is a contextual modifier in an extern parameter
+            // list only, and only when another name follows — `out:
+            // i32` stays a parameter *named* out, exactly as
+            // `blocking` stays an ordinary identifier outside its
+            // position (docs/FFI.md).
+            var out = false;
+            if (admit_out and self.peekKind() == .identifier and
+                std.mem.eql(u8, self.text(self.peek()), "out") and
+                self.peekAhead(1) == .identifier)
+            {
+                _ = self.advance();
+                out = true;
+            }
             const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse
                 return null;
             try self.refuseWildcardName(parameter_name);
@@ -2500,6 +2514,7 @@ pub const Parser = struct {
                 .name_span = parameter_name.span,
                 .type_name = parameter_type,
                 .default = default_value,
+                .out = out,
                 .span = .{ .start = parameter_name.span.start, .end = written_end },
             });
             previous_end = written_end;

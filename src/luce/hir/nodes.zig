@@ -1193,8 +1193,12 @@ pub fn provenance(expression: *const Expression) Provenance {
             // A function's result is the caller's (S16): fresh storage
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
             .function, .indirect, .interface => .fresh,
-            // An extern answers a Tier-1 scalar: nothing owned.
-            .foreign => .plain,
+            // An extern's result is the caller's exactly as a Luce
+            // call's is: a scalar owns nothing, but a `-> str` was
+            // copied into fresh storage at the boundary and a shape
+            // of out values owns its run (docs/FFI.md), so the
+            // statement's end must reclaim what nothing adopts.
+            .foreign => .fresh,
             .intrinsic => |kind| ofIntrinsic(kind),
             // `str(x)` allocates its text; the numeric conversions
             // answer scalars.

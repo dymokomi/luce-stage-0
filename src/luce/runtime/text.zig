@@ -377,6 +377,15 @@ pub fn cstringMake(runtime: *Runtime, text_value: Value) Error!Value {
     return Value.ofI64(@bitCast(@as(u64, @intFromPtr(buffer.ptr + 8))));
 }
 
+/// A `str?` argument crossing to C (docs/FFI.md): `none` crosses as
+/// C's NULL — the zero token, which `cstringFree` already ignores —
+/// and a present value takes `cstringMake`'s NUL-temporary rules
+/// whole.
+pub fn cstringMakeOpt(runtime: *Runtime, text_value: Value) Error!Value {
+    if (text_value.isNone()) return Value.ofI64(0);
+    return cstringMake(runtime, text_value);
+}
+
 /// The paired release: the call returned, the borrow is over.
 pub fn cstringFree(runtime: *Runtime, token: u64) void {
     if (token == 0) return;
@@ -393,4 +402,12 @@ pub fn cstringResult(runtime: *Runtime, token: u64) Error!Value {
     const held = std.mem.span(source);
     if (!std.unicode.utf8ValidateSlice(held)) return runtime.fail(.invalid_utf8);
     return runtime.ownValue(Value.ofStr(held));
+}
+
+/// A `-> str?` extern result (docs/FFI.md): C's NULL decodes to
+/// `none`; anything else takes `cstringResult`'s copy-and-validate
+/// whole.
+pub fn cstringResultOpt(runtime: *Runtime, token: u64) Error!Value {
+    if (token == 0) return Value.none;
+    return cstringResult(runtime, token);
 }

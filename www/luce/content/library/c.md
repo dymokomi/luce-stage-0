@@ -1,10 +1,11 @@
 # std.c
 
 `std.c` is the helper shelf for the C boundary. An `extern` declaration
-speaks 32- and 64-bit integers and opaque `foreign` tokens; this module
-spells the two things a program cannot otherwise say safely: hand a
-callee the address of some bytes for the duration of one call, and
-prepare text the way C expects text.
+speaks the fixed-width scalars, `bool`, `str`, opaque `foreign` tokens
+and named handles — with `out` parameters coming back as extra results;
+this module spells the two things a program cannot otherwise say
+safely: hand a callee the address of some bytes for the duration of one
+call, and prepare text the way C expects text.
 
 ```text
 import std.c

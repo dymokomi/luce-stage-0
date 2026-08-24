@@ -88,12 +88,14 @@ test "the extern declaration's refusals keep the C shape the whole truth" {
         \\    print(str(luce_ffi_probe_add(1)))
         \\
     , "luce.sema.extern");
-    // A narrow width the ABI would need extension attributes for.
+    // A width C itself does not pass: `f16` is not a C scalar, so it
+    // stays outside the boundary vocabulary even now that the narrow
+    // integers cross (docs/FFI.md).
     try expectRejected(
-        \\extern func tiny(a: u8) -> i64
+        \\extern func tiny(a: f16) -> i64
         \\
         \\func main():
-        \\    print(str(tiny(1)))
+        \\    print(str(tiny(1.0)))
         \\
     , "luce.sema.extern");
 }
@@ -477,4 +479,245 @@ test "the C reads copy out of foreign memory" {
         \\4
         \\
     );
+}
+
+// ---------------------------------------------------------------------------
+// 0.21 phase 3: out parameters, the full scalar set, no arity cap, str?
+// ---------------------------------------------------------------------------
+
+test "out parameters become extra results after the declared return" {
+    // The call writes no argument for an out slot; the compiler
+    // allocates it, C fills it, and the values come back in
+    // declaration order after the declared return — received by the
+    // ordinary destructuring (docs/FFI.md, docs/RETURNS.md).  The
+    // negative split pins that an i32 out slot keeps its sign.
+    try agree.prints(
+        \\extern func luce_ffi_probe_split(v: i64, out hi: i32, out lo: i32) -> bool
+        \\
+        \\func main():
+        \\    let ok, hi, lo = luce_ffi_probe_split(4294967298)
+        \\    print(str(ok))
+        \\    print(str(hi))
+        \\    print(str(lo))
+        \\    let sign, top, bottom = luce_ffi_probe_split(-1)
+        \\    print(str(sign))
+        \\    print(str(top))
+        \\    print(str(bottom))
+        \\    luce_ffi_probe_split(7)
+        \\
+    ,
+        \\true
+        \\1
+        \\2
+        \\true
+        \\-1
+        \\-1
+        \\
+    );
+}
+
+test "a void return with one out slot answers a single value" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_out_token(token: u64, out slot: u64)
+        \\
+        \\func main():
+        \\    let held = luce_ffi_probe_out_token(7)
+        \\    print(str(held))
+        \\
+    ,
+        \\7
+        \\
+    );
+}
+
+test "a handle out slot takes the same decode as a handle result" {
+    // A pointer-shaped handle read back out of a slot obeys the
+    // phase-1 rules whole (docs/FFI.md): `?` decodes C's 0 to `none`,
+    // and a present token is the value.
+    try agree.prints(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_out_token(token: u64, out w: Window?)
+        \\
+        \\func main():
+        \\    let absent = luce_ffi_probe_out_token(0)
+        \\    print(str(absent == none))
+        \\    let held = luce_ffi_probe_out_token(4660)
+        \\    print(str(held == none))
+        \\
+    ,
+        \\true
+        \\false
+        \\
+    );
+    // The bare form is the enforced non-null contract, in the out
+    // direction too.
+    try agree.trap(
+        \\extern type Window
+        \\
+        \\extern func luce_ffi_probe_out_token(token: u64, out w: Window)
+        \\
+        \\func main():
+        \\    let held = luce_ffi_probe_out_token(0)
+        \\    print(str(held == held))
+        \\
+    , .null_foreign);
+}
+
+test "the full scalar set round-trips at its exact C width" {
+    // Sign is the point: a u8 200 and an i8 -5 come back themselves
+    // only when each crossed with the extension its signedness earns,
+    // and the i8 sum is visibly wrong if a negative was zero-extended.
+    try agree.prints(
+        \\extern func luce_ffi_probe_echo_u8(v: u8) -> u8
+        \\extern func luce_ffi_probe_echo_i8(v: i8) -> i8
+        \\extern func luce_ffi_probe_echo_u16(v: u16) -> u16
+        \\extern func luce_ffi_probe_echo_i16(v: i16) -> i16
+        \\extern func luce_ffi_probe_echo_f32(v: f32) -> f32
+        \\extern func luce_ffi_probe_echo_bool(v: bool) -> bool
+        \\extern func luce_ffi_probe_add_i8(a: i8, b: i8) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_echo_u8(200)))
+        \\    print(str(luce_ffi_probe_echo_i8(-5)))
+        \\    print(str(luce_ffi_probe_echo_u16(60000)))
+        \\    print(str(luce_ffi_probe_echo_i16(-12345)))
+        \\    print(str(luce_ffi_probe_echo_f32(2.5)))
+        \\    print(str(luce_ffi_probe_echo_bool(true)))
+        \\    print(str(luce_ffi_probe_echo_bool(false)))
+        \\    print(str(luce_ffi_probe_add_i8(-5, -6)))
+        \\
+    ,
+        \\200
+        \\-5
+        \\60000
+        \\-12345
+        \\2.5
+        \\true
+        \\false
+        \\-11
+        \\
+    );
+}
+
+test "eleven mixed arguments marshal position-correct on both engines" {
+    // The cuLaunchKernel shape (docs/FFI.md): integers and doubles
+    // interleaved past the eighth slot.  The probe folds every
+    // position with its own weight, so a swapped or skipped slot
+    // changes the answer.
+    try agree.prints(
+        \\extern func luce_ffi_probe_arity11(a: i32, b: f64, c: i64, d: f64, e: i32, f: i64, g: f64, h: i32, i: i64, j: f64, k: i32) -> f64
+        \\
+        \\func main():
+        \\    let total = luce_ffi_probe_arity11(1, 2.0, 3, 4.0, 5, 6, 7.0, 8, 9, 10.0, 11)
+        \\    print(str(total))
+        \\
+    ,
+        \\506
+        \\
+    );
+}
+
+test "fourteen mixed arguments spill past the registers and stay ordered" {
+    // The cblas_dgemm shape (docs/FFI.md): enough arguments to spill
+    // past both register files on every emitted target.
+    try agree.prints(
+        \\extern func luce_ffi_probe_arity14(a: i32, b: i32, c: i32, d: i64, e: i64, f: i64, g: f64, h: i64, i: i64, j: f64, k: i64, l: i64, m: f64, n: i64) -> f64
+        \\
+        \\func main():
+        \\    let total = luce_ffi_probe_arity14(1, 2, 3, 4, 5, 6, 7.0, 8, 9, 10.0, 11, 12, 13.0, 14)
+        \\    print(str(total))
+        \\
+    ,
+        \\1015
+        \\
+    );
+}
+
+test "str? crosses both ways: none is C's NULL and NULL is none" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_echo_text(text: str?) -> str?
+        \\
+        \\func main():
+        \\    let absent: str? = none
+        \\    print(str(luce_ffi_probe_echo_text(absent) == none))
+        \\    let back = luce_ffi_probe_echo_text("hola") else "missing"
+        \\    print(back)
+        \\
+    ,
+        \\true
+        \\hola
+        \\
+    );
+}
+
+test "out is a modifier only when another name follows" {
+    // `out: i32` stays a parameter *named* out, exactly as `blocking`
+    // stays an ordinary identifier outside its position.
+    try agree.prints(
+        \\extern func luce_ffi_probe_echo_i32(out: i32) -> i32
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_echo_i32(41)))
+        \\
+    ,
+        \\41
+        \\
+    );
+}
+
+test "the out declaration's refusals" {
+    // Outside an extern parameter list `out` is not a modifier at
+    // all: an ordinary function reads it as a parameter name, and a
+    // second name behind it is the ordinary parse mistake it looks
+    // like.
+    try expectRejected(
+        \\func fills(out x: i64) -> i64:
+        \\    return x
+        \\
+        \\func main():
+        \\    print(str(fills(1)))
+        \\
+    , "luce.parse.expected");
+    // Text has no caller-allocated word: `str` stays out of the out
+    // position (docs/FFI.md).
+    try expectRejected(
+        \\extern func bad(out words: str) -> bool
+        \\
+        \\func main():
+        \\    let ok, words = bad()
+        \\    print(words)
+        \\
+    , "luce.sema.extern");
+    // An integer-shaped handle's optional has no C encoding in the
+    // out direction either.
+    try expectRejected(
+        \\extern type Device = i32
+        \\
+        \\extern func bad(out d: Device?) -> bool
+        \\
+        \\func main():
+        \\    let ok, d = bad()
+        \\    print(str(ok))
+        \\
+    , "luce.sema.extern");
+    // The extra results ride the ordinary shape rules: the name count
+    // must match what the call answers.
+    try expectRejected(
+        \\extern func luce_ffi_probe_split(v: i64, out hi: i32, out lo: i32) -> bool
+        \\
+        \\func main():
+        \\    let ok, hi = luce_ffi_probe_split(7)
+        \\    print(str(ok))
+        \\
+    , "luce.sema.shape");
+    // And the ordinary shape positions: a multi-value answer cannot
+    // stand in an argument.
+    try expectRejected(
+        \\extern func luce_ffi_probe_split(v: i64, out hi: i32, out lo: i32) -> bool
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_split(7)))
+        \\
+    , "luce.sema.call");
 }

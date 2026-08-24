@@ -1182,8 +1182,11 @@ const Replay = struct {
     }
 
     /// A foreign call replays like a direct call with everything a C
-    /// boundary cannot have removed: no defaults, no receiver, no
-    /// owned storage — every operand is a Tier-1 scalar (docs/FFI.md).
+    /// boundary cannot have carried: no defaults, no receiver, no
+    /// fallibility — every operand crosses borrowed, and the engines
+    /// allocate the `out` slots themselves (docs/FFI.md).  What the
+    /// call *answers* may own storage — a copied `-> str`, a shape of
+    /// out values — and parks through the ordinary fresh-result rules.
     fn replayForeignCall(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
         const batch = called.operands;
         const entries = try self.replayWrittenOperands(batch);

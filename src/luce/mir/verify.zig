@@ -67,7 +67,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // rows no call happens to consume, for the signature-table reason
     // above.
     for (program.foreign_functions) |foreign| {
-        for (foreign.parameters) |parameter| try verifyType(program, parameter);
+        for (foreign.parameters) |parameter| try verifyType(program, parameter.parameter_type);
         if (foreign.result != .none) try verifyType(program, foreign.result);
     }
     for (program.heap_types) |descriptor| switch (descriptor) {
@@ -1294,19 +1294,58 @@ fn verifyInstruction(
         // be exactly the declared scalars.
         .call_foreign => |call| {
             if (call.foreign >= program.foreign_functions.len) return error.BadFunction;
-            const callee = program.foreign_functions[call.foreign];
+            const callee = &program.foreign_functions[call.foreign];
             if (callee.name.len == 0) return error.BadFunction;
-            if (callee.parameters.len > 8) return error.BadFunction;
-            if (call.arguments.len != callee.parameters.len) return error.BadFunction;
             for (callee.parameters) |parameter| {
-                if (!foreignParameter(parameter)) return error.BadFunction;
+                if (parameter.out) {
+                    if (!foreignOut(parameter.parameter_type)) return error.BadFunction;
+                } else if (!foreignParameter(parameter.parameter_type)) {
+                    return error.BadFunction;
+                }
             }
             if (!foreignResult(callee.result)) return error.BadFunction;
-            for (call.arguments, 0..) |argument, index| {
-                const value = try operandType(function, defined, argument);
-                try expectType(value, callee.parameters[index]);
+            // A call writes one argument per slot that is not `out`;
+            // the engines allocate the out slots themselves.
+            if (call.arguments.len != callee.argumentCount()) return error.BadFunction;
+            var written: usize = 0;
+            for (callee.parameters) |parameter| {
+                if (parameter.out) continue;
+                const value = try operandType(function, defined, call.arguments[written]);
+                try expectType(value, parameter.parameter_type);
+                written += 1;
             }
-            if (!result.eql(callee.result)) return error.TypeMismatch;
+            // What the register receives: the declared return alone,
+            // one out value riding a void return, or the synthesized
+            // shape carrying the declared return first and the out
+            // values in declaration order (docs/FFI.md).
+            switch (callee.resultCount()) {
+                0 => {
+                    if (!result.eql(types.Type.none)) return error.TypeMismatch;
+                },
+                1 => {
+                    const single = if (callee.result != .none)
+                        callee.result
+                    else
+                        firstOut(callee).?;
+                    if (!result.eql(single)) return error.TypeMismatch;
+                },
+                else => |count| {
+                    if (result != .strukt) return error.TypeMismatch;
+                    if (result.strukt >= program.structs.len) return error.BadFunction;
+                    const layout = program.structs[result.strukt];
+                    if (layout.fields.len != count) return error.TypeMismatch;
+                    var slot: usize = 0;
+                    if (callee.result != .none) {
+                        try expectType(layout.fields[0].field_type, callee.result);
+                        slot = 1;
+                    }
+                    for (callee.parameters) |parameter| {
+                        if (!parameter.out) continue;
+                        try expectType(layout.fields[slot].field_type, parameter.parameter_type);
+                        slot += 1;
+                    }
+                },
+            }
         },
         .call_inout => |call| {
             if (call.function >= program.functions.len) return error.BadFunction;
@@ -1494,35 +1533,70 @@ fn verifyInstruction(
 /// attribute machinery.  Narrower widths, bool, and floats wait for
 /// evidence; str and bytes cross only through the scoped buffer
 /// forms.  (LLVM-C's own `LLVMBool` is an `i32`.)
+/// The one out slot of a void-returning extern whose call answers a
+/// single value, or null when there is none.
+fn firstOut(callee: *const defs.ForeignFunction) ?Type {
+    for (callee.parameters) |parameter| {
+        if (parameter.out) return parameter.parameter_type;
+    }
+    return null;
+}
+
+/// The boundary scalar set (docs/FFI.md): the full fixed-width
+/// integers, both floats, and `bool` — the widths the emitted C ABIs
+/// pass directly, with the target's extension attributes where the
+/// ABI wants them.  `f16` and `char` are not C's and stay out.
+fn foreignScalar(of: Type) bool {
+    return switch (of) {
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .boolean => true,
+        else => false,
+    };
+}
+
 fn foreignParameter(of: Type) bool {
     return switch (of) {
-        .u32, .i32, .u64, .i64, .foreign => true,
+        .foreign => true,
         // A named handle is its representation at the boundary, and
-        // every representation it may declare is Tier 1 by
+        // every representation it may declare crosses by
         // construction (docs/FFI.md).
         .extern_type => true,
         // `str` crosses seamlessly (docs/FFI.md): an argument becomes
         // a NUL-terminated temporary borrowed for the call; a result
         // is copied and validated at the boundary.
         .str => true,
-        // `foreign?` — C's nullable pointer, decoded at the boundary
-        // (docs/FFI.md).  The foreign payload and the pointer-shaped
-        // handle's are admitted; an optional of anything else has no C
+        // The nullable crossings (docs/FFI.md): `foreign?` and a
+        // pointer-shaped handle's `?` decode C's null; `str?` crosses
+        // `none` as NULL.  An optional of anything else has no C
         // encoding — an integer-shaped handle's zero is a value, so
         // its optional is refused here exactly as stage 4 refuses it.
+        .optional => |payload| switch (payload) {
+            .foreign, .str => true,
+            .extern_type => |reference| reference.representation == .foreign,
+            else => false,
+        },
+        else => foreignScalar(of),
+    };
+}
+
+/// What an `out` slot may carry back (docs/FFI.md): the scalars and
+/// the handles — plain, `foreign`, or nullable pointer-shaped.  Not
+/// `str`: C fills a caller-allocated word, and text has no word.
+fn foreignOut(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
         .optional => |payload| switch (payload) {
             .foreign => true,
             .extern_type => |reference| reference.representation == .foreign,
             else => false,
         },
-        else => false,
+        else => foreignScalar(of),
     };
 }
 
-/// What an extern may answer: a Tier-1 parameter type, `f64` (one
-/// float register is ABI-uniform), or nothing for a C void.
+/// What an extern may answer directly: a parameter type or nothing
+/// for a C void.
 fn foreignResult(of: Type) bool {
-    return of == .none or of == .f64 or foreignParameter(of);
+    return of == .none or foreignParameter(of);
 }
 
 fn raisesError(program: *const Program, function: *const Function, register: Register) bool {
