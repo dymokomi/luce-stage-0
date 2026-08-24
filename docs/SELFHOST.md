@@ -17,6 +17,18 @@ inline single-statement blocks under exactly that bar: same AST,
 same MIR format, same host ABI, every 0.18 program still valid.)
 New language *capability* is over; that is stage 1's job. The next compiler is written
 fully in Luce, in its own repository, against this frozen seed.
+
+**Freeze amendment (owner, 2026-08-24): the native boundary is
+exempted and completes through 0.21.** The Tier-1 FFI shipped narrow
+on purpose; using real libraries (SDL3 measured end-to-end) showed
+the narrowness is the friction, and the owner ruled the completion
+set: `foreign?` + the `null_foreign` trap, `extern type` named
+handles, seamless `str` both directions (reversing the 0.20 "str
+never crosses" ruling), C-memory reads, `out` parameters, the full
+C scalar set with no arity cap, `extern struct` crossing by pointer,
+capture-free `cfunc`, and `extern var`. docs/FFI.md is the contract.
+Every 0.20 program remains valid; the amendment adds and never
+reshapes. Everything else stays frozen.
 Original ratified direction (2026-08-19) follows.
 
 **The constitution (owner, 2026-08-20).** Where a design question has

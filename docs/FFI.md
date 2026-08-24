@@ -1,130 +1,278 @@
-# Tier-1 FFI — extern declarations over the C ABI (design draft)
+# The C boundary — extern declarations over the C ABI
 
-**Status: landed (2026-08-20) — the core, `--link`, the scoped
-buffer forms (`std.c` over the std-only `Builtin.buffer_address`),
-and the build-plan `link` step method.**  The
-four open details were ruled under the Zig tiebreaker: the spellings
-below stand; `str` never crosses implicitly (the scoped buffer forms
-are the road); extern parameters take no defaults; symbols resolve at
-link time only.  One implementation tightening beyond the draft:
-**Tier-1 scalars are the 32- and 64-bit widths** (`u32 i32 u64 i64`,
-plus `foreign`; results add `f64` and nothing) — the widths every
-emitted C ABI passes without extension attributes, which keeps the
-boundary correct with no per-parameter attribute machinery and makes
-the oracle's dispatch a literal nine-by-three thunk table instead of
-libffi.  LLVM-C's own `LLVMBool` is an `i32`, so the real customer
-loses nothing — and the probe is real: an extern-declared
-`LLVMContextCreate()` linked against the vendored libLLVM creates and
-disposes a context today.
+**Status: 0.20 shipped the narrow core (landed 2026-08-20): `extern func`
+over 32/64-bit scalars + `foreign`, ≤8 arguments, `--link`, the scoped
+buffer forms, build-plan links.  This revision is the 0.21 completion,
+ruled by the owner 2026-08-24.**  The rulings: `foreign?` with the
+`null_foreign` trap; named handle types (`extern type`); seamless `str`
+in both directions — **which deliberately reverses the 0.20 ruling that
+`str` never crosses implicitly**; reading C-owned memory; `out`
+parameters; the full C scalar set with no arity cap; `extern struct`
+crossing by pointer; capture-free C function values; extern globals.
+Deliberately deferred to the binding-generator era: by-value aggregates,
+variadics, bitfields, and ARC-carrying callback trampolines.
+
+## The friction rule
+
+The boundary is governed by one principle, sorted by frequency:
+
+1. **The common shape is invisible.** Scalars, strings, structs, null,
+   out-parameters, named handles: the declaration states the C shape,
+   the compiler does the translation, the call site is ordinary Luce.
+2. **The rare shape is one visible verb.** Buffers, views, reading raw
+   memory, ownership transfer: never invisible, never more than one
+   named scoped call (`c.with_bytes`, `c.bytes_at`).
+3. **The exotic shape is generated away.** Variadics, bitfields,
+   by-value aggregates: `luce bind` emits a shim; user code never sees
+   it.
+
+Two laws over all three: **nothing crosses silently wrong** — a wrong
+crossing stops with a Luce trap at the call, not a corrupt pointer
+inside C — and **every translation is inspectable**: what the compiler
+does at the boundary is stated here, once, and generated bindings are
+committed files a person can read.
 
 ## The declaration
 
-An `extern` declaration names a foreign function and its C shape, in
-ordinary Luce source, anywhere:
-
 ```text
+extern type Window
+extern type Renderer
+extern type Device = i32          # an integer-shaped handle (CUDA device)
+
 extern func getpid() -> i32
-extern func memcmp(a: bytes, b: bytes, count: u64) -> i32
-extern func LLVMContextCreate() -> foreign
-extern func LLVMModuleCreateWithName(name: str) -> foreign
+extern func SDL_GetError() -> str
+extern func SDL_CreateWindow(title: str, w: i32, h: i32, flags: u64) -> Window?
+extern func SDL_CreateRenderer(window: Window, name: str?) -> Renderer?
+extern func SDL_GetWindowSize(window: Window, out w: i32, out h: i32) -> bool
+extern func SDL_DestroyWindow(window: Window)
+extern blocking func SDL_Delay(ms: u32)
+extern var SDL_version_number: i32
 ```
 
-- No body, no importer, no headers: the author writes the shape and
-  owns its truth, exactly as in Zig. A wrong shape is undefined
-  behavior at the boundary and the docs say so plainly.
-- The **type vocabulary is closed** in Tier 1: the fixed-width
-  integers and floats (which already map to C exactly), `bool`,
-  `str`/`bytes` (passed as pointer+length pairs by the compiler — the
-  callee sees C's two-argument convention, spelled once in the docs),
-  buffer views via the scoped form below, and `foreign`.
-- **`foreign` is the opaque handle type**: a token a program may hold,
-  store, pass back, and compare for identity — never dereference,
-  never do arithmetic on. It is the `LLVMValueRef` shape and covers
-  the great majority of real C APIs. It is a value type (copies), and
-  it deliberately has no ARC: what it points at is the foreign
-  library's to manage, and a wrapper class with a `deinit` calling the
-  library's destroy function is the ownership idiom (`files.File`'s
-  pattern, written in user code).
+No body, no importer, no headers: the author writes the shape and owns
+its truth, exactly as in Zig.  A wrong shape is undefined behavior at
+the boundary and the docs say so plainly — except where a check is
+cheap, in which case the boundary checks (`null_foreign`, UTF-8
+validation below).
 
-## Scoped buffer access
+## Named handles — `extern type`
 
-No raw pointer exists as an ordinary value. A C function that reads or
-fills memory receives it through a scope:
+`extern type Name` declares a **nominal opaque handle**: a value type
+with no ARC, no members, no arithmetic, comparable with `==`/`!=`, and
+usable exactly where its name appears in extern signatures.  Passing a
+`Window` where a `Renderer` is expected is a compile error — the type
+system now carries what C itself carries in its pointer types.
+
+- The default representation is the pointer-sized token (what `foreign`
+  is today).  `extern type Name = u32` (or `i32`, `u64`, `i64`)
+  declares an **integer-shaped** handle with that exact C width — CUDA
+  device ordinals are a C `int`, SDL IDs are `Uint32`, and forcing them
+  through a 64-bit token would itself be an ABI bug.
+- `foreign` remains the untyped escape hatch and the currency of
+  `std.c`.  A named handle converts to `foreign` explicitly
+  (`foreign(w)`), never implicitly, and never backwards.
+- Each `extern type` is distinct from every other and from all integers.
+
+## Absence — `foreign?` and the `null_foreign` trap
+
+C signals failure by returning null.  Luce's absence is `none`.  The
+boundary is the translator:
+
+- A **pointer-shaped** handle type (or `foreign`) marked `?` in an
+  extern signature decodes C's 0 into `none` on the way in and encodes
+  `none` as 0 on the way out.  One comparison per crossing.
+  `Window?` is an ordinary optional — `{token, present}` like every
+  other `T?`; there is no sentinel representation, because a present
+  zero and `none` must stay distinguishable on both engines.
+- A pointer-shaped handle **without** `?` is a contract: zero never
+  crosses here.  The boundary enforces it — a bare handle carrying 0
+  across, in either direction, **traps `null_foreign`** at the call, in
+  every profile.  Same cost as the optional decode; same philosophy as
+  checked arithmetic.  The mis-declared extern produces a Luce trap
+  with a traceback, never a corrupt pointer inside C.
+- **Integer-shaped** handles take no trap and no `?`-decode: 0 is an
+  ordinary value (CUDA device 0 is the first GPU).  Their optionals, if
+  ever needed, are ordinary Luce optionals with no boundary meaning.
+- There is no `null` literal.  Absence is `none`; the check reads as it
+  always has: `let w = SDL_CreateWindow(...) else error(last_error())`.
+
+## Text — `str` crosses, both directions
+
+The 0.20 ruling ("`str` never crosses implicitly") is reversed: text is
+the single most common boundary shape and belongs in tier 1 of the
+friction rule.
+
+- **Parameter `str`**: the compiler materializes a NUL-terminated
+  temporary (the bytes plus one zero), passes its address as C's
+  `const char *`, and releases it when the call returns.  **Borrowed
+  for the call only** — a callee that keeps the pointer is undefined
+  behavior; an API that stores its argument needs a wrapper that keeps
+  the buffer alive (binding-recipe territory).
+- **Parameter `str?`**: as above, with `none` crossing as C's NULL.
+- **Result `str`**: the callee's `const char *` is copied immediately —
+  NUL-scanned, bytes copied, UTF-8 **validated**.  Invalid UTF-8 traps
+  (`invalid_utf8`): a `str` is valid UTF-8 by contract and the boundary
+  does not launder that contract.  A C API that returns arbitrary bytes
+  is not a `str` API — read it with `c.bytes_at`.
+- **Result `str?`**: NULL decodes to `none`; otherwise as above.
+- The pointer+length pair form (`bytes` parameters splitting into two C
+  arguments) from the original draft stays **out**: two conventions for
+  text is one too many, and length-carrying buffers are `c.bytes_at` /
+  `c.with_bytes` business.
+
+## Reading C-owned memory
+
+The 0.20 boundary was write-only.  Two std additions make it readable —
+copies, not borrows, per the tier-2 rule:
 
 ```text
-var buffer = array[u8](4096)
-let landed = os.with_bytes(buffer, func(p: foreign, count: u64) -> i64:
-    return read_fd(0, p, count)
-)
+c.bytes_at(pointer: foreign, count: u64) -> bytes   # copy count bytes out
+c.cstring_at(pointer: foreign) -> str               # NUL-scan, copy, validate
 ```
 
-`with_bytes` pins the buffer for exactly the closure's extent and
-hands the callee an address-carrying `foreign`; the token must not
-outlive the scope, and the docs state that escaping it is undefined
-behavior (Tier 1 does not police it — Tier 2's borrow rules are a
-separate future design). This is Swift's `withUnsafeBytes` shape on
-Luce's existing closure machinery.
+`cstring_at` exists for the raw layer and generated code; hand-written
+externs should prefer declaring `-> str` and letting the boundary do it.
+Both trap `null_foreign` on a zero pointer.  `with_bytes` /
+`with_bytes_foreign` / `zstring` remain for outbound buffer scopes, and
+`Builtin.buffer_address` additionally accepts `array[T, _]` so a dense
+array's storage can reach C (the BLAS door).
 
-## Semantics at the boundary
+## Out parameters
 
-- **Extern calls are effects.** They run under the effect lock by
-  default; an `extern blocking func …` form opts a call out of the
-  lock and takes on the socket slots' contract: the callee must be
-  thread-safe, because workers will reach it concurrently.
-- **Guarantees end at the boundary, loudly.** The leak census does not
+C's "pass a pointer, I fill it" convention becomes extra results:
+
+```text
+extern func SDL_GetWindowSize(window: Window, out w: i32, out h: i32) -> bool
+extern func cuDeviceGet(out device: Device, ordinal: i32) -> i32
+
+let ok, w, h = SDL_GetWindowSize(window)
+let status, device = cuDeviceGet(0)
+```
+
+- An `out` parameter takes no argument at the call; the compiler
+  allocates the slot, passes its address, and appends the value to the
+  results **in declaration order after the declared return**.
+- Legal `out` types: the scalars, named handles, and `extern struct`s.
+- The received values are ordinary Luce values; multiple results are
+  received by the existing destructuring, not tuples.
+
+## Scalars and arity
+
+The type vocabulary completes to the full fixed-width set in **both**
+positions: `u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 bool`.  Narrow
+integers carry the target's sign/zero-extension attributes; the
+compiler derives them from the ABI, never hardcodes them.
+
+**There is no argument-count cap.**  The 0.20 nine-by-three thunk table
+is retired; the target C ABI decides register and stack assignment,
+exactly as it does for C.  The oracle's shim generalizes (libffi, which
+the test binary already links transitively).  Specs deliberately cover
+0, 1, 8, 9, 11, and 14 arguments — `cuLaunchKernel` is 11 and
+`cblas_dgemm` is 14, and both must be declarable verbatim.
+
+## Structs — `extern struct`, crossing by pointer
+
+```text
+extern struct Rect:
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+
+extern func SDL_GetRectUnion(a: Rect, b: Rect, out result: Rect) -> bool
+```
+
+- An `extern struct` is a value type with **C's layout**: declaration
+  order, the target's alignment and padding, no reordering.  Fields are
+  the boundary scalars, named handles, nested extern structs, and
+  fixed-size arrays of those.  Ordinary field access reads and writes.
+- **Crossing is by pointer, both directions.**  A parameter of extern
+  struct type passes the struct's address (C's `const T *`); an `out`
+  parameter passes a writable address (C's `T *`).  This covers SDL and
+  Vulkan-shaped APIs completely.  **By-value aggregate passing and
+  returning is deliberately not in 0.21**: it requires per-target ABI
+  classification (the SysV eightbyte algorithm and kin), and the
+  binding generator's C shims are the planned road.  A declaration
+  that would require it is refused with a message saying exactly that.
+- Unions and bitfields are not declarable; the generator's shims and
+  accessors are the road (SDL_Event decodes through generated
+  accessors, not a union type).
+
+## C function values — `cfunc`
+
+```text
+extern func SDL_AddTimer(interval: u32, callback: cfunc(u32, foreign) -> u32,
+                         userdata: foreign) -> u32
+```
+
+- `cfunc(params) -> R` is a boundary-only function type: C's function
+  pointer.  A **capture-free** Luce function or lambda converts to it
+  at an extern call site; anything that captures is refused with the
+  reason (C has no environment slot — the trampoline machinery that
+  carries a closure through `userdata` arrives with `luce bind`).
+- A `cfunc` value may also appear as an extern **result**, an extern
+  struct **field**, and be **called** with ordinary call syntax — this
+  is the function-pointer-call primitive (`vkGetInstanceProcAddr`,
+  `OrtApi`), and its calls carry the same boundary semantics as any
+  extern call.  A null `cfunc` is expressed as `cfunc(...)?` with the
+  same decode as handles.
+- The callback runs on whatever thread C calls it from; a capture-free
+  function touches no Luce heap and needs no runtime attach.  The
+  ARC-carrying form is the generator's problem, later, by design.
+
+## Globals — `extern var`
+
+`extern var name: T` binds a C global of boundary-scalar or handle
+type.  Reads and writes are direct loads and stores of the symbol.
+Rare, but real (`stdout`-shaped APIs); anything fancier is a shim.
+
+## Semantics at the boundary (unchanged from 0.20)
+
+- **Extern calls are effects**; `extern blocking func` opts out of the
+  effect lock and takes the thread-safety contract.
+- **Guarantees end at the boundary, loudly.**  The leak census does not
   count foreign memory; a foreign crash is a process crash; checked
   arithmetic, traps, and the census resume the instant the call
-  returns. One paragraph in MEMORY.md and one on the site say exactly
-  this.
-- **Fallibility is not assumed.** An extern function returns what its
-  shape says; C's errno-and-sentinel conventions are the wrapper's
-  business, in Luce, where `T!` lives.
-- **Externs do not cross workers as values** (function values already
-  do not), and a `foreign` token crosses only as the value it is —
-  whether that is meaningful is the library's contract, not the
-  language's.
+  returns.
+- **Fallibility is not assumed.**  `T!` is the wrapper's business —
+  now one line away: `let w = create() else error(last_error())`.
+- **Externs do not cross workers as values**; a handle crosses as the
+  value it is, and whether that means anything is the library's
+  contract.
 
 ## Both engines, one dispatch
 
-The interpreter reaches externs through a runtime shim —
-`runtime/ffi.zig`, dlopen + libffi in the oracle-carrying test binary
-(which already links libLLVM; the shim ships in nothing) — while
-generated code emits a direct call and the linker resolves the symbol.
-One dispatch semantics, two emission strategies, held together by the
-differential exactly as every other feature is. The spec world gets a
-harness-built test library the way it has a scripted filesystem.
+Generated code emits direct calls (and address-of for `out`/struct
+slots); the oracle's `runtime/ffi.zig` shim generalizes from the fixed
+thunk table to libffi-backed dispatch so every declarable signature
+runs on both engines.  The differential suite holds them together, as
+everywhere.
 
-## Linking
+## Linking (unchanged)
 
-The symbol has to come from somewhere, and the answer is the build
-system that already exists: `build.luc` compiles C sources and `.s`
-shims as command steps, and the dropped `--link OBJ` option revives so
-foreign objects and `-l` requests join the native link. `luce build
-FILE.luc --link foo.o` is the file-form spelling; a plan's `luce` step
-gains a `links` list. Inline assembly stays out (a shim is the
-answer); a C header importer stays out (a `translate` *tool* may emit
-extern `.luc` files later).
+`--link` on the CLI, `links` in a build plan, `LUCE_CC` for the driver.
+A manifest `native:` block is the binding generator's arrival, not
+0.21's.
 
 ## Blast radius (change-map rows)
 
-Lexer/parser (`extern`, `foreign`, `blocking`), semantics (closed type
-vocabulary at the boundary, effect classification), HIR/MIR (a
-foreign-call instruction carrying symbol + signature; format bump),
-verifier (hostile signatures), runtime shim + oracle dispatch, codegen
-(declare + call + str/bytes splitting), `--link` in the CLI and plan
-executor, both-engine specs against a harness library, docs
-(LANGUAGE.md boundary section, MEMORY.md, site pages), grammar and
-highlighting tables, TextMate regeneration. The host ABI table is
-untouched — externs are direct calls, not host slots.
+Lexer (`out` contextual, `cfunc`), parser/AST (`extern type`,
+`extern struct`, `extern var`, `?` in extern signatures, `out`
+parameters, `cfunc` types), semantics (handle nominality, boundary type
+rules, capture-free check), HIR, MIR (foreign-call signature gains
+per-slot shape/nullable/out facts; struct layout table; **format
+bump**), verifier (hostile signatures for every new shape), runtime
+shim (libffi dispatch, `null_foreign`/`invalid_utf8` traps, string
+materialization), codegen (decode/encode pairs, slot allocation,
+extension attributes, struct layout via the target's data layout),
+both-engine specs per feature, docs (LANGUAGE.md, MEMORY.md, STD.md,
+site), grammar/highlighting/TextMate.  Host ABI table untouched —
+externs remain direct calls.
 
-## Open details for ratification
+## Deliberately deferred (the generator's arrival, not 0.21)
 
-1. The spellings: `extern func` / `foreign` / `blocking` as above, or
-   other words.
-2. `str` at the boundary: pointer+length pair (proposed) vs. requiring
-   the caller to NUL-terminate through `bytes` explicitly.
-3. Whether `extern` declarations may carry default arguments (proposed:
-   no — the C shape is the whole truth).
-4. Library naming: symbols resolve at link time only (proposed), or an
-   optional `extern("sqlite3") func …` load-time annotation from day
-   one.
+By-value aggregates; variadics; bitfields and unions as declarable
+types; ARC-carrying callback trampolines; the header importer
+(`luce bind`) and binding recipes; manifest-declared native
+dependencies.  Each is designed in `../../luce`-side documents and
+lands with the library that forces it.
