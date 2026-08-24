@@ -635,10 +635,24 @@ pub const LoopFrame = struct {
 };
 
 /// One declared extern (docs/FFI.md), as semantics carries it: the
-/// bare symbol, the resolved Tier-1 shape, and the lock flag.
+/// bare symbol, the resolved boundary shape, and the lock flag.
 pub const ForeignDeclInfo = struct {
+    /// One C slot: its resolved type and whether it is an `out` slot
+    /// — no argument at the call, an extra result after the declared
+    /// return.
+    pub const Parameter = struct {
+        parameter_type: types.Type,
+        out: bool,
+    };
+
     symbol: []const u8,
-    parameters: []const types.Type,
+    parameters: []const Parameter,
+    /// The declared C return — what the callee's register carries.
     result: types.Type,
+    /// What a *call* produces on the Luce side: the declared return
+    /// alone, one out value riding a void return, or the synthesized
+    /// return shape carrying the declared return first and the out
+    /// values in declaration order (docs/FFI.md, docs/RETURNS.md).
+    answer: types.Type,
     blocking: bool,
 };

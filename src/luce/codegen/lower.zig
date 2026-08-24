@@ -662,42 +662,102 @@ const Module = struct {
         return declared;
     }
 
-    /// The declared LLVM form of one extern (docs/FFI.md).  The C
-    /// shape is exactly the declared scalars — 32/64-bit widths need
-    /// no extension attributes on any emitted target — and the result
-    /// is void for a C void.
+    /// Whether this target's C ABI carries extension promises for
+    /// sub-32-bit integer values — what clang emits for the same
+    /// declaration: x86-64 SysV and Apple's AArch64 extend, AAPCS64
+    /// elsewhere leaves the upper bits unspecified.  Stated per
+    /// target rather than per width, because the *whether* is the
+    /// ABI's and only the direction is the type's.
+    fn extendsNarrow(target: *const std.Target) bool {
+        return switch (target.cpu.arch) {
+            .x86_64 => true,
+            .aarch64 => target.os.tag.isDarwin(),
+            else => false,
+        };
+    }
+
+    /// The extension attribute one boundary slot carries on this
+    /// target, or null when the ABI wants none.  Derived, never
+    /// hardcoded: a signed width extends by sign, an unsigned width
+    /// and `bool` by zero, and 32 bits up carry nothing anywhere.
+    fn boundaryExtension(self: *const Module, written: types.Type) ?Builder.Attribute {
+        if (!extendsNarrow(self.options.target)) return null;
+        return switch (written.storage()) {
+            .boolean, .u8, .u16 => .zeroext,
+            .i8, .i16 => .signext,
+            else => null,
+        };
+    }
+
+    /// The Luce-side shapes that are token-shaped at the C boundary
+    /// (docs/FFI.md): what C sees is the plain pointer word — `str`
+    /// crosses as the address of a NUL-terminated temporary, `?`
+    /// forms as the token or 0 — so the declared LLVM slot is the
+    /// scalar and the call site encodes/decodes.
+    fn foreignFacing(written: types.Type) types.Type {
+        return switch (written) {
+            .optional, .str => .foreign,
+            else => written,
+        };
+    }
+
+    /// The declared LLVM form of one extern (docs/FFI.md): the exact
+    /// C scalar per slot — narrow integers and `bool` carrying the
+    /// target's extension attributes on the declaration, mirrored at
+    /// the call site — a pointer per `out` slot, and a void result
+    /// for a C void.
     fn foreignFunction(self: *Module, index: u32) Error!Builder.Function.Index {
         if (self.foreigns.get(index)) |found| return found;
-        const row = self.program.foreign_functions[index];
+        const row = &self.program.foreign_functions[index];
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
-        for (row.parameters) |parameter| {
-            // `foreign?` and `str` are Luce-side shapes only: what C
-            // sees is the plain token — `str` crosses as the address
-            // of a NUL-terminated temporary — so the declared LLVM
-            // slot is the scalar and the call site encodes/decodes
-            // (docs/FFI.md).
-            const facing: types.Type = switch (parameter) {
-                .optional, .str => .foreign,
-                else => parameter,
-            };
+        var attributes: Builder.FunctionAttributes.Wip = .{};
+        defer attributes.deinit(self.builder);
+        if (self.boundaryExtension(row.result)) |extension| {
+            try attributes.addRetAttr(extension, self.builder);
+        }
+        for (row.parameters, 0..) |parameter, at| {
+            if (parameter.out) {
+                // An out slot is an address argument, nothing more:
+                // the callee writes through it during the call.
+                try parameters.append(self.gpa, .ptr);
+                continue;
+            }
+            const facing = foreignFacing(parameter.parameter_type);
             try parameters.append(self.gpa, try self.valueType(facing));
+            if (self.boundaryExtension(facing)) |extension| {
+                try attributes.addParamAttr(at, extension, self.builder);
+            }
         }
         const result: Builder.Type = if (row.result == .none)
             .void
         else
-            try self.valueType(switch (row.result) {
-                .optional, .str => types.Type.foreign,
-                else => row.result,
-            });
+            try self.valueType(foreignFacing(row.result));
         const declared = try self.builder.addFunction(
             try self.builder.fnType(result, parameters.items, .normal),
             try self.builder.strtabString(row.name),
             .default,
         );
         declared.setLinkage(.external, self.builder);
+        declared.setAttributes(try attributes.finish(self.builder), self.builder);
         try self.foreigns.put(self.gpa, index, declared);
         return declared;
+    }
+
+    /// The LLVM type of one `out` slot — the exact C width the callee
+    /// writes through the address (docs/FFI.md).  Differs from
+    /// `valueType` in exactly two places: C's `_Bool` fills a byte
+    /// where the Luce value is an `i1`, and a nullable handle's slot
+    /// is the bare token word — the decode happens after the load.
+    fn foreignSlotType(written: types.Type) Builder.Type {
+        return switch (written.storage()) {
+            .boolean, .u8, .i8 => .i8,
+            .u16, .i16 => .i16,
+            .u32, .i32 => .i32,
+            .f32 => .float,
+            .f64 => .double,
+            else => .i64,
+        };
     }
 
     /// Frame alignment for a value of `of`.  Only types `valueType`
@@ -7086,9 +7146,10 @@ const Body = struct {
         called: mir.Instruction.ForeignCall,
     ) Error!void {
         const gpa = self.module.gpa;
-        const row = self.module.program.foreign_functions[called.foreign];
+        const builder = self.module.builder;
+        const row = &self.module.program.foreign_functions[called.foreign];
         const target = try self.module.foreignFunction(called.foreign);
-        const zero = try self.module.builder.intValue(.i64, 0);
+        const zero = try builder.intValue(.i64, 0);
         var arguments: std.ArrayList(Builder.Value) = .empty;
         defer arguments.deinit(gpa);
         // The NUL-terminated temporaries a `str` argument crosses as,
@@ -7096,20 +7157,56 @@ const Body = struct {
         // (docs/FFI.md).
         var borrowed: std.ArrayList(Builder.Value) = .empty;
         defer borrowed.deinit(gpa);
-        for (called.arguments, 0..) |argument, index| {
+        // One stack slot per `out` parameter, zeroed before every
+        // call so a callee that skips its slot is still deterministic,
+        // passed by address, and read back after the call.
+        var slots: std.ArrayList(Builder.Value) = .empty;
+        defer slots.deinit(gpa);
+        var written: usize = 0;
+        for (row.parameters) |parameter| {
+            if (parameter.out) {
+                const slot_type = Module.foreignSlotType(parameter.parameter_type);
+                const slot = try self.scratch(
+                    slot_type,
+                    Module.valueAlignment(parameter.parameter_type),
+                    "out.slot",
+                );
+                const nothing: Builder.Value = switch (slot_type) {
+                    .float => try builder.floatValue(0.0),
+                    .double => try builder.doubleValue(0.0),
+                    else => try builder.intValue(slot_type, 0),
+                };
+                _ = try self.wip.store(.normal, nothing, slot, Module.valueAlignment(parameter.parameter_type));
+                try arguments.append(gpa, slot);
+                try slots.append(gpa, slot);
+                continue;
+            }
+            const argument = called.arguments[written];
+            written += 1;
             const held = self.produced[argument].value;
             // Through `storage()`, so a named handle takes the arm its
             // representation earns (docs/FFI.md): pointer-shaped joins
             // bare `foreign`'s non-null contract, integer-shaped passes
             // as the ordinary integer it is, and the 0.21 phase-1 logic
             // is reused rather than restated.
-            switch (row.parameters[index].storage()) {
-                // `foreign?` encodes at the boundary: `none` crosses
-                // as C's 0, a present token as itself (docs/FFI.md).
-                .optional => {
-                    const payload = try self.wip.extractValue(held, &.{Module.optional_payload}, "arg.payload");
+            switch (parameter.parameter_type.storage()) {
+                // The nullable crossings encode at the boundary:
+                // `none` is C's 0 or NULL (docs/FFI.md).  A present
+                // `str?` takes the NUL-temporary rules whole — the
+                // boxed optional decides its own tag, so the runtime
+                // sees `none` or the text with no extra control flow
+                // here.
+                .optional => |payload| if (payload.asType() == .str) {
+                    const text_box = try self.boxedRegister(argument, "cstr.text");
+                    const out = try self.scratch(self.module.value_type, value_alignment, "cstr.out");
+                    try self.callChecked(.luce_rt_cstring_make_opt, &.{ self.runtime, text_box, out });
+                    const token = try self.unboxed(.foreign, out, "cstr.token");
+                    try arguments.append(gpa, token);
+                    try borrowed.append(gpa, token);
+                } else {
+                    const inner = try self.wip.extractValue(held, &.{Module.optional_payload}, "arg.payload");
                     const present = try self.wip.extractValue(held, &.{Module.optional_present}, "arg.present");
-                    try arguments.append(gpa, try self.wip.select(.normal, present, payload, zero, "arg.encoded"));
+                    try arguments.append(gpa, try self.wip.select(.normal, present, inner, zero, "arg.encoded"));
                 },
                 // A bare `foreign` is the enforced non-null contract:
                 // a zero token stops here, at the call, with a trace —
@@ -7135,48 +7232,157 @@ const Body = struct {
         const answer = try self.wip.call(
             .normal,
             .ccc,
-            .none,
-            target.typeOf(self.module.builder),
-            target.toValue(self.module.builder),
+            // The declaration's extension attributes, restated at the
+            // call site because LLVM applies ABI attributes per call.
+            target.ptrConst(builder).attributes,
+            target.typeOf(builder),
+            target.toValue(builder),
             arguments.items,
             if (row.result == .none) "" else "foreign",
         );
         if (!row.blocking) try self.leaveEffects();
         // The borrows end with the call: release every temporary a
-        // `str` argument crossed as.
+        // `str` argument crossed as (the zero token a `none` crossed
+        // as frees nothing).
         for (borrowed.items) |token| {
             try self.callChecked(.luce_rt_cstring_free, &.{ self.runtime, token });
         }
-        // Through `storage()` for the parameters' reason: a
-        // pointer-shaped handle result takes `foreign`'s trap and
-        // decode, an integer-shaped one is its integer.
-        switch (row.result.storage()) {
-            .none => {},
-            // `foreign?` decodes: C's 0 becomes `none`, anything else
-            // is the present token beside a set bit.
-            .optional => {
-                const present = try self.wip.icmp(.ne, answer, zero, "result.present");
-                self.produced[register].value = try self.wip.buildAggregate(
-                    try self.module.valueType(self.function.result_types[register]),
-                    &.{ answer, present },
-                    "result.decoded",
+        // What the call answers on the Luce side: the declared return
+        // first, then each out slot in declaration order, every one
+        // through the same decode a direct result takes (docs/FFI.md).
+        var decoded: std.ArrayList(ForeignResult) = .empty;
+        defer decoded.deinit(gpa);
+        if (row.result != .none) {
+            try decoded.append(gpa, try self.decodeForeignValue(row.result, answer));
+        }
+        var out_index: usize = 0;
+        for (row.parameters) |parameter| {
+            if (!parameter.out) continue;
+            const slot = slots.items[out_index];
+            out_index += 1;
+            const slot_type = Module.foreignSlotType(parameter.parameter_type);
+            var raw = try self.wip.load(
+                .normal,
+                slot_type,
+                slot,
+                Module.valueAlignment(parameter.parameter_type),
+                "out.value",
+            );
+            // C's `_Bool` fills one byte; the Luce value is the bit.
+            if (parameter.parameter_type.storage() == .boolean) {
+                raw = try self.wip.icmp(.ne, raw, try builder.intValue(.i8, 0), "out.bool");
+            }
+            try decoded.append(gpa, try self.decodeForeignValue(parameter.parameter_type, raw));
+        }
+        switch (decoded.items.len) {
+            0 => {},
+            1 => {
+                self.produced[register].value = decoded.items[0].value;
+                self.produced[register].box = decoded.items[0].box;
+            },
+            // Two or more values ride the synthesized return shape,
+            // exactly as a Luce function's do (docs/RETURNS.md): one
+            // run of boxed fields, one `luce_rt_struct_make`, and the
+            // ordinary destructuring reads the fields out.
+            else => |count| {
+                const run = try self.scratchRun(
+                    self.module.value_type,
+                    count,
+                    value_alignment,
+                    "foreign.results",
                 );
+                for (decoded.items, 0..) |one, position| {
+                    if (one.box == .none) {
+                        try self.boxAt(run, position, one.of, one.value);
+                        continue;
+                    }
+                    // A value read out of a box — a str the runtime
+                    // copied — moves across whole, so the text keeps
+                    // whichever form it was in (docs/STRINGS.md).
+                    const address = try self.wip.gep(
+                        .inbounds,
+                        self.module.value_type,
+                        run,
+                        &.{try builder.intValue(.i64, position)},
+                        "box.element",
+                    );
+                    _ = try self.wip.callMemCpy(
+                        address,
+                        value_alignment,
+                        one.box,
+                        value_alignment,
+                        try builder.intValue(.i64, @sizeOf(runtime.Value)),
+                        .normal,
+                        true,
+                    );
+                }
+                try self.callAnswering(register, .luce_rt_struct_make, &.{
+                    self.runtime,
+                    run,
+                    try builder.intValue(.i64, count),
+                });
+            },
+        }
+    }
+
+    /// One boundary value decoded from its C-facing form — a return
+    /// register or a loaded `out` slot, same rules either way
+    /// (docs/FFI.md): a bare pointer-shaped handle enforces its
+    /// non-null contract, a `?` decodes C's 0 to `none`, `str` copies
+    /// and validates, and a scalar already has its declared LLVM
+    /// type.
+    const ForeignResult = struct {
+        of: types.Type,
+        value: Builder.Value,
+        box: Builder.Value = .none,
+    };
+
+    fn decodeForeignValue(
+        self: *Body,
+        written: types.Type,
+        raw: Builder.Value,
+    ) Error!ForeignResult {
+        const zero = try self.module.builder.intValue(.i64, 0);
+        switch (written.storage()) {
+            .optional => |payload| {
+                // `str?` decodes in the runtime: NULL writes the
+                // `none` Value, anything else copies and validates.
+                if (payload.asType() == .str) {
+                    const out = try self.scratch(self.module.value_type, value_alignment, "cstr.result");
+                    try self.callChecked(.luce_rt_cstring_result_opt, &.{ self.runtime, raw, out });
+                    return .{
+                        .of = written,
+                        .value = try self.unboxed(written, out, "cstr.opt"),
+                        .box = out,
+                    };
+                }
+                // `foreign?` decodes: C's 0 becomes `none`, anything
+                // else is the present token beside a set bit.
+                const present = try self.wip.icmp(.ne, raw, zero, "result.present");
+                return .{ .of = written, .value = try self.wip.buildAggregate(
+                    try self.module.valueType(written),
+                    &.{ raw, present },
+                    "result.decoded",
+                ) };
             },
             .foreign => {
-                try self.check(try self.wip.icmp(.eq, answer, zero, "result.is.null"), .null_foreign);
-                self.produced[register].value = answer;
+                try self.check(try self.wip.icmp(.eq, raw, zero, "result.is.null"), .null_foreign);
+                return .{ .of = written, .value = raw };
             },
-            // `-> str` copies and validates immediately: the C text
+            // `str` copies and validates immediately: the C text
             // becomes an owned Luce str before anything else runs
             // (docs/FFI.md).  Null and invalid UTF-8 trap inside the
             // runtime call.
             .str => {
                 const out = try self.scratch(self.module.value_type, value_alignment, "cstr.result");
-                try self.callChecked(.luce_rt_cstring_result, &.{ self.runtime, answer, out });
-                self.produced[register].value = try self.unboxed(.str, out, "cstr.copied");
-                self.produced[register].box = out;
+                try self.callChecked(.luce_rt_cstring_result, &.{ self.runtime, raw, out });
+                return .{
+                    .of = written,
+                    .value = try self.unboxed(.str, out, "cstr.copied"),
+                    .box = out,
+                };
             },
-            else => self.produced[register].value = answer,
+            else => return .{ .of = written, .value = raw },
         }
     }
 

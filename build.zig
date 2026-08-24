@@ -153,12 +153,29 @@ pub fn build(b: *std.Build) void {
     generator.addOption(u64, "generator", generatorIdentity(b, target, optimize, llvm));
     luce.addOptions("build_options", generator);
 
+    // The same sources as `luce`, as a module of their own for every
+    // unit-test binary.  The split exists for exactly one link input:
+    // the oracle's FFI shim dispatches through libffi (docs/FFI.md),
+    // and libffi belongs only to binaries that carry the oracle — the
+    // shipped products import `luce` and must not inherit the
+    // dependency, so the test root links it and the product root
+    // never sees it.  macOS carries libffi in the SDK; Linux uses the
+    // system library (CI installs libffi-dev).
+    const oracle_luce = b.createModule(.{
+        .root_source_file = b.path("src/luce/luce.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    oracle_luce.addOptions("build_options", generator);
+    oracle_luce.linkSystemLibrary("ffi", .{});
+
     const progress_test_runner: std.Build.Step.Compile.TestRunner = .{
         .path = b.path("tools/test_runner.zig"),
         .mode = .simple,
     };
     const luce_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .test_runner = progress_test_runner,
     });
     const run_luce_tests = addProgressTestRun(b, luce_tests, "internals");
@@ -215,6 +232,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     fuzz_luce.addOptions("build_options", generator);
+    fuzz_luce.linkSystemLibrary("ffi", .{});
     const fuzz_tests = b.addTest(.{ .root_module = fuzz_luce, .filters = &.{"fuzz:"} });
     const run_luce_fuzz_tests = b.addRunArtifact(fuzz_tests);
     const test_fuzz_step = b.step("test-fuzz", "Run the Luce fuzz and property corpus");
@@ -223,14 +241,14 @@ pub fn build(b: *std.Build) void {
     // The deterministic hardening lane adds the fixed-seed near-miss parser
     // stress test to the corpus.  It is cheap enough for local changes and
     // keeps long-input recovery visibly separate from ordinary unit tests.
-    const stress_tests = b.addTest(.{ .root_module = luce, .filters = &.{"near-miss programs"} });
+    const stress_tests = b.addTest(.{ .root_module = oracle_luce, .filters = &.{"near-miss programs"} });
     const run_luce_stress_tests = b.addRunArtifact(stress_tests);
     const test_hardening_step = b.step("test-hardening", "Run deterministic Luce hardening tests");
     test_hardening_step.dependOn(&run_luce_fuzz_tests.step);
     test_hardening_step.dependOn(&run_luce_stress_tests.step);
 
     const module_hardening_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "single-byte damage is rejected or runs to a clean outcome",
             "constant struct shapes are rejected before execution",
@@ -310,6 +328,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_c = .full,
     });
     c_sanitize_luce.addOptions("build_options", generator);
+    c_sanitize_luce.linkSystemLibrary("ffi", .{});
     const c_sanitize_tests = b.addTest(.{
         .root_module = c_sanitize_luce,
         .filters = sanitizer_filters,
@@ -328,6 +347,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = true,
     });
     thread_sanitize_luce.addOptions("build_options", generator);
+    thread_sanitize_luce.linkSystemLibrary("ffi", .{});
     const thread_sanitize_tests = b.addTest(.{
         .root_module = thread_sanitize_luce,
         .filters = sanitizer_filters,
@@ -406,6 +426,9 @@ pub fn build(b: *std.Build) void {
     const runtime_path = b.addOptions();
     runtime_path.addOptionPath("luce_rt_library", runtime_archive);
     specs.addOptions("build_options", runtime_path);
+    // The differential oracle rides every spec binary, and its FFI
+    // shim dispatches through libffi (docs/FFI.md).
+    specs.linkSystemLibrary("ffi", .{});
 
     // The release gate runs the specification once.  Its progress runner
     // classifies every test and refuses an unowned or multiply-owned name,
@@ -525,7 +548,7 @@ pub fn build(b: *std.Build) void {
         &addProgressTestRun(b, interface_tests, "interfaces").step,
     );
     const interface_internal_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{"interface"},
         .test_runner = progress_test_runner,
     });
@@ -544,7 +567,7 @@ pub fn build(b: *std.Build) void {
     );
     test_classes_step.dependOn(&addProgressTestRun(b, class_tests, "classes").step);
     const class_runtime_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{"ARC class:"},
         .test_runner = progress_test_runner,
     });
@@ -699,7 +722,7 @@ pub fn build(b: *std.Build) void {
     test_fstrings_step.dependOn(&b.addRunArtifact(fstring_tests).step);
 
     const namespace_diagnostic_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{"imports are explicit, checked, and reported per file"},
     });
     const test_namespace_diagnostics_step = b.step(
@@ -709,7 +732,7 @@ pub fn build(b: *std.Build) void {
     test_namespace_diagnostics_step.dependOn(&b.addRunArtifact(namespace_diagnostic_tests).step);
 
     const worker_exhaustion_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "worker arena exhaustion crosses the join as out of memory",
             "an interpreter worker marks arena exhaustion before it returns",
@@ -722,7 +745,7 @@ pub fn build(b: *std.Build) void {
     test_worker_exhaustion_step.dependOn(&b.addRunArtifact(worker_exhaustion_tests).step);
 
     const worker_ownership_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "a worker result copies and releases a nested object graph",
             "failed worker graph construction closes every partial child",
@@ -748,7 +771,7 @@ pub fn build(b: *std.Build) void {
     test_worker_ownership_step.dependOn(&b.addRunArtifact(worker_snapshot_specs).step);
 
     const runtime_ownership_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "cross-runtime copies roll back every nested allocation",
             "cross-runtime copies reject function values transitively",
@@ -812,7 +835,7 @@ pub fn build(b: *std.Build) void {
     test_runtime_ownership_step.dependOn(&b.addRunArtifact(runtime_ownership_tests).step);
 
     const worker_resource_lifecycle_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "fixed worker and resource lifecycle",
             "fuzz: worker and resource lifecycles",
@@ -827,7 +850,7 @@ pub fn build(b: *std.Build) void {
     );
 
     const owner_graph_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "fixed owner-graph seeds keep one owner",
             "array fill releases forged object cells",
@@ -844,7 +867,7 @@ pub fn build(b: *std.Build) void {
     test_owner_graph_step.dependOn(&b.addRunArtifact(owner_graph_tests).step);
 
     const optimizer_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{"function pruning does not retain an orphaned function reference"},
     });
     const test_optimizer_step = b.step(
@@ -854,7 +877,7 @@ pub fn build(b: *std.Build) void {
     test_optimizer_step.dependOn(&b.addRunArtifact(optimizer_tests).step);
 
     const mir_constant_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{"constant container rows are exhaustively verified after decode"},
     });
     const test_mir_constants_step = b.step(
@@ -864,7 +887,7 @@ pub fn build(b: *std.Build) void {
     test_mir_constants_step.dependOn(&b.addRunArtifact(mir_constant_tests).step);
 
     const mir_wire_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "the wire surface is fingerprinted: change it, bump format_version",
             "a boxed storage bridge survives the module round trip",
@@ -877,7 +900,7 @@ pub fn build(b: *std.Build) void {
     test_mir_wire_step.dependOn(&b.addRunArtifact(mir_wire_tests).step);
 
     const mir_function_shape_tests = b.addTest(.{
-        .root_module = luce,
+        .root_module = oracle_luce,
         .filters = &.{
             "bare function fields require whole-object or compiler-owned storage",
             "map values cannot be optional while bare function values remain legal",

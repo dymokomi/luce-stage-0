@@ -409,7 +409,7 @@ pub fn lowerCall(
     // fallible — C reports failure in its return value, and the
     // wrapper is where `!` lives.
     if (self.analyzer.foreign_names.get(resolved)) |foreign_index| {
-        return lowerForeignCall(self, foreign_index, call, as_statement);
+        return lowerForeignCall(self, foreign_index, call, as_statement, shape_position);
     }
     const function_index = self.analyzer.function_names.get(resolved) orelse {
         try refusals.failUnknownFunction(self, call.callee, call.span);
@@ -3025,13 +3025,17 @@ fn sequenceMethod(
 }
 
 /// One extern call (docs/FFI.md): the C boundary has no argument
-/// names, no defaults, no fallibility, and every operand is a Tier-1
-/// scalar — so the whole check is arity, order, and exact types.
+/// names, no defaults, no fallibility, and every operand is a
+/// boundary scalar — so the whole check is arity, order, and exact
+/// types.  An `out` slot takes no argument: the compiler allocates
+/// it, and the value joins the results after the declared return,
+/// received by the ordinary destructuring (docs/RETURNS.md).
 fn lowerForeignCall(
     self: *FunctionBuilder,
     foreign_index: u32,
     call: ast.Call,
     as_statement: bool,
+    shape_position: ShapePosition,
 ) Error!?Typed {
     const row = self.analyzer.foreigns.items[foreign_index];
     for (call.arguments) |argument| {
@@ -3045,28 +3049,54 @@ fn lowerForeignCall(
             return null;
         }
     }
-    if (call.arguments.len != row.parameters.len) {
+    var written_count: usize = 0;
+    for (row.parameters) |parameter| {
+        if (!parameter.out) written_count += 1;
+    }
+    if (call.arguments.len != written_count) {
         try self.fail(
             "luce.sema.extern",
             call.span,
-            "{s} takes {d} arguments and was given {d}",
-            .{ call.callee, row.parameters.len, call.arguments.len },
+            "{s} takes {d} argument{s} and was given {d}; an out slot takes none",
+            .{ call.callee, written_count, helpers.plural(written_count), call.arguments.len },
         );
         return null;
     }
     const entries = try self.arena().alloc(recorder.RecordedOperand, call.arguments.len);
-    for (call.arguments, 0..) |argument, index| {
+    var argument_index: usize = 0;
+    for (row.parameters) |parameter| {
+        if (parameter.out) continue;
+        const argument = call.arguments[argument_index];
         const fitted = (try self.lowerTyped(
             argument.value,
-            row.parameters[index],
+            parameter.parameter_type,
             argument.span,
             "an extern argument",
         )) orelse return null;
-        entries[index] = .{ .node = fitted.value.node, .slot = @intCast(index) };
+        entries[argument_index] = .{ .node = fitted.value.node, .slot = @intCast(argument_index) };
+        argument_index += 1;
     }
-    if (row.result == .none and !as_statement) {
+    if (row.answer == .none and !as_statement) {
         try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{call.callee});
         return null;
+    }
+    // A return shape is received by a destructuring let/var or
+    // existing-name assignment, or discarded as a statement — the
+    // same rule every multi-value Luce function takes.
+    if (signatures.returnShapeOf(self.analyzer, row.answer)) |shape| {
+        if (!as_statement and shape_position != .receive) {
+            try self.fail(
+                "luce.sema.call",
+                call.span,
+                "{s} answers {d} values, and only a destructuring let, var, or assignment can receive them{s}",
+                .{
+                    call.callee,
+                    shape.fields.len,
+                    if (shape_position == .returning) " — bind them, then return them" else "",
+                },
+            );
+            return null;
+        }
     }
     const node = try recorder.recordCallNode(
         self,
@@ -3074,8 +3104,8 @@ fn lowerForeignCall(
         entries,
         entries.len,
         false,
-        row.result,
+        row.answer,
         call.span,
     );
-    return .{ .node = node, .value_type = row.result };
+    return .{ .node = node, .value_type = row.answer };
 }

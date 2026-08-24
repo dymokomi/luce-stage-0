@@ -347,7 +347,10 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     for (program.foreign_functions) |foreign| {
         try writer.blob(foreign.name);
         try writer.int(u32, @intCast(foreign.parameters.len));
-        for (foreign.parameters) |parameter| try writer.valueType(parameter);
+        for (foreign.parameters) |parameter| {
+            try writer.valueType(parameter.parameter_type);
+            try writer.int(u8, @intFromBool(parameter.out));
+        }
         try writer.valueType(foreign.result);
         try writer.int(u8, @intFromBool(foreign.blocking));
     }
@@ -781,8 +784,11 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (foreigns) |*foreign| {
         foreign.name = try arena.dupe(u8, try reader.blob());
         const parameter_count = try reader.count();
-        const parameters = try arena.alloc(types.Type, parameter_count);
-        for (parameters) |*parameter| parameter.* = try reader.valueType();
+        const parameters = try arena.alloc(mir.ForeignFunction.Parameter, parameter_count);
+        for (parameters) |*parameter| {
+            parameter.parameter_type = try reader.valueType();
+            parameter.out = (try reader.int(u8)) != 0;
+        }
         foreign.parameters = parameters;
         foreign.result = try reader.valueType();
         foreign.blocking = (try reader.int(u8)) != 0;
@@ -2230,6 +2236,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // engines interpret local zero without changing its type.
     inline for (comptime std.meta.fieldNames(mir.Local)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.Function)) |name| hasher.update(name);
+    // A foreign row's slots carry a per-parameter fact byte beside
+    // each type (docs/FFI.md), so its record shapes are wire surface
+    // exactly as the signature table's are.
+    inline for (comptime std.meta.fieldNames(mir.ForeignFunction)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ForeignFunction.Parameter)) |name| hasher.update(name);
     // A constant row has two wire-tagged unions of its own and three
     // nested record shapes.  Fingerprint every name rather than only
     // the instruction that indexes the table, or a payload edit could
@@ -2356,9 +2367,13 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // the silent-misreading case the bump exists for.  Named handles
     // land under the same bump: `extern_type` appends to `types.Type`
     // and its payload set (the hash moves again), and the extern-type
-    // table joins the program after the enums.
+    // table joins the program after the enums.  Phase 3 lands under
+    // it too: every foreign parameter slot carries an `out` byte
+    // beside its type (the hash moves again), the eight-parameter cap
+    // is gone, and the scalar vocabulary completes — encodings a
+    // phase-2 decoder never accepted, caught by the same bump.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 12563044881036113650), hasher.final());
+    try testing.expectEqual(@as(u64, 6292937558132657178), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

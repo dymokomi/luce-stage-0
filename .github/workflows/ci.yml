@@ -84,8 +84,10 @@ jobs:
       - name: Install LLVM 22 and the test dependencies
         run: |
           sudo apt-get update
+          # libffi-dev: the oracle's FFI shim dispatches through
+          # libffi, linked into the test binaries only (docs/FFI.md).
           sudo apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl gnupg nodejs zip unzip
+            build-essential ca-certificates curl gnupg libffi-dev nodejs zip unzip
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.gpg.key"
           fingerprint=$(gpg --show-keys --with-colons "$RUNNER_TEMP/llvm.gpg.key" | awk -F: '$1 == "fpr" { print $10; exit }')
           test "$fingerprint" = 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421

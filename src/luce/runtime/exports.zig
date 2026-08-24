@@ -2086,6 +2086,20 @@ pub export fn luce_rt_cstring_make(
     return completed(runtime);
 }
 
+/// The `str?` variant of `luce_rt_cstring_make` (docs/FFI.md): a
+/// boxed `none` answers the zero token — C's NULL — and a present
+/// value takes the NUL-temporary rules whole.
+pub export fn luce_rt_cstring_make_opt(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = text.cstringMakeOpt(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
 pub export fn luce_rt_cstring_free(
     runtime: *Runtime,
     token: u64,
@@ -2100,6 +2114,18 @@ pub export fn luce_rt_cstring_result(
     out: [*c]Value,
 ) callconv(.c) i32 {
     out.* = text.cstringResult(runtime, token) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+/// The `str?` variant of `luce_rt_cstring_result` (docs/FFI.md): C's
+/// NULL writes the `none` Value; anything else copies and validates.
+pub export fn luce_rt_cstring_result_opt(
+    runtime: *Runtime,
+    token: u64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    out.* = text.cstringResultOpt(runtime, token) catch |mistake|
         return failed(runtime, mistake);
     return completed(runtime);
 }
