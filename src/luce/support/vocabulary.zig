@@ -229,6 +229,13 @@ pub const TrapCode = enum {
     /// A retain attempted to create a new strong reference after a class's
     /// last strong release had begun its `deinit:` body.
     class_resurrection,
+    /// A zero token crossed the C boundary through a bare (non-`?`)
+    /// `foreign` slot, in either direction (docs/FFI.md).  A pointer
+    /// that may be null is declared `foreign?` and decodes to `none`;
+    /// a bare `foreign` is an enforced non-null contract, so the
+    /// crossing stops here — at the call, with a trace — rather than
+    /// as a corrupt pointer inside C.  Appended, so nothing renumbers.
+    null_foreign,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -255,6 +262,7 @@ pub const TrapCode = enum {
             .immutable_object => "constant container is immutable",
             .invalid_weak_target => "invalid weak-reference target",
             .class_resurrection => "deinit cannot create a new strong self reference",
+            .null_foreign => "null crossed a non-null C boundary",
         };
     }
 };

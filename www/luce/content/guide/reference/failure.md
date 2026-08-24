@@ -45,6 +45,7 @@ handler.
 | `immutable_object` | constant container is immutable | A write reaches a file-scope constant container through hidden provenance. |
 | `invalid_weak_target` | invalid weak-reference target | Damaged MIR asks the runtime to weaken a value or resource, or to upgrade something that is not weak storage. Correct source is rejected earlier. |
 | `class_resurrection` | deinit cannot create a new strong self reference | A class finalizer attempts to make its dying object strongly reachable again. Correct source is rejected at compile time; the runtime code defends damaged MIR. |
+| `null_foreign` | null crossed a non-null C boundary | A zero token crosses an extern boundary through a bare `foreign` slot, in either direction. A pointer that may be null is declared `foreign?` and decodes to `none` instead. |
 
 `use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
 runtime's broad *object* wording; the object may also be an open file

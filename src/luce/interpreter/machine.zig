@@ -1054,6 +1054,10 @@ pub const Machine = struct {
                         .i16 => .ofI16(@intCast(value)),
                         .i32 => .ofI32(@intCast(value)),
                         .i64 => .ofI64(@intCast(value)),
+                        // `foreign`'s zero value — the one integer
+                        // constant the verifier admits for the type
+                        // (docs/FFI.md).
+                        .foreign => .ofI64(@intCast(value)),
                         .char => .ofChar(@intCast(value)),
                         else => unreachable,
                     },
@@ -1281,7 +1285,21 @@ pub const Machine = struct {
                                 .u32 => registers[argument].asU32(),
                                 .i32 => @as(u32, @bitCast(registers[argument].asI32())),
                                 .u64 => registers[argument].asU64(),
-                                .i64, .foreign => @bitCast(registers[argument].asI64()),
+                                .i64 => @bitCast(registers[argument].asI64()),
+                                // A bare `foreign` is the enforced
+                                // non-null contract (docs/FFI.md): a
+                                // zero token stops at the call.
+                                .foreign => blk: {
+                                    const token: u64 = @bitCast(registers[argument].asI64());
+                                    if (token == 0) return self.trap(.null_foreign);
+                                    break :blk token;
+                                },
+                                // `foreign?` encodes: `none` crosses
+                                // as C's 0, a present token as itself.
+                                .optional => if (registers[argument].isNone())
+                                    0
+                                else
+                                    @bitCast(registers[argument].asI64()),
                                 else => return self.trap(.host_unavailable),
                             };
                         }
@@ -1299,7 +1317,18 @@ pub const Machine = struct {
                             .u32 => .ofU32(@truncate(answer.integer)),
                             .i32 => .ofI32(@bitCast(@as(u32, @truncate(answer.integer)))),
                             .u64 => .ofU64(answer.integer),
-                            .i64, .foreign => .ofI64(@bitCast(answer.integer)),
+                            .i64 => .ofI64(@bitCast(answer.integer)),
+                            // A bare `foreign` result enforces its
+                            // non-null contract; `foreign?` decodes
+                            // C's 0 to `none` (docs/FFI.md).
+                            .foreign => if (answer.integer == 0)
+                                return self.trap(.null_foreign)
+                            else
+                                .ofI64(@bitCast(answer.integer)),
+                            .optional => if (answer.integer == 0)
+                                .none
+                            else
+                                .ofI64(@bitCast(answer.integer)),
                             else => return self.trap(.host_unavailable),
                         };
                     },

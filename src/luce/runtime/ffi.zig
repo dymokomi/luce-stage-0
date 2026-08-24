@@ -127,6 +127,24 @@ export fn luce_ffi_probe_sum_bytes(at: u64, count: u64) callconv(.c) i64 {
     return total;
 }
 
+/// C's null, deliberately: what a `foreign?` return decodes to `none`
+/// and a bare `foreign` return turns into the `null_foreign` trap
+/// (docs/FFI.md).
+export fn luce_ffi_probe_null() callconv(.c) u64 {
+    return 0;
+}
+
+/// A stable non-null token for the present half of the decode specs.
+export fn luce_ffi_probe_token() callconv(.c) u64 {
+    return 0x1234;
+}
+
+/// Echoes its token, so a `foreign?` parameter's encode (`none` -> 0)
+/// and decode (0 -> `none`) can be watched round-trip in one call.
+export fn luce_ffi_probe_echo(token: u64) callconv(.c) u64 {
+    return token;
+}
+
 test "the shim resolves and calls through every return kind" {
     const add = resolve("luce_ffi_probe_add") orelse return error.TestUnexpectedResult;
     const summed = call(add, &.{ @bitCast(@as(i64, 40)), @bitCast(@as(i64, 2)) }, .integer);

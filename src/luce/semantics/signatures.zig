@@ -721,11 +721,11 @@ fn collectExtern(
     defer parameters.deinit(self.temporary);
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
-        if (!tierOneParameter(resolved)) {
+        if (!(tierOneParameter(resolved) or nullableForeign(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a 32- or 64-bit integer or foreign; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a 32- or 64-bit integer, foreign, or foreign?; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
@@ -735,11 +735,11 @@ fn collectExtern(
     var result: Type = .none;
     if (declaration.returns) |written| {
         const resolved = (try resolve.resolveType(self, module, written)) orelse return;
-        if (!(resolved == .f64 or tierOneParameter(resolved))) {
+        if (!(resolved == .f64 or tierOneParameter(resolved) or nullableForeign(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 written.span,
-                "an extern answers a 32- or 64-bit integer, foreign, f64, or nothing (docs/FFI.md)",
+                "an extern answers a 32- or 64-bit integer, foreign, foreign?, f64, or nothing (docs/FFI.md)",
                 .{},
             );
             return;
@@ -764,4 +764,11 @@ fn tierOneParameter(of: Type) bool {
         .u32, .i32, .u64, .i64, .foreign => true,
         else => false,
     };
+}
+
+/// `foreign?` — the nullable handle (docs/FFI.md).  C's null decodes
+/// to `none` at the boundary; the bare `foreign` beside it is the
+/// enforced non-null contract.
+fn nullableForeign(of: Type) bool {
+    return of == .optional and of.optional.asType() == .foreign;
 }

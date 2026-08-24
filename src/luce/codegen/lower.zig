@@ -672,12 +672,16 @@ const Module = struct {
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
         for (row.parameters) |parameter| {
-            try parameters.append(self.gpa, try self.valueType(parameter));
+            // `foreign?` is a Luce-side shape only: what C sees is the
+            // plain token, so the declared LLVM slot is the scalar and
+            // the call site encodes/decodes (docs/FFI.md).
+            const facing: types.Type = if (parameter == .optional) .foreign else parameter;
+            try parameters.append(self.gpa, try self.valueType(facing));
         }
         const result: Builder.Type = if (row.result == .none)
             .void
         else
-            try self.valueType(row.result);
+            try self.valueType(if (row.result == .optional) types.Type.foreign else row.result);
         const declared = try self.builder.addFunction(
             try self.builder.fnType(result, parameters.items, .normal),
             try self.builder.strtabString(row.name),
@@ -7040,10 +7044,28 @@ const Body = struct {
         const gpa = self.module.gpa;
         const row = self.module.program.foreign_functions[called.foreign];
         const target = try self.module.foreignFunction(called.foreign);
+        const zero = try self.module.builder.intValue(.i64, 0);
         var arguments: std.ArrayList(Builder.Value) = .empty;
         defer arguments.deinit(gpa);
-        for (called.arguments) |argument| {
-            try arguments.append(gpa, self.produced[argument].value);
+        for (called.arguments, 0..) |argument, index| {
+            const held = self.produced[argument].value;
+            switch (row.parameters[index]) {
+                // `foreign?` encodes at the boundary: `none` crosses
+                // as C's 0, a present token as itself (docs/FFI.md).
+                .optional => {
+                    const payload = try self.wip.extractValue(held, &.{Module.optional_payload}, "arg.payload");
+                    const present = try self.wip.extractValue(held, &.{Module.optional_present}, "arg.present");
+                    try arguments.append(gpa, try self.wip.select(.normal, present, payload, zero, "arg.encoded"));
+                },
+                // A bare `foreign` is the enforced non-null contract:
+                // a zero token stops here, at the call, with a trace —
+                // never as a corrupt pointer inside C.
+                .foreign => {
+                    try self.check(try self.wip.icmp(.eq, held, zero, "arg.is.null"), .null_foreign);
+                    try arguments.append(gpa, held);
+                },
+                else => try arguments.append(gpa, held),
+            }
         }
         if (!row.blocking) try self.enterEffects();
         const answer = try self.wip.call(
@@ -7056,7 +7078,24 @@ const Body = struct {
             if (row.result == .none) "" else "foreign",
         );
         if (!row.blocking) try self.leaveEffects();
-        if (row.result != .none) self.produced[register].value = answer;
+        switch (row.result) {
+            .none => {},
+            // `foreign?` decodes: C's 0 becomes `none`, anything else
+            // is the present token beside a set bit.
+            .optional => {
+                const present = try self.wip.icmp(.ne, answer, zero, "result.present");
+                self.produced[register].value = try self.wip.buildAggregate(
+                    try self.module.valueType(self.function.result_types[register]),
+                    &.{ answer, present },
+                    "result.decoded",
+                );
+            },
+            .foreign => {
+                try self.check(try self.wip.icmp(.eq, answer, zero, "result.is.null"), .null_foreign);
+                self.produced[register].value = answer;
+            },
+            else => self.produced[register].value = answer,
+        }
     }
 
     fn emitInoutCall(

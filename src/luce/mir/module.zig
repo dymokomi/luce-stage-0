@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 71;
+pub const format_version: u32 = 72;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2322,8 +2322,13 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // the signature table gains the fallible byte.
     // 70 -> 71: typed errors (docs/ERRORS.md R2): functions and
     // signatures carry what they fail with, `error_value` joins.
-    try testing.expectEqual(@as(u32, 71), format_version);
-    try testing.expectEqual(@as(u64, 11074610861243835665), hasher.final());
+    // 71 -> 72: the 0.21 boundary begins (docs/FFI.md): `null_foreign`
+    // joins `TrapCode` (the hash moves), and a foreign signature slot
+    // may now be optional-of-foreign — an encoding the wire could
+    // already spell but no 71 decoder ever accepted, which is the
+    // silent-misreading case the bump exists for.
+    try testing.expectEqual(@as(u32, 72), format_version);
+    try testing.expectEqual(@as(u64, 1238684840061662608), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

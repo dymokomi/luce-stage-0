@@ -986,6 +986,14 @@ fn verifyInstruction(
                 if (!isMember(program, held, result)) return error.BadConstant;
                 return;
             }
+            // The zero token is `foreign`'s zero value (docs/FFI.md) —
+            // the one integer constant the type admits.  Anything else
+            // would be a forged pointer, so a hostile module offering
+            // one is refused.
+            if (result == .foreign) {
+                if (held != 0) return error.BadConstant;
+                return;
+            }
             if (!result.isInteger()) return error.TypeMismatch;
             if (!fitsInteger(held, result)) return error.BadConstant;
         },
@@ -1455,6 +1463,10 @@ fn verifyInstruction(
 fn foreignParameter(of: Type) bool {
     return switch (of) {
         .u32, .i32, .u64, .i64, .foreign => true,
+        // `foreign?` — C's nullable pointer, decoded at the boundary
+        // (docs/FFI.md).  Only the foreign payload is admitted; an
+        // optional of anything else has no C encoding.
+        .optional => |payload| payload.asType() == .foreign,
         else => false,
     };
 }
