@@ -721,11 +721,11 @@ fn collectExtern(
     defer parameters.deinit(self.temporary);
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
-        if (!(tierOneParameter(resolved) or nullableForeign(resolved))) {
+        if (!(tierOneParameter(resolved) or nullableForeign(resolved) or resolved == .str)) {
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a 32- or 64-bit integer, foreign, or foreign?; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a 32- or 64-bit integer, foreign, foreign?, or str; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
@@ -735,11 +735,11 @@ fn collectExtern(
     var result: Type = .none;
     if (declaration.returns) |written| {
         const resolved = (try resolve.resolveType(self, module, written)) orelse return;
-        if (!(resolved == .f64 or tierOneParameter(resolved) or nullableForeign(resolved))) {
+        if (!(resolved == .f64 or resolved == .str or tierOneParameter(resolved) or nullableForeign(resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 written.span,
-                "an extern answers a 32- or 64-bit integer, foreign, foreign?, f64, or nothing (docs/FFI.md)",
+                "an extern answers a 32- or 64-bit integer, foreign, foreign?, str, f64, or nothing (docs/FFI.md)",
                 .{},
             );
             return;

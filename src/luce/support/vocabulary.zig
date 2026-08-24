@@ -236,6 +236,12 @@ pub const TrapCode = enum {
     /// crossing stops here — at the call, with a trace — rather than
     /// as a corrupt pointer inside C.  Appended, so nothing renumbers.
     null_foreign,
+    /// C handed back text that is not valid UTF-8 where a `str` was
+    /// declared (docs/FFI.md).  A `str` is valid UTF-8 by contract and
+    /// the boundary does not launder that contract: an API that
+    /// returns arbitrary bytes is not a `str` API — read it with
+    /// `c.bytes_at`.  Appended, so nothing renumbers.
+    invalid_utf8,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -263,6 +269,7 @@ pub const TrapCode = enum {
             .invalid_weak_target => "invalid weak-reference target",
             .class_resurrection => "deinit cannot create a new strong self reference",
             .null_foreign => "null crossed a non-null C boundary",
+            .invalid_utf8 => "C text is not valid UTF-8",
         };
     }
 };

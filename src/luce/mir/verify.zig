@@ -1463,6 +1463,10 @@ fn verifyInstruction(
 fn foreignParameter(of: Type) bool {
     return switch (of) {
         .u32, .i32, .u64, .i64, .foreign => true,
+        // `str` crosses seamlessly (docs/FFI.md): an argument becomes
+        // a NUL-terminated temporary borrowed for the call; a result
+        // is copied and validated at the boundary.
+        .str => true,
         // `foreign?` — C's nullable pointer, decoded at the boundary
         // (docs/FFI.md).  Only the foreign payload is admitted; an
         // optional of anything else has no C encoding.
@@ -1805,8 +1809,24 @@ fn verifyIntrinsic(
         .buffer_address => {
             try exactly(arguments, 1);
             const shape = try heapShape(program, arguments[0]);
-            if (shape != .list or shape.list != .u8) return error.BadIntrinsic;
+            switch (shape) {
+                .list => if (shape.list != .u8) return error.BadIntrinsic,
+                .array => if (!(shape.array.element.isNumeric() or shape.array.element == .u8)) return error.BadIntrinsic,
+                else => return error.BadIntrinsic,
+            }
             try expectType(result, .foreign);
+        },
+        // The C reads (docs/FFI.md): a token in, a fresh copy out.
+        .bytes_at => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .foreign);
+            try expectType(arguments[1], .u64);
+            try expectType(result, .bytes);
+        },
+        .cstring_at => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .foreign);
+            try expectType(result, .str);
         },
         // Both sides are lists of one element type; the whole answer
         // travels in the receiver.

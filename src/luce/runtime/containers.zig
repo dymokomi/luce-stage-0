@@ -252,7 +252,9 @@ pub fn extend(runtime: *Runtime, target: Value, source: Value) Error!void {
 /// form is what keeps callers inside that window.
 pub fn bufferAddress(runtime: *Runtime, target: Value) Error!Value {
     const object = try runtime.resolve(target);
-    if (object.data != .list) return runtime.fail(.not_owned);
+    // A dense array's storage counts too — the BLAS door
+    // (docs/FFI.md); stage 4 already limited the elements to scalars.
+    if (object.data != .list and object.data != .array) return runtime.fail(.not_owned);
     if (object.elements.count == 0) return Value.ofI64(0);
     return Value.ofI64(@bitCast(@as(u64, @intFromPtr(object.elements.bytes.ptr))));
 }

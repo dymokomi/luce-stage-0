@@ -1280,6 +1280,11 @@ pub const Machine = struct {
                         const target = runtime.ffi.resolve(symbol_buffer[0..row.name.len :0]) orelse
                             return self.trap(.host_unavailable);
                         var words: [runtime.ffi.max_parameters]u64 = undefined;
+                        // The NUL-terminated temporaries `str`
+                        // arguments cross as, borrowed for exactly
+                        // this call (docs/FFI.md).
+                        var borrowed: [runtime.ffi.max_parameters]u64 = undefined;
+                        var borrowed_count: usize = 0;
                         for (called.arguments, 0..) |argument, index| {
                             words[index] = switch (row.parameters[index]) {
                                 .u32 => registers[argument].asU32(),
@@ -1300,6 +1305,14 @@ pub const Machine = struct {
                                     0
                                 else
                                     @bitCast(registers[argument].asI64()),
+                                .str => blk: {
+                                    const made = text.cstringMake(&self.runtime, registers[argument]) catch |mistake|
+                                        return self.caught(mistake);
+                                    const token: u64 = @bitCast(made.asI64());
+                                    borrowed[borrowed_count] = token;
+                                    borrowed_count += 1;
+                                    break :blk token;
+                                },
                                 else => return self.trap(.host_unavailable),
                             };
                         }
@@ -1311,6 +1324,10 @@ pub const Machine = struct {
                         if (!row.blocking) self.runtime.enterEffects();
                         const answer = runtime.ffi.call(target, words[0..called.arguments.len], kind);
                         if (!row.blocking) self.runtime.leaveEffects();
+                        // The borrows end with the call.
+                        for (borrowed[0..borrowed_count]) |token| {
+                            text.cstringFree(&self.runtime, token);
+                        }
                         registers[item] = switch (row.result) {
                             .none => .none,
                             .f64 => .ofF64(answer.real),
@@ -1329,6 +1346,10 @@ pub const Machine = struct {
                                 .none
                             else
                                 .ofI64(@bitCast(answer.integer)),
+                            // `-> str` copies and validates at the
+                            // boundary (docs/FFI.md).
+                            .str => text.cstringResult(&self.runtime, answer.integer) catch |mistake|
+                                return self.caught(mistake),
                             else => return self.trap(.host_unavailable),
                         };
                     },
@@ -2055,6 +2076,16 @@ pub const Machine = struct {
             },
             .buffer_address => {
                 return containers.bufferAddress(&self.runtime, registers[arguments[0]]);
+            },
+            .bytes_at => {
+                return text.bytesAt(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asU64(),
+                );
+            },
+            .cstring_at => {
+                return text.cstringAt(&self.runtime, registers[arguments[0]]);
             },
             .append_ascii => {
                 try containers.appendAscii(

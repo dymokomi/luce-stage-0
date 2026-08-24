@@ -333,3 +333,64 @@ pub fn parseF64(runtime: *Runtime, held: Value) Error!Value {
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
     return Value.ofF64(parsed);
 }
+
+/// `Builtin.bytes_at(pointer, count)` — `count` bytes copied out of
+/// C-owned memory into a fresh `bytes` (docs/FFI.md).  A copy, never
+/// a borrow: what happens to the foreign memory afterward is the
+/// library's business, and the copy is already safely owned.  The
+/// null token traps `null_foreign` — a callee that may answer null
+/// declared `foreign?`, and `none` never reaches here.
+pub fn bytesAt(runtime: *Runtime, pointer: Value, count: u64) Error!Value {
+    const token: u64 = @bitCast(pointer.asI64());
+    if (token == 0) return runtime.fail(.null_foreign);
+    if (count == 0) return runtime.ownValue(Value.ofBytes(&.{}));
+    const source: [*]const u8 = @ptrFromInt(token);
+    return runtime.ownValue(Value.ofBytes(source[0..count]));
+}
+
+/// `Builtin.cstring_at(pointer)` — NUL-scan C-owned memory, copy, and
+/// validate into a fresh `str` (docs/FFI.md).  A `str` is valid UTF-8
+/// by contract, so invalid text traps `invalid_utf8` rather than
+/// laundering the contract; an API that answers arbitrary bytes is a
+/// `bytes_at` API.
+pub fn cstringAt(runtime: *Runtime, pointer: Value) Error!Value {
+    return cstringResult(runtime, @bitCast(pointer.asI64()));
+}
+
+/// A `str` argument crossing to C (docs/FFI.md): the bytes plus one
+/// terminating zero, in a fresh allocation **borrowed for the call**.
+/// The eight bytes before the handed-out address carry the
+/// allocation's length so `cstringFree` can give back exactly what
+/// was taken — `strlen` cannot be trusted for that job, because a
+/// valid `str` may contain U+0000 and C's view simply truncates
+/// there, which is C's business and not a memory-accounting error.
+/// Answers the token as a `foreign` Value.
+pub fn cstringMake(runtime: *Runtime, text_value: Value) Error!Value {
+    if (!text_value.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+    const text = text_value.asStr();
+    const total = 8 + text.len + 1;
+    const buffer = runtime.objects.alloc(u8, total) catch
+        return runtime.fail(.allocation_failed);
+    std.mem.writeInt(u64, buffer[0..8], total, .little);
+    @memcpy(buffer[8 .. 8 + text.len], text);
+    buffer[total - 1] = 0;
+    return Value.ofI64(@bitCast(@as(u64, @intFromPtr(buffer.ptr + 8))));
+}
+
+/// The paired release: the call returned, the borrow is over.
+pub fn cstringFree(runtime: *Runtime, token: u64) void {
+    if (token == 0) return;
+    const base: [*]u8 = @ptrFromInt(token - 8);
+    const total = std.mem.readInt(u64, base[0..8], .little);
+    runtime.objects.free(base[0..total]);
+}
+
+/// A `-> str` extern result (docs/FFI.md): the same copy-and-validate
+/// `cstring_at` performs, from the raw token the call answered.
+pub fn cstringResult(runtime: *Runtime, token: u64) Error!Value {
+    if (token == 0) return runtime.fail(.null_foreign);
+    const source: [*:0]const u8 = @ptrFromInt(token);
+    const held = std.mem.span(source);
+    if (!std.unicode.utf8ValidateSlice(held)) return runtime.fail(.invalid_utf8);
+    return runtime.ownValue(Value.ofStr(held));
+}

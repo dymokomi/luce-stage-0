@@ -222,6 +222,11 @@ pub const Service = enum {
     luce_rt_append,
     luce_rt_list_extend,
     luce_rt_buffer_address,
+    luce_rt_bytes_at,
+    luce_rt_cstring_at,
+    luce_rt_cstring_make,
+    luce_rt_cstring_free,
+    luce_rt_cstring_result,
     luce_rt_append_ascii,
     luce_rt_pop,
     luce_rt_insert,
@@ -1054,6 +1059,26 @@ pub fn describe(service: Service) Effect {
         .luce_rt_buffer_address => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_bytes_at => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_out },
+        },
+        .luce_rt_cstring_at => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_cstring_make => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_cstring_free => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain },
+        },
+        .luce_rt_cstring_result => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .value_out },
         },
         .luce_rt_insert => .{
             .memory = touches_heap,

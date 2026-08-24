@@ -2052,6 +2052,58 @@ pub export fn luce_rt_buffer_address(
     return completed(runtime);
 }
 
+pub export fn luce_rt_bytes_at(
+    runtime: *Runtime,
+    pointer: [*c]const Value,
+    count: u64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, pointer)) return raised_trap;
+    out.* = text.bytesAt(runtime, pointer.*, count) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_cstring_at(
+    runtime: *Runtime,
+    pointer: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, pointer)) return raised_trap;
+    out.* = text.cstringAt(runtime, pointer.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_cstring_make(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    out.* = text.cstringMake(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_cstring_free(
+    runtime: *Runtime,
+    token: u64,
+) callconv(.c) i32 {
+    text.cstringFree(runtime, token);
+    return completed(runtime);
+}
+
+pub export fn luce_rt_cstring_result(
+    runtime: *Runtime,
+    token: u64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    out.* = text.cstringResult(runtime, token) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
 pub export fn luce_rt_append_ascii(
     runtime: *Runtime,
     target: [*c]const Value,

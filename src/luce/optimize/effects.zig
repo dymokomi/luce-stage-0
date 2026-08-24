@@ -280,6 +280,10 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .append_value,
         .extend_list,
         .buffer_address,
+        // The C reads allocate fresh storage and trap on the null
+        // token — never reordered or dropped (docs/FFI.md).
+        .bytes_at,
+        .cstring_at,
         .append_ascii,
         .pop_value,
         .insert_value,
@@ -452,6 +456,8 @@ pub fn viewStable(instruction: Instruction) bool {
             .channel_len,
             .channel_cap,
             .buffer_address,
+            .bytes_at,
+            .cstring_at,
             => false,
             // Scalars and text: no handle is resolved, nothing is
             // attached, nothing is freed.  `str` of a builder reads a

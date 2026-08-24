@@ -145,6 +145,23 @@ export fn luce_ffi_probe_echo(token: u64) callconv(.c) u64 {
     return token;
 }
 
+/// A C string the `-> str` boundary copies and validates.
+export fn luce_ffi_probe_greet() callconv(.c) [*:0]const u8 {
+    return "hello from C";
+}
+
+/// Invalid UTF-8, deliberately: what the `-> str` boundary refuses to
+/// launder (docs/FFI.md), pinned by the `invalid_utf8` trap spec.
+export fn luce_ffi_probe_bad_text() callconv(.c) [*:0]const u8 {
+    return "\xff\xfe";
+}
+
+/// `strlen`, so a `str` argument's NUL-terminated temporary is
+/// observed from the C side.
+export fn luce_ffi_probe_text_len(text: [*:0]const u8) callconv(.c) i64 {
+    return @intCast(std.mem.span(text).len);
+}
+
 test "the shim resolves and calls through every return kind" {
     const add = resolve("luce_ffi_probe_add") orelse return error.TestUnexpectedResult;
     const summed = call(add, &.{ @bitCast(@as(i64, 40)), @bitCast(@as(i64, 2)) }, .integer);

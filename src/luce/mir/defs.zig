@@ -476,6 +476,17 @@ pub const Intrinsic = enum {
     socket_listen,
     socket_accept,
     socket_port,
+    /// `Builtin.bytes_at(pointer, count)` — `count` bytes copied out
+    /// of C-owned memory into a fresh `bytes` (docs/FFI.md).  A copy,
+    /// never a borrow: the rare shape's one visible verb.  The null
+    /// token traps `null_foreign`.  Appended so every earlier
+    /// intrinsic keeps its wire number.
+    bytes_at,
+    /// `Builtin.cstring_at(pointer)` — NUL-scan C-owned memory, copy,
+    /// and UTF-8-validate into a fresh `str` (docs/FFI.md).  Invalid
+    /// text traps `invalid_utf8`; the null token traps `null_foreign`.
+    /// Appended so every earlier intrinsic keeps its wire number.
+    cstring_at,
 
     // -- per-intrinsic facts, classified once ---------------------------
     //
@@ -557,6 +568,8 @@ pub const Intrinsic = enum {
             .channel_len,
             .channel_cap,
             .buffer_address,
+            .bytes_at,
+            .cstring_at,
             .key_text,
             // The file runtime locks each host callback (see above).
             .file_read,
@@ -723,6 +736,10 @@ pub const Intrinsic = enum {
             .channel_len,
             .channel_cap,
             .buffer_address,
+            // A trap is not an error outcome: the null token and
+            // invalid text stop the program (docs/FFI.md).
+            .bytes_at,
+            .cstring_at,
             .abs,
             .min,
             .max,
@@ -828,6 +845,10 @@ pub const Intrinsic = enum {
             .read_line,
             .env_get,
             .shell_run,
+            // The C reads copy out of foreign memory into fresh
+            // bytes/str storage (docs/FFI.md).
+            .bytes_at,
+            .cstring_at,
             .os_standard_stream,
             .process_spawn,
             .process_ready,
@@ -983,6 +1004,8 @@ pub const Intrinsic = enum {
 
             .extend_list,
             .buffer_address,
+            .bytes_at,
+            .cstring_at,
             .abs,
             .min,
             .max,

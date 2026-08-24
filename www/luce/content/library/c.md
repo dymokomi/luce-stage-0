@@ -35,7 +35,24 @@ lives, and the token must not outlive the call.
 | `c.zstring(text: str) -> list[u8]` | the UTF-8 bytes of `text` with one terminating zero |
 
 The result is an ordinary byte list; `with_bytes` hands its address to a
-callee that expects a NUL-terminated `char *`.
+callee that expects a NUL-terminated `char *`. An extern declared with a
+`str` parameter or result does this translation itself — `zstring` is the
+raw layer's spelling.
+
+## Reading C memory
+
+The other direction is a **copy**, never a borrow: the bytes land in
+fresh Luce storage, and what happens to the foreign memory afterward is
+the library's business.
+
+| Signature | Result |
+|---|---|
+| `c.bytes_at(pointer: foreign, count: u64) -> bytes` | `count` bytes copied from `pointer` |
+| `c.cstring_at(pointer: foreign) -> str` | the NUL-terminated text at `pointer`, copied and UTF-8-validated |
+
+Both trap `null_foreign` on the zero token; `cstring_at` traps
+`invalid_utf8` on text that is not valid UTF-8 — an API that answers
+arbitrary bytes is a `bytes_at` API.
 
 ```luce run
 import std.c

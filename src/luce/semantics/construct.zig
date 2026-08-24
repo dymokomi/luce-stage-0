@@ -963,13 +963,37 @@ pub fn lowerIntrinsic(
         // (docs/FFI.md).  std-only through the `Builtin.` spelling;
         // `std.c.with_bytes` is the public door.
         .buffer_address => {
-            const takes_bytes = blk: {
+            const takes_buffer = blk: {
                 if (arguments[0].value_type != .heap) break :blk false;
                 const shape = self.analyzer.heap_types.items[arguments[0].value_type.heap];
-                break :blk shape == .list and shape.list == .u8;
+                // A dense array's storage may reach C too — the BLAS
+                // door (docs/FFI.md).  Scalar elements only: what C
+                // sees must be the elements and nothing else.
+                break :blk switch (shape) {
+                    .list => shape.list == .u8,
+                    .array => shape.array.element.isNumeric() or shape.array.element == .u8,
+                    else => false,
+                };
             };
-            if (!takes_bytes) return failIntrinsic(self, call, "buffer_address takes a list[u8]");
+            if (!takes_buffer) return failIntrinsic(self, call, "buffer_address takes a list[u8] or a numeric array");
             result = .foreign;
+        },
+        // The C reads (docs/FFI.md): copies out of foreign memory,
+        // never borrows.  std-only through the `Builtin.` spelling;
+        // `std.c.bytes_at` and `std.c.cstring_at` are the public
+        // doors.  The null token traps `null_foreign` at run time;
+        // `cstring_at` additionally validates and traps `invalid_utf8`.
+        .bytes_at => {
+            if (arguments[0].value_type != .foreign)
+                return failIntrinsic(self, call, "bytes_at takes (foreign, u64)");
+            if (arguments[1].value_type != .u64)
+                return failIntrinsic(self, call, "bytes_at takes (foreign, u64)");
+            result = .bytes;
+        },
+        .cstring_at => {
+            if (arguments[0].value_type != .foreign)
+                return failIntrinsic(self, call, "cstring_at takes a foreign");
+            result = .str;
         },
         .abs => {
             if (!arguments[0].value_type.isNumeric()) return failIntrinsic(self, call, "abs takes a number");

@@ -2323,12 +2323,13 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 70 -> 71: typed errors (docs/ERRORS.md R2): functions and
     // signatures carry what they fail with, `error_value` joins.
     // 71 -> 72: the 0.21 boundary begins (docs/FFI.md): `null_foreign`
-    // joins `TrapCode` (the hash moves), and a foreign signature slot
-    // may now be optional-of-foreign — an encoding the wire could
-    // already spell but no 71 decoder ever accepted, which is the
-    // silent-misreading case the bump exists for.
+    // and `invalid_utf8` join `TrapCode`, `bytes_at` and `cstring_at`
+    // join `Intrinsic` (the hash moves), and a foreign signature slot
+    // may now be optional-of-foreign or `str` — encodings the wire
+    // could already spell but no 71 decoder ever accepted, which is
+    // the silent-misreading case the bump exists for.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 1238684840061662608), hasher.final());
+    try testing.expectEqual(@as(u64, 14083163962640641375), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

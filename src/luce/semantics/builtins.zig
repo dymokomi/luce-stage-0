@@ -138,6 +138,8 @@ pub const standard_intrinsics = [_]Builtin{
     .{ .name = "dir_create", .kind = .dir_create, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "path_kind", .kind = .path_kind, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "buffer_address", .kind = .buffer_address, .parameters = &.{.{ .name = "buffer" }} },
+    .{ .name = "bytes_at", .kind = .bytes_at, .parameters = &.{ .{ .name = "pointer" }, .{ .name = "count" } } },
+    .{ .name = "cstring_at", .kind = .cstring_at, .parameters = &.{.{ .name = "pointer" }} },
     .{ .name = "path_size", .kind = .path_size, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "path_modified", .kind = .path_modified, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "dir_remove", .kind = .dir_remove, .parameters = &.{.{ .name = "path" }}, .host = true },

@@ -62,12 +62,14 @@ test "an extern call crosses the boundary and back, every Tier-1 return kind" {
 }
 
 test "the extern declaration's refusals keep the C shape the whole truth" {
-    // A parameter outside the Tier-1 vocabulary.
+    // A parameter outside the boundary vocabulary — a heap container
+    // has no C shape and never will.
     try expectRejected(
-        \\extern func speaks(words: str) -> i64
+        \\extern func speaks(words: list[i64]) -> i64
         \\
         \\func main():
-        \\    print(str(speaks("no")))
+        \\    var held = list[i64]()
+        \\    print(str(speaks(held)))
         \\
     , "luce.sema.extern");
     // A named argument: the C shape promises no names.
@@ -243,4 +245,70 @@ test "optionals of non-foreign types still do not cross" {
         \\    print(str(bad() == none))
         \\
     , "luce.sema.extern");
+}
+
+test "str crosses seamlessly: an argument becomes C's NUL-terminated text" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_text_len(text: str) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_text_len("hello")))
+        \\    print(str(luce_ffi_probe_text_len("")))
+        \\    let held = "two words"
+        \\    print(str(luce_ffi_probe_text_len(held)))
+        \\
+    ,
+        \\5
+        \\0
+        \\9
+        \\
+    );
+}
+
+test "a -> str result is copied and validated at the boundary" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_greet() -> str
+        \\
+        \\func main():
+        \\    let text = luce_ffi_probe_greet()
+        \\    print(text)
+        \\    print(str(len(text)))
+        \\
+    ,
+        \\hello from C
+        \\12
+        \\
+    );
+}
+
+test "invalid C text refuses to become a str" {
+    try agree.trapSays(
+        \\extern func luce_ffi_probe_bad_text() -> str
+        \\
+        \\func main():
+        \\    print(luce_ffi_probe_bad_text())
+        \\
+    , .invalid_utf8, "C text is not valid UTF-8");
+}
+
+test "the C reads copy out of foreign memory" {
+    // The buffer is Luce's own, handed out as a token and read back
+    // through the two copy verbs — which is exactly the shape of
+    // reading C-owned memory, with a lifetime this spec controls.
+    try agree.prints(
+        \\import std.c
+        \\
+        \\func main():
+        \\    var data = c.zstring("AB")
+        \\    let copied = c.with_bytes(data, (p) => i64(len(c.bytes_at(p, 2))))
+        \\    print(str(copied))
+        \\    var text = c.zstring("hola")
+        \\    let read = c.with_bytes(text, (p) => i64(len(c.cstring_at(p))))
+        \\    print(str(read))
+        \\
+    ,
+        \\2
+        \\4
+        \\
+    );
 }

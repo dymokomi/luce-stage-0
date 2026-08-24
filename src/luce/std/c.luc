@@ -35,3 +35,18 @@ pub func zstring(text: str) -> list[u8]:
         held.append(b)
     held.append(0)
     return held
+
+# Reading the other direction (docs/FFI.md): a **copy** out of
+# C-owned memory, never a borrow — the rare shape's one visible verb.
+# `count` bytes from `pointer`, as a fresh `bytes`.  The null token
+# traps `null_foreign`.
+pub func bytes_at(pointer: foreign, count: u64) -> bytes:
+    return Builtin.bytes_at(pointer, count)
+
+# A C string, copied: NUL-scan from `pointer`, copy, validate UTF-8.
+# Invalid text traps `invalid_utf8` — a str is valid UTF-8 by
+# contract, and an API that answers arbitrary bytes is not a str API.
+# Hand-written externs should prefer declaring `-> str` and letting
+# the boundary do this; this spelling is the raw layer's.
+pub func cstring_at(pointer: foreign) -> str:
+    return Builtin.cstring_at(pointer)

@@ -672,16 +672,24 @@ const Module = struct {
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
         for (row.parameters) |parameter| {
-            // `foreign?` is a Luce-side shape only: what C sees is the
-            // plain token, so the declared LLVM slot is the scalar and
-            // the call site encodes/decodes (docs/FFI.md).
-            const facing: types.Type = if (parameter == .optional) .foreign else parameter;
+            // `foreign?` and `str` are Luce-side shapes only: what C
+            // sees is the plain token — `str` crosses as the address
+            // of a NUL-terminated temporary — so the declared LLVM
+            // slot is the scalar and the call site encodes/decodes
+            // (docs/FFI.md).
+            const facing: types.Type = switch (parameter) {
+                .optional, .str => .foreign,
+                else => parameter,
+            };
             try parameters.append(self.gpa, try self.valueType(facing));
         }
         const result: Builder.Type = if (row.result == .none)
             .void
         else
-            try self.valueType(if (row.result == .optional) types.Type.foreign else row.result);
+            try self.valueType(switch (row.result) {
+                .optional, .str => types.Type.foreign,
+                else => row.result,
+            });
         const declared = try self.builder.addFunction(
             try self.builder.fnType(result, parameters.items, .normal),
             try self.builder.strtabString(row.name),
@@ -7047,6 +7055,11 @@ const Body = struct {
         const zero = try self.module.builder.intValue(.i64, 0);
         var arguments: std.ArrayList(Builder.Value) = .empty;
         defer arguments.deinit(gpa);
+        // The NUL-terminated temporaries a `str` argument crosses as,
+        // borrowed for exactly this call and released right after it
+        // (docs/FFI.md).
+        var borrowed: std.ArrayList(Builder.Value) = .empty;
+        defer borrowed.deinit(gpa);
         for (called.arguments, 0..) |argument, index| {
             const held = self.produced[argument].value;
             switch (row.parameters[index]) {
@@ -7064,6 +7077,16 @@ const Body = struct {
                     try self.check(try self.wip.icmp(.eq, held, zero, "arg.is.null"), .null_foreign);
                     try arguments.append(gpa, held);
                 },
+                // `str` crosses as the address of a NUL-terminated
+                // temporary the runtime makes and this site frees.
+                .str => {
+                    const text_box = try self.boxedRegister(argument, "cstr.text");
+                    const out = try self.scratch(self.module.value_type, value_alignment, "cstr.out");
+                    try self.callChecked(.luce_rt_cstring_make, &.{ self.runtime, text_box, out });
+                    const token = try self.unboxed(.foreign, out, "cstr.token");
+                    try arguments.append(gpa, token);
+                    try borrowed.append(gpa, token);
+                },
                 else => try arguments.append(gpa, held),
             }
         }
@@ -7078,6 +7101,11 @@ const Body = struct {
             if (row.result == .none) "" else "foreign",
         );
         if (!row.blocking) try self.leaveEffects();
+        // The borrows end with the call: release every temporary a
+        // `str` argument crossed as.
+        for (borrowed.items) |token| {
+            try self.callChecked(.luce_rt_cstring_free, &.{ self.runtime, token });
+        }
         switch (row.result) {
             .none => {},
             // `foreign?` decodes: C's 0 becomes `none`, anything else
@@ -7093,6 +7121,16 @@ const Body = struct {
             .foreign => {
                 try self.check(try self.wip.icmp(.eq, answer, zero, "result.is.null"), .null_foreign);
                 self.produced[register].value = answer;
+            },
+            // `-> str` copies and validates immediately: the C text
+            // becomes an owned Luce str before anything else runs
+            // (docs/FFI.md).  Null and invalid UTF-8 trap inside the
+            // runtime call.
+            .str => {
+                const out = try self.scratch(self.module.value_type, value_alignment, "cstr.result");
+                try self.callChecked(.luce_rt_cstring_result, &.{ self.runtime, answer, out });
+                self.produced[register].value = try self.unboxed(.str, out, "cstr.copied");
+                self.produced[register].box = out;
             },
             else => self.produced[register].value = answer,
         }
@@ -8095,6 +8133,15 @@ const Body = struct {
             .buffer_address => try self.callAnswering(register, .luce_rt_buffer_address, &.{
                 rt,
                 try self.boxedRegister(of[0], "buffer"),
+            }),
+            .bytes_at => try self.callAnswering(register, .luce_rt_bytes_at, &.{
+                rt,
+                try self.boxedRegister(of[0], "pointer"),
+                self.produced[of[1]].value,
+            }),
+            .cstring_at => try self.callAnswering(register, .luce_rt_cstring_at, &.{
+                rt,
+                try self.boxedRegister(of[0], "pointer"),
             }),
             .insert_value => try self.callChecked(.luce_rt_insert, &.{
                 rt,
