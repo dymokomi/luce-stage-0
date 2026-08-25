@@ -20,8 +20,12 @@ real FFI customer.  In one program it exercises:
 - `out` parameters, including C's `char **` error convention
   (`LLVMVerifyModule`) read back as `out message: foreign?` and
   released through `LLVMDisposeMessage`;
-- an `extern struct` of two handle fields standing in for C's
-  `LLVMTypeRef[2]` parameter array (`LLVMFunctionType`);
+- a borrowed `list[LLVMTypeRef]` parameter crossing as C's contiguous
+  `LLVMTypeRef *` beside its count (`LLVMFunctionType`);
+- owned C strings taken in one call — `c.take_str(pointer,
+  LLVMDisposeMessage)`, the extern's own name converting to the
+  disposer `cfunc` (`LLVMPrintModuleToString`,
+  `LLVMGetDefaultTargetTriple`, the verifier's `char **` messages);
 - a `u64` immediate at full width (`LLVMConstInt` with `i64.max`);
 - a `cfunc` diagnostic handler (`LLVMContextSetDiagnosticHandler`)
   that C really invokes — garbage bitcode fed to

@@ -698,6 +698,15 @@ const Replay = struct {
                 } },
                 made.result,
             ),
+            // A declared extern as a C pointer: the symbol's own
+            // address, no wrapper (docs/FFI.md).
+            .cfunc_extern => |made| try self.code.emit(
+                .{ .const_cfunc_extern = .{
+                    .foreign = made.foreign,
+                    .signature = made.signature,
+                } },
+                made.result,
+            ),
             .lambda_ref => |made| closure: {
                 const receiver = if (made.environment) |environment| held: {
                     const value = try self.replayValue(environment);

@@ -339,6 +339,7 @@ fn collect(
                 .foreign_get,
                 .foreign_set,
                 .const_cfunc,
+                .const_cfunc_extern,
                 .call_cfunc,
                 .interface_call,
                 .spawn,

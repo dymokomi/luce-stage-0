@@ -663,6 +663,10 @@ const Writer = struct {
                 try self.int(u32, call.signature);
                 try self.registers(call.arguments);
             },
+            .const_cfunc_extern => |made| {
+                try self.int(u32, made.foreign);
+                try self.int(u32, made.signature);
+            },
         }
     }
 };
@@ -1218,6 +1222,10 @@ const Reader = struct {
                 .callee = try self.int(u32),
                 .signature = try self.int(u32),
                 .arguments = try self.registers(arena),
+            } },
+            .const_cfunc_extern => .{ .const_cfunc_extern = .{
+                .foreign = try self.int(u32),
+                .signature = try self.int(u32),
             } },
         };
     }
@@ -2432,9 +2440,13 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // appends to `types.Type` and its payload set, and
     // `const_cfunc`/`call_cfunc` append to `Instruction` (the hash
     // moves again) — encodings no earlier decoder accepted, caught by
-    // the same bump.
+    // the same bump.  And phase 4c: a foreign parameter slot may carry
+    // a borrowed `list[H]` heap type (an encoding the wire could
+    // already spell but no earlier decoder accepted), and
+    // `const_cfunc_extern` appends to `Instruction` (the hash moves
+    // again) — caught by the same bump.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 7312633432793541537), hasher.final());
+    try testing.expectEqual(@as(u64, 4664683626749479671), hasher.final());
 }
 
 test "a cfunc program round-trips the wire, conversion and call included" {
@@ -2467,6 +2479,43 @@ test "a cfunc program round-trips the wire, conversion and call included" {
     try testing.expectEqualStrings(original_dump, loaded_dump);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "const_cfunc triple : cfunc(i64) -> i64") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "call_cfunc") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "an extern-as-cfunc conversion and a borrowed list round-trip the wire" {
+    var program = try compileScript(
+        \\extern func luce_ffi_probe_increment(v: i64) -> i64
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\extern func luce_ffi_probe_sum_tokens(at: list[u64], count: u64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(luce_ffi_probe_increment, 1)))
+        \\    var held = list[u64]()
+        \\    print(str(luce_ffi_probe_sum_tokens(held, 0)))
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    // Decode re-verifies, so a survived round trip is a verified one —
+    // the borrowed-list parameter row included.
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        loaded_dump,
+        "const_cfunc_extern luce_ffi_probe_increment : cfunc(i64) -> i64",
+    ) != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);

@@ -346,6 +346,14 @@ fn printInstruction(
             try appendPrint(text, allocator, "call_cfunc r{d} : {s}", .{ call.callee, signature_name });
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
+        .const_cfunc_extern => |made| {
+            const signature_name = try typeName(allocator, program, .{ .cfunc = made.signature });
+            defer allocator.free(signature_name);
+            try appendPrint(text, allocator, "const_cfunc_extern {s} : {s}", .{
+                program.foreign_functions[made.foreign].name,
+                signature_name,
+            });
+        },
         .foreign_set => |set| try appendPrint(text, allocator, "foreign_set {s}, r{d}", .{
             program.foreign_variables[set.variable].name,
             set.value,

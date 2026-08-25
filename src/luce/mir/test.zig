@@ -209,6 +209,121 @@ test "the verifier holds C globals and C-layout structs to their vocabularies" {
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "the verifier holds borrowed lists and extern-as-cfunc to their vocabularies" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    // Three heap rows: an admissible borrowed list, a list whose
+    // element a hostile module could smuggle, and a non-list container.
+    const heap_types = try arena.alloc(types.HeapType, 3);
+    heap_types[0] = .{ .list = .i64 };
+    heap_types[1] = .{ .list = .str };
+    heap_types[2] = .{ .map = .{ .key = .i64, .value = .i64 } };
+    program.heap_types = heap_types;
+
+    const signatures = try arena.alloc(types.Signature, 3);
+    signatures[0] = .{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .i64 }}),
+        .result = .i64,
+    };
+    signatures[1] = .{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .i32 }}),
+        .result = .i64,
+    };
+    signatures[2] = .{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{
+            .{ .value_type = .i64 },
+            .{ .value_type = .i32 },
+        }),
+        .result = .none,
+    };
+    program.signatures = signatures;
+
+    const foreigns = try arena.alloc(defs.ForeignFunction, 3);
+    foreigns[0] = .{
+        .name = "sum",
+        .parameters = try arena.dupe(defs.ForeignFunction.Parameter, &.{.{
+            .parameter_type = .{ .heap = 0 },
+        }}),
+        .result = .i64,
+    };
+    foreigns[1] = .{
+        .name = "inc",
+        .parameters = try arena.dupe(defs.ForeignFunction.Parameter, &.{.{
+            .parameter_type = .i64,
+        }}),
+        .result = .i64,
+    };
+    foreigns[2] = .{
+        .name = "split",
+        .parameters = try arena.dupe(defs.ForeignFunction.Parameter, &.{
+            .{ .parameter_type = .i64 },
+            .{ .parameter_type = .i32, .out = true },
+        }),
+        .result = .none,
+    };
+    program.foreign_functions = foreigns;
+
+    const functions = try arena.alloc(Function, 1);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{ .name = "xs", .local_type = .{ .heap = 0 } }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .local_get = 0 },
+            .{ .call_foreign = .{ .foreign = 0, .arguments = try arena.dupe(Register, &.{0}) } },
+            .{ .const_cfunc_extern = .{ .foreign = 1, .signature = 0 } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .heap = 0 }, .i64, .{ .cfunc = 0 }, .none }),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }),
+        }}),
+    };
+    program.functions = functions;
+    program.entry_function = 0;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // A borrowed list holds only word-shaped elements, crosses inward
+    // only, and never through an out slot.
+    foreigns[0].parameters[0].parameter_type = .{ .heap = 1 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    foreigns[0].parameters[0].parameter_type = .{ .heap = 2 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    // Out of range answers the general type-walk refusal.
+    foreigns[0].parameters[0].parameter_type = .{ .heap = 9 };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    foreigns[0].parameters[0].parameter_type = .{ .heap = 0 };
+    foreigns[0].parameters[0].out = true;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    foreigns[0].parameters[0].out = false;
+    const list_result = foreigns[0].result;
+    foreigns[0].result = .{ .heap = 0 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    foreigns[0].result = list_result;
+
+    // The extern-as-cfunc conversion: the row must exist, the shape
+    // must match slot for slot, out slots never convert, and the
+    // register wears exactly the row's type.
+    functions[0].instructions[2] = .{ .const_cfunc_extern = .{ .foreign = 9, .signature = 0 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[2] = .{ .const_cfunc_extern = .{ .foreign = 1, .signature = 9 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .{ .cfunc = 1 };
+    functions[0].instructions[2] = .{ .const_cfunc_extern = .{ .foreign = 1, .signature = 1 } };
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .{ .cfunc = 2 };
+    functions[0].instructions[2] = .{ .const_cfunc_extern = .{ .foreign = 2, .signature = 2 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .i64;
+    functions[0].instructions[2] = .{ .const_cfunc_extern = .{ .foreign = 1, .signature = 0 } };
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .{ .cfunc = 0 };
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "the verifier holds cfunc rows, conversions, and calls to their vocabularies" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();

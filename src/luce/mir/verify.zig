@@ -1595,6 +1595,26 @@ fn verifyInstruction(
             }
             if (!result.eql(signature.result)) return error.TypeMismatch;
         },
+        // A declared extern as a C function pointer (docs/FFI.md): the
+        // row must exist and the cfunc row must be the extern's shape
+        // slot for slot — no out slots, because a cfunc has no out
+        // convention, and the cfunc vocabulary already holds every
+        // slot to words (so a str- or struct-crossing extern can never
+        // match).
+        .const_cfunc_extern => |made| {
+            if (made.foreign >= program.foreign_functions.len) return error.BadFunction;
+            if (!cfuncRow(program, made.signature)) return error.BadFunction;
+            const callee = &program.foreign_functions[made.foreign];
+            if (callee.name.len == 0) return error.BadFunction;
+            const signature = program.signatures[made.signature];
+            if (callee.parameters.len != signature.parameters.len) return error.BadFunction;
+            for (callee.parameters, signature.parameters) |parameter, wanted| {
+                if (parameter.out) return error.BadFunction;
+                try expectType(parameter.parameter_type, wanted.value_type);
+            }
+            if (!callee.result.eql(signature.result)) return error.TypeMismatch;
+            try expectType(result, .{ .cfunc = made.signature });
+        },
     }
 }
 
@@ -1666,6 +1686,18 @@ fn foreignParameter(program: *const Program, of: Type) bool {
             .cfunc => |index| cfuncRow(program, index),
             else => false,
         },
+        // A borrowed list parameter (docs/FFI.md): `list[H]` where H
+        // is a handle or a boundary scalar — element kinds whose dense
+        // storage is already the exact C array layout.  Parameter
+        // position only: `foreignResult` and `foreignOut` refuse every
+        // heap type, because no list crosses outward.
+        .heap => |index| index < program.heap_types.len and switch (program.heap_types[index]) {
+            .list => |element| switch (element) {
+                .foreign, .extern_type => true,
+                else => foreignScalar(element),
+            },
+            else => false,
+        },
         else => foreignScalar(of),
     };
 }
@@ -1720,9 +1752,10 @@ fn foreignOut(program: *const Program, of: Type) bool {
 /// or nothing for a C void — never an aggregate, because by-value
 /// aggregate return needs per-target ABI classification the boundary
 /// deliberately does not do (docs/FFI.md; the generator's shims are
-/// the road).
+/// the road), and never a list, because a borrowed list crosses
+/// inward only.
 fn foreignResult(program: *const Program, of: Type) bool {
-    return of == .none or (of != .strukt and foreignParameter(program, of));
+    return of == .none or (of != .strukt and of != .heap and foreignParameter(program, of));
 }
 
 /// The Globals vocabulary (docs/FFI.md): a boundary scalar or a

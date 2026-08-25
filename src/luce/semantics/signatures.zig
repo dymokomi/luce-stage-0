@@ -783,6 +783,19 @@ fn collectExtern(
         if (try refuseIntegerHandleOptional(self, resolved, parameter.type_name.span)) return;
         if (try refuseOrdinaryStruct(self, resolved, parameter.type_name.span)) return;
         if (parameter.out) {
+            // A list in the out direction is C writing into a caller's
+            // array (the LLVMGetParams shape), which needs count and
+            // ownership rules this boundary defers on purpose — say so
+            // rather than fall into the vocabulary sentence.
+            if (listElement(self, resolved) != null) {
+                try self.fail(
+                    "luce.sema.extern",
+                    parameter.type_name.span,
+                    "{s} does not come back through an out slot: C writing into a caller's array is deferred to the binding generator — a borrowed list crosses inward only (docs/FFI.md)",
+                    .{try self.typeName(resolved)},
+                );
+                return;
+            }
             if (!(boundaryOut(resolved) or externStruct(self, resolved))) {
                 try self.fail(
                     "luce.sema.extern",
@@ -793,11 +806,25 @@ fn collectExtern(
                 return;
             }
             try out_types.append(self.temporary, resolved);
-        } else if (!(boundaryParameter(resolved) or nullableBoundary(resolved) or externStruct(self, resolved))) {
+        } else if (!(boundaryParameter(resolved) or nullableBoundary(resolved) or
+            externStruct(self, resolved) or borrowedList(self, resolved)))
+        {
+            // A list of the wrong element gets the list sentence, not
+            // the vocabulary one: the shape was right and the element
+            // is what has no C form.
+            if (listElement(self, resolved) != null) {
+                try self.fail(
+                    "luce.sema.extern",
+                    parameter.type_name.span,
+                    "a borrowed list parameter is list[H] where H is a named handle, foreign, or a boundary scalar; {s} would need ownership rules the boundary does not have (docs/FFI.md)",
+                    .{try self.typeName(resolved)},
+                );
+                return;
+            }
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a fixed-width integer, f32, f64, bool, foreign, a named handle, str, or an extern struct — the pointer-shaped handles and str also as their ? forms; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a fixed-width integer, f32, f64, bool, foreign, a named handle, str, an extern struct, or a borrowed list of handles or scalars — the pointer-shaped handles and str also as their ? forms; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
@@ -822,6 +849,18 @@ fn collectExtern(
             return;
         }
         if (try refuseOrdinaryStruct(self, resolved, written.span)) return;
+        // No list crosses outward (docs/FFI.md): a borrowed list is
+        // read-only for the call, and a C-owned array is read with the
+        // copy verbs — say which door is open.
+        if (listElement(self, resolved) != null) {
+            try self.fail(
+                "luce.sema.extern",
+                written.span,
+                "{s} answers {s}; no list crosses outward — a borrowed list parameter is read-only for the call, and a C-owned array is copied in with c.bytes_at (docs/FFI.md)",
+                .{ declaration.name, try self.typeName(resolved) },
+            );
+            return;
+        }
         if (!(boundaryParameter(resolved) or nullableBoundary(resolved))) {
             try self.fail(
                 "luce.sema.extern",
@@ -935,6 +974,30 @@ pub fn cfuncSlot(of: Type) bool {
 /// call site can materialize the C bytes and cross by pointer.
 fn externStruct(self: *const Analyzer, of: Type) bool {
     return of == .strukt and self.structs.items[of.strukt].c_layout;
+}
+
+/// A borrowed list parameter (docs/FFI.md): `list[H]` where H is a
+/// named handle, `foreign`, or a boundary scalar — exactly the
+/// element types the runtime stores densely at the C width, so the
+/// elements cross as a contiguous C array with no packing.  The
+/// address is borrowed for the call only, an empty list crosses as
+/// C's null, and the count crosses separately — C's way.  Parameter
+/// position only: results, out slots, struct fields, cfunc slots and
+/// globals each refuse a list with their own reason.
+fn borrowedList(self: *const Analyzer, of: Type) bool {
+    const element = listElement(self, of) orelse return false;
+    return switch (element) {
+        .foreign, .extern_type => true,
+        else => boundaryScalar(element),
+    };
+}
+
+/// The element of a `list[T]`, or null for every other type — the
+/// one question the list refusals and `borrowedList` share.
+fn listElement(self: *const Analyzer, of: Type) ?Type {
+    if (of != .heap) return null;
+    const descriptor = self.heapOf(of) orelse return null;
+    return if (descriptor == .list) descriptor.list else null;
 }
 
 /// An *ordinary* struct in a boundary slot has no C byte form at all,

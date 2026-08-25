@@ -41,7 +41,7 @@ cost of changing the embedded library.
 | `std.http` | HTTP/1.1 client in pure Luce | `get`, `post`, `Client` (base URL + default headers), `Response` with `ok`/`text`/`json`; status codes are data; the request path fails with the `HttpError` union (`unsupported`/`bad_url`/`protocol`/`io`, + `describe`) |
 | `std.ui` | low-level native windows | `Window` with a fallible init (`try ui.Window(...)`) and a window-owned GPU surface |
 | `std.build` | the plan a `build.luc` declares | `Plan` (program/library/object/command steps, `default`, `emit` printing versioned JSON), `Step.needs` edges; the luce tool executes the plan (docs/BUILD.md) |
-| `std.c` | the C boundary's helpers (docs/FFI.md) | `with_bytes`/`with_bytes_foreign` scoped buffer addresses, `zstring` NUL-terminated text |
+| `std.c` | the C boundary's helpers (docs/FFI.md) | `with_bytes`/`with_bytes_foreign` scoped buffer addresses, `zstring` NUL-terminated text, `bytes_at`/`cstring_at` copies out of C memory, `take_str` owned C text (copy, validate, then `free(at)`) |
 
 `termui` is a maintained package, not an embedded `std` module. It appears in
 the public Library because it ships with the release, while keeping package

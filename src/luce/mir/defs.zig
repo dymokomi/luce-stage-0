@@ -1297,6 +1297,14 @@ pub const Instruction = union(enum) {
     /// `null_foreign` at the call.  Runs under the effect lock, like
     /// a non-blocking extern.
     call_cfunc: CfuncCall,
+    /// A declared extern's own address as a C function pointer
+    /// (docs/FFI.md): `foreign` names the row and `signature` the
+    /// cfunc row the value wears, which must be the extern's shape
+    /// slot for slot — an extern *is* a C function already, so no
+    /// wrapper stands between the value and the symbol.  Codegen
+    /// answers the symbol's address; the oracle answers its dlsym
+    /// pointer.  Appended so no earlier tag renumbers on the wire.
+    const_cfunc_extern: struct { foreign: u32, signature: u32 },
 
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };

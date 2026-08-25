@@ -42,6 +42,7 @@ pub fn mapOperands(
         .unwind,
         .foreign_get,
         .const_cfunc,
+        .const_cfunc_extern,
         => {},
         // A bound function value names a register: the receiver it
         // carries (docs/BINDING.md D12).
@@ -122,6 +123,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .unwind,
         .foreign_get,
         .const_cfunc,
+        .const_cfunc_extern,
         => {},
         .const_function => |named| {
             if (named.receiver) |receiver| used[receiver] = true;
@@ -238,6 +240,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .call_foreign,
         .call_indirect,
         .const_cfunc,
+        .const_cfunc_extern,
         .call_cfunc,
         .intrinsic,
         .heap_new,

@@ -50,10 +50,24 @@ the library's business.
 |---|---|
 | `c.bytes_at(pointer: foreign, count: u64) -> bytes` | `count` bytes copied from `pointer` |
 | `c.cstring_at(pointer: foreign) -> str` | the NUL-terminated text at `pointer`, copied and UTF-8-validated |
+| `c.take_str(at: foreign, free: cfunc(foreign)) -> str` | the text at `at`, copied and validated like `cstring_at`, then `free(at)` |
 
-Both trap `null_foreign` on the zero token; `cstring_at` traps
+All three trap `null_foreign` on the zero token; the text readers trap
 `invalid_utf8` on text that is not valid UTF-8 — an API that answers
 arbitrary bytes is a `bytes_at` API.
+
+`take_str` is the **owned** C string in one call — the pattern where an
+API answers `char *` and a matching disposer must receive the pointer
+back (`LLVMPrintModuleToString` beside `LLVMDisposeMessage`). An extern
+function's own name converts to the `cfunc` argument, so the disposer
+passes as itself:
+
+```text
+let ir = c.take_str(LLVMPrintModuleToString(m), LLVMDisposeMessage)
+```
+
+The zero token traps before the disposer runs: nothing to read and, by
+the same contract, nothing to release.
 
 ```luce run
 import std.c

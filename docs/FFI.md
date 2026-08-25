@@ -8,7 +8,10 @@ ruled by the owner 2026-08-24.**  The rulings: `foreign?` with the
 in both directions — **which deliberately reverses the 0.20 ruling that
 `str` never crosses implicitly**; reading C-owned memory; `out`
 parameters; the full C scalar set with no arity cap; `extern struct`
-crossing by pointer; capture-free C function values; extern globals.
+crossing by pointer; capture-free C function values; extern globals;
+borrowed `list[H]` parameters; extern functions as cfunc values and
+the owned-C-string verb `c.take_str` — the phase-4c closures, proved
+against LLVM-C's hottest calls.
 Deliberately deferred to the binding-generator era: by-value aggregates,
 variadics, bitfields, and ARC-carrying callback trampolines.
 
@@ -120,19 +123,79 @@ friction rule.
   text is one too many, and length-carrying buffers are `c.bytes_at` /
   `c.with_bytes` business.
 
+## Arrays — borrowed `list[H]` parameters
+
+C's second-most-common shape after text is "a pointer to N of these
+beside the N" — `LLVMFunctionType(result, param_types, count, vararg)`
+takes an `LLVMTypeRef *` and its length, `LLVMBuildCall2` the same.
+An extern **parameter** may be declared `list[H]` where H is a named
+handle, `foreign`, or a boundary scalar:
+
+```text
+extern func LLVMFunctionType(result: LLVMTypeRef,
+                             parameters: list[LLVMTypeRef],
+                             count: u32, is_vararg: i32) -> LLVMTypeRef
+
+let signature = LLVMFunctionType(int64, [int64, int64], 2, 0)
+```
+
+- **The elements cross as a contiguous C array of the exact element
+  representation**, and the address passes as the parameter.  Nothing
+  is packed or copied: the runtime already stores every admissible
+  element type densely at its C width (a `list[LLVMTypeRef]` *is*
+  `LLVMTypeRef[n]`, a `list[i32]` *is* `int[n]`), which is exactly why
+  the element vocabulary is these types and no others — the
+  translation is inspectable because there isn't one.
+- **Borrowed for the call only** — the same law as `str` temporaries:
+  a callee that keeps the pointer is undefined behavior by contract.
+- **The count still crosses separately — C's way.**  A declaration
+  states both, and the caller passes both; the boundary does not
+  invent a fused pointer+length convention C itself does not have.
+- **An empty list passes C's null pointer and takes no `null_foreign`
+  trap.**  This slot carries a list value, not a token, and the
+  existing law already says an empty buffer's address is C's null
+  (the phase-1 `with_bytes` ruling); the count parameter tells the
+  callee the story.
+- **Direction is Luce→C, read-only.**  C writing into a caller's
+  array — the `LLVMGetParams` shape — is deliberately not in 0.21: it
+  needs a capacity/count-writeback contract this phase has no
+  evidence to design, and the binding generator's shims are the
+  planned road.  A `list` in an `out` slot is refused saying so.
+- **No `list[...]` results, no lists in extern structs, no nested
+  lists, no `list[str]`.**  Each would need ownership rules this
+  phase does not earn: a returned list has an allocator question, a
+  struct field a lifetime question, `list[str]` a per-element
+  NUL-temporary question.  Every one is refused with its reason; a
+  C-owned array is read with `c.bytes_at`.
+
 ## Reading C-owned memory
 
-The 0.20 boundary was write-only.  Two std additions make it readable —
-copies, not borrows, per the tier-2 rule:
+The 0.20 boundary was write-only.  Three std additions make it
+readable — copies, not borrows, per the tier-2 rule:
 
 ```text
 c.bytes_at(pointer: foreign, count: u64) -> bytes   # copy count bytes out
 c.cstring_at(pointer: foreign) -> str               # NUL-scan, copy, validate
+c.take_str(at: foreign, free: cfunc(foreign)) -> str  # copy, then free(at)
 ```
 
 `cstring_at` exists for the raw layer and generated code; hand-written
 externs should prefer declaring `-> str` and letting the boundary do it.
-Both trap `null_foreign` on a zero pointer.  `with_bytes` /
+Both trap `null_foreign` on a zero pointer.  `take_str` is the **owned**
+C string in one call — the `LLVMPrintModuleToString` /
+`LLVMDisposeMessage` convention: copy and validate the NUL-terminated
+text (`cstring_at`'s exact semantics — `null_foreign` on zero, before
+the disposer runs; `invalid_utf8` on bad bytes), hand the pointer to
+`free`, answer the copy:
+
+```text
+let ir = c.take_str(LLVMPrintModuleToString(m), LLVMDisposeMessage)
+```
+
+A `foreign?`-answering variant was considered and deliberately not
+added: flow narrowing already turns a checked `foreign?` into the bare
+`foreign` at every use site, so `take_str` serves the `char **`
+out-slot convention as written.  `with_bytes` /
 `with_bytes_foreign` / `zstring` remain for outbound buffer scopes, and
 `Builtin.buffer_address` additionally accepts `array[T, _]` so a dense
 array's storage can reach C (the BLAS door).
@@ -232,6 +295,18 @@ extern func SDL_AddTimer(interval: u32, callback: cfunc(u32, foreign) -> u32,
   that carries a closure through `userdata` arrives with `luce bind`).
   A **fallible** function is refused too: C has no error channel, and
   a status-answering wrapper is one line away.
+- **An extern function's own name converts too**, wherever a cfunc is
+  wanted, when its signature matches the row shape for shape — an
+  extern *is* a C function pointer already, so the value is the
+  symbol's address (the oracle's, its dlsym pointer) and no wrapper
+  stands between.  This is what makes disposers first-class:
+  `LLVMDisposeMessage` lands directly in a `cfunc(foreign)` slot.  A
+  shape mismatch is refused like any other; an extern with `out`
+  slots does not convert — the out convention belongs to the declared
+  call site, and a C function pointer's type has no spelling for it.
+  `blocking` does not block the conversion: it is a call-site
+  contract, not a fact about the address, and a call through the
+  converted value carries the cfunc call's own semantics.
 - **The cfunc vocabulary is the scalars and the handles** — the
   boundary scalars, `foreign`, named handles, and the pointer-shaped
   ones as their `?` forms.  No `str`, no extern structs, no nested

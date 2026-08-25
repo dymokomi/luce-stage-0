@@ -762,6 +762,70 @@ export fn luce_ffi_probe_ops_fill(slot: ?*ProbeOps) callconv(.c) void {
     out.* = .{ .tag = 9, .op = &probeNegate, .missing = null };
 }
 
+// -- the 0.21 phase-4c probes -------------------------------------------------
+
+/// The borrowed-array shape (docs/FFI.md): a contiguous run of
+/// pointer-sized tokens beside its count — the LLVMFunctionType
+/// convention.  Position-weighted, so a swapped or skipped element
+/// changes the answer; **null answers -1**, so an empty list crossing
+/// as C's null is distinguishable from a zero-length sum.
+export fn luce_ffi_probe_sum_tokens(at: ?[*]const u64, count: u64) callconv(.c) i64 {
+    const held = at orelse return -1;
+    var total: i64 = 0;
+    for (held[0..count], 1..) |token, weight| {
+        total += @as(i64, @intCast(weight)) * @as(i64, @bitCast(token));
+    }
+    return total;
+}
+
+/// The same shape at C's `int` width: a caller that handed over
+/// 8-byte cells for a `list[i32]` produces a visibly wrong fold.
+export fn luce_ffi_probe_sum_ints(at: ?[*]const i32, count: u64) callconv(.c) i64 {
+    const held = at orelse return -1;
+    var total: i64 = 0;
+    for (held[0..count], 1..) |value, weight| {
+        total += @as(i64, @intCast(weight)) * @as(i64, value);
+    }
+    return total;
+}
+
+/// C-owned text handed over as an owned pointer — the
+/// LLVMPrintModuleToString convention: the caller must copy the text
+/// and hand the pointer back to the matching disposer.  Static
+/// storage, so both engines see one stable address and the leak
+/// census owes nothing.
+const probe_owned_text = "owned by C";
+
+/// How many times the disposer ran **with the right pointer** — a
+/// census a spec reads through `luce_ffi_probe_freed_count`, proving
+/// the free actually happened on both engines.  A wrong pointer
+/// poisons the count instead of crashing, so a marshalling bug reads
+/// as a wrong number, not a SIGSEGV.
+var probe_text_freed: i64 = 0;
+
+export fn luce_ffi_probe_make_text() callconv(.c) [*:0]const u8 {
+    return probe_owned_text;
+}
+
+export fn luce_ffi_probe_free_text(at: ?*const anyopaque) callconv(.c) void {
+    if (at == @as(*const anyopaque, @ptrCast(probe_owned_text))) {
+        probe_text_freed += 1;
+    } else {
+        probe_text_freed += 1000;
+    }
+}
+
+export fn luce_ffi_probe_freed_count() callconv(.c) i64 {
+    return probe_text_freed;
+}
+
+/// The plain i64 shape an extern-as-cfunc conversion is proved with:
+/// `luce_ffi_probe_apply(luce_ffi_probe_increment, v)` sends C's own
+/// function through the boundary and back into C.
+export fn luce_ffi_probe_increment(v: i64) callconv(.c) i64 {
+    return v + 1;
+}
+
 /// The `str?` echo.  The answer is copied into private storage first:
 /// the boundary frees an argument's NUL temporary the moment the call
 /// returns, so echoing the argument pointer itself would hand the

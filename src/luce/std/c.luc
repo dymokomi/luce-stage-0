@@ -50,3 +50,19 @@ pub func bytes_at(pointer: foreign, count: u64) -> bytes:
 # the boundary do this; this spelling is the raw layer's.
 pub func cstring_at(pointer: foreign) -> str:
     return Builtin.cstring_at(pointer)
+
+# Take ownership of C-owned text in one call: copy and validate the
+# NUL-terminated bytes at `at` (`cstring_at`'s exact semantics —
+# `null_foreign` on the zero token, `invalid_utf8` on bad bytes),
+# release the allocation through `free`, then answer the copy.  The
+# LLVMPrintModuleToString / LLVMDisposeMessage convention as one call
+# — an extern's own name converts to the cfunc (docs/FFI.md):
+#
+#     let ir = c.take_str(LLVMPrintModuleToString(m), LLVMDisposeMessage)
+#
+# The zero token traps before `free` runs: there is nothing to read
+# and, by the same contract, nothing to release.
+pub func take_str(at: foreign, free: cfunc(foreign)) -> str:
+    let text = Builtin.cstring_at(at)
+    free(at)
+    return text

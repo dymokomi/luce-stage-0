@@ -62,13 +62,14 @@ test "an extern call crosses the boundary and back, every Tier-1 return kind" {
 }
 
 test "the extern declaration's refusals keep the C shape the whole truth" {
-    // A parameter outside the boundary vocabulary — a heap container
-    // has no C shape and never will.
+    // A parameter outside the boundary vocabulary — a map has no C
+    // shape and never will.  (`list[i64]` stopped being this example
+    // when the borrowed list arrived in phase 4c.)
     try expectRejected(
-        \\extern func speaks(words: list[i64]) -> i64
+        \\extern func speaks(words: map[str, i64]) -> i64
         \\
         \\func main():
-        \\    var held = list[i64]()
+        \\    var held = map[str, i64]()
         \\    print(str(speaks(held)))
         \\
     , "luce.sema.extern");
@@ -1285,6 +1286,257 @@ test "the cfunc type's own vocabulary is the boundary's, and stays closed" {
         \\    print("never")
         \\
     , "luce.parse.type");
+}
+
+// -- the 0.21 phase-4c specs: borrowed lists and extern-as-cfunc ------------
+
+test "a borrowed list crosses as a contiguous C array, address and count apart" {
+    // The LLVMFunctionType shape (docs/FFI.md): the elements cross at
+    // the exact element representation, the address is borrowed for
+    // the call only, and the count crosses separately — C's way.  The
+    // probe folds position-weighted, so a swapped, skipped, or
+    // wrong-width element changes the answer; the literal argument
+    // additionally proves a call-scoped temporary list crosses and is
+    // released (the census would catch a leak).
+    try agree.prints(
+        \\extern func luce_ffi_probe_sum_tokens(at: list[u64], count: u64) -> i64
+        \\
+        \\func main():
+        \\    var held = list[u64]()
+        \\    held.append(1)
+        \\    held.append(2)
+        \\    held.append(3)
+        \\    print(str(luce_ffi_probe_sum_tokens(held, 3)))
+        \\    print(str(luce_ffi_probe_sum_tokens([5, 6], 2)))
+        \\
+    ,
+        \\14
+        \\17
+        \\
+    );
+}
+
+test "a borrowed list of named handles crosses token for token" {
+    // Two present tokens (0x1234 = 4660 each): 4660*1 + 4660*2.
+    try agree.prints(
+        \\extern type Blob
+        \\
+        \\extern func luce_ffi_probe_token() -> Blob
+        \\extern func luce_ffi_probe_sum_tokens(at: list[Blob], count: u64) -> i64
+        \\
+        \\func main():
+        \\    var held = list[Blob]()
+        \\    held.append(luce_ffi_probe_token())
+        \\    held.append(luce_ffi_probe_token())
+        \\    print(str(luce_ffi_probe_sum_tokens(held, 2)))
+        \\
+    ,
+        \\13980
+        \\
+    );
+}
+
+test "a borrowed narrow-scalar list crosses at its exact C width" {
+    // `list[i32]` is 4-byte cells; a boundary that handed over 8-byte
+    // cells folds visibly wrong.  1*1 + 2*(-2) + 3*3 = 6.
+    try agree.prints(
+        \\extern func luce_ffi_probe_sum_ints(at: list[i32], count: u64) -> i64
+        \\
+        \\func main():
+        \\    var held = list[i32]()
+        \\    held.append(1)
+        \\    held.append(-2)
+        \\    held.append(3)
+        \\    print(str(luce_ffi_probe_sum_ints(held, 3)))
+        \\
+    ,
+        \\6
+        \\
+    );
+}
+
+test "an empty borrowed list passes C's null pointer and takes no trap" {
+    // The slot carries a list value, not a token, so the empty
+    // buffer's null address is a value here, never `null_foreign`
+    // (docs/FFI.md) — the count parameter tells the callee the story.
+    // The probe answers -1 for null, so a zero-length sum (0) and a
+    // null crossing are distinguishable.
+    try agree.prints(
+        \\extern func luce_ffi_probe_sum_tokens(at: list[u64], count: u64) -> i64
+        \\
+        \\func main():
+        \\    var empty = list[u64]()
+        \\    print(str(luce_ffi_probe_sum_tokens(empty, 0)))
+        \\
+    ,
+        \\-1
+        \\
+    );
+}
+
+test "the borrowed list's refusals: inward only, and only word-shaped elements" {
+    // No list result: a borrowed list is read-only for the call, and
+    // C-owned arrays are copied in with c.bytes_at (docs/FFI.md).
+    try expectRejected(
+        \\extern func bad() -> list[i64]
+        \\
+        \\func main():
+        \\    let xs = bad()
+        \\    print(str(len(xs)))
+        \\
+    , "luce.sema.extern");
+    // No out list: C writing into a caller's array (the LLVMGetParams
+    // shape) is deferred to the binding generator.
+    try expectRejected(
+        \\extern func bad(out xs: list[i64]) -> bool
+        \\
+        \\func main():
+        \\    let ok, xs = bad()
+        \\    print(str(ok))
+        \\
+    , "luce.sema.extern");
+    // No list[str]: each element would need the NUL-temporary
+    // ownership rules a borrowed buffer does not have.
+    try expectRejected(
+        \\extern func bad(words: list[str]) -> i64
+        \\
+        \\func main():
+        \\    var held = list[str]()
+        \\    print(str(bad(held)))
+        \\
+    , "luce.sema.extern");
+    // No optional list: the empty list already crosses as C's null,
+    // so `list[T]?` has nothing left to encode.
+    try expectRejected(
+        \\extern func bad(xs: list[u64]?) -> i64
+        \\
+        \\func main():
+        \\    print(str(bad(none)))
+        \\
+    , "luce.sema.extern");
+    // No list inside an extern struct: a field has C's byte form or
+    // it has none.
+    try expectRejected(
+        \\extern struct Bad:
+        \\    xs: list[i64]
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // No list in a cfunc slot: a callback trampoline moves words.
+    try expectRejected(
+        \\extern func bad(callback: cfunc(list[i64]) -> i64) -> i64
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+}
+
+test "an extern function name converts to a cfunc value, and the value calls" {
+    // The disposer shape (docs/FFI.md): an extern IS a C function
+    // pointer already — codegen hands over the symbol's address, the
+    // oracle its dlsym pointer — so C receives C's own function and
+    // calls it (10 + 1, then apply's + 1), and the held value calls
+    // through the ordinary cfunc path.
+    try agree.prints(
+        \\extern func luce_ffi_probe_increment(v: i64) -> i64
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(luce_ffi_probe_increment, 10)))
+        \\    let held: cfunc(i64) -> i64 = luce_ffi_probe_increment
+        \\    print(str(held(5)))
+        \\
+    ,
+        \\12
+        \\6
+        \\
+    );
+}
+
+test "a blocking extern converts too: the address is the address" {
+    // `blocking` is a call-site contract, not a fact about the
+    // symbol's address; a call through the converted value carries
+    // the cfunc call's own semantics (docs/FFI.md).
+    try agree.prints(
+        \\extern blocking func luce_ffi_probe_increment(v: i64) -> i64
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(luce_ffi_probe_increment, 40)))
+        \\
+    ,
+        \\42
+        \\
+    );
+}
+
+test "the extern-as-cfunc conversion's refusals" {
+    // The shape is exact, slot for slot.
+    try expectRejected(
+        \\extern func luce_ffi_probe_echo_u8(v: u8) -> u8
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(luce_ffi_probe_echo_u8, 1)))
+        \\
+    , "luce.sema.type");
+    // An extern with out slots does not convert: the out convention
+    // belongs to the declared call site, and a C function pointer's
+    // type has no spelling for it (docs/FFI.md).
+    try expectRejected(
+        \\extern func luce_ffi_probe_split(v: i64, out hi: i32, out lo: i32) -> bool
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> bool, value: i64) -> i64
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(luce_ffi_probe_split, 1)))
+        \\
+    , "luce.sema.extern");
+}
+
+test "c.take_str copies the text, then the disposer really runs, on both engines" {
+    // The LLVMPrintModuleToString / LLVMDisposeMessage convention as
+    // one call (docs/FFI.md, docs/STD.md).  The freed census counts
+    // only a call with the right pointer, so the printed delta proves
+    // the disposer ran, ran once, and received the same address the
+    // text came from — on both engines.  Read as a delta because the
+    // counter is C-side state one process shares across the arms.
+    try agree.prints(
+        \\import std.c
+        \\
+        \\extern func luce_ffi_probe_make_text() -> foreign
+        \\extern func luce_ffi_probe_free_text(at: foreign)
+        \\extern func luce_ffi_probe_freed_count() -> i64
+        \\
+        \\func main():
+        \\    let before = luce_ffi_probe_freed_count()
+        \\    let text = c.take_str(luce_ffi_probe_make_text(), luce_ffi_probe_free_text)
+        \\    print(text)
+        \\    print(str(luce_ffi_probe_freed_count() - before))
+        \\
+    ,
+        \\owned by C
+        \\1
+        \\
+    );
+}
+
+test "c.take_str's zero token traps before the disposer runs" {
+    // `cstring_at`'s own contract: nothing to read, and by the same
+    // contract nothing to release, so the count stays put — which the
+    // trap makes unobservable here and the census spec above pins.
+    try agree.trap(
+        \\import std.c
+        \\
+        \\extern func luce_ffi_probe_free_text(at: foreign)
+        \\
+        \\func main():
+        \\    var zero: foreign
+        \\    print(c.take_str(zero, luce_ffi_probe_free_text))
+        \\
+    , .null_foreign);
 }
 
 test "a cfunc value has no equality and cannot cross workers" {

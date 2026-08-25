@@ -78,6 +78,10 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // wrapper's address, the cached closure's — so a duplicate
         // folds and an unread one deletes (docs/FFI.md).
         .const_cfunc => .pure,
+        // An extern's address is the same plain word: the symbol's on
+        // the compiled path, its resolved pointer on the oracle's —
+        // one answer per row, so it folds and deletes the same way.
+        .const_cfunc_extern => .pure,
         .local_get, .struct_get => .pure,
 
         // A weak read observes whether an object is still alive and, on
@@ -448,6 +452,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .foreign_set,
         // A C function pointer is a word out of thin air.
         .const_cfunc,
+        .const_cfunc_extern,
         => true,
 
         // A fresh object appends a row, and the table moves when it

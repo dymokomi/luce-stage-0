@@ -1071,6 +1071,12 @@ pub const FunctionBuilder = struct {
         signature: u32,
     ) Error!?Typed {
         const resolved = (try self.resolveDeclared(written, span, .written)) orelse return null;
+        // A declared extern answers before the function table, exactly
+        // as a call site asks (docs/FFI.md): the two share a namespace,
+        // and an extern IS a C function pointer already.
+        if (self.analyzer.foreign_names.get(resolved)) |foreign_index| {
+            return self.cfuncFromExtern(written, span, foreign_index, signature);
+        }
         const index = self.analyzer.function_names.get(resolved) orelse {
             try refusals.failUnknownFunction(self, written, span);
             return null;
@@ -1127,6 +1133,93 @@ pub const FunctionBuilder = struct {
             } }),
             .value_type = cfunc_type,
         };
+    }
+
+    /// An **extern function name as a C function pointer**, where a
+    /// cfunc type is what the place expects (docs/FFI.md).  A declared
+    /// extern IS a C function already, so the value is its address —
+    /// the symbol's on the compiled path, its dlsym pointer on the
+    /// oracle's — and no wrapper stands between the value and the
+    /// callee.  This is what makes a disposer first-class:
+    /// `c.take_str(LLVMPrintModuleToString(m), LLVMDisposeMessage)`.
+    /// What converts is exactly the shape-for-shape match — same
+    /// slots, same result, no out slots, because a C function
+    /// pointer's type has no out convention.
+    fn cfuncFromExtern(
+        self: *FunctionBuilder,
+        written: []const u8,
+        span: Span,
+        foreign_index: u32,
+        signature: u32,
+    ) Error!?Typed {
+        const info = self.analyzer.foreigns.items[foreign_index];
+        const cfunc_type: Type = .{ .cfunc = signature };
+        for (info.parameters) |parameter| {
+            if (!parameter.out) continue;
+            try self.fail(
+                "luce.sema.extern",
+                span,
+                "{s} has out slots, and a C function pointer's shape has none — the out convention belongs to the declared call site, not to the pointer's type (docs/FFI.md)",
+                .{written},
+            );
+            return null;
+        }
+        const wants = self.analyzer.signatures.items[signature];
+        var matches = info.parameters.len == wants.parameters.len and
+            info.result.eql(wants.result);
+        if (matches) {
+            for (info.parameters, wants.parameters) |parameter, wanted| {
+                if (!parameter.parameter_type.eql(wanted.value_type)) {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+        if (!matches) {
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "this place is {s}, and {s} is {s}",
+                .{
+                    try self.analyzer.typeName(cfunc_type),
+                    written,
+                    try self.writtenExternShape(info),
+                },
+            );
+            return null;
+        }
+        return .{
+            .node = try recorder.recordNode(self, .{ .cfunc_extern = .{
+                .foreign = foreign_index,
+                .signature = signature,
+                .result = cfunc_type,
+                .span = span,
+            } }),
+            .value_type = cfunc_type,
+        };
+    }
+
+    /// A declared extern's shape, written the way its declaration
+    /// reads — what a cfunc mismatch puts on the other side of the
+    /// sentence.
+    fn writtenExternShape(
+        self: *FunctionBuilder,
+        info: context.ForeignDeclInfo,
+    ) Error![]const u8 {
+        var written: std.ArrayList(u8) = .empty;
+        errdefer written.deinit(self.arena());
+        try written.appendSlice(self.arena(), "extern func(");
+        for (info.parameters, 0..) |parameter, position| {
+            if (position != 0) try written.appendSlice(self.arena(), ", ");
+            if (parameter.out) try written.appendSlice(self.arena(), "out ");
+            try written.appendSlice(self.arena(), try self.analyzer.typeName(parameter.parameter_type));
+        }
+        try written.appendSlice(self.arena(), ")");
+        if (info.result != .none) {
+            try written.appendSlice(self.arena(), " -> ");
+            try written.appendSlice(self.arena(), try self.analyzer.typeName(info.result));
+        }
+        return written.toOwnedSlice(self.arena());
     }
 
     /// A lambda or block closure landing where a cfunc is expected

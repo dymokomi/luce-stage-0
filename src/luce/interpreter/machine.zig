@@ -1708,6 +1708,20 @@ pub const Machine = struct {
                                     try borrowed.append(self.arena, token);
                                     break :blk token;
                                 },
+                                // A borrowed list crosses as the
+                                // address of its own contiguous
+                                // storage (docs/FFI.md): the
+                                // admissible element types are stored
+                                // densely at their exact C width, so
+                                // `bufferAddress` is reused whole —
+                                // an empty list's address is C's null
+                                // and takes no trap, because this
+                                // slot carries a list, not a token.
+                                .heap => blk: {
+                                    const address = containers.bufferAddress(&self.runtime, registers[argument]) catch |mistake|
+                                        return self.caught(mistake);
+                                    break :blk @bitCast(address.asI64());
+                                },
                                 // An extern struct crosses by pointer
                                 // (docs/FFI.md): the field run packs
                                 // into C-layout bytes that exist only
@@ -1807,6 +1821,17 @@ pub const Machine = struct {
                         const token = self.cfuncPointer(made.function, made.signature) catch |mistake|
                             return self.caught(mistake);
                         registers[item] = .ofI64(@bitCast(token));
+                    },
+                    // An extern IS a C function already (docs/FFI.md):
+                    // the oracle's value is its resolved pointer, the
+                    // same address `call_foreign` would dispatch to.
+                    // A symbol nothing carries is the host refusing,
+                    // exactly as a call would refuse it.
+                    .const_cfunc_extern => |made| {
+                        const row = &self.program.foreign_functions[made.foreign];
+                        const address = resolveForeignSymbol(row.name) orelse
+                            return self.trap(.host_unavailable);
+                        registers[item] = .ofI64(@bitCast(@as(u64, @intFromPtr(address))));
                     },
                     // A call through a C function pointer: the callee
                     // is a word a boundary crossing or a bare field

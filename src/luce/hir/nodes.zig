@@ -320,6 +320,10 @@ pub const Expression = union(enum) {
     /// A capture-free function landing where a cfunc type is expected
     /// (docs/FFI.md): the conversion to a C function pointer.
     cfunc_value: CfuncValue,
+    /// A declared extern's name landing where a cfunc type is
+    /// expected (docs/FFI.md): the extern is a C function already, so
+    /// the value is its address and no wrapper stands between.
+    cfunc_extern: CfuncExtern,
 
     // Payloads --------------------------------------------------------------
 
@@ -701,6 +705,17 @@ pub const Expression = union(enum) {
         /// The function table index — what `const_cfunc` names.
         function: u32,
         /// The signature row the value wears: the C shape.
+        signature: u32,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
+    pub const CfuncExtern = struct {
+        /// The foreign table index — what `const_cfunc_extern` names.
+        foreign: u32,
+        /// The signature row the value wears: the extern's own shape,
+        /// slot for slot.
         signature: u32,
         result: Type,
         span: Span,
@@ -1281,7 +1296,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         .function_value, .lambda_ref, .bound_method => .fresh,
         // A C function pointer is a bare word: no storage, no object
         // (docs/FFI.md).
-        .cfunc_value => .plain,
+        .cfunc_value, .cfunc_extern => .plain,
     };
 }
 
@@ -1400,6 +1415,7 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
         .function_value,
         .lambda_ref,
         .cfunc_value,
+        .cfunc_extern,
         => false,
         .field_get => |read| splitsBlocks(read.target, declared),
         .variant_payload => |read| splitsBlocks(read.target, declared),

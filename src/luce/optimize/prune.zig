@@ -139,6 +139,9 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         // call that will happen is C's, through the address
         // (docs/FFI.md).
         .const_cfunc => |*made| &made.function,
+        // An extern's address names a foreign row, not a function-table
+        // row; like `call_foreign`, renumbering does not touch it.
+        .const_cfunc_extern => null,
         // Everything else: `call_indirect` carries its callee in a
         // register, and the rest is data, storage or control flow.
         .const_boolean,
@@ -221,6 +224,7 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .spawn,
         .call_indirect,
         .const_cfunc,
+        .const_cfunc_extern,
         .call_cfunc,
         .intrinsic,
         .heap_new,

@@ -731,6 +731,9 @@ const Module = struct {
     fn foreignFacing(written: types.Type) types.Type {
         return switch (written) {
             .optional, .str => .foreign,
+            // A borrowed list crosses as the address of its storage —
+            // the pointer word again (docs/FFI.md).
+            .heap => .foreign,
             else => written,
         };
     }
@@ -3773,6 +3776,7 @@ const Body = struct {
                 .call_indirect,
                 .const_cfunc,
                 .call_cfunc,
+                .const_cfunc_extern,
                 .binary,
                 .unary,
                 .convert,
@@ -6328,6 +6332,17 @@ const Body = struct {
                     "cfunc.address",
                 );
             },
+            // An extern IS a C function already: the value is the
+            // declared symbol's address, no wrapper (docs/FFI.md).
+            .const_cfunc_extern => |made| {
+                const target = try self.module.foreignFunction(made.foreign);
+                self.produced[register].value = try self.wip.cast(
+                    .ptrtoint,
+                    target.toValue(self.module.builder),
+                    .i64,
+                    "cfunc.extern.address",
+                );
+            },
             .call_cfunc => |called| try self.emitCfuncCall(register, called),
             .local_get => |local| {
                 const held = self.function.locals[local];
@@ -7696,6 +7711,24 @@ const Body = struct {
                     const token = try self.unboxed(.foreign, out, "cstr.token");
                     try arguments.append(gpa, token);
                     try borrowed.append(gpa, token);
+                },
+                // A borrowed list crosses as the address of its own
+                // contiguous storage (docs/FFI.md): the admissible
+                // element types are stored densely at their exact C
+                // width, so nothing is packed and nothing is copied —
+                // the same storage `buffer_address` hands out, reused
+                // rather than restated.  Borrowed for the call only;
+                // an empty list's address is C's null and takes no
+                // trap, because this slot carries a list, not a token
+                // — the count parameter tells the callee the story.
+                .heap => {
+                    const out = try self.scratch(self.module.value_type, value_alignment, "list.addr");
+                    try self.callChecked(.luce_rt_buffer_address, &.{
+                        self.runtime,
+                        try self.boxedRegister(argument, "list"),
+                        out,
+                    });
+                    try arguments.append(gpa, try self.unboxed(.foreign, out, "list.token"));
                 },
                 // An extern struct crosses by pointer (docs/FFI.md):
                 // the value's field run is materialized into C-layout
