@@ -4,6 +4,64 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.21 — the C boundary
+
+Luce programs now speak to C directly. An `extern` declaration states a C
+shape once, and the compiler owns the translation: the common shapes cross
+invisibly, the rare ones take one visible verb, and nothing crosses
+silently wrong. The boundary exists for one customer above all — the
+self-hosted compiler drives LLVM-C with it — and the acceptance probe in
+`research/acceptance/` is real code against real libLLVM.
+
+- **Named handles.** `extern type Window` declares a nominal, pointer-shaped
+  C handle; `= u32`-style forms cover integer-shaped descriptors.
+  `LLVMTypeRef` and `LLVMValueRef` are now different types, and mixing them
+  is a compile-time fact.
+
+- **Null, made honest.** A `?` on a pointer-shaped slot decodes C's null to
+  `none` — an ordinary optional, no sentinel. A slot *without* `?` is an
+  enforced contract: a zero crossing traps `null_foreign` in every build
+  profile, both directions. There is no null literal.
+
+- **Text crosses seamlessly.** A `str` parameter becomes a NUL-terminated
+  temporary borrowed for the call; a `str` result is copied immediately and
+  UTF-8-validated (`invalid_utf8` trap otherwise). For C text the caller
+  must free, `c.take_str(pointer, disposer)` copies, disposes, and answers
+  the `str` in one call.
+
+- **`out` parameters become extra results**, received by ordinary
+  destructuring after the declared return: `let status, device =
+  cuDeviceGet(0)`. Out slots are zeroed before the call, so a callee that
+  skips the write still behaves deterministically.
+
+- **The full scalar set, any arity.** Every fixed-width integer, `f32`/`f64`,
+  and `bool` cross at their exact C representation with the target's
+  extension attributes; the argument-count cap is gone.
+
+- **`extern struct`** is an ordinary value struct carrying one C-layout
+  fact. It crosses by borrowed pointer in both directions — out-struct
+  slots included — and the packed bytes exist only at the crossing.
+
+- **`extern var`** binds a C global with direct loads and stores at its
+  exact width. **Borrowed arrays**: a `list[H]` parameter of handles or
+  scalars crosses as a contiguous C array borrowed for the call; an empty
+  list is C's null, and the count crosses separately, C's way.
+
+- **`cfunc(params) -> R` is C's function pointer, both directions.** A
+  capture-free function, lambda, or extern name converts to it; pointers
+  arriving from C — results, out slots, struct fields — are callable
+  directly. A callback runs synchronously against the runtime of the Luce
+  thread that handed it over, and a trap inside one stops the program at
+  the boundary rather than returning corrupt data into C.
+
+- **`std.c`** gains the tier-two doors: `bytes_at` and `cstring_at` copy
+  C-owned memory inward, `take_str` adopts owned text, and the scoped
+  buffer verbs hand a callee an address for exactly one call.
+
+The module format bumps to reject stale artifacts; the host ABI is
+untouched. The differential oracle dispatches extern calls through libffi,
+which ships in nothing — compiled products link only what they always did.
+
 ## 0.20 — default-private and `pub`
 
 Visibility flips to match the language Luce is growing into: a declaration
