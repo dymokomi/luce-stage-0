@@ -630,6 +630,7 @@ const Replay = struct {
                 use.result,
             )).register,
             .container_ref => |use| try self.code.emit(.{ .const_container = use.row }, use.result),
+            .foreign_get => |read| try self.code.emit(.{ .foreign_get = read.variable }, read.result),
             .carried_get => |carried| try self.replayCore(carried.origin),
             .binary => |operation| try self.replayBinary(operation),
             .convert => |conversion| convert: {
@@ -2210,6 +2211,7 @@ const Replay = struct {
         switch (assign.place) {
             .local => |local| try self.replayAssignLocal(local, assign.value, assign.store, null),
             .field => |field| try self.replayAssignField(field, assign.value, assign.store, null),
+            .foreign => |place| try self.replayAssignForeign(place, assign.value, assign.store, null),
             .index => |index| try self.replayAssignIndex(
                 index,
                 assign.value,
@@ -2231,6 +2233,7 @@ const Replay = struct {
         switch (assign.place) {
             .local => |local| try self.replayAssignLocal(local, assign.value, assign.store, assign.op),
             .field => |field| try self.replayAssignField(field, assign.value, assign.store, assign.op),
+            .foreign => |place| try self.replayAssignForeign(place, assign.value, assign.store, assign.op),
             .index => |index| try self.replayAssignIndex(
                 index,
                 assign.value,
@@ -2266,6 +2269,31 @@ const Replay = struct {
         const text_concat = op == .add and (place_type == .str or place_type == .bytes);
         if (text_concat) try self.parkDerivedStorage(combined, place_type);
         return .{ .register = combined, .provenance = if (text_concat) .fresh else .plain };
+    }
+
+    /// A store into a C global (docs/FFI.md): the value — combined
+    /// with the current word for the compound form — moves through
+    /// `foreign_set` whole.  The Globals vocabulary owns no storage,
+    /// so there is nothing to take, copy, retain or release.
+    fn replayAssignForeign(
+        self: *Replay,
+        place: nodes.Place.Foreign,
+        value: nodes.NodeRef,
+        recorded: nodes.StoreKind,
+        compound: ?nodes.BinaryOp,
+    ) Error!void {
+        const register = try self.replayValue(value);
+        std.debug.assert(recorded == .plain);
+        var stored = register;
+        if (compound) |op| {
+            const current = try self.code.emit(.{ .foreign_get = place.variable }, place.value_type);
+            const combined = try self.replayCombine(op, current, place.value_type, register);
+            stored = combined.register;
+        }
+        _ = try self.code.emit(
+            .{ .foreign_set = .{ .variable = place.variable, .value = stored } },
+            .none,
+        );
     }
 
     fn replayAssignLocal(

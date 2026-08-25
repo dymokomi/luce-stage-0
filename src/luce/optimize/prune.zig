@@ -168,6 +168,9 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         .ret,
         .trap,
         .unwind,
+        // A C global names a symbol row, never a function.
+        .foreign_get,
+        .foreign_set,
         => null,
     };
 }
@@ -218,6 +221,8 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .ret,
         .trap,
         .unwind,
+        .foreign_get,
+        .foreign_set,
         => null,
     };
 }

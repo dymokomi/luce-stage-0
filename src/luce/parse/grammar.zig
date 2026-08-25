@@ -538,6 +538,8 @@ pub const Parser = struct {
         defer externs.deinit(self.arena);
         var extern_types: std.ArrayList(ast.ExternTypeDecl) = .empty;
         defer extern_types.deinit(self.arena);
+        var extern_vars: std.ArrayList(ast.ExternVarDecl) = .empty;
+        defer extern_vars.deinit(self.arena);
 
         while (self.peekKind() != .end_of_file) {
             if (self.atIndirectUnion()) {
@@ -622,6 +624,26 @@ pub const Parser = struct {
                         } else {
                             self.recover();
                         }
+                    } else if (self.peekAhead(1) == .keyword_struct) {
+                        if (try self.externStructDecl()) |declaration| {
+                            try structs.append(self.arena, declaration);
+                        } else {
+                            self.recover();
+                        }
+                    } else if (self.peekAhead(1) == .keyword_var) {
+                        if (try self.externVarDecl()) |declaration| {
+                            try extern_vars.append(self.arena, declaration);
+                        } else {
+                            self.recover();
+                        }
+                    } else if (self.peekAhead(1) == .keyword_class) {
+                        try self.report(
+                            "luce.parse.extern",
+                            self.peek().span,
+                            "an extern aggregate is a value: write extern struct — C has no reference classes",
+                            .{},
+                        );
+                        self.recover();
                     } else if (try self.externDecl()) |declaration| {
                         try externs.append(self.arena, declaration);
                     } else {
@@ -663,7 +685,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_pub => {
-                    try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions, &extern_types);
+                    try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions, &extern_types, &extern_vars);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -716,6 +738,7 @@ pub const Parser = struct {
             .functions = try functions.toOwnedSlice(self.arena),
             .externs = try externs.toOwnedSlice(self.arena),
             .extern_types = try extern_types.toOwnedSlice(self.arena),
+            .extern_vars = try extern_vars.toOwnedSlice(self.arena),
         };
     }
 
@@ -733,6 +756,7 @@ pub const Parser = struct {
         unions: *std.ArrayList(ast.UnionDecl),
         functions: *std.ArrayList(ast.FuncDecl),
         extern_types: *std.ArrayList(ast.ExternTypeDecl),
+        extern_vars: *std.ArrayList(ast.ExternVarDecl),
     ) Error!void {
         const marker = self.advance();
         const visibility: ast.Visibility = .public;
@@ -861,10 +885,12 @@ pub const Parser = struct {
                 );
                 self.recover();
             },
-            // `pub extern type Name` — a handle is a type declaration
-            // and takes the marker like one (docs/FFI.md).  An extern
-            // *function* stays unmarkable, exactly as it was before
-            // handles arrived, and earns the sentence below.
+            // `pub extern type Name`, `pub extern struct Name:`, and
+            // `pub extern var name: T` — a handle, a C-layout struct,
+            // and a C global are declarations and take the marker like
+            // any other (docs/FFI.md).  An extern *function* stays
+            // unmarkable, exactly as it was before handles arrived,
+            // and earns the sentence below.
             .keyword_extern => {
                 if (self.atExternType()) {
                     if (try self.externTypeDecl()) |declaration| {
@@ -874,11 +900,27 @@ pub const Parser = struct {
                     } else {
                         self.recover();
                     }
+                } else if (self.peekAhead(1) == .keyword_struct) {
+                    if (try self.externStructDecl()) |declaration| {
+                        var marked = declaration;
+                        marked.visibility = visibility;
+                        try structs.append(self.arena, marked);
+                    } else {
+                        self.recover();
+                    }
+                } else if (self.peekAhead(1) == .keyword_var) {
+                    if (try self.externVarDecl()) |declaration| {
+                        var marked = declaration;
+                        marked.visibility = visibility;
+                        try extern_vars.append(self.arena, marked);
+                    } else {
+                        self.recover();
+                    }
                 } else {
                     try self.report(
                         "luce.parse.top",
                         marker.span,
-                        "'{s}' marks a declaration: expected func, alias, const, struct, interface, enum, union, or extern type after it, found {s}",
+                        "'{s}' marks a declaration: expected func, alias, const, struct, interface, enum, union, or an extern type, struct, or var after it, found {s}",
                         .{ keywordWord(marker.kind).?, try self.found() },
                     );
                     self.recover();
@@ -2431,6 +2473,49 @@ pub const Parser = struct {
             .name_span = name.span,
             .representation = representation,
             .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// `extern struct Name:` — an ordinary value struct whose fields
+    /// additionally have C's layout (docs/FFI.md).  The body grammar is
+    /// a struct's own, shared whole: memberwise construction, field
+    /// access, copies and zero values all come from the same machinery,
+    /// and only the C-layout fact travels with the declaration.  What a
+    /// field may hold at the boundary is stage 4's ruling.
+    fn externStructDecl(self: *Parser) Error!?ast.StructDecl {
+        const start = self.advance(); // extern — the caller has already looked
+        var declaration = (try self.structDecl()) orelse return null;
+        declaration.c_layout = true;
+        declaration.span.start = start.span.start;
+        return declaration;
+    }
+
+    /// `extern var name: T` — a C global's declared shape
+    /// (docs/FFI.md).  No initializer — the C side owns the value —
+    /// and no body: reads and writes are direct loads and stores of
+    /// the symbol, with the bare semantics the Globals section states.
+    fn externVarDecl(self: *Parser) Error!?ast.ExternVarDecl {
+        const start = self.advance(); // extern
+        _ = self.advance(); // var — the caller has already looked
+        const name = (try self.expect(.identifier, "a C global's name")) orelse return null;
+        try self.refuseWildcardName(name);
+        if ((try self.expect(.colon, "':' before the global's type")) == null) return null;
+        const written = (try self.typeName()) orelse return null;
+        if (self.peekKind() == .assign) {
+            try self.report(
+                "luce.parse.extern",
+                self.peek().span,
+                "an extern var takes no initializer; the C side owns the value",
+                .{},
+            );
+            return null;
+        }
+        if ((try self.expect(.newline, "end of line after an extern var declaration")) == null) return null;
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .type_name = written,
+            .span = .{ .start = start.span.start, .end = written.span.end },
         };
     }
 

@@ -148,6 +148,12 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // shape are two different objects and may never be shared.
         .heap_new => .impure,
 
+        // A C global is mutable state the language never sees change:
+        // C code, another load-bearing extern call, or the program's
+        // own store can move it, so a read is never foldable and a
+        // store is never dead (docs/FFI.md's bare semantics).
+        .foreign_get,
+        .foreign_set,
         .local_set,
         .call,
         .call_foreign,
@@ -428,6 +434,10 @@ pub fn viewStable(instruction: Instruction) bool {
         .ret,
         .trap,
         .unwind,
+        // A C global's load and store move scalar words outside the
+        // object table entirely (docs/FFI.md).
+        .foreign_get,
+        .foreign_set,
         => true,
 
         // A fresh object appends a row, and the table moves when it

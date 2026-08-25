@@ -70,6 +70,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         for (foreign.parameters) |parameter| try verifyType(program, parameter.parameter_type);
         if (foreign.result != .none) try verifyType(program, foreign.result);
     }
+    // An extern var's type is held to the Globals vocabulary here, on
+    // the row, so a hostile module cannot make an engine load or store
+    // a symbol at a width the boundary never speaks (docs/FFI.md).
+    for (program.foreign_variables) |variable| {
+        try verifyType(program, variable.value_type);
+        if (variable.name.len == 0) return error.BadFunction;
+        if (!foreignGlobal(variable.value_type)) return error.BadFunction;
+    }
     for (program.heap_types) |descriptor| switch (descriptor) {
         .class => |layout| {
             if (layout >= program.structs.len or !program.structs[layout].reference)
@@ -139,6 +147,21 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             );
             if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
                 return error.BadStruct;
+        }
+        // A C-layout struct is an ordinary value layout whose fields
+        // additionally have a C byte form (docs/FFI.md).  Hold a
+        // decoded module to the closed field vocabulary the layout
+        // walk computes over, so `cSizeOf`/`cOffsetOf` can never be
+        // asked about a shape they have no answer for — and to value
+        // structs only, because a reference or interface layout has no
+        // C bytes at all.
+        if (layout.c_layout) {
+            if (layout.interface or layout.reference or layout.closure_storage)
+                return error.BadStruct;
+            for (layout.fields) |field| {
+                if (field.weak) return error.BadStruct;
+                if (!cLayoutField(program, field.field_type)) return error.BadStruct;
+            }
         }
     }
     for (program.variants) |declared| {
@@ -1298,12 +1321,12 @@ fn verifyInstruction(
             if (callee.name.len == 0) return error.BadFunction;
             for (callee.parameters) |parameter| {
                 if (parameter.out) {
-                    if (!foreignOut(parameter.parameter_type)) return error.BadFunction;
-                } else if (!foreignParameter(parameter.parameter_type)) {
+                    if (!foreignOut(program, parameter.parameter_type)) return error.BadFunction;
+                } else if (!foreignParameter(program, parameter.parameter_type)) {
                     return error.BadFunction;
                 }
             }
-            if (!foreignResult(callee.result)) return error.BadFunction;
+            if (!foreignResult(program, callee.result)) return error.BadFunction;
             // A call writes one argument per slot that is not `out`;
             // the engines allocate the out slots themselves.
             if (call.arguments.len != callee.argumentCount()) return error.BadFunction;
@@ -1513,6 +1536,20 @@ fn verifyInstruction(
             try expectType(result, .none);
             if (!function.fallible) return error.NotFallible;
         },
+        // The C globals (docs/FFI.md): the row must exist — its type
+        // was already held to the Globals vocabulary on the table —
+        // and a load answers exactly the declared type, a store moves
+        // exactly it.
+        .foreign_get => |variable| {
+            if (variable >= program.foreign_variables.len) return error.BadFunction;
+            try expectType(result, program.foreign_variables[variable].value_type);
+        },
+        .foreign_set => |set| {
+            try expectType(result, .none);
+            if (set.variable >= program.foreign_variables.len) return error.BadFunction;
+            const value = try operandType(function, defined, set.value);
+            try expectType(value, program.foreign_variables[set.variable].value_type);
+        },
     }
 }
 
@@ -1553,7 +1590,7 @@ fn foreignScalar(of: Type) bool {
     };
 }
 
-fn foreignParameter(of: Type) bool {
+fn foreignParameter(program: *const Program, of: Type) bool {
     return switch (of) {
         .foreign => true,
         // A named handle is its representation at the boundary, and
@@ -1564,6 +1601,10 @@ fn foreignParameter(of: Type) bool {
         // a NUL-terminated temporary borrowed for the call; a result
         // is copied and validated at the boundary.
         .str => true,
+        // An extern struct crosses by pointer (docs/FFI.md): the call
+        // site materializes the C bytes and passes their address, so
+        // only a C-layout row may stand in a slot.
+        .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
         // The nullable crossings (docs/FFI.md): `foreign?` and a
         // pointer-shaped handle's `?` decode C's null; `str?` crosses
         // `none` as NULL.  An optional of anything else has no C
@@ -1578,12 +1619,15 @@ fn foreignParameter(of: Type) bool {
     };
 }
 
-/// What an `out` slot may carry back (docs/FFI.md): the scalars and
-/// the handles — plain, `foreign`, or nullable pointer-shaped.  Not
-/// `str`: C fills a caller-allocated word, and text has no word.
-fn foreignOut(of: Type) bool {
+/// What an `out` slot may carry back (docs/FFI.md): the scalars, the
+/// handles — plain, `foreign`, or nullable pointer-shaped — and an
+/// extern struct, whose C bytes the call allocates and reads back per
+/// field.  Not `str`: C fills a caller-allocated word, and text has
+/// no word.
+fn foreignOut(program: *const Program, of: Type) bool {
     return switch (of) {
         .foreign, .extern_type => true,
+        .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
         .optional => |payload| switch (payload) {
             .foreign => true,
             .extern_type => |reference| reference.representation == .foreign,
@@ -1593,10 +1637,36 @@ fn foreignOut(of: Type) bool {
     };
 }
 
-/// What an extern may answer directly: a parameter type or nothing
-/// for a C void.
-fn foreignResult(of: Type) bool {
-    return of == .none or foreignParameter(of);
+/// What an extern may answer directly: a scalar-shaped parameter type
+/// or nothing for a C void — never an aggregate, because by-value
+/// aggregate return needs per-target ABI classification the boundary
+/// deliberately does not do (docs/FFI.md; the generator's shims are
+/// the road).
+fn foreignResult(program: *const Program, of: Type) bool {
+    return of == .none or (of != .strukt and foreignParameter(program, of));
+}
+
+/// The Globals vocabulary (docs/FFI.md): a boundary scalar or a
+/// handle — `foreign` or named, at whatever representation it
+/// declares.  Nothing else has a direct load/store shape: no `str`,
+/// no optionals, no aggregates.
+fn foreignGlobal(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
+        else => foreignScalar(of),
+    };
+}
+
+/// An extern struct's field vocabulary (docs/FFI.md): the boundary
+/// scalars, the handles — `foreign` or named — and nested extern
+/// structs.  Fixed arrays wait for the binding generator; str, bytes,
+/// containers, optionals and ordinary structs have no C byte form.
+fn cLayoutField(program: *const Program, of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
+        .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
+        else => foreignScalar(of),
+    };
 }
 
 fn raisesError(program: *const Program, function: *const Function, register: Register) bool {

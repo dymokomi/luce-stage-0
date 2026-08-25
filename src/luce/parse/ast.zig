@@ -563,6 +563,11 @@ pub const StructDecl = struct {
     /// `struct` → value, `class` → reference.  Ownership work reads this
     /// once ARC lands; today it is recorded and otherwise inert.
     kind: TypeKind = .value,
+    /// `extern struct` (docs/FFI.md): an ordinary value struct whose
+    /// fields additionally have C's layout, so the boundary can cross
+    /// it by pointer.  The parser only builds it with `kind == .value`;
+    /// what an extern struct's body may hold is stage 4's ruling.
+    c_layout: bool = false,
     span: Span,
 };
 
@@ -777,6 +782,19 @@ pub const ExternTypeDecl = struct {
     span: Span,
 };
 
+/// `extern var SDL_version_number: i32` — a C global's declared shape
+/// (docs/FFI.md).  It shares the value namespace like a file-scope
+/// constant, but reads and writes are direct loads and stores of the
+/// external symbol, with the bare semantics the Globals section
+/// states: no traps, no decode.  Writing follows `var` mutability.
+pub const ExternVarDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    type_name: TypeName,
+    visibility: Visibility = .private,
+    span: Span,
+};
+
 pub const Program = struct {
     imports: []Import,
     aliases: []AliasDecl = &.{},
@@ -788,4 +806,5 @@ pub const Program = struct {
     functions: []FuncDecl,
     externs: []ExternDecl = &.{},
     extern_types: []ExternTypeDecl = &.{},
+    extern_vars: []ExternVarDecl = &.{},
 };

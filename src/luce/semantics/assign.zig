@@ -494,6 +494,16 @@ fn compoundCombine(
 fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
     const found = self.findLocal(base) orelse {
         const qualified = try naming.qualify(self.analyzer, self.prefix, base);
+        // An extern var writes like the `var` it is declared as: a
+        // direct store of the C global (docs/FFI.md).
+        if (self.analyzer.foreign_variable_names.get(qualified)) |variable| {
+            return lowerAssignForeign(self, variable, assign);
+        }
+        if (try naming.memberKey(self.analyzer, self.module, base)) |key| {
+            if (self.analyzer.foreign_variable_names.get(key)) |variable| {
+                return lowerAssignForeign(self, variable, assign);
+            }
+        }
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", span, "{s} is a file-scope constant and cannot be assigned", .{base});
         } else {
@@ -605,6 +615,23 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
 fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
     const found = self.findLocal(target.base) orelse {
         const qualified = try naming.qualify(self.analyzer, self.prefix, target.base);
+        // geo.version = 5 — an imported module's extern var
+        // (docs/FFI.md), written through its namespace exactly as it
+        // is read through one.
+        if (naming.importsModule(self.analyzer, self.module, target.base)) {
+            const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
+            if (self.analyzer.foreign_variable_names.get(try self.importedName(joined))) |variable| {
+                const info = self.analyzer.foreign_variables.items[variable];
+                if (info.declaration.visibility == .private and info.module != self.module) {
+                    try self.fail("luce.sema.private", target.span, "{s} is private to {s}", .{
+                        target.field,
+                        naming.moduleName(self.analyzer, info.module),
+                    });
+                    return;
+                }
+                return lowerAssignForeign(self, variable, assign);
+            }
+        }
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", target.span, "{s} is a file-scope constant and cannot be assigned", .{target.base});
             return;
@@ -697,6 +724,42 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
             .place = place,
             .value = value.node,
             .store = store_kind,
+            .span = assign.span,
+        } });
+    }
+}
+
+/// NAME = value / NAME OP= value where NAME is an `extern var`
+/// (docs/FFI.md): a direct store of the C global's word, `var`
+/// mutability with the Globals section's bare semantics.  The
+/// vocabulary owns no storage, so the store is always plain, and the
+/// compound form reads the word once through `foreign_get`.
+fn lowerAssignForeign(self: *FunctionBuilder, variable: u32, assign: ast.Assign) Error!void {
+    const info = self.analyzer.foreign_variables.items[variable];
+    const value = ((try self.lowerTyped(
+        assign.value,
+        info.value_type,
+        assign.span,
+        info.declaration.name,
+    )) orelse return).value;
+    const place: nodes.Place = .{ .foreign = .{
+        .variable = variable,
+        .value_type = info.value_type,
+    } };
+    if (assign.compound) |op| {
+        _ = (try compoundCombine(self, op, info.value_type, value, assign.span)) orelse return;
+        try recorder.recordStatement(self, .{ .compound_assign = .{
+            .place = place,
+            .op = compoundOperation(op),
+            .value = value.node,
+            .store = .plain,
+            .span = assign.span,
+        } });
+    } else {
+        try recorder.recordStatement(self, .{ .assign = .{
+            .place = place,
+            .value = value.node,
+            .store = .plain,
             .span = assign.span,
         } });
     }

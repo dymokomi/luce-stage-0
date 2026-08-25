@@ -396,6 +396,19 @@ fn collectUnionName(
     });
 }
 
+/// An extern struct's field vocabulary (docs/FFI.md): the boundary
+/// scalars, the handles — `foreign` or named — and nested extern
+/// structs.  str, bytes, containers, optionals, functions and
+/// ordinary aggregates have no C byte form; fixed arrays wait for the
+/// binding generator.
+fn cLayoutField(self: *const Analyzer, of: types.Type) bool {
+    return switch (of) {
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .boolean, .foreign, .extern_type => true,
+        .strukt => |index| self.structs.items[index].c_layout,
+        else => false,
+    };
+}
+
 /// The struct of this module that takes `name` and stands above
 /// `span` in the file, or null.
 fn structDeclaredAbove(tree: ast.Program, name: []const u8, span: Span) ?*const ast.StructDecl {
@@ -556,6 +569,10 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                 .name = try self.arena.dupe(u8, qualified),
                 .fields = &.{},
                 .reference = declaration.kind == .reference,
+                // Stamped in the names pass, before any field
+                // resolves, so a field naming an extern struct
+                // declared later still sees the C-layout fact.
+                .c_layout = declaration.c_layout,
             });
         }
     }
@@ -649,6 +666,29 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             {
                 continue;
             }
+            // An extern struct's fields are held to the C-layout
+            // vocabulary (docs/FFI.md): what has no C byte form
+            // cannot sit at a C offset.  Everything else about the
+            // struct — construction, access, copies, zero values,
+            // methods — is the ordinary value-struct machinery.
+            if (declaration.c_layout and !cLayoutField(self, field_type)) {
+                if (field_type == .heap and self.heap_types.items[field_type.heap] == .array) {
+                    try self.fail(
+                        "luce.sema.extern",
+                        field.type_name.span,
+                        "a fixed-array field waits for the binding generator; stage-0 arrays carry runtime shape and have no C-layout form (docs/FFI.md)",
+                        .{},
+                    );
+                } else {
+                    try self.fail(
+                        "luce.sema.extern",
+                        field.type_name.span,
+                        "an extern struct's field is a fixed-width integer, f32, f64, bool, foreign, a named handle, or another extern struct; {s} has no C byte form (docs/FFI.md)",
+                        .{try self.typeName(field_type)},
+                    );
+                }
+                continue;
+            }
             if (field.weak and !shapes.weakTarget(self, field_type)) {
                 if (field_type.held() == null) {
                     try self.fail(
@@ -721,6 +761,16 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                 declaration.span,
                 "{s} {s} has an empty body",
                 .{ if (declaration.kind == .reference) "class" else "struct", declaration.name },
+            );
+        } else if (declaration.c_layout and fields.items.len == 0) {
+            // C has no empty struct, so a fieldless extern struct has
+            // no size to cross at — refused here rather than left to
+            // materialize zero bytes at a boundary.
+            try self.fail(
+                "luce.sema.extern",
+                declaration.span,
+                "extern struct {s} declares no fields; C has no empty structs, and the C shape is the whole point of the declaration (docs/FFI.md)",
+                .{declaration.name},
             );
         }
         self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);

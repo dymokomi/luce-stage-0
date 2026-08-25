@@ -1805,11 +1805,19 @@ pub const FunctionBuilder = struct {
                     if (self.analyzer.constant_names.get(qualified)) |constant| {
                         return expressions.emitConstant(self, constant, name.span);
                     }
+                    // Or a C global, sharing the value namespace like
+                    // a constant that C may move (docs/FFI.md).
+                    if (self.analyzer.foreign_variable_names.get(qualified)) |variable| {
+                        return expressions.emitForeignVar(self, variable, name.span);
+                    }
                     // Or a member import's binding: `from geo import
                     // origin` reads the imported constant bare.
                     if (try naming.memberKey(self.analyzer, self.module, name.text)) |key| {
                         if (self.analyzer.constant_names.get(key)) |constant| {
                             return expressions.emitConstant(self, constant, name.span);
+                        }
+                        if (self.analyzer.foreign_variable_names.get(key)) |variable| {
+                            return expressions.emitForeignVar(self, variable, name.span);
                         }
                     }
                     // Or a function, where a function is what the place

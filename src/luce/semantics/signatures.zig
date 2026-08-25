@@ -211,6 +211,7 @@ fn collectFunction(
     }
     if (self.function_names.contains(name) or
         self.constant_names.contains(name) or
+        self.foreign_variable_names.contains(name) or
         (top_level and (self.alias_names.contains(name) or self.struct_names.contains(name) or self.enum_names.contains(name))))
     {
         try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
@@ -688,6 +689,61 @@ pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
     return layout;
 }
 
+/// Every declared `extern var` (docs/FFI.md): resolve the type, hold
+/// it to the Globals vocabulary, and register the row under its
+/// qualified value-namespace spelling — the bare declared name stays
+/// the symbol the linker resolves.  Before `collectFunctions`, so a
+/// later function or constant taking a global's name reports through
+/// the ordinary duplicate gate.
+pub fn collectExternVars(self: *Analyzer) Error!void {
+    for (self.modules, 0..) |module, module_index| {
+        self.diagnostics.scope = module.file;
+        for (module.tree.extern_vars) |*declaration| {
+            if (isReserved(declaration.name)) {
+                try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+                continue;
+            }
+            const qualified = try naming.qualify(self, module.prefix, declaration.name);
+            if (try naming.firstDeclarationOf(self, qualified)) |where| {
+                try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                    declaration.name,
+                    where,
+                });
+                continue;
+            }
+            const resolved = (try resolve.resolveType(self, module_index, declaration.type_name)) orelse continue;
+            if (!foreignGlobal(resolved)) {
+                try self.fail(
+                    "luce.sema.extern",
+                    declaration.type_name.span,
+                    "an extern var is a fixed-width integer, f32, f64, bool, foreign, or a named handle — a C global loads and stores one word, and anything richer is a wrapper's business (docs/FFI.md)",
+                    .{},
+                );
+                continue;
+            }
+            const index: u32 = @intCast(self.foreign_variables.items.len);
+            try self.foreign_variable_names.put(self.temporary, qualified, index);
+            try self.foreign_variables.append(self.temporary, .{
+                .declaration = declaration,
+                .module = module_index,
+                .value_type = resolved,
+            });
+        }
+    }
+    self.diagnostics.scope = source_mod.root_file;
+}
+
+/// The Globals vocabulary (docs/FFI.md): a boundary scalar or a
+/// handle — `foreign` or named, at whatever representation it
+/// declares.  No `str`, no optionals, no aggregates: a C global's
+/// reads and writes are direct loads and stores of one word.
+fn foreignGlobal(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
+        else => boundaryScalar(of),
+    };
+}
+
 /// One extern declaration (docs/FFI.md): resolve the shape, refuse
 /// what falls outside the boundary vocabulary with the reason, and
 /// register the row under its qualified call spelling — the bare
@@ -706,7 +762,10 @@ fn collectExtern(
     module: usize,
 ) Error!void {
     const qualified = try naming.qualify(self, prefix, declaration.name);
-    if (self.function_names.get(qualified) != null or self.foreign_names.get(qualified) != null) {
+    if (self.function_names.get(qualified) != null or
+        self.foreign_names.get(qualified) != null or
+        self.foreign_variable_names.get(qualified) != null)
+    {
         try self.fail(
             "luce.sema.extern",
             declaration.name_span,
@@ -722,22 +781,23 @@ fn collectExtern(
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse return;
         if (try refuseIntegerHandleOptional(self, resolved, parameter.type_name.span)) return;
+        if (try refuseOrdinaryStruct(self, resolved, parameter.type_name.span)) return;
         if (parameter.out) {
-            if (!boundaryOut(resolved)) {
+            if (!(boundaryOut(resolved) or externStruct(self, resolved))) {
                 try self.fail(
                     "luce.sema.extern",
                     parameter.type_name.span,
-                    "an out parameter is a fixed-width integer, f32, f64, bool, foreign, or a handle — a value C writes into the slot the call allocates (docs/FFI.md)",
+                    "an out parameter is a fixed-width integer, f32, f64, bool, foreign, a handle, or an extern struct — a value C writes into the slot the call allocates (docs/FFI.md)",
                     .{},
                 );
                 return;
             }
             try out_types.append(self.temporary, resolved);
-        } else if (!(boundaryParameter(resolved) or nullableBoundary(resolved))) {
+        } else if (!(boundaryParameter(resolved) or nullableBoundary(resolved) or externStruct(self, resolved))) {
             try self.fail(
                 "luce.sema.extern",
                 parameter.type_name.span,
-                "an extern parameter is a fixed-width integer, f32, f64, bool, foreign, a named handle, or str — the pointer-shaped handles and str also as their ? forms; nothing else crosses the boundary (docs/FFI.md)",
+                "an extern parameter is a fixed-width integer, f32, f64, bool, foreign, a named handle, str, or an extern struct — the pointer-shaped handles and str also as their ? forms; nothing else crosses the boundary (docs/FFI.md)",
                 .{},
             );
             return;
@@ -748,6 +808,20 @@ fn collectExtern(
     if (declaration.returns) |written| {
         const resolved = (try resolve.resolveType(self, module, written)) orelse return;
         if (try refuseIntegerHandleOptional(self, resolved, written.span)) return;
+        // By-value aggregate return needs per-target ABI
+        // classification the boundary deliberately does not do
+        // (docs/FFI.md): C fills a struct through an out parameter,
+        // and the binding generator's shims are the by-value road.
+        if (externStruct(self, resolved)) {
+            try self.fail(
+                "luce.sema.extern",
+                written.span,
+                "{s} answers an extern struct by value; by-value aggregates wait for the binding generator's shims — take it back through `out result: {s}` instead (docs/FFI.md)",
+                .{ declaration.name, try self.typeName(resolved) },
+            );
+            return;
+        }
+        if (try refuseOrdinaryStruct(self, resolved, written.span)) return;
         if (!(boundaryParameter(resolved) or nullableBoundary(resolved))) {
             try self.fail(
                 "luce.sema.extern",
@@ -833,6 +907,29 @@ fn boundaryOut(of: Type) bool {
             (payload == .extern_type and payload.extern_type.representation == .foreign);
     }
     return boundaryScalar(of);
+}
+
+/// An `extern struct` at the boundary (docs/FFI.md): an ordinary
+/// value struct whose layout row carries the C-layout fact, so the
+/// call site can materialize the C bytes and cross by pointer.
+fn externStruct(self: *const Analyzer, of: Type) bool {
+    return of == .strukt and self.structs.items[of.strukt].c_layout;
+}
+
+/// An *ordinary* struct in a boundary slot has no C byte form at all,
+/// and the fix is one keyword — say so rather than fall into the
+/// general vocabulary sentence.
+fn refuseOrdinaryStruct(self: *Analyzer, of: Type, span: source_mod.Span) Error!bool {
+    if (of != .strukt or self.structs.items[of.strukt].c_layout) return false;
+    // A synthesized return shape cannot be written in a declaration,
+    // so this is always a named struct of the program's own.
+    try self.fail(
+        "luce.sema.extern",
+        span,
+        "{s} is an ordinary struct with no C layout; only an extern struct crosses the boundary (docs/FFI.md)",
+        .{try self.typeName(of)},
+    );
+    return true;
 }
 
 /// `Device?` at the boundary, where `Device` is integer-shaped: an

@@ -651,6 +651,324 @@ test "str? crosses both ways: none is C's NULL and NULL is none" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// 0.21 phase 4a: extern struct and extern var
+// ---------------------------------------------------------------------------
+
+test "an extern struct crosses by pointer with C's layout" {
+    // The probe folds each field with its position's weight, so a
+    // wrong offset or a swapped field changes the answer; the zero
+    // value proves an ordinary Luce zero struct packs as C zeroes.
+    try agree.prints(
+        \\extern struct Rect:
+        \\    x: i32
+        \\    y: i32
+        \\    w: i32
+        \\    h: i32
+        \\
+        \\extern func luce_ffi_probe_rect_sum(rect: Rect) -> i64
+        \\
+        \\func main():
+        \\    let r = Rect(x = 1, y = 2, w = 3, h = 4)
+        \\    print(str(luce_ffi_probe_rect_sum(r)))
+        \\    var zero: Rect
+        \\    print(str(luce_ffi_probe_rect_sum(zero)))
+        \\
+    ,
+        \\30
+        \\0
+        \\
+    );
+}
+
+test "an out extern struct reads back per field" {
+    // The SDL_GetRectUnion shape (docs/FFI.md): two structs cross in
+    // by pointer, C fills the out slot's C bytes, and each field is
+    // read from its offset into an ordinary struct value the existing
+    // destructuring receives.
+    try agree.prints(
+        \\extern struct Rect:
+        \\    x: i32
+        \\    y: i32
+        \\    w: i32
+        \\    h: i32
+        \\
+        \\extern func luce_ffi_probe_rect_union(a: Rect, b: Rect, out result: Rect) -> bool
+        \\
+        \\func main():
+        \\    let a = Rect(x = 0, y = 0, w = 2, h = 2)
+        \\    let b = Rect(x = 1, y = 1, w = 3, h = 3)
+        \\    let ok, joined = luce_ffi_probe_rect_union(a, b)
+        \\    print(str(ok))
+        \\    print(str(joined.x))
+        \\    print(str(joined.y))
+        \\    print(str(joined.w))
+        \\    print(str(joined.h))
+        \\
+    ,
+        \\true
+        \\0
+        \\0
+        \\4
+        \\4
+        \\
+    );
+}
+
+test "nested extern structs keep their inner offsets, both directions" {
+    // The layout-verification Outer shape: narrow fields beside a
+    // nested struct force real padding, and every leaf carries its
+    // own weight.  1+4+9+16+25+36 in; the fill watches the same
+    // offsets in the out direction.
+    try agree.prints(
+        \\extern struct Inner:
+        \\    a: i8
+        \\    b: i32
+        \\
+        \\extern struct Outer:
+        \\    a: i8
+        \\    inner: Inner
+        \\    b: i8
+        \\    tail: Inner
+        \\
+        \\extern func luce_ffi_probe_outer_sum(outer: Outer) -> i64
+        \\extern func luce_ffi_probe_outer_fill(seed: i32, out outer: Outer)
+        \\
+        \\func main():
+        \\    let o = Outer(a = 1, inner = Inner(a = 2, b = 3), b = 4, tail = Inner(a = 5, b = 6))
+        \\    print(str(luce_ffi_probe_outer_sum(o)))
+        \\    let filled = luce_ffi_probe_outer_fill(10)
+        \\    print(str(filled.inner.b))
+        \\    print(str(filled.tail.b))
+        \\    print(str(luce_ffi_probe_outer_sum(filled)))
+        \\
+    ,
+        \\91
+        \\10
+        \\11
+        \\133
+        \\
+    );
+}
+
+test "every C-layout field family packs at its own width" {
+    // `_Bool`, `double`, narrow signed, `float`, `short`, a
+    // pointer-shaped handle, `unsigned char`, `long long` — one
+    // struct, each field weighted: 1 + 1 - 9 + 1 - 100 + 6 + 1400 -
+    // 56 = 1244 only when every cell landed at its C offset with its
+    // exact width.
+    try agree.prints(
+        \\extern type Blob
+        \\
+        \\extern struct Mixed:
+        \\    a: bool
+        \\    b: f64
+        \\    c: i8
+        \\    d: f32
+        \\    e: i16
+        \\    f: Blob
+        \\    g: u8
+        \\    h: i64
+        \\
+        \\extern func luce_ffi_probe_mixed_sum(mixed: Mixed) -> f64
+        \\extern func luce_ffi_probe_token() -> Blob
+        \\
+        \\func main():
+        \\    let m = Mixed(a = true, b = 0.5, c = -3, d = 0.25, e = -20, f = luce_ffi_probe_token(), g = 200, h = -7)
+        \\    print(str(luce_ffi_probe_mixed_sum(m)))
+        \\
+    ,
+        \\1244
+        \\
+    );
+}
+
+test "a handle field read out of an out struct carries no trap" {
+    // A field read is not a boundary slot (docs/FFI.md): C's null in
+    // a pointer-shaped handle field arrives as an ordinary zero
+    // value, where the same zero in a bare handle *slot* would trap.
+    try agree.prints(
+        \\extern type Chunk
+        \\
+        \\extern struct Pair:
+        \\    first: Chunk
+        \\    second: Chunk
+        \\
+        \\extern func luce_ffi_probe_pair_fill(token: u64, out pair: Pair)
+        \\
+        \\func main():
+        \\    let p = luce_ffi_probe_pair_fill(4660)
+        \\    var zero: Chunk
+        \\    print(str(p.first == zero))
+        \\    print(str(p.second == zero))
+        \\
+    ,
+        \\false
+        \\true
+        \\
+    );
+}
+
+test "an extern var loads and stores the real C symbol" {
+    // The write is proved to land on the symbol by reading it back
+    // through C, and C's own store is seen by a direct load; the
+    // compound form reads the word once and combines.  Every value is
+    // written before it is read, so the spec owes nothing to the
+    // global's state between runs.
+    try agree.prints(
+        \\extern var luce_ffi_probe_counter: i64
+        \\
+        \\extern func luce_ffi_probe_counter_read() -> i64
+        \\extern func luce_ffi_probe_counter_write(value: i64)
+        \\
+        \\func main():
+        \\    luce_ffi_probe_counter = 41
+        \\    print(str(luce_ffi_probe_counter))
+        \\    print(str(luce_ffi_probe_counter_read()))
+        \\    luce_ffi_probe_counter_write(7)
+        \\    print(str(luce_ffi_probe_counter))
+        \\    luce_ffi_probe_counter += 5
+        \\    print(str(luce_ffi_probe_counter))
+        \\
+    ,
+        \\41
+        \\41
+        \\7
+        \\12
+        \\
+    );
+}
+
+test "a handle-typed extern var has bare semantics: zero is a value" {
+    // The Globals section (docs/FFI.md): no traps on globals — a
+    // zero store and a zero load both pass where a boundary slot
+    // would trap null_foreign.
+    try agree.prints(
+        \\extern type Window
+        \\
+        \\extern var luce_ffi_probe_token_slot: Window
+        \\
+        \\func main():
+        \\    var zero: Window
+        \\    luce_ffi_probe_token_slot = zero
+        \\    print(str(luce_ffi_probe_token_slot == zero))
+        \\
+    ,
+        \\true
+        \\
+    );
+}
+
+test "the extern struct declaration's refusals" {
+    // By-value aggregate return waits for the binding generator's
+    // shims (docs/FFI.md).
+    try expectRejected(
+        \\extern struct Rect:
+        \\    x: i32
+        \\    y: i32
+        \\
+        \\extern func bad() -> Rect
+        \\
+        \\func main():
+        \\    let r = bad()
+        \\    print(str(r.x))
+        \\
+    , "luce.sema.extern");
+    // str has no C byte form; a field cannot hold one.
+    try expectRejected(
+        \\extern struct Bad:
+        \\    words: str
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // An ordinary struct has no C layout, so it cannot nest inside an
+    // extern one.
+    try expectRejected(
+        \\struct Plain:
+        \\    n: i64
+        \\
+        \\extern struct Bad:
+        \\    inner: Plain
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // Fixed-array fields wait for the binding generator: stage-0
+    // arrays carry runtime shape and have no C-layout form.
+    try expectRejected(
+        \\extern struct Bad:
+        \\    data: array[i32, _]
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // An ordinary struct does not cross a parameter slot either; the
+    // refusal names the one-keyword fix.
+    try expectRejected(
+        \\struct Plain:
+        \\    n: i64
+        \\
+        \\extern func bad(p: Plain) -> i64
+        \\
+        \\func main():
+        \\    print(str(bad(Plain(n = 1))))
+        \\
+    , "luce.sema.extern");
+    // An extern struct's optional has no C encoding.
+    try expectRejected(
+        \\extern struct Rect:
+        \\    x: i32
+        \\
+        \\extern func bad(r: Rect?) -> i64
+        \\
+        \\func main():
+        \\    print(str(bad(none)))
+        \\
+    , "luce.sema.extern");
+    // C has no empty structs.
+    try expectRejected(
+        \\extern struct Bad:
+        \\    func nothing() -> i64:
+        \\        return 0
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // C has no reference classes; the aggregate keyword is struct.
+    try expectRejected(
+        \\extern class Bad:
+        \\    n: i64
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.parse.extern");
+}
+
+test "the extern var declaration's refusals" {
+    // Text is not one C word; a global of it has no load/store shape.
+    try expectRejected(
+        \\extern var bad: str
+        \\
+        \\func main():
+        \\    print(bad)
+        \\
+    , "luce.sema.extern");
+    // The C side owns the value: no initializer.
+    try expectRejected(
+        \\extern var bad: i64 = 3
+        \\
+        \\func main():
+        \\    print(str(bad))
+        \\
+    , "luce.parse.extern");
+}
+
 test "out is a modifier only when another name follows" {
     // `out: i32` stays a parameter *named* out, exactly as `blocking`
     // stays an ordinary identifier outside its position.

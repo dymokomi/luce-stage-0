@@ -111,6 +111,104 @@ test "class deinitializer metadata is exact and never source-callable" {
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "the verifier holds C globals and C-layout structs to their vocabularies" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    // Two layouts: a C-layout struct and an ordinary one, so both
+    // sides of the boundary's struct rules can be probed.
+    const rect_fields = try arena.dupe(types.StructField, &.{.{ .name = "x", .field_type = .i32 }});
+    const plain_fields = try arena.dupe(types.StructField, &.{.{ .name = "n", .field_type = .i64 }});
+    const layouts = try arena.alloc(types.StructLayout, 2);
+    layouts[0] = .{ .name = "Rect", .fields = rect_fields, .c_layout = true };
+    layouts[1] = .{ .name = "Plain", .fields = plain_fields };
+    program.structs = layouts;
+
+    program.foreign_variables = try arena.dupe(defs.ForeignVariable, &.{.{
+        .name = "probe",
+        .value_type = .i64,
+    }});
+    program.foreign_functions = try arena.dupe(defs.ForeignFunction, &.{.{
+        .name = "probe_fn",
+        .parameters = &.{},
+        .result = .none,
+    }});
+
+    const instructions = try arena.dupe(Instruction, &.{
+        .{ .foreign_get = 0 },
+        .{ .foreign_set = .{ .variable = 0, .value = 0 } },
+        .{ .call_foreign = .{ .foreign = 0, .arguments = &.{} } },
+        .{ .ret = null },
+    });
+    const result_types = try arena.dupe(types.Type, &.{ .i64, .none, .none, .none });
+    const blocks = try arena.alloc(Block, 1);
+    blocks[0] = .{ .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }) };
+    const functions = try arena.alloc(Function, 1);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = instructions,
+        .result_types = result_types,
+        .blocks = blocks,
+    };
+    program.functions = functions;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // A global row outside the Globals vocabulary, or with no symbol.
+    program.foreign_variables[0].value_type = .str;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.foreign_variables[0].value_type = .{ .strukt = 0 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.foreign_variables[0].value_type = .i64;
+    program.foreign_variables[0].name = "";
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.foreign_variables[0].name = "probe";
+
+    // An out-of-range row index, from either instruction.
+    functions[0].instructions[0] = .{ .foreign_get = 3 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[0] = .{ .foreign_get = 0 };
+    functions[0].instructions[1] = .{ .foreign_set = .{ .variable = 3, .value = 0 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[1] = .{ .foreign_set = .{ .variable = 0, .value = 0 } };
+
+    // A load at the wrong width, and a store of the wrong type.
+    functions[0].result_types[0] = .i32;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[0] = .i64;
+    program.foreign_variables[0].value_type = .i32;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    program.foreign_variables[0].value_type = .i64;
+
+    // By-value aggregate return, and an ordinary struct in a slot.
+    program.foreign_functions[0].result = .{ .strukt = 0 };
+    functions[0].result_types[2] = .{ .strukt = 0 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.foreign_functions[0].result = .none;
+    functions[0].result_types[2] = .none;
+    program.foreign_functions[0].parameters = try arena.dupe(defs.ForeignFunction.Parameter, &.{.{
+        .parameter_type = .{ .strukt = 1 },
+    }});
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.foreign_functions[0].parameters = &.{};
+
+    // A C-layout row must stay a value struct over the closed field
+    // vocabulary: no weak fields, no reference/interface kinds, no
+    // field without a C byte form.
+    layouts[0].fields[0].field_type = .str;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    layouts[0].fields[0].field_type = .{ .strukt = 1 };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    layouts[0].fields[0].field_type = .i32;
+    layouts[0].reference = true;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    layouts[0].reference = false;
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "a struct graph is checked for cycles in one pass, not one per path" {
     // Forty layouts, each holding the next one twice: no cycle, but
     // 2^39 distinct paths from the first to the last.  A per-path walk

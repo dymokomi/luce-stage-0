@@ -333,6 +333,8 @@ fn collect(
                 .variant_field,
                 .call,
                 .call_foreign,
+                .foreign_get,
+                .foreign_set,
                 .interface_call,
                 .spawn,
                 .call_indirect,

@@ -280,6 +280,9 @@ const Module = struct {
     /// resolves the symbol, which is what link-time-only means
     /// (docs/FFI.md).
     foreigns: std.AutoHashMapUnmanaged(u32, Builder.Function.Index) = .empty,
+    /// Declared C globals (docs/FFI.md), one external LLVM global per
+    /// `foreign_variables` row a body touches, cached like `foreigns`.
+    foreign_globals: std.AutoHashMapUnmanaged(u32, Builder.Variable.Index) = .empty,
     /// The pointer table a call through a function value dispatches
     /// through, and the name table `str(f)` reads — both built on
     /// first use and null in a program that makes no function value
@@ -376,6 +379,7 @@ const Module = struct {
 
     fn deinit(self: *Module) void {
         self.foreigns.deinit(self.gpa);
+        self.foreign_globals.deinit(self.gpa);
         self.gpa.free(self.spawned);
         self.gpa.free(self.entries);
         self.gpa.free(self.functions);
@@ -741,6 +745,23 @@ const Module = struct {
         declared.setLinkage(.external, self.builder);
         declared.setAttributes(try attributes.finish(self.builder), self.builder);
         try self.foreigns.put(self.gpa, index, declared);
+        return declared;
+    }
+
+    /// The declared LLVM form of one C global (docs/FFI.md): an
+    /// external global of the exact C width — `foreignSlotType`'s, the
+    /// same width a store writes and a load reads — declared once per
+    /// row and cached, exactly as `foreignFunction` caches externs.
+    fn foreignVariable(self: *Module, index: u32) Error!Builder.Variable.Index {
+        if (self.foreign_globals.get(index)) |found| return found;
+        const row = &self.program.foreign_variables[index];
+        const declared = try self.builder.addVariable(
+            try self.builder.strtabString(row.name),
+            foreignSlotType(row.value_type),
+            .default,
+        );
+        declared.ptrConst(self.builder).global.setLinkage(.external, self.builder);
+        try self.foreign_globals.put(self.gpa, index, declared);
         return declared;
     }
 
@@ -3387,6 +3408,8 @@ const Body = struct {
                 .weak_local_set,
                 .spawn,
                 .call_foreign,
+                .foreign_get,
+                .foreign_set,
                 .call_indirect,
                 .binary,
                 .unary,
@@ -6145,6 +6168,46 @@ const Body = struct {
             },
             .trap => |code| try self.emitCodeTrap(code),
             .unwind => try self.leaveErrored(),
+            // The C globals (docs/FFI.md): a direct load or store of
+            // the external symbol at its declared width — the Globals
+            // section's bare semantics, so neither direction traps or
+            // decodes, a pointer-shaped handle's zero included.
+            .foreign_get => |variable| {
+                const row = &self.module.program.foreign_variables[variable];
+                const global = try self.module.foreignVariable(variable);
+                const slot_type = Module.foreignSlotType(row.value_type);
+                var raw = try self.wip.load(
+                    .normal,
+                    slot_type,
+                    global.toValue(self.module.builder),
+                    Module.valueAlignment(row.value_type),
+                    "global.value",
+                );
+                // C's `_Bool` fills one byte; the Luce value is the bit.
+                if (row.value_type.storage() == .boolean) {
+                    raw = try self.wip.icmp(
+                        .ne,
+                        raw,
+                        try self.module.builder.intValue(.i8, 0),
+                        "global.bool",
+                    );
+                }
+                self.produced[register].value = raw;
+            },
+            .foreign_set => |set| {
+                const row = &self.module.program.foreign_variables[set.variable];
+                const global = try self.module.foreignVariable(set.variable);
+                var held = self.produced[set.value].value;
+                if (row.value_type.storage() == .boolean) {
+                    held = try self.wip.cast(.zext, held, .i8, "global.byte");
+                }
+                _ = try self.wip.store(
+                    .normal,
+                    held,
+                    global.toValue(self.module.builder),
+                    Module.valueAlignment(row.value_type),
+                );
+            },
         }
     }
 
@@ -7165,6 +7228,27 @@ const Body = struct {
         var written: usize = 0;
         for (row.parameters) |parameter| {
             if (parameter.out) {
+                // An extern struct's out slot is its C bytes, zeroed
+                // so a callee that skips a field is deterministic,
+                // and read back per field below (docs/FFI.md).
+                if (parameter.parameter_type == .strukt) {
+                    const size = types.cSizeOf(
+                        self.module.program.structs,
+                        parameter.parameter_type,
+                    );
+                    const slot = try self.scratchForeignBytes(size, "out.c.bytes");
+                    _ = try self.wip.callMemSet(
+                        slot,
+                        foreign_bytes_alignment,
+                        try builder.intValue(.i8, 0),
+                        try builder.intValue(.i64, size),
+                        .normal,
+                        false,
+                    );
+                    try arguments.append(gpa, slot);
+                    try slots.append(gpa, slot);
+                    continue;
+                }
                 const slot_type = Module.foreignSlotType(parameter.parameter_type);
                 const slot = try self.scratch(
                     slot_type,
@@ -7225,6 +7309,26 @@ const Body = struct {
                     try arguments.append(gpa, token);
                     try borrowed.append(gpa, token);
                 },
+                // An extern struct crosses by pointer (docs/FFI.md):
+                // the value's field run is materialized into C-layout
+                // bytes in a stack slot that exists only for this
+                // call, and C sees the slot's address as `const T *`
+                // — borrowed for the call; a callee that keeps the
+                // pointer is undefined behavior.
+                .strukt => |layout| {
+                    const size = types.cSizeOf(self.module.program.structs, .{ .strukt = layout });
+                    const slot = try self.scratchForeignBytes(size, "arg.c.bytes");
+                    _ = try self.wip.callMemSet(
+                        slot,
+                        foreign_bytes_alignment,
+                        try builder.intValue(.i8, 0),
+                        try builder.intValue(.i64, size),
+                        .normal,
+                        false,
+                    );
+                    try self.packForeignStruct(layout, held, slot);
+                    try arguments.append(gpa, slot);
+                },
                 else => try arguments.append(gpa, held),
             }
         }
@@ -7260,6 +7364,16 @@ const Body = struct {
             if (!parameter.out) continue;
             const slot = slots.items[out_index];
             out_index += 1;
+            // A struct out slot reads back per field into an ordinary
+            // struct value — field reads, not boundary slots, so no
+            // decode and no trap (docs/FFI.md).
+            if (parameter.parameter_type == .strukt) {
+                try decoded.append(gpa, try self.unpackedForeignStruct(
+                    parameter.parameter_type.strukt,
+                    slot,
+                ));
+                continue;
+            }
             const slot_type = Module.foreignSlotType(parameter.parameter_type);
             var raw = try self.wip.load(
                 .normal,
@@ -7384,6 +7498,143 @@ const Body = struct {
             },
             else => return .{ .of = written, .value = raw },
         }
+    }
+
+    /// A C byte slot is allocated at 8 — at least the C alignment of
+    /// every admissible extern-struct field type, so any layout may
+    /// start at its base (`types.cAlignOf`).
+    const foreign_bytes_alignment = Builder.Alignment.fromByteUnits(8);
+
+    /// A fresh entry-block slot for one extern struct's C bytes.
+    fn scratchForeignBytes(self: *Body, size: u32, name: []const u8) Error!Builder.Value {
+        const array = try self.module.builder.arrayType(size, .i8);
+        return self.scratch(array, foreign_bytes_alignment, name);
+    }
+
+    /// Materialize one extern-struct value — `run_ptr` is its run of
+    /// boxed fields — into C-layout bytes at `slot`: each field
+    /// unboxed the way `struct_get` unboxes it and stored at the C
+    /// offset the shared layout walk computes (`types.cOffsetOf`),
+    /// nested extern structs inline (docs/FFI.md).
+    fn packForeignStruct(
+        self: *Body,
+        layout: u32,
+        run_ptr: Builder.Value,
+        slot: Builder.Value,
+    ) Error!void {
+        const builder = self.module.builder;
+        const structs = self.module.program.structs;
+        for (structs[layout].fields, 0..) |field, index| {
+            const address = try self.wip.gep(
+                .inbounds,
+                self.module.value_type,
+                run_ptr,
+                &.{try builder.intValue(.i64, index)},
+                "c.field.at",
+            );
+            const held = try self.unboxed(field.field_type, address, "c.field");
+            const offset = types.cOffsetOf(structs, layout, @intCast(index));
+            const cell = try self.wip.gep(
+                .inbounds,
+                .i8,
+                slot,
+                &.{try builder.intValue(.i64, offset)},
+                "c.cell",
+            );
+            switch (field.field_type.storage()) {
+                .strukt => |nested| try self.packForeignStruct(nested, held, cell),
+                // C's `_Bool` fills one byte; the Luce value is an i1.
+                .boolean => {
+                    const wide = try self.wip.cast(.zext, held, .i8, "c.bool");
+                    _ = try self.wip.store(
+                        .normal,
+                        wide,
+                        cell,
+                        Builder.Alignment.fromByteUnits(1),
+                    );
+                },
+                else => _ = try self.wip.store(
+                    .normal,
+                    held,
+                    cell,
+                    Builder.Alignment.fromByteUnits(types.cAlignOf(structs, field.field_type)),
+                ),
+            }
+        }
+    }
+
+    /// Read one extern struct back out of its C bytes: each field
+    /// loaded from its offset into a run of boxed fields, and the run
+    /// made into an ordinary owned struct value — exactly the
+    /// `struct_make` shape, so ARC, printing and equality see nothing
+    /// new (docs/FFI.md).
+    fn unpackedForeignStruct(self: *Body, layout: u32, slot: Builder.Value) Error!ForeignResult {
+        const builder = self.module.builder;
+        const structs = self.module.program.structs;
+        const fields = structs[layout].fields;
+        const run = try self.scratchRun(
+            self.module.value_type,
+            fields.len,
+            value_alignment,
+            "c.fields",
+        );
+        for (fields, 0..) |field, index| {
+            const offset = types.cOffsetOf(structs, layout, @intCast(index));
+            const cell = try self.wip.gep(
+                .inbounds,
+                .i8,
+                slot,
+                &.{try builder.intValue(.i64, offset)},
+                "c.cell",
+            );
+            if (field.field_type.storage() == .strukt) {
+                // A nested struct is made whole first, then its box
+                // moves into the outer run — the same whole-box copy
+                // the multi-result path performs.
+                const nested = try self.unpackedForeignStruct(field.field_type.storage().strukt, cell);
+                const address = try self.wip.gep(
+                    .inbounds,
+                    self.module.value_type,
+                    run,
+                    &.{try builder.intValue(.i64, index)},
+                    "box.element",
+                );
+                _ = try self.wip.callMemCpy(
+                    address,
+                    value_alignment,
+                    nested.box,
+                    value_alignment,
+                    try builder.intValue(.i64, @sizeOf(runtime.Value)),
+                    .normal,
+                    true,
+                );
+                continue;
+            }
+            var raw = try self.wip.load(
+                .normal,
+                Module.foreignSlotType(field.field_type),
+                cell,
+                Builder.Alignment.fromByteUnits(types.cAlignOf(structs, field.field_type)),
+                "c.value",
+            );
+            // C's `_Bool` fills one byte; the Luce value is the bit.
+            if (field.field_type.storage() == .boolean) {
+                raw = try self.wip.icmp(.ne, raw, try builder.intValue(.i8, 0), "c.bool");
+            }
+            try self.boxAt(run, index, field.field_type, raw);
+        }
+        const out = try self.scratch(self.module.value_type, value_alignment, "c.struct");
+        try self.callChecked(.luce_rt_struct_make, &.{
+            self.runtime,
+            run,
+            try builder.intValue(.i64, fields.len),
+            out,
+        });
+        return .{
+            .of = .{ .strukt = layout },
+            .value = try self.unboxed(.{ .strukt = layout }, out, "c.made"),
+            .box = out,
+        };
     }
 
     fn emitInoutCall(

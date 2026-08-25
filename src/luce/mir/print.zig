@@ -17,7 +17,14 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 
     for (program.structs) |layout| {
         try appendPrint(&text, allocator, "{s} {s}:\n", .{
-            if (layout.interface) "interface" else if (layout.reference) "class" else "struct",
+            if (layout.interface)
+                "interface"
+            else if (layout.reference)
+                "class"
+            else if (layout.c_layout)
+                "extern struct"
+            else
+                "struct",
             layout.name,
         });
         for (layout.fields) |field| {
@@ -65,6 +72,17 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
                 @tagName(declared.representation),
             }),
         }
+    }
+
+    // A C global prints its symbol and the type its direct loads and
+    // stores move (docs/FFI.md).
+    for (program.foreign_variables) |variable| {
+        const variable_type_name = try typeName(allocator, program, variable.value_type);
+        defer allocator.free(variable_type_name);
+        try appendPrint(&text, allocator, "extern var {s}: {s}\n", .{
+            variable.name,
+            variable_type_name,
+        });
     }
 
     // A union prints its members with their payload fields: the member
@@ -311,6 +329,13 @@ fn printInstruction(
             try appendPrint(text, allocator, "call_foreign {s}", .{program.foreign_functions[call.foreign].name});
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
+        .foreign_get => |variable| try appendPrint(text, allocator, "foreign_get {s}", .{
+            program.foreign_variables[variable].name,
+        }),
+        .foreign_set => |set| try appendPrint(text, allocator, "foreign_set {s}, r{d}", .{
+            program.foreign_variables[set.variable].name,
+            set.value,
+        }),
         .call_inout => |call| {
             try appendPrint(text, allocator, "call_inout {s}, &%{d}", .{
                 program.functions[call.function].name,

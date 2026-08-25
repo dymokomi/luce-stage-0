@@ -656,3 +656,14 @@ pub const ForeignDeclInfo = struct {
     answer: types.Type,
     blocking: bool,
 };
+
+/// One declared `extern var` (docs/FFI.md), as semantics carries it:
+/// the bare symbol, its resolved Globals-vocabulary type, and where it
+/// was declared.  Reads and writes resolve through the value
+/// namespace like a file-scope constant's, and lower to the direct
+/// `foreign_get`/`foreign_set` loads and stores.
+pub const ForeignVarInfo = struct {
+    declaration: *const ast.ExternVarDecl,
+    module: usize,
+    value_type: types.Type,
+};

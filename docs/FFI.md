@@ -184,18 +184,34 @@ extern struct Rect:
 extern func SDL_GetRectUnion(a: Rect, b: Rect, out result: Rect) -> bool
 ```
 
-- An `extern struct` is a value type with **C's layout**: declaration
-  order, the target's alignment and padding, no reordering.  Fields are
-  the boundary scalars, named handles, nested extern structs, and
-  fixed-size arrays of those.  Ordinary field access reads and writes.
+- An `extern struct` is an **ordinary value struct** whose fields
+  additionally have **C's layout**: declaration order, the target's
+  alignment and padding, no reordering.  Memberwise construction,
+  field access, copies, equality, printing and zero values are the
+  ordinary struct machinery; the C byte form exists only at a
+  boundary crossing, where the call site materializes the fields at
+  their C offsets and reads them back the same way.  Fields are the
+  boundary scalars and the handles — `foreign` or named — and nested
+  extern structs, inline.  **Fixed-size array fields are deferred to
+  the binding generator**: stage-0 arrays carry runtime shape and
+  have no C-layout form, so a declaration naming one is refused
+  saying so.
 - **Crossing is by pointer, both directions.**  A parameter of extern
-  struct type passes the struct's address (C's `const T *`); an `out`
-  parameter passes a writable address (C's `T *`).  This covers SDL and
-  Vulkan-shaped APIs completely.  **By-value aggregate passing and
-  returning is deliberately not in 0.21**: it requires per-target ABI
-  classification (the SysV eightbyte algorithm and kin), and the
-  binding generator's C shims are the planned road.  A declaration
-  that would require it is refused with a message saying exactly that.
+  struct type passes the struct's C bytes' address (C's `const T *`),
+  **borrowed for the call** — a callee that keeps the pointer is
+  undefined behavior; an `out` parameter passes a writable address
+  (C's `T *`) and each field is read back after the call.  This
+  covers SDL and Vulkan-shaped APIs completely.  **By-value aggregate
+  passing and returning is deliberately not in 0.21**: it requires
+  per-target ABI classification (the SysV eightbyte algorithm and
+  kin), and the binding generator's C shims are the planned road.  A
+  declaration that would require it is refused with a message saying
+  exactly that.
+- **A field read carries no boundary decode.**  A pointer-shaped
+  handle field read back out of an `out` struct is a field read, not
+  a boundary slot: C's null arrives as an ordinary zero value and
+  takes no automatic `null_foreign` trap — the trap belongs to bare
+  handle *slots*, where the phase-1 rules apply whole.
 - Unions and bitfields are not declarable; the generator's shims and
   accessors are the road (SDL_Event decodes through generated
   accessors, not a union type).
@@ -225,8 +241,15 @@ extern func SDL_AddTimer(interval: u32, callback: cfunc(u32, foreign) -> u32,
 ## Globals — `extern var`
 
 `extern var name: T` binds a C global of boundary-scalar or handle
-type.  Reads and writes are direct loads and stores of the symbol.
-Rare, but real (`stdout`-shaped APIs); anything fancier is a shim.
+type — `foreign` or named; no `str`, no optionals, no aggregates,
+because a C global loads and stores one word.  It shares the value
+namespace like a file-scope constant, takes `pub` like any
+declaration, and writing follows `var` mutability.  Reads and writes
+are direct loads and stores of the symbol with **bare semantics**: no
+traps and no `?` decode in either direction — a pointer-shaped
+handle's zero is a value here.  No initializer: the C side owns the
+value.  Rare, but real (`stdout`-shaped APIs); anything fancier is a
+shim.
 
 ## Semantics at the boundary (unchanged from 0.20)
 

@@ -395,6 +395,117 @@ export fn luce_ffi_probe_arity14(
     return total;
 }
 
+// -- the 0.21 phase-4a probes ------------------------------------------------
+
+/// The extern-struct crossing (docs/FFI.md): a `const Rect *`
+/// parameter whose fields are folded with position weights, so a
+/// wrong offset or a swapped field changes the answer.
+const ProbeRect = extern struct { x: i32, y: i32, w: i32, h: i32 };
+
+export fn luce_ffi_probe_rect_sum(rect: ?*const ProbeRect) callconv(.c) i64 {
+    const held = rect orelse return -1;
+    return 1 * @as(i64, held.x) + 2 * @as(i64, held.y) +
+        3 * @as(i64, held.w) + 4 * @as(i64, held.h);
+}
+
+/// The SDL_GetRectUnion shape: two structs in by pointer, one filled
+/// through an out pointer.
+export fn luce_ffi_probe_rect_union(
+    a: ?*const ProbeRect,
+    b: ?*const ProbeRect,
+    slot: ?*ProbeRect,
+) callconv(.c) bool {
+    const first = a orelse return false;
+    const second = b orelse return false;
+    const out = slot orelse return false;
+    const x = @min(first.x, second.x);
+    const y = @min(first.y, second.y);
+    const right = @max(first.x + first.w, second.x + second.w);
+    const bottom = @max(first.y + first.h, second.y + second.h);
+    out.* = .{ .x = x, .y = y, .w = right - x, .h = bottom - y };
+    return true;
+}
+
+/// Nested extern structs (the layout-verification Outer shape): the
+/// mixed widths force real padding, and every field carries its own
+/// weight so a wrong inner offset changes the answer.
+const ProbeInner = extern struct { a: i8, b: i32 };
+const ProbeOuter = extern struct { a: i8, inner: ProbeInner, b: i8, tail: ProbeInner };
+
+export fn luce_ffi_probe_outer_sum(outer: ?*const ProbeOuter) callconv(.c) i64 {
+    const held = outer orelse return -1;
+    return 1 * @as(i64, held.a) + 2 * @as(i64, held.inner.a) + 3 * @as(i64, held.inner.b) +
+        4 * @as(i64, held.b) + 5 * @as(i64, held.tail.a) + 6 * @as(i64, held.tail.b);
+}
+
+/// Fills the nested shape through an out pointer, so the inner
+/// offsets are watched in the read-back direction too.
+export fn luce_ffi_probe_outer_fill(seed: i32, slot: ?*ProbeOuter) callconv(.c) void {
+    const out = slot orelse return;
+    out.* = .{
+        .a = 1,
+        .inner = .{ .a = 2, .b = seed },
+        .b = 3,
+        .tail = .{ .a = 4, .b = seed + 1 },
+    };
+}
+
+/// Every remaining C-layout field family in one shape — `_Bool`,
+/// `double`, narrow signed, `float`, `short`, a pointer-shaped
+/// handle, and the widths around them — folded position by position.
+const ProbeMixed = extern struct {
+    a: bool,
+    b: f64,
+    c: i8,
+    d: f32,
+    e: i16,
+    f: ?*anyopaque,
+    g: u8,
+    h: i64,
+};
+
+export fn luce_ffi_probe_mixed_sum(mixed: ?*const ProbeMixed) callconv(.c) f64 {
+    const held = mixed orelse return -1;
+    var total: f64 = 0;
+    if (held.a) total += 1;
+    total += 2 * held.b;
+    total += 3 * @as(f64, @floatFromInt(held.c));
+    total += 4 * @as(f64, held.d);
+    total += 5 * @as(f64, @floatFromInt(held.e));
+    if (held.f != null) total += 6;
+    total += 7 * @as(f64, @floatFromInt(held.g));
+    total += 8 * @as(f64, @floatFromInt(held.h));
+    return total;
+}
+
+/// Writes one present token and one null into an out struct's
+/// pointer-shaped handle fields: a field read carries no automatic
+/// trap, and the spec watches the zero arrive as a value
+/// (docs/FFI.md).
+const ProbePair = extern struct { first: u64, second: u64 };
+
+export fn luce_ffi_probe_pair_fill(token: u64, slot: ?*ProbePair) callconv(.c) void {
+    const out = slot orelse return;
+    out.* = .{ .first = token, .second = 0 };
+}
+
+/// The `extern var` probes (docs/FFI.md): a mutable C global beside
+/// the C-side reader and writer that prove a Luce store landed on the
+/// real symbol and a C store is seen by a direct Luce load.
+export var luce_ffi_probe_counter: i64 = 11;
+
+export fn luce_ffi_probe_counter_read() callconv(.c) i64 {
+    return luce_ffi_probe_counter;
+}
+
+export fn luce_ffi_probe_counter_write(value: i64) callconv(.c) void {
+    luce_ffi_probe_counter = value;
+}
+
+/// A pointer-shaped global for the bare-semantics case: reading zero
+/// out of a handle-typed `extern var` is a value, never a trap.
+export var luce_ffi_probe_token_slot: u64 = 0;
+
 /// The `str?` echo.  The answer is copied into private storage first:
 /// the boundary frees an argument's NUL temporary the moment the call
 /// returns, so echoing the argument pointer itself would hand the

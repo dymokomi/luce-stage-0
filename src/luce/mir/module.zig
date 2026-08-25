@@ -271,6 +271,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         try writer.int(u8, @intFromBool(layout.interface));
         try writer.int(u8, @intFromBool(layout.closure_storage));
         try writer.int(u8, @intFromBool(layout.reference));
+        try writer.int(u8, @intFromBool(layout.c_layout));
         try writer.int(u8, @intFromBool(layout.deinitializer != null));
         if (layout.deinitializer) |function| try writer.int(u32, function);
         try writer.int(u32, @intCast(layout.fields.len));
@@ -353,6 +354,12 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         }
         try writer.valueType(foreign.result);
         try writer.int(u8, @intFromBool(foreign.blocking));
+    }
+
+    try writer.int(u32, @intCast(program.foreign_variables.len));
+    for (program.foreign_variables) |variable| {
+        try writer.blob(variable.name);
+        try writer.valueType(variable.value_type);
     }
 
     try writer.int(u32, @intCast(program.functions.len));
@@ -639,6 +646,11 @@ const Writer = struct {
             },
             .trap => |code| try self.int(u8, @intFromEnum(code)),
             .unwind => {},
+            .foreign_get => |variable| try self.int(u32, variable),
+            .foreign_set => |set| {
+                try self.int(u32, set.variable);
+                try self.int(u32, set.value);
+            },
         }
     }
 };
@@ -678,6 +690,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         layout.interface = (try reader.int(u8)) != 0;
         layout.closure_storage = (try reader.int(u8)) != 0;
         layout.reference = (try reader.int(u8)) != 0;
+        layout.c_layout = (try reader.int(u8)) != 0;
         layout.deinitializer = if ((try reader.int(u8)) != 0)
             try reader.int(u32)
         else
@@ -794,6 +807,14 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         foreign.blocking = (try reader.int(u8)) != 0;
     }
     program.foreign_functions = foreigns;
+
+    const foreign_variable_count = try reader.count();
+    const foreign_variables = try arena.alloc(mir.ForeignVariable, foreign_variable_count);
+    for (foreign_variables) |*variable| {
+        variable.name = try arena.dupe(u8, try reader.blob());
+        variable.value_type = try reader.valueType();
+    }
+    program.foreign_variables = foreign_variables;
 
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
@@ -1171,6 +1192,11 @@ const Reader = struct {
             },
             .trap => .{ .trap = try self.enumTag(mir.TrapCode) },
             .unwind => .unwind,
+            .foreign_get => .{ .foreign_get = try self.int(u32) },
+            .foreign_set => .{ .foreign_set = .{
+                .variable = try self.int(u32),
+                .value = try self.int(u32),
+            } },
         };
     }
 };
@@ -2241,6 +2267,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // exactly as the signature table's are.
     inline for (comptime std.meta.fieldNames(mir.ForeignFunction)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.ForeignFunction.Parameter)) |name| hasher.update(name);
+    // An extern var row is one symbol and one type on the wire, and
+    // the two `foreign_get`/`foreign_set` instructions index it — its
+    // record shape is wire surface exactly as the foreign functions'.
+    inline for (comptime std.meta.fieldNames(mir.ForeignVariable)) |name| hasher.update(name);
     // A constant row has two wire-tagged unions of its own and three
     // nested record shapes.  Fingerprint every name rather than only
     // the instruction that indexes the table, or a payload edit could
@@ -2371,9 +2401,14 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // it too: every foreign parameter slot carries an `out` byte
     // beside its type (the hash moves again), the eight-parameter cap
     // is gone, and the scalar vocabulary completes — encodings a
-    // phase-2 decoder never accepted, caught by the same bump.
+    // phase-2 decoder never accepted, caught by the same bump.  And
+    // phase 4a: `extern struct` stamps the C-layout byte on every
+    // struct row, `extern var` adds the foreign-variable table after
+    // the foreign functions, and `foreign_get`/`foreign_set` append to
+    // `Instruction` (the hash moves again) — bytes a phase-3 decoder
+    // never read, caught by the same bump.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 6292937558132657178), hasher.final());
+    try testing.expectEqual(@as(u64, 17615794941723489182), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

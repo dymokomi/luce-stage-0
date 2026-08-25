@@ -218,6 +218,10 @@ pub const Expression = union(enum) {
     index_get: IndexGet,
     /// A use of a folded file-scope constant, inlined at this site.
     constant_ref: ConstantRef,
+    /// A read of a C global (docs/FFI.md): a direct load of the
+    /// symbol, with the Globals section's bare semantics — no trap,
+    /// no decode.
+    foreign_get: ForeignGet,
     /// A folded container constant — a flat list, map or rank-1 array
     /// built at compile time — materialized as its interned
     /// program-root row (`const_container`).  Reached only through a
@@ -413,6 +417,14 @@ pub const Expression = union(enum) {
     pub const ConstantRef = struct {
         /// The analyzer's constant table index.
         constant: u32,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
+    pub const ForeignGet = struct {
+        /// The foreign-variable table index.
+        variable: u32,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -875,6 +887,12 @@ pub const Place = union(enum) {
     /// A nested chain (`p.a[i].b = v`): the root local and the steps
     /// descended through, mirroring the rebuild the store performs.
     chain: Chain,
+    /// An `extern var` (docs/FFI.md): the store is a direct write of
+    /// the C global's symbol, under the Globals section's bare
+    /// semantics.  The type travels with the place because the
+    /// foreign-variable table is stage 6's; the two always agree
+    /// because stage 4 builds both from one row.
+    foreign: Foreign,
 
     pub const Field = struct {
         base: LocalId,
@@ -891,6 +909,7 @@ pub const Place = union(enum) {
     /// every position (the value's ride on the statement).
     pub const Index = struct { base: Operand, indices: []const Operand };
     pub const Chain = struct { root: LocalId, steps: []const Step };
+    pub const Foreign = struct { variable: u32, value_type: types.Type };
     pub const Step = union(enum) {
         field: struct { layout: u32, field: u32, weak: bool = false },
         index: []const Operand,
@@ -1175,6 +1194,9 @@ pub fn provenance(expression: *const Expression) Provenance {
         .constant_ref => |payload| zeroOf(payload.result),
         // A program-root container row is a handle, not storage.
         .container_ref => .plain,
+        // A C global's load answers a scalar word — no storage, no
+        // object (docs/FFI.md).
+        .foreign_get => .plain,
         // The slot only ferries the call's value across the branch;
         // the storage question belongs to the call.
         .carried_get => |payload| provenance(payload.origin),
@@ -1339,6 +1361,7 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
         .narrowed_get,
         .constant_ref,
         .container_ref,
+        .foreign_get,
         .function_value,
         .lambda_ref,
         => false,

@@ -402,7 +402,8 @@ pub fn declares(self: *const Analyzer, qualified: []const u8) bool {
         self.enum_names.contains(qualified) or
         self.extern_type_names.contains(qualified) or
         self.variant_names.contains(qualified) or
-        self.constant_names.contains(qualified);
+        self.constant_names.contains(qualified) or
+        self.foreign_variable_names.contains(qualified);
 }
 
 /// Where a fully-qualified name is already declared, whichever of
@@ -438,6 +439,10 @@ pub fn firstDeclarationOf(self: *Analyzer, qualified: []const u8) Error!?[]const
     }
     if (self.constant_names.get(qualified)) |index| {
         const info = self.constant_infos.items[index];
+        return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
+    }
+    if (self.foreign_variable_names.get(qualified)) |index| {
+        const info = self.foreign_variables.items[index];
         return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
     }
     return null;

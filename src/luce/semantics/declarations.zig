@@ -236,6 +236,13 @@ pub const Analyzer = struct {
     /// linker resolves.
     foreigns: std.ArrayList(context.ForeignDeclInfo) = .empty,
     foreign_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The declared C globals (docs/FFI.md): symbol, resolved type,
+    /// and declaration site — copied whole into
+    /// `Program.foreign_variables` by stage 6.  Keys in
+    /// `foreign_variable_names` are the qualified value-namespace
+    /// spelling; the row's symbol is the bare declared name.
+    foreign_variables: std.ArrayList(context.ForeignVarInfo) = .empty,
+    foreign_variable_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// Which row the runtime starts, once `entry.settle` has decided:
     /// the declared `main`, or the one the compiler wrote for `luce
     /// test`.  Null until then, and on a program that has no entry at
@@ -292,6 +299,8 @@ pub const Analyzer = struct {
         self.function_names.deinit(self.temporary);
         self.foreigns.deinit(self.temporary);
         self.foreign_names.deinit(self.temporary);
+        self.foreign_variables.deinit(self.temporary);
+        self.foreign_variable_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
         self.constant_names.deinit(self.temporary);
@@ -338,6 +347,7 @@ pub const Analyzer = struct {
         try constants.foldAll(self);
         try defaults.settleFieldDefaults(self);
         try defaults.settleVariantDefaults(self);
+        try signatures.collectExternVars(self);
         try signatures.collectFunctions(self);
         // Member imports are checked once, here, with every table
         // filled — which is what lets bare-name resolution trust a
@@ -390,6 +400,16 @@ pub const Analyzer = struct {
             };
         }
 
+        const foreign_variable_rows = try self.arena.alloc(
+            mir.ForeignVariable,
+            self.foreign_variables.items.len,
+        );
+        for (self.foreign_variables.items, foreign_variable_rows) |declared, *row| {
+            row.* = .{
+                .name = try self.arena.dupe(u8, declared.declaration.name),
+                .value_type = declared.value_type,
+            };
+        }
         const foreign_rows = try self.arena.alloc(mir.ForeignFunction, self.foreigns.items.len);
         for (self.foreigns.items, foreign_rows) |declared, *row| {
             const slots = try self.arena.alloc(mir.ForeignFunction.Parameter, declared.parameters.len);
@@ -413,6 +433,7 @@ pub const Analyzer = struct {
             .variants = try self.variants.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .foreign_functions = foreign_rows,
+            .foreign_variables = foreign_variable_rows,
             .constants = try self.pool.items.toOwnedSlice(self.arena),
             .container_constants = try self.pool.containers.toOwnedSlice(self.arena),
             .entry_function = entry_index,

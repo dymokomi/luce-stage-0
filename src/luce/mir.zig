@@ -49,6 +49,7 @@ pub const ErrorCode = @import("mir/defs.zig").ErrorCode;
 pub const FileAct = @import("mir/defs.zig").FileAct;
 pub const Instruction = @import("mir/defs.zig").Instruction;
 pub const ForeignFunction = @import("mir/defs.zig").ForeignFunction;
+pub const ForeignVariable = @import("mir/defs.zig").ForeignVariable;
 pub const Local = @import("mir/defs.zig").Local;
 pub const Block = @import("mir/defs.zig").Block;
 pub const Origin = @import("mir/defs.zig").Origin;

@@ -95,6 +95,22 @@ pub fn emitConstant(self: *FunctionBuilder, index: u32, span: Span) Error!?Typed
     };
 }
 
+/// Read one C global at this use site (docs/FFI.md): the recorded
+/// `foreign_get` is a direct load of the symbol, with the Globals
+/// section's bare semantics — no trap and no decode, a
+/// pointer-shaped handle's zero included.
+pub fn emitForeignVar(self: *FunctionBuilder, index: u32, span: Span) Error!?Typed {
+    const info = self.analyzer.foreign_variables.items[index];
+    return .{
+        .node = try recorder.recordNode(self, .{ .foreign_get = .{
+            .variable = index,
+            .result = info.value_type,
+            .span = span,
+        } }),
+        .value_type = info.value_type,
+    };
+}
+
 /// Record a folded constant's node — **the single spelling point
 /// for every constant shape**, which is what lets a defaulted
 /// argument or field of any shape record without its call site
@@ -1059,6 +1075,18 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
                     return null;
                 }
                 return emitConstant(self, constant, field.span);
+            }
+            // geo.version — an imported module's C global (docs/FFI.md).
+            if (self.analyzer.foreign_variable_names.get(try self.importedName(joined))) |variable| {
+                const info = self.analyzer.foreign_variables.items[variable];
+                if (info.declaration.visibility == .private and info.module != self.module) {
+                    try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                        field.name,
+                        naming.moduleName(self.analyzer, info.module),
+                    });
+                    return null;
+                }
+                return emitForeignVar(self, variable, field.span);
             }
             try refusals.failNamespaceMember(self, base, field.name, joined, field.span);
             return null;

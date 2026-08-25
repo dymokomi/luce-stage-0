@@ -775,6 +775,14 @@ pub const VariantType = struct {
 pub const StructLayout = struct {
     name: []const u8, // arena-owned by the program
     fields: []StructField,
+    /// Declared `extern struct` (docs/FFI.md): an ordinary value struct
+    /// to the language — memberwise construction, field access, copies,
+    /// zero values — whose fields additionally have a **C layout**, so
+    /// a boundary crossing can materialize the value into C's byte form
+    /// and read one back.  The C bytes exist only at the crossing;
+    /// neither engine changes how the value itself is represented.
+    /// `cLayout` below is the one statement of the byte form.
+    c_layout: bool = false,
     /// Method contracts for an interface layout, empty for every source
     /// struct and class.  Keeping these separate from `fields` prevents a
     /// generic field instruction from forging or exposing an existential's
@@ -810,6 +818,78 @@ pub const StructLayout = struct {
         return null;
     }
 };
+
+// ---------------------------------------------------------------------------
+// The C layout of an extern struct (docs/FFI.md)
+// ---------------------------------------------------------------------------
+//
+// The one statement of the byte form both engines materialize at a
+// boundary crossing: declaration order, each field at the next offset
+// aligned to its C alignment, struct alignment the widest field's,
+// size rounded up to the alignment.  On every emitted target
+// (arm64-apple, x86-64 and aarch64 linux-gnu) the C alignment of every
+// admissible field type is its natural alignment, so this walk *is*
+// C's algorithm there.  Verified against clang on all three targets
+// (2026-08-24, offsetof/sizeof/_Alignof probes compiled per target):
+//   struct{int x,y,w,h}                 -> offsets 0,4,8,12, size 16
+//   struct{char,double,char,float,short,
+//          void*,unsigned char,longlong} -> 0,8,16,20,24,32,40,48,
+//                                           size 56, align 8
+//   struct{char,struct{char,int},char,
+//          struct{char,int}}             -> 0,4,12,16, size 24
+// All three targets answered identically, matching this walk exactly.
+
+/// The C alignment of one extern-struct field type, in bytes.  Asked
+/// only of the closed boundary vocabulary — scalars, handles, and
+/// nested extern structs — which the declaration check and the MIR
+/// verifier both enforce before any crossing is emitted.
+pub fn cAlignOf(layouts: []const StructLayout, of: Type) u32 {
+    return switch (of.storage()) {
+        .boolean, .u8, .i8 => 1,
+        .u16, .i16 => 2,
+        .u32, .i32, .f32 => 4,
+        .u64, .i64, .f64, .foreign => 8,
+        .strukt => |index| widest: {
+            var widest: u32 = 1;
+            for (layouts[index].fields) |field| {
+                widest = @max(widest, cAlignOf(layouts, field.field_type));
+            }
+            break :widest widest;
+        },
+        else => unreachable, // the boundary vocabulary is closed
+    };
+}
+
+/// The C size of one extern-struct field type, in bytes — a nested
+/// struct's size carries its own tail padding, exactly as C's does.
+pub fn cSizeOf(layouts: []const StructLayout, of: Type) u32 {
+    return switch (of.storage()) {
+        .boolean, .u8, .i8 => 1,
+        .u16, .i16 => 2,
+        .u32, .i32, .f32 => 4,
+        .u64, .i64, .f64, .foreign => 8,
+        .strukt => |index| whole: {
+            var offset: u32 = 0;
+            for (layouts[index].fields) |field| {
+                offset = std.mem.alignForward(u32, offset, cAlignOf(layouts, field.field_type));
+                offset += cSizeOf(layouts, field.field_type);
+            }
+            break :whole std.mem.alignForward(u32, offset, cAlignOf(layouts, of));
+        },
+        else => unreachable, // the boundary vocabulary is closed
+    };
+}
+
+/// The C offset of one field inside an extern-struct layout.
+pub fn cOffsetOf(layouts: []const StructLayout, layout: u32, field: u32) u32 {
+    var offset: u32 = 0;
+    for (layouts[layout].fields[0 .. field + 1], 0..) |held, index| {
+        offset = std.mem.alignForward(u32, offset, cAlignOf(layouts, held.field_type));
+        if (index == field) return offset;
+        offset += cSizeOf(layouts, held.field_type);
+    }
+    unreachable; // the loop returns at `field`, which the caller holds in range
+}
 
 // ---------------------------------------------------------------------------
 // The names the language answers to
@@ -1083,6 +1163,71 @@ fn writeTypeName(
             try written.appendSlice(allocator, "?");
         },
     }
+}
+
+test "the C layout walk answers what clang answered on every emitted target" {
+    // The three probe shapes from the verification comment above,
+    // pinned so the walk cannot drift from what clang said.
+    var rect_fields = [_]StructField{
+        .{ .name = "x", .field_type = .i32 },
+        .{ .name = "y", .field_type = .i32 },
+        .{ .name = "w", .field_type = .i32 },
+        .{ .name = "h", .field_type = .i32 },
+    };
+    var mixed_fields = [_]StructField{
+        .{ .name = "a", .field_type = .i8 },
+        .{ .name = "b", .field_type = .f64 },
+        .{ .name = "c", .field_type = .i8 },
+        .{ .name = "d", .field_type = .f32 },
+        .{ .name = "e", .field_type = .i16 },
+        .{ .name = "f", .field_type = .foreign },
+        .{ .name = "g", .field_type = .u8 },
+        .{ .name = "h", .field_type = .i64 },
+    };
+    var inner_fields = [_]StructField{
+        .{ .name = "a", .field_type = .i8 },
+        .{ .name = "b", .field_type = .i32 },
+    };
+    var outer_fields = [_]StructField{
+        .{ .name = "a", .field_type = .i8 },
+        .{ .name = "inner", .field_type = .{ .strukt = 2 } },
+        .{ .name = "b", .field_type = .i8 },
+        .{ .name = "tail", .field_type = .{ .strukt = 2 } },
+    };
+    const layouts = [_]StructLayout{
+        .{ .name = "Rect", .fields = &rect_fields, .c_layout = true },
+        .{ .name = "Mixed", .fields = &mixed_fields, .c_layout = true },
+        .{ .name = "Inner", .fields = &inner_fields, .c_layout = true },
+        .{ .name = "Outer", .fields = &outer_fields, .c_layout = true },
+    };
+
+    const rect_offsets = [_]u32{ 0, 4, 8, 12 };
+    for (rect_offsets, 0..) |offset, field| {
+        try std.testing.expectEqual(offset, cOffsetOf(&layouts, 0, @intCast(field)));
+    }
+    try std.testing.expectEqual(@as(u32, 16), cSizeOf(&layouts, .{ .strukt = 0 }));
+    try std.testing.expectEqual(@as(u32, 4), cAlignOf(&layouts, .{ .strukt = 0 }));
+
+    const mixed_offsets = [_]u32{ 0, 8, 16, 20, 24, 32, 40, 48 };
+    for (mixed_offsets, 0..) |offset, field| {
+        try std.testing.expectEqual(offset, cOffsetOf(&layouts, 1, @intCast(field)));
+    }
+    try std.testing.expectEqual(@as(u32, 56), cSizeOf(&layouts, .{ .strukt = 1 }));
+    try std.testing.expectEqual(@as(u32, 8), cAlignOf(&layouts, .{ .strukt = 1 }));
+
+    const outer_offsets = [_]u32{ 0, 4, 12, 16 };
+    for (outer_offsets, 0..) |offset, field| {
+        try std.testing.expectEqual(offset, cOffsetOf(&layouts, 3, @intCast(field)));
+    }
+    try std.testing.expectEqual(@as(u32, 24), cSizeOf(&layouts, .{ .strukt = 3 }));
+    try std.testing.expectEqual(@as(u32, 4), cAlignOf(&layouts, .{ .strukt = 3 }));
+
+    // A named handle takes its representation's slot: pointer-shaped
+    // is the pointer word, an integer-shaped one its exact width.
+    const window: Type = .{ .extern_type = .{ .index = 0, .representation = .foreign } };
+    try std.testing.expectEqual(@as(u32, 8), cSizeOf(&layouts, window));
+    const device: Type = .{ .extern_type = .{ .index = 1, .representation = .i32 } };
+    try std.testing.expectEqual(@as(u32, 4), cSizeOf(&layouts, device));
 }
 
 test "type equality distinguishes struct indices" {

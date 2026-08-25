@@ -40,6 +40,7 @@ pub fn mapOperands(
         .jump,
         .trap,
         .unwind,
+        .foreign_get,
         => {},
         // A bound function value names a register: the receiver it
         // carries (docs/BINDING.md D12).
@@ -48,6 +49,7 @@ pub fn mapOperands(
         },
         .local_set => |*set| set.value = map[set.value],
         .weak_local_set => |*set| set.value = map[set.value],
+        .foreign_set => |*set| set.value = map[set.value],
         .binary => |*binary| {
             binary.left = map[binary.left];
             binary.right = map[binary.right];
@@ -113,12 +115,14 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .jump,
         .trap,
         .unwind,
+        .foreign_get,
         => {},
         .const_function => |named| {
             if (named.receiver) |receiver| used[receiver] = true;
         },
         .local_set => |set| used[set.value] = true,
         .weak_local_set => |set| used[set.value] = true,
+        .foreign_set => |set| used[set.value] = true,
         .binary => |binary| {
             used[binary.left] = true;
             used[binary.right] = true;
@@ -230,6 +234,9 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .ret,
         .trap,
         .unwind,
+        // A C global is a symbol, never a frame local.
+        .foreign_get,
+        .foreign_set,
         => .none,
     };
 }

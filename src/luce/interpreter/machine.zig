@@ -22,6 +22,10 @@ const types = @import("../support/types.zig");
 
 const Allocator = std.mem.Allocator;
 const RuntimeValue = runtime.Value;
+
+/// C bytes are the machine's own: an extern struct's cells and a C
+/// global's word are packed and read at native endianness.
+const native_endian = @import("builtin").target.cpu.arch.endian();
 const Result = interpreter.Result;
 const Budget = interpreter.Budget;
 
@@ -556,6 +560,17 @@ pub const Machine = struct {
         };
     }
 
+    /// The symbol's address in this process, or null — the oracle's
+    /// resolution for calls and globals alike (docs/FFI.md): link-time
+    /// symbols live in whatever image carries the oracle.
+    fn resolveForeignSymbol(name: []const u8) ?*anyopaque {
+        var symbol_buffer: [256]u8 = undefined;
+        if (name.len >= symbol_buffer.len) return null;
+        @memcpy(symbol_buffer[0..name.len], name);
+        symbol_buffer[name.len] = 0;
+        return runtime.ffi.resolve(symbol_buffer[0..name.len :0]);
+    }
+
     /// Read one `out` slot's raw bits after the call: C wrote through
     /// a typed pointer, so the slot is read back through the same
     /// type, and the bits land in the low end of the word exactly as
@@ -566,6 +581,80 @@ pub const Machine = struct {
             .u16, .i16 => @as(*const u16, @ptrCast(@alignCast(cell))).*,
             .u32, .i32, .f32 => @as(*const u32, @ptrCast(@alignCast(cell))).*,
             else => cell.*,
+        };
+    }
+
+    /// Materialize one extern-struct value into its C bytes
+    /// (docs/FFI.md): each field stored at its C offset, computed by
+    /// the one layout walk both engines share (`types.cOffsetOf`).
+    /// The caller has zeroed the buffer, so padding bytes are
+    /// deterministic.
+    fn packForeignStruct(self: *Machine, layout: u32, value: RuntimeValue, bytes: []u8) void {
+        const fields = self.program.structs[layout].fields;
+        const field_run = value.asStruct();
+        for (fields, 0..) |field, index| {
+            if (index >= field_run.len) break; // an unwritten zero packs as the zeroed buffer
+            const offset = types.cOffsetOf(self.program.structs, layout, @intCast(index));
+            self.packForeignField(field.field_type, field_run[index], bytes[offset..]);
+        }
+    }
+
+    /// One field into its C cell, at the slice's start.  Through
+    /// `storage()`, so a named handle packs as its representation; the
+    /// C-layout field vocabulary is closed, which is what the final
+    /// arm's `unreachable` states.
+    fn packForeignField(self: *Machine, of: types.Type, value: RuntimeValue, bytes: []u8) void {
+        switch (of.storage()) {
+            .boolean => bytes[0] = @intFromBool(value.asBoolean()),
+            .u8 => bytes[0] = value.asU8(),
+            .i8 => bytes[0] = @bitCast(value.asI8()),
+            .u16 => std.mem.writeInt(u16, bytes[0..2], value.asU16(), native_endian),
+            .i16 => std.mem.writeInt(i16, bytes[0..2], value.asI16(), native_endian),
+            .u32 => std.mem.writeInt(u32, bytes[0..4], value.asU32(), native_endian),
+            .i32 => std.mem.writeInt(i32, bytes[0..4], value.asI32(), native_endian),
+            .u64 => std.mem.writeInt(u64, bytes[0..8], value.asU64(), native_endian),
+            .i64 => std.mem.writeInt(i64, bytes[0..8], value.asI64(), native_endian),
+            .f32 => std.mem.writeInt(u32, bytes[0..4], @bitCast(value.asF32()), native_endian),
+            .f64 => std.mem.writeInt(u64, bytes[0..8], @bitCast(value.asF64()), native_endian),
+            // A handle field is its token — no trap and no decode: the
+            // bare Globals-and-fields semantics (docs/FFI.md).
+            .foreign => std.mem.writeInt(i64, bytes[0..8], value.asI64(), native_endian),
+            .strukt => |nested| self.packForeignStruct(nested, value, bytes),
+            else => unreachable, // the C-layout field vocabulary is closed
+        }
+    }
+
+    /// Read one extern struct back out of its C bytes: each field
+    /// loaded from its offset into an ordinary field run — a field
+    /// read, not a boundary slot, so a pointer-shaped handle field
+    /// carries no automatic trap (docs/FFI.md).
+    fn unpackForeignStruct(self: *Machine, layout: u32, bytes: []const u8) EvalError!RuntimeValue {
+        const fields = self.program.structs[layout].fields;
+        const field_run = try self.arena.alloc(RuntimeValue, fields.len);
+        defer self.arena.free(field_run);
+        for (fields, field_run, 0..) |field, *slot, index| {
+            const offset = types.cOffsetOf(self.program.structs, layout, @intCast(index));
+            slot.* = try self.unpackForeignField(field.field_type, bytes[offset..]);
+        }
+        return self.runtime.makeStruct(field_run);
+    }
+
+    fn unpackForeignField(self: *Machine, of: types.Type, bytes: []const u8) EvalError!RuntimeValue {
+        return switch (of.storage()) {
+            .boolean => .ofBoolean(bytes[0] != 0),
+            .u8 => .ofU8(bytes[0]),
+            .i8 => .ofI8(@bitCast(bytes[0])),
+            .u16 => .ofU16(std.mem.readInt(u16, bytes[0..2], native_endian)),
+            .i16 => .ofI16(std.mem.readInt(i16, bytes[0..2], native_endian)),
+            .u32 => .ofU32(std.mem.readInt(u32, bytes[0..4], native_endian)),
+            .i32 => .ofI32(std.mem.readInt(i32, bytes[0..4], native_endian)),
+            .u64 => .ofU64(std.mem.readInt(u64, bytes[0..8], native_endian)),
+            .i64 => .ofI64(std.mem.readInt(i64, bytes[0..8], native_endian)),
+            .f32 => .ofF32(@bitCast(std.mem.readInt(u32, bytes[0..4], native_endian))),
+            .f64 => .ofF64(@bitCast(std.mem.readInt(u64, bytes[0..8], native_endian))),
+            .foreign => .ofI64(std.mem.readInt(i64, bytes[0..8], native_endian)),
+            .strukt => |nested| try self.unpackForeignStruct(nested, bytes),
+            else => unreachable, // the C-layout field vocabulary is closed
         };
     }
 
@@ -1344,11 +1433,7 @@ pub const Machine = struct {
                     // so.
                     .call_foreign => |called| {
                         const row = &self.program.foreign_functions[called.foreign];
-                        var symbol_buffer: [256]u8 = undefined;
-                        if (row.name.len >= symbol_buffer.len) return self.trap(.host_unavailable);
-                        @memcpy(symbol_buffer[0..row.name.len], row.name);
-                        symbol_buffer[row.name.len] = 0;
-                        const target = runtime.ffi.resolve(symbol_buffer[0..row.name.len :0]) orelse
+                        const target = resolveForeignSymbol(row.name) orelse
                             return self.trap(.host_unavailable);
                         const shapes = try self.arena.alloc(runtime.ffi.CType, row.parameters.len);
                         defer self.arena.free(shapes);
@@ -1361,6 +1446,20 @@ pub const Machine = struct {
                         const out_slots = try self.arena.alloc(u64, row.parameters.len);
                         defer self.arena.free(out_slots);
                         @memset(out_slots, 0);
+                        // An extern struct's C bytes, argument and out
+                        // alike, live only for this call: an argument
+                        // packs the field run into them and passes the
+                        // address (borrowed for the call — a callee
+                        // keeping the pointer is UB, docs/FFI.md); an
+                        // out slot is zeroed bytes read back below.
+                        const struct_buffers = try self.arena.alloc(?[]align(8) u8, row.parameters.len);
+                        defer {
+                            for (struct_buffers) |held| {
+                                if (held) |buffer| self.arena.free(buffer);
+                            }
+                            self.arena.free(struct_buffers);
+                        }
+                        @memset(struct_buffers, null);
                         // The NUL-terminated temporaries `str`
                         // arguments cross as, borrowed for exactly
                         // this call (docs/FFI.md).
@@ -1375,7 +1474,15 @@ pub const Machine = struct {
                         for (row.parameters, 0..) |parameter, index| {
                             if (parameter.out) {
                                 shapes[index] = .pointer;
-                                words[index] = @intFromPtr(&out_slots[index]);
+                                if (parameter.parameter_type == .strukt) {
+                                    const size = types.cSizeOf(self.program.structs, parameter.parameter_type);
+                                    const buffer = try self.arena.alignedAlloc(u8, .of(u64), size);
+                                    @memset(buffer, 0);
+                                    struct_buffers[index] = buffer;
+                                    words[index] = @intFromPtr(buffer.ptr);
+                                } else {
+                                    words[index] = @intFromPtr(&out_slots[index]);
+                                }
                                 continue;
                             }
                             const argument = called.arguments[written];
@@ -1423,6 +1530,19 @@ pub const Machine = struct {
                                     try borrowed.append(self.arena, token);
                                     break :blk token;
                                 },
+                                // An extern struct crosses by pointer
+                                // (docs/FFI.md): the field run packs
+                                // into C-layout bytes that exist only
+                                // for this call, and the address is
+                                // what C sees.
+                                .strukt => |layout| blk: {
+                                    const size = types.cSizeOf(self.program.structs, of);
+                                    const buffer = try self.arena.alignedAlloc(u8, .of(u64), size);
+                                    @memset(buffer, 0);
+                                    struct_buffers[index] = buffer;
+                                    self.packForeignStruct(layout, registers[argument], buffer);
+                                    break :blk @intFromPtr(buffer.ptr);
+                                },
                                 else => return self.trap(.host_unavailable),
                             };
                         }
@@ -1450,9 +1570,19 @@ pub const Machine = struct {
                         }
                         for (row.parameters, 0..) |parameter, index| {
                             if (!parameter.out) continue;
-                            const raw = foreignSlotRead(parameter.parameter_type, &out_slots[index]);
-                            const decoded = self.decodeForeign(parameter.parameter_type, raw) catch |mistake|
-                                return self.caught(mistake);
+                            // A struct out slot reads back per field —
+                            // field reads, not boundary slots, so no
+                            // decode and no trap (docs/FFI.md).
+                            const decoded = if (parameter.parameter_type == .strukt)
+                                self.unpackForeignStruct(
+                                    parameter.parameter_type.strukt,
+                                    struct_buffers[index].?,
+                                ) catch |mistake| return self.caught(mistake)
+                            else read: {
+                                const raw = foreignSlotRead(parameter.parameter_type, &out_slots[index]);
+                                break :read self.decodeForeign(parameter.parameter_type, raw) catch |mistake|
+                                    return self.caught(mistake);
+                            };
                             try self.field_scratch.append(self.arena, decoded);
                         }
                         registers[item] = switch (self.field_scratch.items.len) {
@@ -1461,6 +1591,27 @@ pub const Machine = struct {
                             else => self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
                                 return self.caught(mistake),
                         };
+                    },
+                    // The C globals (docs/FFI.md): resolve the symbol
+                    // in this process and load or store it directly at
+                    // its declared width — the Globals section's bare
+                    // semantics, so neither direction traps or decodes,
+                    // a pointer-shaped handle's zero included.
+                    .foreign_get => |variable| {
+                        const row = &self.program.foreign_variables[variable];
+                        const address = resolveForeignSymbol(row.name) orelse
+                            return self.trap(.host_unavailable);
+                        const bytes: [*]const u8 = @ptrCast(address);
+                        registers[item] = self.unpackForeignField(row.value_type, bytes[0..8]) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .foreign_set => |set| {
+                        const row = &self.program.foreign_variables[set.variable];
+                        const address = resolveForeignSymbol(row.name) orelse
+                            return self.trap(.host_unavailable);
+                        const bytes: [*]u8 = @ptrCast(address);
+                        self.packForeignField(row.value_type, registers[set.value], bytes[0..8]);
+                        registers[item] = .none;
                     },
                     .call => |called| {
                         // Reused scratch, not a fresh arena slice per

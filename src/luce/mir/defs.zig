@@ -1268,6 +1268,16 @@ pub const Instruction = union(enum) {
     /// block in front of it: `lowerReturn`'s three lines with one
     /// terminator changed (docs/FAILURE.md).
     unwind,
+    /// Read a C global (docs/FFI.md): a direct load of
+    /// `foreign_variables[index]`'s symbol at its declared width.  The
+    /// Globals section's bare semantics — no trap, no `?` decode — so
+    /// unlike a boundary result, a pointer-shaped handle read here
+    /// carries whatever the symbol holds, zero included.  Appended so
+    /// no earlier tag renumbers on the wire.
+    foreign_get: u32,
+    /// Write a C global: a direct store of the value's bits at the
+    /// declared width, under the same bare semantics.
+    foreign_set: struct { variable: u32, value: Register },
 
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
@@ -1485,6 +1495,15 @@ pub const ForeignFunction = struct {
     }
 };
 
+/// One declared `extern var` (docs/FFI.md): the C global's symbol as
+/// the linker sees it, and the boundary type its loads and stores
+/// move.  The vocabulary — boundary scalars and handles — is the
+/// verifier's to hold, exactly as a foreign function's is.
+pub const ForeignVariable = struct {
+    name: []const u8,
+    value_type: types.Type,
+};
+
 pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     structs: []StructLayout = &.{},
@@ -1520,6 +1539,10 @@ pub const Program = struct {
     /// call runs outside the effect lock.  What `call_foreign`
     /// indexes; the Tier-1 vocabulary is the verifier's to hold.
     foreign_functions: []ForeignFunction = &.{},
+    /// One row per declared `extern var` (docs/FFI.md): the symbol and
+    /// the type its direct loads and stores move.  What `foreign_get`
+    /// and `foreign_set` index.
+    foreign_variables: []ForeignVariable = &.{},
     constants: []const []const u8 = &.{},
     /// Constant-container declarations after reachability pruning.
     /// Rows deliberately retain declaration identity; equal contents
