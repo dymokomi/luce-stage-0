@@ -1173,6 +1173,17 @@ pub const Parser = struct {
 
         if (self.peekKind() == .left_paren) return self.parenthesizedTypeName();
         if (self.peekKind() == .keyword_func) return self.functionTypeName();
+        // `cfunc(T, ...) -> R` — the C function pointer type
+        // (docs/FFI.md).  A contextual spelling, not a keyword: it is
+        // recognized only with its parentheses, a shape that was
+        // previously a parse error in type position, so a program
+        // remains free to name its own type `cfunc`.
+        if (self.peekKind() == .identifier and
+            self.peekAhead(1) == .left_paren and
+            std.mem.eql(u8, self.text(self.peek()), "cfunc"))
+        {
+            return self.cfuncTypeName();
+        }
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
         var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
         // module.Struct — one dotted level reaches an imported type.
@@ -1365,6 +1376,59 @@ pub const Parser = struct {
                 written.span = .{ .start = start.span.start, .end = marked.span.end };
                 try self.functionErrorType(&written, start);
             }
+        }
+        return self.optionalSuffix(written);
+    }
+
+    /// `cfunc(T, ...) -> R` — a C function pointer type, spelled the
+    /// way a function type is (docs/FFI.md).  The differences are the
+    /// boundary's: no `!`, because C has no error channel — a fallible
+    /// crossing is a wrapper's business — and the vocabulary of the
+    /// parts is stage 4's ruling, not the grammar's.
+    fn cfuncTypeName(self: *Parser) Error!?ast.TypeName {
+        const start = self.advance(); // the contextual word `cfunc`
+        const opener = (try self.expect(.left_paren, "'(' with the parameter types")) orelse return null;
+        var parameters: std.ArrayList(ast.TypeName) = .empty;
+        defer parameters.deinit(self.arena);
+        var previous_end = opener.span.end;
+        while (!expr.endsList(self.peekKind(), .right_paren)) {
+            const parameter = (try self.typeName()) orelse return null;
+            try parameters.append(self.arena, parameter);
+            previous_end = parameter.span.end;
+            if (self.accept(.comma) == null) break;
+        }
+        if (try self.missingSeparator(previous_end)) return null;
+        const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+        var written: ast.TypeName = .{
+            .name = "cfunc",
+            .cfunc = true,
+            .arguments = try parameters.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = closing.span.end },
+        };
+        if (self.accept(.arrow) != null) {
+            if (self.peekKind() == .bang) {
+                try self.report(
+                    "luce.parse.type",
+                    self.peek().span,
+                    "a cfunc has no error channel: C answers a value, and a fallible crossing is a wrapper's business (docs/FFI.md)",
+                    .{},
+                );
+                return null;
+            }
+            const answered = (try self.typeName()) orelse return null;
+            const held = try self.arena.create(ast.TypeName);
+            held.* = answered;
+            written.result = held;
+            written.span = .{ .start = start.span.start, .end = answered.span.end };
+        }
+        if (self.peekKind() == .bang) {
+            try self.report(
+                "luce.parse.type",
+                self.peek().span,
+                "a cfunc has no error channel: C answers a value, and a fallible crossing is a wrapper's business (docs/FFI.md)",
+                .{},
+            );
+            return null;
         }
         return self.optionalSuffix(written);
     }
@@ -2385,15 +2449,11 @@ pub const Parser = struct {
         }
         var returns: ?ast.TypeName = null;
         if (self.accept(.arrow) != null) {
-            if (self.peekKind() == .left_paren) {
-                try self.report(
-                    "luce.parse.extern",
-                    self.peek().span,
-                    "an extern answers at most one value; a C function has no return shape",
-                    .{},
-                );
-                return null;
-            }
+            // A `(` is legal here — `(cfunc(...) -> R)?` closes the
+            // function type before the `?` reaches its result — and a
+            // written return *shape* is refused inside the
+            // parenthesized-type rule, which knows a pair that travels
+            // together is a struct.
             if (self.peekKind() == .bang) {
                 try self.report(
                     "luce.parse.extern",

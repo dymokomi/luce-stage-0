@@ -268,6 +268,9 @@ fn writesPlainElement(
         .char,
         .str,
         .foreign,
+        // A C function pointer is a word in a cell and owns nothing
+        // to free (docs/FFI.md).
+        .cfunc,
         => true,
         .none, .bytes, .strukt, .variant, .heap, .optional => false,
         .enumeration, .extern_type => unreachable, // answered by storage() above
@@ -335,6 +338,8 @@ fn collect(
                 .call_foreign,
                 .foreign_get,
                 .foreign_set,
+                .const_cfunc,
+                .call_cfunc,
                 .interface_call,
                 .spawn,
                 .call_indirect,

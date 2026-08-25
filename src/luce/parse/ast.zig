@@ -38,6 +38,12 @@ pub const TypeName = struct {
     /// the value fails with.  Only on a fallible function type; null
     /// for the bare `!`, whose error is a `str` message.
     error_type: ?*TypeName = null,
+    /// `cfunc(T, ...) -> R` — a C function pointer type (docs/FFI.md).
+    /// A flag rather than a name check because a zero-parameter
+    /// `cfunc()` answering nothing would otherwise be spelled exactly
+    /// like a program's own type named `cfunc`; the parser sets it
+    /// only on the shape it parsed with the parentheses.
+    cfunc: bool = false,
     span: Span,
 };
 

@@ -1039,3 +1039,277 @@ test "the out declaration's refusals" {
         \\
     , "luce.sema.call");
 }
+
+// -- the 0.21 phase-4b specs: cfunc (docs/FFI.md) ---------------------------
+
+test "a capture-free function crosses as a C pointer and C calls it back" {
+    // The qsort discipline: C receives the pointer and invokes it
+    // synchronously, on the calling thread.  `+ 1` inside the probe
+    // proves C stood between the two Luce sides, and the fold probe
+    // proves repeated invocations.
+    try agree.prints(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\extern func luce_ffi_probe_fold(callback: cfunc(i64) -> i64, count: i64) -> i64
+        \\
+        \\func triple(v: i64) -> i64:
+        \\    return v * 3
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(triple, 10)))
+        \\    print(str(luce_ffi_probe_fold(triple, 4)))
+        \\
+    ,
+        \\31
+        \\30
+        \\
+    );
+}
+
+test "a lambda lands on a cfunc place and narrow callback scalars stay sign-correct" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\extern func luce_ffi_probe_apply_i8(callback: cfunc(i8) -> i8, value: i8) -> i64
+        \\
+        \\func negate_narrow(v: i8) -> i8:
+        \\    return 0 - v
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply((v) => v + 2, 40)))
+        \\    print(str(luce_ffi_probe_apply_i8(negate_narrow, -7)))
+        \\
+    ,
+        \\43
+        \\14
+        \\
+    );
+}
+
+test "a callback receives and answers handles, tokens intact" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_token() -> foreign
+        \\extern func luce_ffi_probe_relay(callback: cfunc(foreign) -> foreign, token: foreign) -> foreign
+        \\
+        \\func echo_handle(t: foreign) -> foreign:
+        \\    return t
+        \\
+        \\func main():
+        \\    let token = luce_ffi_probe_token()
+        \\    let back = luce_ffi_probe_relay(echo_handle, token)
+        \\    print(str(back == token))
+        \\
+    ,
+        \\true
+        \\
+    );
+}
+
+test "a C-returned function pointer is callable, from a result, an out slot, and a let" {
+    // The vkGetInstanceProcAddr shape: the pointer arrives as a value
+    // and ordinary call syntax dispatches through it.
+    try agree.prints(
+        \\extern func luce_ffi_probe_proc_address() -> cfunc(i64, i64) -> i64
+        \\extern func luce_ffi_probe_proc_out(out proc: cfunc(i64, i64) -> i64)
+        \\
+        \\func apply_twice(op: cfunc(i64, i64) -> i64, v: i64) -> i64:
+        \\    return op(op(v, 2), 2)
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_proc_address()(6, 7)))
+        \\    let held = luce_ffi_probe_proc_address()
+        \\    print(str(held(3, 5)))
+        \\    let filled = luce_ffi_probe_proc_out()
+        \\    print(str(filled(4, 4)))
+        \\    print(str(apply_twice(held, 5)))
+        \\
+    ,
+        \\42
+        \\15
+        \\16
+        \\20
+        \\
+    );
+}
+
+test "an extern struct's cfunc field is a bare word: read, called, and zero traps only at the call" {
+    // The OrtApi shape.  A field read carries no boundary decode, so
+    // the null field arrives as a value; the call is where zero stops.
+    try agree.prints(
+        \\extern struct Ops:
+        \\    tag: i64
+        \\    op: cfunc(i64) -> i64
+        \\    missing: cfunc(i64) -> i64
+        \\
+        \\extern func luce_ffi_probe_ops_fill(out ops: Ops)
+        \\
+        \\func main():
+        \\    let ops = luce_ffi_probe_ops_fill()
+        \\    print(str(ops.tag))
+        \\    print(str((ops.op)(21)))
+        \\
+    ,
+        \\9
+        \\-21
+        \\
+    );
+    try agree.trap(
+        \\extern struct Ops:
+        \\    tag: i64
+        \\    op: cfunc(i64) -> i64
+        \\    missing: cfunc(i64) -> i64
+        \\
+        \\extern func luce_ffi_probe_ops_fill(out ops: Ops)
+        \\
+        \\func main():
+        \\    let ops = luce_ffi_probe_ops_fill()
+        \\    print(str((ops.missing)(1)))
+        \\
+    , .null_foreign);
+}
+
+test "cfunc? decodes C's null to none and encodes none as NULL" {
+    try agree.prints(
+        \\extern func luce_ffi_probe_null() -> (cfunc(i64, i64) -> i64)?
+        \\extern func luce_ffi_probe_proc_address() -> (cfunc(i64, i64) -> i64)?
+        \\extern func luce_ffi_probe_maybe_callback(callback: (cfunc(i64) -> i64)?) -> i64
+        \\
+        \\func double(v: i64) -> i64:
+        \\    return v * 2
+        \\
+        \\func main():
+        \\    let absent = luce_ffi_probe_null()
+        \\    if absent == none:
+        \\        print("none")
+        \\    let present = luce_ffi_probe_proc_address()
+        \\    if present != none:
+        \\        print(str(present(6, 8)))
+        \\    print(str(luce_ffi_probe_maybe_callback(none)))
+        \\    print(str(luce_ffi_probe_maybe_callback(double)))
+        \\
+    ,
+        \\none
+        \\48
+        \\-1
+        \\14
+        \\
+    );
+}
+
+test "a bare cfunc slot carrying C's null traps null_foreign at the boundary" {
+    try agree.trapSays(
+        \\extern func luce_ffi_probe_null() -> cfunc(i64, i64) -> i64
+        \\
+        \\func main():
+        \\    let proc = luce_ffi_probe_null()
+        \\    print(str(proc(1, 2)))
+        \\
+    , .null_foreign, "null crossed a non-null C boundary");
+}
+
+test "the cfunc conversion refuses what C cannot receive, with the reason" {
+    // A closure that captures: C has no environment slot.
+    try expectRejected(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func main():
+        \\    let bias = 5
+        \\    print(str(luce_ffi_probe_apply((v) => v + bias, 1)))
+        \\
+    , "luce.sema.extern");
+    // A method reference: the receiver is an environment.
+    try expectRejected(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\struct Counter:
+        \\    base: i64
+        \\
+        \\    func shifted(v: i64) -> i64:
+        \\        return self.base + v
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(Counter.shifted, 1)))
+        \\
+    , "luce.sema.extern");
+    // A fallible function: C has no error channel.
+    try expectRejected(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func risky(v: i64) -> i64!:
+        \\    return v
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(risky, 1)))
+        \\
+    , "luce.sema.extern");
+    // The shape is exact: a mismatched signature is refused where a
+    // function value's would be.
+    try expectRejected(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\
+        \\func wrong(v: i32) -> i64:
+        \\    return 1
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(wrong, 1)))
+        \\
+    , "luce.sema.type");
+}
+
+test "the cfunc type's own vocabulary is the boundary's, and stays closed" {
+    // No str: text crossing needs the boundary's temporaries, which a
+    // trampoline does not carry — binding-generator territory.
+    try expectRejected(
+        \\extern func bad(callback: cfunc(str) -> i64) -> i64
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // No extern structs either: by-pointer materialization is a call
+    // site's business, not a callback trampoline's.
+    try expectRejected(
+        \\extern struct Rect:
+        \\    x: i32
+        \\    y: i32
+        \\
+        \\extern func bad(callback: cfunc(Rect) -> i64) -> i64
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.sema.extern");
+    // No error channel: C answers a value.
+    try expectRejected(
+        \\extern func bad(callback: cfunc(i64) -> i64 !) -> i64
+        \\
+        \\func main():
+        \\    print("never")
+        \\
+    , "luce.parse.type");
+}
+
+test "a cfunc value has no equality and cannot cross workers" {
+    // A code address is the linker's accident, not a program fact.
+    try expectRejected(
+        \\extern func luce_ffi_probe_proc_address() -> cfunc(i64, i64) -> i64
+        \\
+        \\func main():
+        \\    let a = luce_ffi_probe_proc_address()
+        \\    let b = luce_ffi_probe_proc_address()
+        \\    print(str(a == b))
+        \\
+    , "luce.sema.type");
+    // The oracle's trampoline binds one runtime's machine, so the
+    // value takes the function refusal at the worker boundary.
+    try expectRejected(
+        \\extern func luce_ffi_probe_proc_address() -> cfunc(i64, i64) -> i64
+        \\
+        \\func apply(op: cfunc(i64, i64) -> i64) -> i64:
+        \\    return op(2, 3)
+        \\
+        \\func main():
+        \\    let held = luce_ffi_probe_proc_address()
+        \\    let t = spawn apply(held)
+        \\    print(str(t.wait()))
+        \\
+    , "luce.sema.own");
+}

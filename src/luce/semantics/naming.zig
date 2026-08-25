@@ -190,6 +190,16 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             }
             break :blk privateMentioned(self, signature.result);
         },
+        // A cfunc type publishes its signature the same way — a
+        // private named handle in a public cfunc slot is the same
+        // quiet door (docs/FFI.md).
+        .cfunc => |index| blk: {
+            const signature = self.signatures.items[index];
+            for (signature.parameters) |parameter| {
+                if (privateMentioned(self, parameter.value_type)) |hidden| break :blk hidden;
+            }
+            break :blk privateMentioned(self, signature.result);
+        },
         .optional => |payload| privateMentioned(self, payload.asType()),
         else => null,
     };

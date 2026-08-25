@@ -91,6 +91,9 @@ pub fn run(
     // (S34).  The result is built first — it carries the census and a
     // trap's words, which live in the arena, not here.
     defer machine.runtime.deinit();
+    // The libffi closures behind any cfunc conversions: their
+    // executable mappings are not arena memory (docs/FFI.md).
+    defer machine.releaseCfuncClosures();
     switch (try machine.execute(program.entry_function)) {
         // The census is this runtime's plus every worker's: a leak in
         // a worker is a leak in the program, and both engines report
@@ -314,6 +317,7 @@ const Nursery = struct {
             .host = self.host,
         };
         defer runtime_pointer.* = machine.runtime;
+        defer machine.releaseCfuncClosures();
 
         const arguments = [_]runtime.Value{receiver.*};
         const outcome = machine.call(function_index, &arguments) catch |mistake| {
@@ -370,6 +374,7 @@ const Nursery = struct {
         defer worker.* = machine.runtime;
         defer machine.stack.deinit(machine.arena);
         defer machine.frame_storage.deinit(machine.arena);
+        defer machine.releaseCfuncClosures();
 
         const outcome = if (machine.materializeConstants()) |failed|
             failed
@@ -505,6 +510,22 @@ pub const Machine = struct {
     /// the same located prelude through the ordinary unwind channel as
     /// a trapped function.  Null on every instruction path.
     constant_trace: ?runtime.trace.Frame = null,
+    /// The libffi closures backing this machine's `cfunc` conversions
+    /// (docs/FFI.md), one per (function, signature) pair so a loop
+    /// converting the same callback answers the same address the
+    /// compiled path's one wrapper would.  Map and contexts live in
+    /// the arena; the closures' executable mappings are libffi's and
+    /// go back through `releaseCfuncClosures`.
+    cfunc_closures: std.AutoHashMapUnmanaged(u64, *runtime.ffi.Closure) = .empty,
+
+    /// What a closure's handler needs to run the callback: which
+    /// machine, which function, which C shape.  Arena-owned; its
+    /// address is what libffi hands back as userdata.
+    const CfuncContext = struct {
+        machine: *Machine,
+        function: u32,
+        signature: u32,
+    };
 
     pub const EvalError = runtime.Error;
 
@@ -617,8 +638,9 @@ pub const Machine = struct {
             .f32 => std.mem.writeInt(u32, bytes[0..4], @bitCast(value.asF32()), native_endian),
             .f64 => std.mem.writeInt(u64, bytes[0..8], @bitCast(value.asF64()), native_endian),
             // A handle field is its token — no trap and no decode: the
-            // bare Globals-and-fields semantics (docs/FFI.md).
-            .foreign => std.mem.writeInt(i64, bytes[0..8], value.asI64(), native_endian),
+            // bare Globals-and-fields semantics (docs/FFI.md).  A
+            // cfunc field is the same word under the same rule.
+            .foreign, .cfunc => std.mem.writeInt(i64, bytes[0..8], value.asI64(), native_endian),
             .strukt => |nested| self.packForeignStruct(nested, value, bytes),
             else => unreachable, // the C-layout field vocabulary is closed
         }
@@ -652,7 +674,7 @@ pub const Machine = struct {
             .i64 => .ofI64(std.mem.readInt(i64, bytes[0..8], native_endian)),
             .f32 => .ofF32(@bitCast(std.mem.readInt(u32, bytes[0..4], native_endian))),
             .f64 => .ofF64(@bitCast(std.mem.readInt(u64, bytes[0..8], native_endian))),
-            .foreign => .ofI64(std.mem.readInt(i64, bytes[0..8], native_endian)),
+            .foreign, .cfunc => .ofI64(std.mem.readInt(i64, bytes[0..8], native_endian)),
             .strukt => |nested| try self.unpackForeignStruct(nested, bytes),
             else => unreachable, // the C-layout field vocabulary is closed
         };
@@ -680,6 +702,12 @@ pub const Machine = struct {
                 self.runtime.fail(.null_foreign)
             else
                 .ofI64(@bitCast(word)),
+            // A bare C function pointer takes the handle contract
+            // whole: zero never crosses a bare slot (docs/FFI.md).
+            .cfunc => if (word == 0)
+                self.runtime.fail(.null_foreign)
+            else
+                .ofI64(@bitCast(word)),
             .optional => if (of.optional.asType() == .str)
                 text.cstringResultOpt(&self.runtime, word)
             else if (word == 0)
@@ -689,6 +717,155 @@ pub const Machine = struct {
             .str => text.cstringResult(&self.runtime, word),
             else => self.runtime.fail(.host_unavailable),
         };
+    }
+
+    /// Encode one value for a cfunc-vocabulary slot, Luce to C
+    /// (docs/FFI.md): the scalar arms of the extern-call encode, with
+    /// the bare pointer-shaped null contract and the `?` encode —
+    /// exactly what a cfunc signature admits, so no `str`, no structs.
+    fn encodeCfuncWord(self: *Machine, of: types.Type, value: RuntimeValue) EvalError!u64 {
+        return switch (of.storage()) {
+            .boolean => @intFromBool(value.asBoolean()),
+            .u8 => value.asU8(),
+            .i8 => @as(u8, @bitCast(value.asI8())),
+            .u16 => value.asU16(),
+            .i16 => @as(u16, @bitCast(value.asI16())),
+            .u32 => value.asU32(),
+            .i32 => @as(u32, @bitCast(value.asI32())),
+            .u64 => value.asU64(),
+            .i64 => @bitCast(value.asI64()),
+            .f32 => @as(u32, @bitCast(value.asF32())),
+            .f64 => @bitCast(value.asF64()),
+            .foreign, .cfunc => blk: {
+                const token: u64 = @bitCast(value.asI64());
+                if (token == 0) break :blk self.runtime.fail(.null_foreign);
+                break :blk token;
+            },
+            .optional => if (value.isNone()) 0 else @bitCast(value.asI64()),
+            else => unreachable, // the cfunc vocabulary is closed
+        };
+    }
+
+    /// The C-callable address for one (function, signature) pair —
+    /// the oracle's half of `const_cfunc` (docs/FFI.md).  Cached, so
+    /// conversion is idempotent and closures stay bounded by the
+    /// program's conversion sites rather than by executions.
+    fn cfuncPointer(self: *Machine, function: u32, signature: u32) EvalError!u64 {
+        const key = (@as(u64, function) << 32) | signature;
+        if (self.cfunc_closures.get(key)) |held| return runtime.ffi.closureAddress(held);
+        const row = &self.program.signatures[signature];
+        const shapes = try self.arena.alloc(runtime.ffi.CType, row.parameters.len);
+        defer self.arena.free(shapes);
+        for (row.parameters, shapes) |parameter, *shape| {
+            shape.* = foreignShape(parameter.value_type);
+        }
+        const context = try self.arena.create(CfuncContext);
+        context.* = .{ .machine = self, .function = function, .signature = signature };
+        const closure = try runtime.ffi.closureMake(
+            self.arena,
+            shapes,
+            if (row.result == .none) .void else foreignShape(row.result),
+            invokeCfuncCallback,
+            context,
+        );
+        errdefer runtime.ffi.closureFree(closure);
+        try self.cfunc_closures.put(self.arena, key, closure);
+        return runtime.ffi.closureAddress(closure);
+    }
+
+    /// Give back every libffi closure this machine made.  The map and
+    /// contexts are arena memory; the executable mappings are
+    /// libffi's own and must go back explicitly.
+    pub fn releaseCfuncClosures(self: *Machine) void {
+        var held = self.cfunc_closures.valueIterator();
+        while (held.next()) |closure| runtime.ffi.closureFree(closure.*);
+        self.cfunc_closures.clearRetainingCapacity();
+    }
+
+    /// C called a converted callback.  Run the Luce function in a
+    /// machine of its own against the same runtime — the finalizer
+    /// discipline exactly: a separate machine keeps the nested call
+    /// from reallocating the suspended caller's frame arrays, and the
+    /// runtime moves in and back so there is one object table.
+    ///
+    /// A trap inside the callback cannot unwind through the C frames
+    /// standing between the two machines; it is recorded as the
+    /// runtime's pending trap, the callback answers zero, and the
+    /// suspended extern call surfaces the trap the moment C returns
+    /// (docs/FFI.md).
+    fn invokeCfuncCallback(opaque_context: ?*anyopaque, arguments: [*]const u64, count: usize) u64 {
+        const context: *CfuncContext = @ptrCast(@alignCast(opaque_context.?));
+        const outer = context.machine;
+        const row = &outer.program.signatures[context.signature];
+        std.debug.assert(count == row.parameters.len);
+
+        var scratch: std.heap.ArenaAllocator = .init(outer.runtime.objects);
+        defer scratch.deinit();
+        var machine: Machine = .{
+            .arena = scratch.allocator(),
+            .runtime = outer.runtime,
+            .program = outer.program,
+            .max_depth = outer.max_depth,
+            .host = outer.host,
+        };
+        defer outer.runtime = machine.runtime;
+
+        const values = scratch.allocator().alloc(RuntimeValue, count) catch {
+            machine.runtime.exhausted = true;
+            return 0;
+        };
+        for (row.parameters, values, 0..) |parameter, *slot, index| {
+            // The boundary's own decode, C -> Luce: a bare
+            // pointer-shaped zero records its trap and the callback
+            // answers zero.
+            slot.* = machine.decodeForeign(parameter.value_type, arguments[index]) catch {
+                machine.recordUnwind();
+                return 0;
+            };
+        }
+        const outcome = machine.call(context.function, values) catch |mistake| {
+            if (mistake == error.OutOfMemory) machine.runtime.exhausted = true;
+            machine.releaseFrameStorage();
+            machine.releaseCfuncClosures();
+            return 0;
+        };
+        defer machine.releaseCfuncClosures();
+        switch (outcome) {
+            .value => |answered| {
+                if (row.result == .none) {
+                    machine.runtime.freeValue(answered);
+                    return 0;
+                }
+                return machine.encodeCfuncWord(row.result, answered) catch {
+                    machine.recordUnwind();
+                    machine.releaseFrameStorage();
+                    return 0;
+                };
+            },
+            // The conversion refused a fallible function, so an
+            // errored outcome is a malformed engine answer; refuse it
+            // the way the finalizer channel does.
+            .errored => {
+                machine.runtime.forget();
+                _ = machine.runtime.fail(.host_unavailable) catch {};
+                machine.recordUnwind();
+                machine.releaseFrameStorage();
+                return 0;
+            },
+            .exited => {
+                machine.releaseFrameStorage();
+                return 0;
+            },
+            .trap => |trapped| {
+                machine.runtime.pending = .{
+                    .code = trapped.code,
+                    .message = trapped.message,
+                };
+                machine.recordUnwind();
+                machine.releaseFrameStorage();
+                return 0;
+            },
+        }
     }
 
     /// Fill a trap's stack trace from the live frame stack, innermost
@@ -1503,8 +1680,9 @@ pub const Machine = struct {
                                 .f64 => @bitCast(registers[argument].asF64()),
                                 // A bare `foreign` is the enforced
                                 // non-null contract (docs/FFI.md): a
-                                // zero token stops at the call.
-                                .foreign => blk: {
+                                // zero token stops at the call.  A
+                                // bare cfunc takes the same contract.
+                                .foreign, .cfunc => blk: {
                                     const token: u64 = @bitCast(registers[argument].asI64());
                                     if (token == 0) return self.trap(.null_foreign);
                                     break :blk token;
@@ -1557,6 +1735,13 @@ pub const Machine = struct {
                         // token a `none` crossed as frees nothing.
                         for (borrowed.items) |token| {
                             text.cstringFree(&self.runtime, token);
+                        }
+                        // A callback the C side invoked may have
+                        // trapped or exited; the pending record is the
+                        // nested machine's message across the C frames
+                        // it could not unwind (docs/FFI.md).
+                        if (self.runtime.pending != null or self.runtime.exit_status != null) {
+                            return self.caught(error.Trap);
                         }
                         // The declared return first, then each out
                         // slot in declaration order — the same values
@@ -1612,6 +1797,58 @@ pub const Machine = struct {
                         const bytes: [*]u8 = @ptrCast(address);
                         self.packForeignField(row.value_type, registers[set.value], bytes[0..8]);
                         registers[item] = .none;
+                    },
+                    // A capture-free function as a C pointer
+                    // (docs/FFI.md): the oracle's answer is a libffi
+                    // closure bound to this machine, cached per
+                    // (function, signature) so repeated conversions
+                    // answer one address, as the compiled wrapper does.
+                    .const_cfunc => |made| {
+                        const token = self.cfuncPointer(made.function, made.signature) catch |mistake|
+                            return self.caught(mistake);
+                        registers[item] = .ofI64(@bitCast(token));
+                    },
+                    // A call through a C function pointer: the callee
+                    // is a word a boundary crossing or a bare field
+                    // read put here — a zero can only have arrived
+                    // through a field's bare semantics, and it stops
+                    // now, at the call (docs/FFI.md).
+                    .call_cfunc => |called| {
+                        const row = &self.program.signatures[called.signature];
+                        const token: u64 = @bitCast(registers[called.callee].asI64());
+                        if (token == 0) return self.trap(.null_foreign);
+                        const shapes = try self.arena.alloc(runtime.ffi.CType, row.parameters.len);
+                        defer self.arena.free(shapes);
+                        const words = try self.arena.alloc(u64, row.parameters.len);
+                        defer self.arena.free(words);
+                        for (row.parameters, called.arguments, shapes, words) |parameter, argument, *shape, *word| {
+                            shape.* = foreignShape(parameter.value_type);
+                            word.* = self.encodeCfuncWord(parameter.value_type, registers[argument]) catch |mistake|
+                                return self.caught(mistake);
+                        }
+                        const answers: runtime.ffi.CType = if (row.result == .none)
+                            .void
+                        else
+                            foreignShape(row.result);
+                        self.runtime.enterEffects();
+                        const answer = try runtime.ffi.call(
+                            self.arena,
+                            @ptrFromInt(token),
+                            shapes,
+                            words,
+                            answers,
+                        );
+                        self.runtime.leaveEffects();
+                        // The callee may itself have called back into
+                        // Luce; carry a nested trap or exit across.
+                        if (self.runtime.pending != null or self.runtime.exit_status != null) {
+                            return self.caught(error.Trap);
+                        }
+                        registers[item] = if (row.result == .none)
+                            .none
+                        else
+                            self.decodeForeign(row.result, answer) catch |mistake|
+                                return self.caught(mistake);
                     },
                     .call => |called| {
                         // Reused scratch, not a fresh arena slice per
@@ -2034,6 +2271,10 @@ pub const Machine = struct {
             // Only the extern boundary gives the pointer-shaped zero a
             // meaning; a slot holds it like any other scalar.
             .extern_type => |reference| try self.zeroValue(reference.representation.asType()),
+            // A C function pointer's zero is the null pointer word —
+            // a value in a slot, and a `null_foreign` trap only at a
+            // boundary crossing or a call (docs/FFI.md).
+            .cfunc => .ofI64(0),
             .enumeration => unreachable, // answered above
             // The slot fill of a function-typed local, which nothing a
             // program can write ever reads: stage 4 refuses the one

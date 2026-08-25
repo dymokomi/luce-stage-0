@@ -451,6 +451,10 @@ pub const Lowering = struct {
             // meaning; a declared-but-unassigned slot holds it like any
             // other scalar.
             .extern_type => try self.emit(.{ .const_integer = 0 }, of),
+            // A C function pointer's zero is the null pointer word —
+            // a value in a slot; only a boundary crossing or a call
+            // gives it the `null_foreign` meaning (docs/FFI.md).
+            .cfunc => try self.emit(.{ .const_integer = 0 }, of),
             // **An enum's zero is its first declared member.**  Zero
             // itself would be a value no member holds — the one thing
             // an enum promises is that every value of it is a member,

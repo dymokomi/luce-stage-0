@@ -322,13 +322,16 @@ declares a foreign function's C shape and a call crosses directly into
 machine code the language never saw. The vocabulary at that boundary is
 closed — the fixed-width integers, `f32`/`f64`, `bool`, `str`, the opaque
 `foreign` token and named `extern type` handles, their nullable `?` forms,
-`out` parameters that come back as extra results, with no arity cap, and
-`extern struct` values crossing by pointer — and **every guarantee ends
-at the boundary**: checked arithmetic, traps, the leak census, and worker
-isolation resume the instant the call returns, and what the callee did in
-between is its own affair. `extern var name: T` binds a C global the same
-way — direct loads and stores of the symbol, C owning the value. `luce
-build --link` is how the foreign code joins the artifact.
+`out` parameters that come back as extra results, with no arity cap,
+`extern struct` values crossing by pointer, and `cfunc(...) -> R`
+function pointers — a capture-free function or lambda converts to one
+where the type is expected, and a C-returned pointer is callable with
+ordinary call syntax — and **every guarantee ends at the boundary**:
+checked arithmetic, traps, the leak census, and worker isolation resume
+the instant the call returns, and what the callee did in between is its
+own affair. `extern var name: T` binds a C global the same way — direct
+loads and stores of the symbol, C owning the value. `luce build --link`
+is how the foreign code joins the artifact.
 
 ## Deliberate boundaries
 

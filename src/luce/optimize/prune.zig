@@ -135,6 +135,10 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         // arm a comparator passed to `sort_by` would be pruned out from
         // under the value that names it (docs/FUNCTIONS.md D2).
         .const_function => |*named| &named.function,
+        // A C function pointer names its Luce callee the same way: the
+        // call that will happen is C's, through the address
+        // (docs/FFI.md).
+        .const_cfunc => |*made| &made.function,
         // Everything else: `call_indirect` carries its callee in a
         // register, and the rest is data, storage or control flow.
         .const_boolean,
@@ -159,6 +163,8 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         .variant_tag,
         .variant_field,
         .call_indirect,
+        // A cfunc call's callee is a register carrying an address.
+        .call_cfunc,
         .interface_call,
         .interface_call_inout,
         .intrinsic,
@@ -214,6 +220,8 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .interface_call_inout,
         .spawn,
         .call_indirect,
+        .const_cfunc,
+        .call_cfunc,
         .intrinsic,
         .heap_new,
         .jump,

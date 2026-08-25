@@ -208,6 +208,171 @@ pub fn call(
 }
 
 // ---------------------------------------------------------------------------
+// Closures — the oracle's Luce-to-C callback trampolines (docs/FFI.md)
+// ---------------------------------------------------------------------------
+//
+// Generated code hands C the address of a compiled wrapper; the
+// interpreter has no compiled anything, so it asks libffi to
+// materialize a real C-callable entry point whose body is data — the
+// closure below.  Like `call`, this is linked only into
+// oracle-carrying binaries; nothing that ships references it.
+
+extern fn ffi_closure_alloc(size: usize, code: **anyopaque) ?*anyopaque;
+extern fn ffi_closure_free(writable: *anyopaque) void;
+extern fn ffi_prep_closure_loc(
+    closure: *anyopaque,
+    cif: *anyopaque,
+    fun: *const fn (?*anyopaque, ?*anyopaque, ?[*]?*anyopaque, ?*anyopaque) callconv(.c) void,
+    user_data: ?*anyopaque,
+    codeloc: *anyopaque,
+) c_int;
+
+/// Comfortably past every target's `sizeof(ffi_closure)` (about 56
+/// bytes); libffi writes only what it needs into the mapping it makes.
+const closure_allocation_size: usize = 256;
+
+/// What a closure calls when C calls it: the machine-side handler.
+/// Arguments arrive as `call` sends them — each value's bits in the
+/// low end of one word — and the answer goes back the same way.
+pub const ClosureInvoke = *const fn (context: ?*anyopaque, arguments: [*]const u64, count: usize) u64;
+
+/// One live C-callable entry point.  The struct's address is stable
+/// for its lifetime — the prepared cif points into it — so it lives
+/// behind one allocation and is freed only through `closureFree`.
+pub const Closure = struct {
+    gpa: std.mem.Allocator,
+    parameters: []CType,
+    returns: CType,
+    invoke: ClosureInvoke,
+    context: ?*anyopaque,
+    atypes: []*FfiType,
+    cif: CifStorage,
+    /// The writable half `ffi_closure_alloc` answered, and the
+    /// executable address C calls.  Not our allocator's memory.
+    writable: *anyopaque,
+    executable: *anyopaque,
+};
+
+/// Make one C-callable entry point that dispatches to `invoke` with
+/// `context`.  The caller owns the result and must `closureFree` it.
+pub fn closureMake(
+    gpa: std.mem.Allocator,
+    parameters: []const CType,
+    returns: CType,
+    invoke: ClosureInvoke,
+    context: ?*anyopaque,
+) std.mem.Allocator.Error!*Closure {
+    const closure = try gpa.create(Closure);
+    errdefer gpa.destroy(closure);
+    closure.gpa = gpa;
+    closure.returns = returns;
+    closure.invoke = invoke;
+    closure.context = context;
+    closure.parameters = try gpa.dupe(CType, parameters);
+    errdefer gpa.free(closure.parameters);
+    closure.atypes = try gpa.alloc(*FfiType, parameters.len);
+    errdefer gpa.free(closure.atypes);
+    for (closure.parameters, closure.atypes) |shape, *atype| atype.* = shape.descriptor();
+    closure.cif = .{};
+    const prepared = ffi_prep_cif(
+        &closure.cif.words,
+        default_abi,
+        @intCast(parameters.len),
+        returns.descriptor(),
+        if (parameters.len == 0) null else closure.atypes.ptr,
+    );
+    // Every shape `CType` can spell is a scalar libffi accepts.
+    std.debug.assert(prepared == 0);
+    var code: *anyopaque = undefined;
+    const writable = ffi_closure_alloc(closure_allocation_size, &code) orelse
+        return error.OutOfMemory;
+    closure.writable = writable;
+    closure.executable = code;
+    const installed = ffi_prep_closure_loc(writable, &closure.cif.words, dispatchClosure, closure, code);
+    if (installed != 0) {
+        ffi_closure_free(writable);
+        return error.OutOfMemory;
+    }
+    return closure;
+}
+
+/// The address C calls — what a Luce `cfunc` value holds on the
+/// oracle path.
+pub fn closureAddress(closure: *const Closure) u64 {
+    return @intFromPtr(closure.executable);
+}
+
+pub fn closureFree(closure: *Closure) void {
+    ffi_closure_free(closure.writable);
+    closure.gpa.free(closure.atypes);
+    closure.gpa.free(closure.parameters);
+    closure.gpa.destroy(closure);
+}
+
+/// libffi's entry into Zig: read each argument cell through its C
+/// type into a word, hand the words to the machine-side handler, and
+/// store the answer back the way libffi's closure convention wants it
+/// — narrow integral returns widened to a full `ffi_arg` word.
+fn dispatchClosure(
+    cif: ?*anyopaque,
+    ret: ?*anyopaque,
+    args: ?[*]?*anyopaque,
+    user: ?*anyopaque,
+) callconv(.c) void {
+    _ = cif;
+    const closure: *Closure = @ptrCast(@alignCast(user.?));
+    var stack_words: [16]u64 = undefined;
+    var heap_words: ?[]u64 = null;
+    defer if (heap_words) |held| closure.gpa.free(held);
+    const words = if (closure.parameters.len <= stack_words.len)
+        stack_words[0..closure.parameters.len]
+    else grown: {
+        heap_words = closure.gpa.alloc(u64, closure.parameters.len) catch {
+            // Exhaustion inside a C callback has no channel to report
+            // through; a zero answer is the only honest stop short of
+            // crashing C.
+            storeClosureAnswer(closure.returns, ret, 0);
+            return;
+        };
+        break :grown heap_words.?;
+    };
+    if (closure.parameters.len != 0) {
+        const cells = args.?;
+        for (closure.parameters, words, 0..) |shape, *word, index| {
+            const cell: *align(1) const u64 = @ptrCast(cells[index].?);
+            word.* = switch (shape) {
+                .void => unreachable, // a parameter is never void
+                .uint8, .sint8 => @as(*align(1) const u8, @ptrCast(cell)).*,
+                .uint16, .sint16 => @as(*align(1) const u16, @ptrCast(cell)).*,
+                .uint32, .sint32, .float => @as(*align(1) const u32, @ptrCast(cell)).*,
+                .uint64, .sint64, .double, .pointer => cell.*,
+            };
+        }
+    }
+    const answer = closure.invoke(closure.context, words.ptr, words.len);
+    storeClosureAnswer(closure.returns, ret, answer);
+}
+
+/// Store a handler's answer word into libffi's return slot.  The
+/// closure convention widens narrow integral answers to a full
+/// `ffi_arg`, extended by the declared sign, exactly as a C callee's
+/// register would carry them.
+fn storeClosureAnswer(returns: CType, ret: ?*anyopaque, word: u64) void {
+    const slot: *align(1) u64 = @ptrCast(ret orelse return);
+    switch (returns) {
+        .void => {},
+        .uint8 => slot.* = @as(u8, @truncate(word)),
+        .sint8 => slot.* = @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(word)))))),
+        .uint16 => slot.* = @as(u16, @truncate(word)),
+        .sint16 => slot.* = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(word)))))),
+        .uint32 => slot.* = @as(u32, @truncate(word)),
+        .sint32 => slot.* = @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(word)))))),
+        .uint64, .sint64, .pointer, .double => slot.* = word,
+        .float => @as(*align(1) f32, @ptrCast(slot)).* = @bitCast(@as(u32, @truncate(word))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — the shim against functions in this very image
 // ---------------------------------------------------------------------------
 
@@ -506,6 +671,97 @@ export fn luce_ffi_probe_counter_write(value: i64) callconv(.c) void {
 /// out of a handle-typed `extern var` is a value, never a trap.
 export var luce_ffi_probe_token_slot: u64 = 0;
 
+// -- the 0.21 phase-4b probes -------------------------------------------------
+
+/// The callback shape (docs/FFI.md): C receives a function pointer
+/// and calls it — synchronously, on the calling thread, the qsort
+/// discipline.  The `+ 1` proves C stood between the two Luce sides.
+export fn luce_ffi_probe_apply(
+    callback: ?*const fn (i64) callconv(.c) i64,
+    value: i64,
+) callconv(.c) i64 {
+    const held = callback orelse return -1;
+    return held(value) + 1;
+}
+
+/// A callback crossing handles both ways: the token goes in, C calls
+/// back with it, and what the callback answers comes back out.
+export fn luce_ffi_probe_relay(
+    callback: ?*const fn (u64) callconv(.c) u64,
+    token: u64,
+) callconv(.c) u64 {
+    const held = callback orelse return 0;
+    return held(token);
+}
+
+/// A narrow-scalar callback: the argument must arrive sign-correct
+/// and the answer must come back sign-correct, or the doubled sum is
+/// visibly wrong.
+export fn luce_ffi_probe_apply_i8(
+    callback: ?*const fn (i8) callconv(.c) i8,
+    value: i8,
+) callconv(.c) i64 {
+    const held = callback orelse return 0;
+    return @as(i64, held(value)) * 2;
+}
+
+/// A callback invoked repeatedly — the enumerator shape: fold the
+/// callback's answers over 1..count.
+export fn luce_ffi_probe_fold(
+    callback: ?*const fn (i64) callconv(.c) i64,
+    count: i64,
+) callconv(.c) i64 {
+    const held = callback orelse return -1;
+    var total: i64 = 0;
+    var index: i64 = 1;
+    while (index <= count) : (index += 1) total += held(index);
+    return total;
+}
+
+/// The nullable-callback argument (docs/FFI.md): C's branch on NULL
+/// is watched from the Luce side as `none` against a present value.
+export fn luce_ffi_probe_maybe_callback(
+    callback: ?*const fn (i64) callconv(.c) i64,
+) callconv(.c) i64 {
+    const held = callback orelse return -1;
+    return held(7);
+}
+
+/// A C function whose *address* crosses to Luce — the
+/// `vkGetInstanceProcAddr` shape: the answer is called indirectly.
+fn probeMultiply(a: i64, b: i64) callconv(.c) i64 {
+    return a * b;
+}
+
+export fn luce_ffi_probe_proc_address() callconv(.c) u64 {
+    return @intFromPtr(&probeMultiply);
+}
+
+/// The same address through an out slot.
+export fn luce_ffi_probe_proc_out(slot: ?*u64) callconv(.c) void {
+    const out = slot orelse return;
+    out.* = @intFromPtr(&probeMultiply);
+}
+
+/// An extern struct carrying a function-pointer field (docs/FFI.md):
+/// the OrtApi shape.  `fill` installs a real function beside a null
+/// one, so a field read carrying zero is watched arriving as a value
+/// and trapping only at the call.
+const ProbeOps = extern struct {
+    tag: i64,
+    op: ?*const fn (i64) callconv(.c) i64,
+    missing: ?*const fn (i64) callconv(.c) i64,
+};
+
+fn probeNegate(v: i64) callconv(.c) i64 {
+    return -v;
+}
+
+export fn luce_ffi_probe_ops_fill(slot: ?*ProbeOps) callconv(.c) void {
+    const out = slot orelse return;
+    out.* = .{ .tag = 9, .op = &probeNegate, .missing = null };
+}
+
 /// The `str?` echo.  The answer is copied into private storage first:
 /// the boundary frees an argument's NUL temporary the moment the call
 /// returns, so echoing the argument pointer itself would hand the
@@ -581,4 +837,59 @@ test "the shim passes eleven mixed arguments position-correct" {
 
 test "a symbol nothing carries answers null" {
     try testing.expectEqual(@as(?*anyopaque, null), resolve("luce_ffi_probe_that_never_existed"));
+}
+
+fn doublePlusContext(context: ?*anyopaque, arguments: [*]const u64, count: usize) u64 {
+    const bias: *const i64 = @ptrCast(@alignCast(context.?));
+    std.debug.assert(count == 1);
+    const value: i64 = @bitCast(arguments[0]);
+    return @bitCast(value * 2 + bias.*);
+}
+
+test "a closure is a real C entry point: C calls it through the probe" {
+    var bias: i64 = 5;
+    const closure = try closureMake(
+        testing.allocator,
+        &.{.sint64},
+        .sint64,
+        doublePlusContext,
+        &bias,
+    );
+    defer closureFree(closure);
+
+    // Hand the closure's address to a C function that calls it — the
+    // full round trip: Zig -> libffi call -> C -> libffi closure -> Zig.
+    const apply = resolve("luce_ffi_probe_apply") orelse return error.TestUnexpectedResult;
+    const answered = try call(
+        testing.allocator,
+        apply,
+        &.{ .pointer, .sint64 },
+        &.{ closureAddress(closure), @bitCast(@as(i64, 10)) },
+        .sint64,
+    );
+    // 10 * 2 + 5, then the probe's own + 1.
+    try testing.expectEqual(@as(i64, 26), @as(i64, @bitCast(answered)));
+}
+
+fn negateNarrow(context: ?*anyopaque, arguments: [*]const u64, count: usize) u64 {
+    _ = context;
+    std.debug.assert(count == 1);
+    const value: i8 = @bitCast(@as(u8, @truncate(arguments[0])));
+    const answer: i8 = -value;
+    return @as(u8, @bitCast(answer));
+}
+
+test "a closure widens its narrow answer sign-correct" {
+    const closure = try closureMake(testing.allocator, &.{.sint8}, .sint8, negateNarrow, null);
+    defer closureFree(closure);
+    const apply = resolve("luce_ffi_probe_apply_i8") orelse return error.TestUnexpectedResult;
+    const answered = try call(
+        testing.allocator,
+        apply,
+        &.{ .pointer, .sint8 },
+        &.{ closureAddress(closure), @as(u8, @bitCast(@as(i8, -7))) },
+        .sint64,
+    );
+    // -(-7) * 2: sign-correct in and out of the closure.
+    try testing.expectEqual(@as(i64, 14), @as(i64, @bitCast(answered)));
 }

@@ -690,6 +690,14 @@ const Replay = struct {
                 },
                 named.result,
             ),
+            // A capture-free function as a C pointer (docs/FFI.md).
+            .cfunc_value => |made| try self.code.emit(
+                .{ .const_cfunc = .{
+                    .function = made.function,
+                    .signature = made.signature,
+                } },
+                made.result,
+            ),
             .lambda_ref => |made| closure: {
                 const receiver = if (made.environment) |environment| held: {
                     const value = try self.replayValue(environment);
@@ -1121,6 +1129,7 @@ const Replay = struct {
             .function => |index| return self.replayDirectCall(called, index),
             .foreign => |index| return self.replayForeignCall(called, index),
             .indirect => |through| return self.replayIndirectCall(called, through),
+            .cfunc => |through| return self.replayCfuncCall(called, through),
             .interface => |through| return self.replayInterfaceCall(called, through),
             .intrinsic => |kind| return self.replayIntrinsicCall(called, kind),
             .conversion => |produced| return self.replayConversion(called, produced),
@@ -1372,6 +1381,38 @@ const Replay = struct {
             .fallible = called.fallible,
         } }, signature.result);
         return self.finishFallible(call, called, .fresh);
+    }
+
+    /// A call through a C function pointer (docs/FFI.md): the callee
+    /// rides the batch as its first operand, `replayIndirectCall`'s
+    /// discipline exactly, and the call is a boundary call — no
+    /// defaults, no receiver, no fallibility.
+    fn replayCfuncCall(
+        self: *Replay,
+        called: nodes.Expression.Call,
+        through: nodes.ResolvedCallee.Cfunc,
+    ) Error!Register {
+        const batch = called.operands;
+        const entries = try self.scratch().alloc(BatchEntry, batch.operands.len + 1);
+        defer self.scratch().free(entries);
+        entries[0] = try self.peel(through.callee);
+        for (batch.operands, entries[1..]) |operand, *entry| entry.* = try self.peel(operand);
+        self.markSpills(entries, &.{});
+        for (entries, 0..) |*entry, position| {
+            const opened_in = self.code.current;
+            const copied = if (position == 0) through.borrow_copy else batch.borrow_copy[position - 1];
+            try self.replayBatchOperand(entry, copied);
+            self.assertSplitCarried(entries[0..position], opened_in);
+        }
+        try self.reloadSpills(entries);
+        for (entries) |*entry| try self.applyWrappers(entry);
+        const registers = try self.arena().alloc(Register, batch.operands.len);
+        for (entries[1..], batch.slots) |entry, slot| registers[slot] = entry.register;
+        return self.code.emit(.{ .call_cfunc = .{
+            .callee = entries[0].register,
+            .signature = through.signature,
+            .arguments = registers,
+        } }, called.result);
     }
 
     fn replayIntrinsicCall(

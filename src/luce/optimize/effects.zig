@@ -73,6 +73,11 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // identity and the allocation `struct_make` has, and for the
         // same reason (docs/BINDING.md D12).
         .const_function => .impure,
+        // A C function pointer is a plain word both engines answer
+        // deterministically for one (function, signature) pair — the
+        // wrapper's address, the cached closure's — so a duplicate
+        // folds and an unread one deletes (docs/FFI.md).
+        .const_cfunc => .pure,
         .local_get, .struct_get => .pure,
 
         // A weak read observes whether an object is still alive and, on
@@ -163,6 +168,9 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // A call through a value runs a function this pass cannot see,
         // exactly as a direct call does.
         .call_indirect,
+        // A call through a C function pointer runs machine code the
+        // language never saw (docs/FFI.md).
+        .call_cfunc,
         // A spawn makes a task nothing else is, and hands a thread
         // everything it was given (docs/THREADS.md D2).
         .spawn,
@@ -438,14 +446,17 @@ pub fn viewStable(instruction: Instruction) bool {
         // object table entirely (docs/FFI.md).
         .foreign_get,
         .foreign_set,
+        // A C function pointer is a word out of thin air.
+        .const_cfunc,
         => true,
 
         // A fresh object appends a row, and the table moves when it
         // grows.
         .heap_new => false,
         // A callee may do any of the three, whether it was named at the
-        // call or reached through a value.
-        .call, .call_foreign, .call_inout, .interface_call, .interface_call_inout, .call_indirect => false,
+        // call or reached through a value — a C callee included, whose
+        // code may call back into Luce through a converted callback.
+        .call, .call_foreign, .call_inout, .interface_call, .interface_call_inout, .call_indirect, .call_cfunc => false,
         // A spawn attaches the task's row, moves every object argument
         // out of this runtime, and hands the table to a second thread.
         // Nothing resolved before it can be believed after it

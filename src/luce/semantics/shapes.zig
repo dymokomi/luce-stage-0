@@ -185,6 +185,12 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                 }
             },
             .function => if (sought == .function) return true,
+            // A C function pointer takes the function refusal at the
+            // worker boundary (docs/FFI.md): the oracle's callback
+            // trampoline binds one runtime's machine, so the value
+            // must not cross — and the compiled context is per-thread
+            // for the same reason.
+            .cfunc => if (sought == .function) return true,
             .none,
             .boolean,
             .u8,
@@ -230,6 +236,12 @@ pub const Incomparable = struct {
         /// not by the hidden row/generation pair. A containing value has no
         /// stable field-by-field equality without performing upgrades.
         weak,
+        /// A C function pointer is a code address whose value depends on
+        /// which engine, which conversion site, and which library build
+        /// produced it — an accident of linkage, not a fact about the
+        /// program (docs/FFI.md).  Function values set the precedent:
+        /// no equality.
+        cfunc,
     };
 
     reason: Reason,
@@ -262,7 +274,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
     // Every scalar, every string and every object handle compares by
     // itself, so the overwhelmingly common `==` allocates nothing.
     switch (of) {
-        .strukt, .variant, .function, .optional => {},
+        .strukt, .variant, .function, .optional, .cfunc => {},
         else => return null,
     }
 
@@ -281,6 +293,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
         const current = pending.items[next];
         switch (current) {
             .function => return .{ .reason = .function, .part = current },
+            .cfunc => return .{ .reason = .cfunc, .part = current },
             .variant => return .{ .reason = .variant, .part = current },
             .optional => |payload| try pending.append(self.temporary, payload.asType()),
             .strukt => |layout| {

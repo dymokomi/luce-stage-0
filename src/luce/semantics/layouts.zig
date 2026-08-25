@@ -397,13 +397,13 @@ fn collectUnionName(
 }
 
 /// An extern struct's field vocabulary (docs/FFI.md): the boundary
-/// scalars, the handles — `foreign` or named — and nested extern
-/// structs.  str, bytes, containers, optionals, functions and
-/// ordinary aggregates have no C byte form; fixed arrays wait for the
-/// binding generator.
+/// scalars, the handles — `foreign` or named — bare C function
+/// pointers, and nested extern structs.  str, bytes, containers,
+/// optionals, functions and ordinary aggregates have no C byte form;
+/// fixed arrays wait for the binding generator.
 fn cLayoutField(self: *const Analyzer, of: types.Type) bool {
     return switch (of) {
-        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .boolean, .foreign, .extern_type => true,
+        .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64, .boolean, .foreign, .extern_type, .cfunc => true,
         .strukt => |index| self.structs.items[index].c_layout,
         else => false,
     };
@@ -683,7 +683,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                     try self.fail(
                         "luce.sema.extern",
                         field.type_name.span,
-                        "an extern struct's field is a fixed-width integer, f32, f64, bool, foreign, a named handle, or another extern struct; {s} has no C byte form (docs/FFI.md)",
+                        "an extern struct's field is a fixed-width integer, f32, f64, bool, foreign, a named handle, a bare cfunc, or another extern struct; {s} has no C byte form (docs/FFI.md)",
                         .{try self.typeName(field_type)},
                     );
                 }

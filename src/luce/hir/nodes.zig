@@ -317,6 +317,9 @@ pub const Expression = union(enum) {
     /// `receiver.method` where a function type lands — a function
     /// value whose environment is the receiver (docs/BINDING.md D1).
     bound_method: BoundMethod,
+    /// A capture-free function landing where a cfunc type is expected
+    /// (docs/FFI.md): the conversion to a C function pointer.
+    cfunc_value: CfuncValue,
 
     // Payloads --------------------------------------------------------------
 
@@ -694,6 +697,16 @@ pub const Expression = union(enum) {
         park: ?Park = null,
     };
 
+    pub const CfuncValue = struct {
+        /// The function table index — what `const_cfunc` names.
+        function: u32,
+        /// The signature row the value wears: the C shape.
+        signature: u32,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
     pub const BoundMethod = struct {
         /// The method's function table index.  **Its parameter zero is
         /// the receiver**, which the value carries rather than takes,
@@ -747,6 +760,11 @@ pub const ResolvedCallee = union(enum) {
     /// in the call batch so evaluation order, spill handling, and writing
     /// receiver place checks follow the same path as declared methods.
     interface: Interface,
+    /// A call through a C function pointer (docs/FFI.md): the
+    /// expression that answers the cfunc value, and the signature row
+    /// the call was checked against.  The callee rides as the run's
+    /// first operand, `Indirect`'s discipline exactly.
+    cfunc: Cfunc,
     /// A builtin that lowers to one MIR intrinsic — the resolved name
     /// of the operation, shared with stage 6 so it cannot drift.
     /// `str(f)` records here as `function_name` rather than as a
@@ -800,6 +818,15 @@ pub const ResolvedCallee = union(enum) {
         signature: u32,
         writing: bool = false,
         fallible: bool = false,
+    };
+
+    pub const Cfunc = struct {
+        callee: NodeRef,
+        signature: u32,
+        /// The defensive borrow copy for the callee — recorded for the
+        /// same residual hazard `Indirect.borrow_copy` names, and inert
+        /// in practice: a cfunc value is a word and owns no storage.
+        borrow_copy: bool = false,
     };
 };
 
@@ -1221,6 +1248,11 @@ pub fn provenance(expression: *const Expression) Provenance {
             // of out values owns its run (docs/FFI.md), so the
             // statement's end must reclaim what nothing adopts.
             .foreign => .fresh,
+            // A cfunc answers only boundary scalars and handles
+            // (docs/FFI.md): nothing owns storage, but `.fresh` keeps
+            // the one classification externs already have — a fresh
+            // scalar parks as cheaply as a plain one.
+            .cfunc => .fresh,
             .intrinsic => |kind| ofIntrinsic(kind),
             // `str(x)` allocates its text; the numeric conversions
             // answer scalars.
@@ -1247,6 +1279,9 @@ pub fn provenance(expression: *const Expression) Provenance {
         // owns the two-slot run holding the function it names and the
         // receiver it carries (docs/BINDING.md D12).
         .function_value, .lambda_ref, .bound_method => .fresh,
+        // A C function pointer is a bare word: no storage, no object
+        // (docs/FFI.md).
+        .cfunc_value => .plain,
     };
 }
 
@@ -1294,7 +1329,7 @@ pub fn freshObject(expression: *const Expression) bool {
         .slice, .spawn => true,
         .call => |payload| switch (payload.callee) {
             .function, .indirect, .interface => true,
-            .foreign => false,
+            .foreign, .cfunc => false,
             .intrinsic => |kind| freshObjectIntrinsic(kind),
             .conversion, .enum_name, .variant_name => false,
         },
@@ -1364,6 +1399,7 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
         .foreign_get,
         .function_value,
         .lambda_ref,
+        .cfunc_value,
         => false,
         .field_get => |read| splitsBlocks(read.target, declared),
         .variant_payload => |read| splitsBlocks(read.target, declared),
@@ -1422,6 +1458,7 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
         // The callee expression is lowered in this frame beside the
         // arguments, so a branch inside it is this call's own.
         .indirect => |through| splitsBlocks(through.callee, declared),
+        .cfunc => |through| splitsBlocks(through.callee, declared),
         .function, .foreign, .interface, .intrinsic, .conversion => false,
     };
 }

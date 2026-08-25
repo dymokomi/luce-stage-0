@@ -152,7 +152,8 @@ let status, device = cuDeviceGet(0)
 - An `out` parameter takes no argument at the call; the compiler
   allocates the slot, passes its address, and appends the value to the
   results **in declaration order after the declared return**.
-- Legal `out` types: the scalars, named handles, and `extern struct`s.
+- Legal `out` types: the scalars, named handles, `cfunc`s, and
+  `extern struct`s.
 - The received values are ordinary Luce values; multiple results are
   received by the existing destructuring, not tuples.
 
@@ -191,8 +192,8 @@ extern func SDL_GetRectUnion(a: Rect, b: Rect, out result: Rect) -> bool
   ordinary struct machinery; the C byte form exists only at a
   boundary crossing, where the call site materializes the fields at
   their C offsets and reads them back the same way.  Fields are the
-  boundary scalars and the handles — `foreign` or named — and nested
-  extern structs, inline.  **Fixed-size array fields are deferred to
+  boundary scalars, the handles — `foreign` or named — bare `cfunc`
+  function pointers, and nested extern structs, inline.  **Fixed-size array fields are deferred to
   the binding generator**: stage-0 arrays carry runtime shape and
   have no C-layout form, so a declaration naming one is refused
   saying so.
@@ -223,20 +224,43 @@ extern func SDL_AddTimer(interval: u32, callback: cfunc(u32, foreign) -> u32,
                          userdata: foreign) -> u32
 ```
 
-- `cfunc(params) -> R` is a boundary-only function type: C's function
-  pointer.  A **capture-free** Luce function or lambda converts to it
-  at an extern call site; anything that captures is refused with the
-  reason (C has no environment slot — the trampoline machinery that
-  carries a closure through `userdata` arrives with `luce bind`).
-- A `cfunc` value may also appear as an extern **result**, an extern
-  struct **field**, and be **called** with ordinary call syntax — this
-  is the function-pointer-call primitive (`vkGetInstanceProcAddr`,
-  `OrtApi`), and its calls carry the same boundary semantics as any
-  extern call.  A null `cfunc` is expressed as `cfunc(...)?` with the
-  same decode as handles.
-- The callback runs on whatever thread C calls it from; a capture-free
-  function touches no Luce heap and needs no runtime attach.  The
-  ARC-carrying form is the generator's problem, later, by design.
+- `cfunc(params) -> R` is C's function pointer as a Luce type.  A
+  **capture-free** Luce function, lambda, or closure converts to it
+  where the type is expected; anything that captures — a closure over
+  a local, a method reference carrying its receiver — is refused with
+  the reason (C has no environment slot — the trampoline machinery
+  that carries a closure through `userdata` arrives with `luce bind`).
+  A **fallible** function is refused too: C has no error channel, and
+  a status-answering wrapper is one line away.
+- **The cfunc vocabulary is the scalars and the handles** — the
+  boundary scalars, `foreign`, named handles, and the pointer-shaped
+  ones as their `?` forms.  No `str`, no extern structs, no nested
+  cfunc, no `out`: a callback trampoline moves words, and the richer
+  crossings arrive with the binding generator's shims.
+- A `cfunc` value may also appear as an extern **result**, an `out`
+  slot, an extern struct **field**, and be **called** with ordinary
+  call syntax — this is the function-pointer-call primitive
+  (`vkGetInstanceProcAddr`, `OrtApi`), and its calls carry the same
+  boundary semantics as any extern call.  A null `cfunc` is
+  `cfunc(...)?` with the handles' decode; as with `func` types, a
+  result consumes its own `?`, so a cfunc that answers something is
+  parenthesized to be nullable: `(cfunc(u32) -> u32)?`.  A bare cfunc
+  slot enforces the non-null contract in both directions, and a
+  struct *field* read is bare — C's null arrives as a zero value and
+  the call is where it traps `null_foreign`.
+- In the language a cfunc is a pointer-sized value with a zero and
+  nothing else: no equality or ordering — a code address is the
+  linker's accident, not a program fact — and no worker crossing, the
+  function-value rule exactly.
+- **The callback runs against the runtime of the Luce thread that
+  handed it to C** — the synchronous discipline (`qsort` comparators,
+  enumerators, proc loaders): each Luce thread publishes its runtime
+  context on the way in, workers included, and a callback C invokes
+  on a thread Luce never entered stops the process.  A trap inside a
+  callback cannot unwind through the C frames above it; it stops the
+  program at the boundary, loudly, with its report.  Cross-thread
+  asynchronous callbacks are the ARC-carrying trampoline's problem —
+  the generator's, later, by design.
 
 ## Globals — `extern var`
 

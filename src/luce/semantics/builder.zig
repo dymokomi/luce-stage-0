@@ -440,6 +440,10 @@ pub const FunctionBuilder = struct {
     /// a lambda that reaches `lowerExpressionInner` with it unset is the
     /// refusal "a lambda needs a place that expects a function".
     wanted_function: ?u32 = null,
+    /// The cfunc signature row the place expects (docs/FFI.md), the
+    /// `wanted_function` mechanism exactly: a bare function name or a
+    /// capture-free closure lands on it and converts.
+    wanted_cfunc: ?u32 = null,
     /// What a fallible call left for the `try` or `catch` in front of
     /// it to finish.  Set by `openFallible` and consumed once.
     opened: ?Opened = null,
@@ -881,6 +885,16 @@ pub const FunctionBuilder = struct {
         self.wanted = context.literalLandingType(expected);
         self.wanted_place = expected;
         self.wanted_container = self.containerPlace(expected);
+        self.wanted_cfunc = switch (expected) {
+            .cfunc => |index| index,
+            // A `cfunc(...)?` place converts and wraps, exactly as an
+            // optional function place does below.
+            .optional => |payload| switch (payload) {
+                .cfunc => |index| index,
+                else => null,
+            },
+            else => null,
+        };
         self.wanted_function = switch (expected) {
             .function => |index| index,
             // **A place that may hold none is still a place.**  The
@@ -1041,6 +1055,119 @@ pub const FunctionBuilder = struct {
                 .span = span,
             } }),
             .value_type = value,
+        };
+    }
+
+    /// A **named function as a C function pointer**, where a cfunc
+    /// type is what the place expects (docs/FFI.md).  The checks are
+    /// `functionValue`'s moved to the C boundary: everything a
+    /// C caller cannot supply is refused with its reason — a
+    /// receiver, an error channel — and the shape must be exactly
+    /// the declared C shape, parameter for parameter.
+    fn cfuncValue(
+        self: *FunctionBuilder,
+        written: []const u8,
+        span: Span,
+        signature: u32,
+    ) Error!?Typed {
+        const resolved = (try self.resolveDeclared(written, span, .written)) orelse return null;
+        const index = self.analyzer.function_names.get(resolved) orelse {
+            try refusals.failUnknownFunction(self, written, span);
+            return null;
+        };
+        if (!try refusals.functionReachable(self, index, span)) return null;
+        const info = self.analyzer.functions.items[index];
+        if (info.is_entry) {
+            try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{written});
+            return null;
+        }
+        // A method's implicit receiver is an environment, and C has no
+        // environment slot (docs/FFI.md).
+        if (info.receiver != .not) {
+            try self.fail(
+                "luce.sema.extern",
+                span,
+                "{s} is a method, and a method reference would carry its receiver; C has no environment slot — write a top-level function, or wait for the binding generator's trampolines (docs/FFI.md)",
+                .{written},
+            );
+            return null;
+        }
+        // C has no error channel: a fallible crossing is a wrapper's
+        // business (docs/FFI.md).
+        if (info.fallible) {
+            try self.fail(
+                "luce.sema.extern",
+                span,
+                "{s} can fail, and C has no error channel; wrap the fallible work in a function that answers a status value (docs/FFI.md)",
+                .{written},
+            );
+            return null;
+        }
+        const wants = self.analyzer.signatures.items[signature];
+        const cfunc_type: Type = .{ .cfunc = signature };
+        if (!self.matchesSignature(info, wants, 0)) {
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "this place is {s}, and {s} is {s}",
+                .{
+                    try self.analyzer.typeName(cfunc_type),
+                    written,
+                    try self.writtenSignature(info),
+                },
+            );
+            return null;
+        }
+        return .{
+            .node = try recorder.recordNode(self, .{ .cfunc_value = .{
+                .function = index,
+                .signature = signature,
+                .result = cfunc_type,
+                .span = span,
+            } }),
+            .value_type = cfunc_type,
+        };
+    }
+
+    /// A lambda or block closure landing where a cfunc is expected
+    /// (docs/FFI.md): the ordinary closure machinery builds the hidden
+    /// function against the same signature row, and the conversion
+    /// then demands what C demands — no environment.  A capture-free
+    /// closure converts; one that captured anything is refused with
+    /// what it captured.
+    fn cfuncFromClosure(
+        self: *FunctionBuilder,
+        made: Typed,
+        signature: u32,
+        span: Span,
+    ) Error!?Typed {
+        const lambda = switch (made.node.*) {
+            .lambda_ref => |held| held,
+            else => unreachable, // the closure path answers exactly this node
+        };
+        if (lambda.environment != null) {
+            const info = self.analyzer.functions.items[lambda.function];
+            const captured: []const u8 = if (info.closure_captures.len != 0)
+                info.closure_captures[0].name
+            else
+                "its environment";
+            try self.fail(
+                "luce.sema.extern",
+                span,
+                "this closure captures {s}, and a C function pointer has no environment slot; make it capture-free, or wait for the binding generator's trampolines (docs/FFI.md)",
+                .{captured},
+            );
+            return null;
+        }
+        const cfunc_type: Type = .{ .cfunc = signature };
+        return .{
+            .node = try recorder.recordNode(self, .{ .cfunc_value = .{
+                .function = lambda.function,
+                .signature = signature,
+                .result = cfunc_type,
+                .span = span,
+            } }),
+            .value_type = cfunc_type,
         };
     }
 
@@ -1725,6 +1852,8 @@ pub const FunctionBuilder = struct {
         self.wanted_place = null;
         const wanted_function = self.wanted_function;
         self.wanted_function = null;
+        const wanted_cfunc = self.wanted_cfunc;
+        self.wanted_cfunc = null;
         switch (expression.*) {
             .int_literal => |literal| return self.lowerIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
@@ -1826,6 +1955,11 @@ pub const FunctionBuilder = struct {
                     if (wanted_function) |signature| {
                         return self.functionValue(name.text, name.span, signature);
                     }
+                    // Or a function converting to a C pointer, where a
+                    // cfunc is what the place wants (docs/FFI.md).
+                    if (wanted_cfunc) |signature| {
+                        return self.cfuncValue(name.text, name.span, signature);
+                    }
                     try refusals.failUnknownName(self, name.text, name.span);
                     return null;
                 };
@@ -1923,6 +2057,24 @@ pub const FunctionBuilder = struct {
                         .value => |bound| return bound,
                     }
                 }
+                // `Struct.helper` and `module.helper` where a cfunc is
+                // wanted — the same one-dot conversion path, C-side
+                // (docs/FFI.md).  A `receiver.method` deliberately
+                // falls through: an extern struct's cfunc *field* is
+                // an ordinary field read, and a method reference would
+                // carry a receiver C has no slot for — the field path
+                // says what is actually there.
+                if (wanted_cfunc) |signature| {
+                    if (helpers.dottedChain(field.target)) |chain| {
+                        if (chain.count == 1 and self.findLocal(chain.head()) == null) {
+                            const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
+                                chain.head(),
+                                field.name,
+                            });
+                            return self.cfuncValue(written, field.span, signature);
+                        }
+                    }
+                }
                 return expressions.lowerField(self, field);
             },
             .call => |call| return calls.lowerCall(self, call, as_statement, fallible_allowed, shape_position, wanted),
@@ -1940,8 +2092,20 @@ pub const FunctionBuilder = struct {
             .slice_range => |slice| return expressions.lowerSliceRange(self, slice),
             .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
             .spawn => |worker| return calls.lowerSpawn(self, worker, as_statement),
-            .lambda => |written| return self.lowerLambda(expression, written, wanted_function),
-            .closure => |written| return closures.lowerClosure(self, written, wanted_function),
+            .lambda => |written| {
+                if (wanted_function == null) if (wanted_cfunc) |signature| {
+                    const made = (try self.lowerLambda(expression, written, signature)) orelse return null;
+                    return self.cfuncFromClosure(made, signature, written.span);
+                };
+                return self.lowerLambda(expression, written, wanted_function);
+            },
+            .closure => |written| {
+                if (wanted_function == null) if (wanted_cfunc) |signature| {
+                    const made = (try closures.lowerClosure(self, written, signature)) orelse return null;
+                    return self.cfuncFromClosure(made, signature, written.span);
+                };
+                return closures.lowerClosure(self, written, wanted_function);
+            },
             .match_value => |written| return self.lowerMatchValue(written, wanted_place),
         }
     }

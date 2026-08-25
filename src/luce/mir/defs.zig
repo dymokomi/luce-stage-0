@@ -40,6 +40,9 @@ pub fn boxTag(of: Type) ?value.Tag {
         .str => .str,
         .bytes => .bytes,
         .foreign => .i64,
+        // A C function pointer is its word to the runtime, exactly as
+        // `foreign` is (docs/FFI.md).
+        .cfunc => .i64,
         .strukt => .strukt,
         // A union value is a struct value whose field 0 is the tag
         // (docs/UNION.md D8): to the runtime it is a field run, so it
@@ -1278,6 +1281,22 @@ pub const Instruction = union(enum) {
     /// Write a C global: a direct store of the value's bits at the
     /// declared width, under the same bare semantics.
     foreign_set: struct { variable: u32, value: Register },
+    /// A capture-free Luce function as a C function pointer
+    /// (docs/FFI.md): `function` names the callee and `signature` the
+    /// cfunc row the value wears — the C shape the callback crosses
+    /// at.  The verifier ties the two together exactly as
+    /// `const_function` ties a value to its signature.  Codegen
+    /// answers the address of a C-ABI wrapper; the oracle answers a
+    /// libffi closure bound to this machine.  Appended so no earlier
+    /// tag renumbers on the wire.
+    const_cfunc: struct { function: u32, signature: u32 },
+    /// A call through a C function pointer (docs/FFI.md): the callee
+    /// is a `cfunc`-typed register, the arguments cross under the
+    /// same boundary rules as `call_foreign`'s, and a zero callee —
+    /// which only a bare field read can carry in — traps
+    /// `null_foreign` at the call.  Runs under the effect lock, like
+    /// a non-blocking extern.
+    call_cfunc: CfuncCall,
 
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
@@ -1300,6 +1319,7 @@ pub const Instruction = union(enum) {
     pub const Call = struct { function: u32, arguments: []Register };
     pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
     pub const ForeignCall = struct { foreign: u32, arguments: []Register };
+    pub const CfuncCall = struct { callee: Register, signature: u32, arguments: []Register };
     pub const InterfaceMake = struct { layout: u32, witness: u32, receiver: Register };
     pub const InterfaceCall = struct {
         receiver: Register,

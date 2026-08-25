@@ -332,6 +332,20 @@ fn printInstruction(
         .foreign_get => |variable| try appendPrint(text, allocator, "foreign_get {s}", .{
             program.foreign_variables[variable].name,
         }),
+        .const_cfunc => |made| {
+            const signature_name = try typeName(allocator, program, .{ .cfunc = made.signature });
+            defer allocator.free(signature_name);
+            try appendPrint(text, allocator, "const_cfunc {s} : {s}", .{
+                program.functions[made.function].name,
+                signature_name,
+            });
+        },
+        .call_cfunc => |call| {
+            const signature_name = try typeName(allocator, program, .{ .cfunc = call.signature });
+            defer allocator.free(signature_name);
+            try appendPrint(text, allocator, "call_cfunc r{d} : {s}", .{ call.callee, signature_name });
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
         .foreign_set => |set| try appendPrint(text, allocator, "foreign_set {s}, r{d}", .{
             program.foreign_variables[set.variable].name,
             set.value,

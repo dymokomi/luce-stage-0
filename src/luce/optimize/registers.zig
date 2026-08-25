@@ -41,6 +41,7 @@ pub fn mapOperands(
         .trap,
         .unwind,
         .foreign_get,
+        .const_cfunc,
         => {},
         // A bound function value names a register: the receiver it
         // carries (docs/BINDING.md D12).
@@ -83,6 +84,10 @@ pub fn mapOperands(
             call.callee = map[call.callee];
             call.arguments = try mapSlice(arena, call.arguments, map);
         },
+        .call_cfunc => |*call| {
+            call.callee = map[call.callee];
+            call.arguments = try mapSlice(arena, call.arguments, map);
+        },
         .intrinsic => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .heap_new => |*new| new.dims = try mapSlice(arena, new.dims, map),
         .branch => |*branch| branch.condition = map[branch.condition],
@@ -116,6 +121,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .trap,
         .unwind,
         .foreign_get,
+        .const_cfunc,
         => {},
         .const_function => |named| {
             if (named.receiver) |receiver| used[receiver] = true;
@@ -149,6 +155,10 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .variant_tag => |tag| used[tag.target] = true,
         .variant_field => |get| used[get.target] = true,
         .call_indirect => |call| {
+            used[call.callee] = true;
+            for (call.arguments) |argument| used[argument] = true;
+        },
+        .call_cfunc => |call| {
             used[call.callee] = true;
             for (call.arguments) |argument| used[argument] = true;
         },
@@ -227,6 +237,8 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .spawn,
         .call_foreign,
         .call_indirect,
+        .const_cfunc,
+        .call_cfunc,
         .intrinsic,
         .heap_new,
         .jump,

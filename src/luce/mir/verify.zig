@@ -234,6 +234,9 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
                     .call, .spawn => |call| call.function,
                     .call_inout => |call| call.function,
                     .const_function => |bound| bound.function,
+                    // A C pointer to the finalizer would let C call a
+                    // body only ARC may run.
+                    .const_cfunc => |made| made.function,
                     else => null,
                 };
                 if (named) |target| {
@@ -317,6 +320,14 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
             if (reference.index >= program.extern_types.len) return error.BadStruct;
             const declared = program.extern_types[reference.index];
             if (declared.representation != reference.representation) return error.BadStruct;
+        },
+        // A C function pointer names a signature row, and the row must
+        // stay inside the cfunc vocabulary (docs/FFI.md): a decoded
+        // module gets no benefit of the doubt about what a trampoline
+        // or an indirect call would be asked to move.
+        .cfunc => |index| {
+            if (index >= program.signatures.len) return error.BadFunction;
+            if (!cfuncRow(program, index)) return error.BadFunction;
         },
         // A payload is a type in its own right and is bounded the same
         // way; it can never be optional itself, so this is one step.
@@ -746,7 +757,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .f64 => true,
         .f32 => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .f16 => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => false,
+        .none, .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type, .cfunc => false,
     };
 }
 
@@ -1550,6 +1561,40 @@ fn verifyInstruction(
             const value = try operandType(function, defined, set.value);
             try expectType(value, program.foreign_variables[set.variable].value_type);
         },
+        // A capture-free function as a C pointer (docs/FFI.md): the
+        // callee must exist, must be exactly the C shape the value
+        // wears — parameter for parameter, result for result — and
+        // must be callable with nothing a C caller cannot supply: no
+        // receiver, no environment, no error channel.
+        .const_cfunc => |made| {
+            if (made.function >= program.functions.len) return error.BadFunction;
+            if (!cfuncRow(program, made.signature)) return error.BadFunction;
+            const callee = program.functions[made.function];
+            const signature = program.signatures[made.signature];
+            if (callee.fallible) return error.BadFunction;
+            if (callee.parameter_count != signature.parameters.len) return error.BadFunction;
+            if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
+            for (signature.parameters, callee.locals[0..callee.parameter_count]) |parameter, local| {
+                try expectType(local.local_type, parameter.value_type);
+            }
+            if (!callee.return_type.eql(signature.result)) return error.TypeMismatch;
+            try expectType(result, .{ .cfunc = made.signature });
+        },
+        // A call through a C function pointer: the callee register
+        // wears the exact cfunc row the arguments are checked against,
+        // and the result is what the row answers (docs/FFI.md).
+        .call_cfunc => |call| {
+            if (!cfuncRow(program, call.signature)) return error.BadFunction;
+            const callee = try operandType(function, defined, call.callee);
+            try expectType(callee, .{ .cfunc = call.signature });
+            const signature = program.signatures[call.signature];
+            if (call.arguments.len != signature.parameters.len) return error.BadFunction;
+            for (call.arguments, signature.parameters) |argument, parameter| {
+                const value = try operandType(function, defined, argument);
+                try expectType(value, parameter.value_type);
+            }
+            if (!result.eql(signature.result)) return error.TypeMismatch;
+        },
     }
 }
 
@@ -1601,20 +1646,52 @@ fn foreignParameter(program: *const Program, of: Type) bool {
         // a NUL-terminated temporary borrowed for the call; a result
         // is copied and validated at the boundary.
         .str => true,
+        // A C function pointer crosses as the word it is; its
+        // signature row must hold to the cfunc vocabulary
+        // (docs/FFI.md).
+        .cfunc => |index| cfuncRow(program, index),
         // An extern struct crosses by pointer (docs/FFI.md): the call
         // site materializes the C bytes and passes their address, so
         // only a C-layout row may stand in a slot.
         .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
-        // The nullable crossings (docs/FFI.md): `foreign?` and a
-        // pointer-shaped handle's `?` decode C's null; `str?` crosses
-        // `none` as NULL.  An optional of anything else has no C
-        // encoding — an integer-shaped handle's zero is a value, so
-        // its optional is refused here exactly as stage 4 refuses it.
+        // The nullable crossings (docs/FFI.md): `foreign?`, a
+        // pointer-shaped handle's `?`, and `cfunc(...)?` decode C's
+        // null; `str?` crosses `none` as NULL.  An optional of
+        // anything else has no C encoding — an integer-shaped
+        // handle's zero is a value, so its optional is refused here
+        // exactly as stage 4 refuses it.
         .optional => |payload| switch (payload) {
             .foreign, .str => true,
             .extern_type => |reference| reference.representation == .foreign,
+            .cfunc => |index| cfuncRow(program, index),
             else => false,
         },
+        else => foreignScalar(of),
+    };
+}
+
+/// One `cfunc` signature row (docs/FFI.md): in bounds, never
+/// fallible, and every slot inside the cfunc vocabulary — the mirror
+/// of stage 4's `signatures.cfuncSlot`, restated at the trust
+/// boundary.
+fn cfuncRow(program: *const Program, index: u32) bool {
+    if (index >= program.signatures.len) return false;
+    const signature = program.signatures[index];
+    if (signature.fallible) return false;
+    for (signature.parameters) |parameter| {
+        if (!cfuncSlot(parameter.value_type)) return false;
+    }
+    return signature.result == .none or cfuncSlot(signature.result);
+}
+
+/// One slot of a cfunc signature: the boundary scalars and handles,
+/// the pointer-shaped ones also as their `?` forms — no `str`, no
+/// extern structs, no nested cfunc (docs/FFI.md).
+fn cfuncSlot(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
+        .optional => |payload| payload == .foreign or
+            (payload == .extern_type and payload.extern_type.representation == .foreign),
         else => foreignScalar(of),
     };
 }
@@ -1627,10 +1704,12 @@ fn foreignParameter(program: *const Program, of: Type) bool {
 fn foreignOut(program: *const Program, of: Type) bool {
     return switch (of) {
         .foreign, .extern_type => true,
+        .cfunc => |index| cfuncRow(program, index),
         .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
         .optional => |payload| switch (payload) {
             .foreign => true,
             .extern_type => |reference| reference.representation == .foreign,
+            .cfunc => |index| cfuncRow(program, index),
             else => false,
         },
         else => foreignScalar(of),
@@ -1658,12 +1737,16 @@ fn foreignGlobal(of: Type) bool {
 }
 
 /// An extern struct's field vocabulary (docs/FFI.md): the boundary
-/// scalars, the handles — `foreign` or named — and nested extern
-/// structs.  Fixed arrays wait for the binding generator; str, bytes,
-/// containers, optionals and ordinary structs have no C byte form.
+/// scalars, the handles — `foreign` or named — bare C function
+/// pointers, and nested extern structs.  Fixed arrays wait for the
+/// binding generator; str, bytes, containers, optionals and ordinary
+/// structs have no C byte form.
 fn cLayoutField(program: *const Program, of: Type) bool {
     return switch (of) {
         .foreign, .extern_type => true,
+        // A bare C function pointer field is the pointer word
+        // (docs/FFI.md); a field read carries no boundary decode.
+        .cfunc => |index| cfuncRow(program, index),
         .strukt => |index| index < program.structs.len and program.structs[index].c_layout,
         else => foreignScalar(of),
     };
@@ -2627,6 +2710,8 @@ fn typeCanOwnStorage(of: Type) bool {
         .heap,
         .enumeration,
         .extern_type,
+        // A C function pointer is a word; nothing to own (docs/FFI.md).
+        .cfunc,
         => false,
     };
 }
@@ -2665,6 +2750,11 @@ fn typeCarriesWorker(
         const current = pending.pop().?;
         switch (current) {
             .function => if (sought == .function) return true,
+            // A C function pointer takes the function refusal at the
+            // worker boundary: the oracle's trampoline binds one
+            // runtime's machine, so the value must not cross
+            // (docs/FFI.md).
+            .cfunc => if (sought == .function) return true,
             .optional => |payload| try pending.append(allocator, payload.asType()),
             .strukt => |index| {
                 if (index >= program.structs.len) return error.BadStruct;

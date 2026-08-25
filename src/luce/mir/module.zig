@@ -394,6 +394,9 @@ const Writer = struct {
         if (of == .heap) try self.int(u32, of.heap);
         if (of == .variant) try self.int(u32, of.variant);
         if (of == .function) try self.int(u32, of.function);
+        // A C function pointer names a signature row, exactly as a
+        // function value does (docs/FFI.md).
+        if (of == .cfunc) try self.int(u32, of.cfunc);
         // The width travels with the index, as it does in memory: the
         // decoder rebuilds the whole reference without reaching into
         // the enum table, which is read later in the stream.
@@ -650,6 +653,15 @@ const Writer = struct {
             .foreign_set => |set| {
                 try self.int(u32, set.variable);
                 try self.int(u32, set.value);
+            },
+            .const_cfunc => |made| {
+                try self.int(u32, made.function);
+                try self.int(u32, made.signature);
+            },
+            .call_cfunc => |call| {
+                try self.int(u32, call.callee);
+                try self.int(u32, call.signature);
+                try self.registers(call.arguments);
             },
         }
     }
@@ -912,6 +924,7 @@ const Reader = struct {
                 .index = try self.int(u32),
                 .representation = try self.enumTag(types.Type.ExternTypeRef.Representation),
             } },
+            .cfunc => .{ .cfunc = try self.int(u32) },
             // `T??` has no representation, so a payload that decodes
             // as optional is a damaged module, not a nested one.
             .optional => types.Type.optionalOf(try self.valueTypeAt(depth + 1)) orelse
@@ -1196,6 +1209,15 @@ const Reader = struct {
             .foreign_set => .{ .foreign_set = .{
                 .variable = try self.int(u32),
                 .value = try self.int(u32),
+            } },
+            .const_cfunc => .{ .const_cfunc = .{
+                .function = try self.int(u32),
+                .signature = try self.int(u32),
+            } },
+            .call_cfunc => .{ .call_cfunc = .{
+                .callee = try self.int(u32),
+                .signature = try self.int(u32),
+                .arguments = try self.registers(arena),
             } },
         };
     }
@@ -2406,9 +2428,49 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // struct row, `extern var` adds the foreign-variable table after
     // the foreign functions, and `foreign_get`/`foreign_set` append to
     // `Instruction` (the hash moves again) — bytes a phase-3 decoder
-    // never read, caught by the same bump.
+    // never read, caught by the same bump.  And phase 4b: `cfunc`
+    // appends to `types.Type` and its payload set, and
+    // `const_cfunc`/`call_cfunc` append to `Instruction` (the hash
+    // moves again) — encodings no earlier decoder accepted, caught by
+    // the same bump.
     try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 17615794941723489182), hasher.final());
+    try testing.expectEqual(@as(u64, 7312633432793541537), hasher.final());
+}
+
+test "a cfunc program round-trips the wire, conversion and call included" {
+    var program = try compileScript(
+        \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
+        \\extern func luce_ffi_probe_proc_address() -> (cfunc(i64, i64) -> i64)?
+        \\
+        \\func triple(v: i64) -> i64:
+        \\    return v * 3
+        \\
+        \\func main():
+        \\    print(str(luce_ffi_probe_apply(triple, 10)))
+        \\    let proc = luce_ffi_probe_proc_address()
+        \\    if proc != none:
+        \\        print(str(proc(6, 7)))
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    // Decode re-verifies, so a survived round trip is a verified one.
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "const_cfunc triple : cfunc(i64) -> i64") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "call_cfunc") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

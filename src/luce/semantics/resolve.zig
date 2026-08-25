@@ -154,6 +154,11 @@ pub fn refuseOptionalPart(
 }
 
 fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
+    // `cfunc(T, ...) -> R` — the C function pointer type
+    // (docs/FFI.md).  The flag comes only from the parser's
+    // parenthesized shape, so a program's own type named `cfunc`
+    // still resolves through the ordinary name path below.
+    if (written.cfunc) return resolveCfunc(self, module, written);
     // `func(T, ...) -> R`.  Not in the builtin table because it is
     // not a name a program could have written for something else:
     // `func` is a keyword, so this shape reaches here from the
@@ -477,6 +482,48 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
     });
 }
 
+/// `cfunc(T, ...) -> R` — the written C function pointer type,
+/// interned into the signature table under its own tag (docs/FFI.md).
+///
+/// The vocabulary is held here, at the one place a written cfunc type
+/// is minted, so every later stage may trust a `Type.cfunc`'s row:
+/// boundary scalars and handles, the pointer-shaped ones also as
+/// their `?` forms — `signatures.cfuncSlot` is the shared statement.
+fn resolveCfunc(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
+    const signatures_mod = @import("signatures.zig");
+    const parameters = try self.arena.alloc(types.Signature.Parameter, written.arguments.len);
+    for (written.arguments, parameters) |part, *parameter| {
+        const resolved = (try resolveType(self, module, part)) orelse return null;
+        if (!signatures_mod.cfuncSlot(resolved)) {
+            try self.fail(
+                "luce.sema.extern",
+                part.span,
+                "a cfunc parameter is a fixed-width integer, f32, f64, bool, foreign, or a named handle — the pointer-shaped ones also as their ? forms; the richer crossings wait for the binding generator's trampolines (docs/FFI.md)",
+                .{},
+            );
+            return null;
+        }
+        parameter.* = .{ .value_type = resolved };
+    }
+    var result: Type = .none;
+    if (written.result) |answered| {
+        result = (try resolveType(self, module, answered.*)) orelse return null;
+        if (!signatures_mod.cfuncSlot(result)) {
+            try self.fail(
+                "luce.sema.extern",
+                answered.span,
+                "a cfunc answers a fixed-width integer, f32, f64, bool, foreign, or a named handle — the pointer-shaped ones also as their ? forms — or nothing (docs/FFI.md)",
+                .{},
+            );
+            return null;
+        }
+    }
+    return .{ .cfunc = try internSignatureIndex(self, .{
+        .parameters = parameters,
+        .result = result,
+    }) };
+}
+
 /// The `?` a function type is told to wear where it stands in a slot.
 ///
 /// A memberwise aggregate field and a container element exist before anything
@@ -585,9 +632,16 @@ pub fn nominalType(self: *Analyzer, layout: u32) Error!Type {
 
 /// Intern one function signature and answer the type that names it.
 pub fn internSignature(self: *Analyzer, signature: types.Signature) Error!Type {
+    return .{ .function = try internSignatureIndex(self, signature) };
+}
+
+/// The row itself: one index per distinct shape.  `func` and `cfunc`
+/// types share the table — the tag on the `Type` is what tells the
+/// two spellings apart, exactly as it tells them apart on the wire.
+pub fn internSignatureIndex(self: *Analyzer, signature: types.Signature) Error!u32 {
     for (self.signatures.items, 0..) |existing, index| {
-        if (existing.eql(signature)) return .{ .function = @intCast(index) };
+        if (existing.eql(signature)) return @intCast(index);
     }
     try self.signatures.append(self.arena, signature);
-    return .{ .function = @intCast(self.signatures.items.len - 1) };
+    return @intCast(self.signatures.items.len - 1);
 }

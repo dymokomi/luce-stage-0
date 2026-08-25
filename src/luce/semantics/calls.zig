@@ -456,6 +456,11 @@ fn lowerValueCall(
 ) Error!?Typed {
     const callee_type = callee.value_type;
     const written = try calleeSpelling(self, written_at);
+    // A cfunc value is callable with the same suffix, under the
+    // boundary's own rules (docs/FFI.md).
+    if (callee_type == .cfunc) {
+        return lowerCfuncCall(self, callee, written, arguments, span, as_statement);
+    }
     if (callee_type != .function) {
         // The storable form — `(func(...) -> R)?` — is callable
         // exactly where the flow analysis has proved the value is
@@ -464,7 +469,9 @@ fn lowerValueCall(
         // the test and the use).  So the refusal teaches the three
         // lines that always work rather than the narrowing that
         // sometimes cannot.
-        if (callee_type == .optional and callee_type.optional == .function) {
+        if (callee_type == .optional and
+            (callee_type.optional == .function or callee_type.optional == .cfunc))
+        {
             // A name that could have been narrowed and was not is told
             // to narrow it, which is the shorter fix and the one it can
             // take.  Everything else takes the three-line one.
@@ -590,6 +597,72 @@ fn lowerValueCall(
     // call owes (docs/ERRORS.md R3): the same opening, the same
     // `try`/`catch` sentence at the same place.
     if (signature.fallible) return try self.openFallibleWith(signature.result, signature.error_type, node, span);
+    return .{ .node = node, .value_type = signature.result };
+}
+
+/// A call through a C function pointer (docs/FFI.md): positional,
+/// exact, never fallible — an extern call whose callee is a value.
+/// The arguments cross under the same boundary rules an extern call's
+/// do; what differs is only where the callee comes from.
+fn lowerCfuncCall(
+    self: *FunctionBuilder,
+    callee: Typed,
+    written: []const u8,
+    arguments: []const ast.Argument,
+    span: Span,
+    as_statement: bool,
+) Error!?Typed {
+    const signature_index = callee.value_type.cfunc;
+    const signature = self.analyzer.signatures.items[signature_index];
+    for (arguments) |argument| {
+        if (argument.name != null) {
+            try self.fail(
+                "luce.sema.extern",
+                argument.span,
+                "a cfunc call is positional; the C shape promises no argument names",
+                .{},
+            );
+            return null;
+        }
+    }
+    if (arguments.len != signature.parameters.len) {
+        try self.fail(
+            "luce.sema.extern",
+            span,
+            "{s} is {s} and takes {d} argument{s}, got {d}",
+            .{
+                written,
+                try self.analyzer.typeName(callee.value_type),
+                signature.parameters.len,
+                helpers.plural(signature.parameters.len),
+                arguments.len,
+            },
+        );
+        return null;
+    }
+    const entries = try self.arena().alloc(recorder.RecordedOperand, arguments.len);
+    for (arguments, signature.parameters, 0..) |argument, parameter, index| {
+        const fitted = (try self.lowerTyped(
+            argument.value,
+            parameter.value_type,
+            argument.span,
+            "a cfunc argument",
+        )) orelse return null;
+        entries[index] = .{ .node = fitted.value.node, .slot = @intCast(index) };
+    }
+    if (signature.result == .none and !as_statement) {
+        try self.fail("luce.sema.call", span, "{s} returns nothing", .{written});
+        return null;
+    }
+    const node = try recorder.recordCallNode(
+        self,
+        .{ .cfunc = .{ .callee = callee.node, .signature = signature_index } },
+        entries,
+        entries.len,
+        false,
+        signature.result,
+        span,
+    );
     return .{ .node = node, .value_type = signature.result };
 }
 
@@ -2113,8 +2186,9 @@ fn failFieldIsNotAMethod(
     const layout = self.analyzer.structs.items[layout_index];
     const field_index = layout.findField(method.name) orelse return false;
     const field_type = layout.fields[field_index].field_type;
-    const holds_function = field_type == .function or
-        (field_type == .optional and field_type.optional == .function);
+    const holds_function = field_type == .function or field_type == .cfunc or
+        (field_type == .optional and
+            (field_type.optional == .function or field_type.optional == .cfunc));
     if (!holds_function) return false;
     // A field this module cannot see is answered as private, never as
     // a fix it could not take (VISIBILITY.md D2).
@@ -2123,7 +2197,7 @@ fn failFieldIsNotAMethod(
         try writtenReceiver(self, method),
         method.name,
     });
-    if (field_type == .function) {
+    if (field_type == .function or field_type == .cfunc) {
         try self.fail(
             "luce.sema.call",
             method.span,

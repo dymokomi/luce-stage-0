@@ -371,13 +371,41 @@ const Module = struct {
     entries: []?Builder.Function.Index = &.{},
     witness_tables: ?WitnessTables = null,
 
+    /// The C-ABI wrappers behind `const_cfunc` (docs/FFI.md), one per
+    /// (function, signature) pair — the callback's real C entry point,
+    /// whose address is the cfunc value.  Built by `lowerCfuncSupport`
+    /// before any body is lowered, keyed `function << 32 | signature`.
+    cfunc_wrappers: std.AutoHashMapUnmanaged(u64, Builder.Function.Index) = .empty,
+    /// The per-thread runtime context a wrapper reads: C hands a
+    /// callback no host, no runtime and no depth, so each Luce thread
+    /// publishes its own on the way in — `luce_main` for the main
+    /// thread, the worker entry for a worker's.  Thread-local, so a
+    /// callback C invokes runs against the runtime of the Luce thread
+    /// that handed it over — the synchronous callback discipline
+    /// (docs/FFI.md).  Null in a program with no cfunc conversion,
+    /// which then emits none of this.
+    cfunc_context: ?CfuncContext = null,
+
+    /// libc's `abort` and `exit`, declared on first use: the cfunc
+    /// wrapper's two stops — no runtime context at all, and a trap
+    /// that cannot unwind through C (docs/FFI.md).
+    libc_abort: ?Builder.Function.Index = null,
+    libc_exit: ?Builder.Function.Index = null,
+
     const WitnessTables = struct {
         layouts: Builder.Variable.Index,
         offsets: Builder.Variable.Index,
         methods: Builder.Variable.Index,
     };
 
+    const CfuncContext = struct {
+        host: Builder.Variable.Index,
+        rt: Builder.Variable.Index,
+        depth: Builder.Variable.Index,
+    };
+
     fn deinit(self: *Module) void {
+        self.cfunc_wrappers.deinit(self.gpa);
         self.foreigns.deinit(self.gpa);
         self.foreign_globals.deinit(self.gpa);
         self.gpa.free(self.spawned);
@@ -410,7 +438,9 @@ const Module = struct {
         return switch (of) {
             .none => .void,
             .boolean => .i1,
-            .foreign => .i64,
+            // A C function pointer travels as the token word `foreign`
+            // travels as (docs/FFI.md).
+            .foreign, .cfunc => .i64,
             .u8, .i8 => .i8,
             .u16, .i16 => .i16,
             .u32, .i32, .char => .i32,
@@ -795,6 +825,7 @@ const Module = struct {
             .i64,
             .f64,
             .foreign,
+            .cfunc,
             .str,
             .bytes,
             .strukt,
@@ -1158,7 +1189,7 @@ const Module = struct {
         const tag: runtime.Tag, const bits: Builder.Constant = switch (of) {
             .none => .{ .none, try self.builder.intConst(.i64, 0) },
             .boolean => .{ .boolean, try self.builder.intConst(.i64, 0) },
-            .foreign => .{ .i64, try self.builder.intConst(.i64, 0) },
+            .foreign, .cfunc => .{ .i64, try self.builder.intConst(.i64, 0) },
             .u8 => .{ .u8, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
             .u16 => .{ .u16, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
             .u32 => .{ .u32, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
@@ -1404,6 +1435,12 @@ const Module = struct {
         if (self.program.container_constants.len != 0) {
             try self.lowerConstantMaterializer();
         }
+
+        // The cfunc wrappers and their thread-local context, before
+        // the worker entry and the bodies: the worker entry publishes
+        // the context and a body takes a wrapper's address, so both
+        // need the support standing (docs/FFI.md).
+        try self.lowerCfuncSupport();
 
         self.spawned = try self.collectSpawned();
         if (self.spawned.len != 0) try self.lowerWorkerEntry();
@@ -1722,6 +1759,7 @@ const Module = struct {
             .enumeration,
             // A handle is a scalar token: its own storage, nothing owned.
             .extern_type,
+            .cfunc,
             .function,
             => false,
         };
@@ -1927,6 +1965,318 @@ const Module = struct {
         return declared;
     }
 
+    /// Everything a program's cfunc conversions need, before any body
+    /// is lowered (docs/FFI.md): the thread-local runtime context and
+    /// one C-ABI wrapper per (function, signature) pair a
+    /// `const_cfunc` names.  A program without a conversion emits
+    /// none of it.
+    fn lowerCfuncSupport(self: *Module) Error!void {
+        for (self.program.functions) |*function| {
+            for (function.instructions) |instruction| {
+                const made = switch (instruction) {
+                    .const_cfunc => |made| made,
+                    else => continue,
+                };
+                const key = (@as(u64, made.function) << 32) | made.signature;
+                if (self.cfunc_wrappers.contains(key)) continue;
+                try self.makeCfuncContext();
+                const wrapper = try self.lowerCfuncWrapper(made.function, made.signature);
+                try self.cfunc_wrappers.put(self.gpa, key, wrapper);
+            }
+        }
+    }
+
+    fn makeCfuncContext(self: *Module) Error!void {
+        if (self.cfunc_context != null) return;
+        self.cfunc_context = .{
+            .host = try self.cfuncContextGlobal("luce.cfunc.host", .ptr, try self.builder.nullConst(.ptr)),
+            .rt = try self.cfuncContextGlobal("luce.cfunc.rt", .ptr, try self.builder.nullConst(.ptr)),
+            .depth = try self.cfuncContextGlobal("luce.cfunc.depth", .i64, try self.builder.intConst(.i64, 0)),
+        };
+    }
+
+    fn cfuncContextGlobal(
+        self: *Module,
+        name: []const u8,
+        of: Builder.Type,
+        zero: Builder.Constant,
+    ) Error!Builder.Variable.Index {
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabString(name),
+            of,
+            .default,
+        );
+        try variable.setInitializer(zero, self.builder);
+        variable.setThreadLocal(.generaldynamic, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+        return variable;
+    }
+
+    /// Publish this thread's runtime context for callbacks, on the way
+    /// into Luce code — `luce_main` and the worker entry both pass
+    /// through here.  Emitted only when a conversion exists.
+    fn publishCfuncContext(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        host: Builder.Value,
+        rt: Builder.Value,
+        depth: Builder.Value,
+    ) Error!void {
+        const context = self.cfunc_context orelse return;
+        const word = Builder.Alignment.fromByteUnits(8);
+        _ = try wip.store(.normal, host, context.host.toValue(self.builder), word);
+        _ = try wip.store(.normal, rt, context.rt.toValue(self.builder), word);
+        _ = try wip.store(.normal, depth, context.depth.toValue(self.builder), word);
+    }
+
+    fn libcAbort(self: *Module) Error!Builder.Function.Index {
+        if (self.libc_abort) |found| return found;
+        const declared = try self.builder.addFunction(
+            try self.builder.fnType(.void, &.{}, .normal),
+            try self.builder.strtabString("abort"),
+            .default,
+        );
+        declared.setLinkage(.external, self.builder);
+        self.libc_abort = declared;
+        return declared;
+    }
+
+    fn libcExit(self: *Module) Error!Builder.Function.Index {
+        if (self.libc_exit) |found| return found;
+        const declared = try self.builder.addFunction(
+            try self.builder.fnType(.void, &.{.i32}, .normal),
+            try self.builder.strtabString("exit"),
+            .default,
+        );
+        declared.setLinkage(.external, self.builder);
+        self.libc_exit = declared;
+        return declared;
+    }
+
+    /// The stop a callback takes when it cannot answer: a trap is
+    /// standing in the runtime — the callee's own, or the boundary's
+    /// `null_foreign` raised just before — and there is no unwinding
+    /// through the C frames above, so the program ends here, loudly:
+    /// report the trap the way `luce_main`'s ending does, then leave
+    /// with the trap status (docs/FFI.md).
+    fn cfuncStop(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        host: Builder.Value,
+        rt: Builder.Value,
+    ) Error!void {
+        const context = try self.loadHostSlot(wip, host, .context, "context");
+        try self.reportTrap(wip, host, context, rt, .true);
+        const status = try self.callService(wip, .luce_rt_status, .i32, &.{
+            rt,
+            try self.builder.intValue(.i32, outcome_trapped),
+        }, "status");
+        _ = try wip.call(
+            .normal,
+            .ccc,
+            .none,
+            try self.builder.fnType(.void, &.{.i32}, .normal),
+            (try self.libcExit()).toValue(self.builder),
+            &.{status},
+            "",
+        );
+        _ = try wip.@"unreachable"();
+    }
+
+    /// `<Rc> @luce.cfunc.F.S(<C params>)` — the C entry point behind
+    /// one cfunc conversion (docs/FFI.md): the exact C scalar per
+    /// slot with the target's extension attributes, exactly as an
+    /// extern declaration carries them, decoding inward and encoding
+    /// outward under the boundary's own rules.  The address of this
+    /// wrapper is the cfunc value.
+    fn lowerCfuncWrapper(
+        self: *Module,
+        function_index: u32,
+        signature_index: u32,
+    ) Error!Builder.Function.Index {
+        const callee = &self.program.functions[function_index];
+        const row = self.program.signatures[signature_index];
+        const builder = self.builder;
+        const word = Builder.Alignment.fromByteUnits(8);
+
+        var parameters: std.ArrayList(Builder.Type) = .empty;
+        defer parameters.deinit(self.gpa);
+        var attributes: Builder.FunctionAttributes.Wip = .{};
+        defer attributes.deinit(builder);
+        if (self.boundaryExtension(row.result)) |extension| {
+            try attributes.addRetAttr(extension, builder);
+        }
+        for (row.parameters, 0..) |parameter, at| {
+            const facing = foreignFacing(parameter.value_type);
+            try parameters.append(self.gpa, try self.valueType(facing));
+            if (self.boundaryExtension(facing)) |extension| {
+                try attributes.addParamAttr(at, extension, builder);
+            }
+        }
+        const result: Builder.Type = if (row.result == .none)
+            .void
+        else
+            try self.valueType(foreignFacing(row.result));
+        const declared = try builder.addFunction(
+            try builder.fnType(result, parameters.items, .normal),
+            try builder.strtabStringFmt("luce.cfunc.{d}.{d}", .{ function_index, signature_index }),
+            .default,
+        );
+        declared.setLinkage(.internal, builder);
+        declared.setAttributes(try attributes.finish(builder), builder);
+
+        var wip: Builder.WipFunction = try .init(builder, .{
+            .function = declared,
+            .strip = true,
+        });
+        defer wip.deinit();
+        const entry = try wip.block(0, "entry");
+        wip.cursor = .{ .block = entry };
+
+        // C hands a callback nothing; the calling thread's published
+        // context is the runtime it runs against.  A thread Luce never
+        // entered has no runtime to trap through, and stopping the
+        // process is the only honest answer left (docs/FFI.md).
+        const context = self.cfunc_context.?;
+        const rt = try wip.load(.normal, .ptr, context.rt.toValue(builder), word, "rt");
+        const orphan = try wip.block(1, "no.context");
+        const live = try wip.block(1, "live");
+        _ = try wip.brCond(
+            try wip.icmp(.eq, rt, try builder.nullValue(.ptr), "rt.null"),
+            orphan,
+            live,
+            .else_likely,
+        );
+        wip.cursor = .{ .block = orphan };
+        _ = try wip.call(
+            .normal,
+            .ccc,
+            .none,
+            try builder.fnType(.void, &.{}, .normal),
+            (try self.libcAbort()).toValue(builder),
+            &.{},
+            "",
+        );
+        _ = try wip.@"unreachable"();
+
+        wip.cursor = .{ .block = live };
+        const host = try wip.load(.normal, .ptr, context.host.toValue(builder), word, "host");
+        const depth = try wip.load(.normal, .i64, context.depth.toValue(builder), word, "depth");
+        const zero = try builder.intValue(.i64, 0);
+
+        var arguments: std.ArrayList(Builder.Value) = .empty;
+        defer arguments.deinit(self.gpa);
+        try arguments.appendSlice(self.gpa, &.{ host, rt, depth });
+        for (row.parameters, 0..) |parameter, at| {
+            const raw = wip.arg(@intCast(at));
+            switch (parameter.value_type.storage()) {
+                // A bare pointer-shaped slot enforces its non-null
+                // contract in this direction too: C calling a Luce
+                // callback with null in a bare slot is the
+                // mis-declared boundary stopping with a Luce trap.
+                .foreign, .cfunc => {
+                    const bad = try wip.block(1, "arg.null");
+                    const ok = try wip.block(1, "arg.ok");
+                    _ = try wip.brCond(
+                        try wip.icmp(.eq, raw, zero, "arg.is.null"),
+                        bad,
+                        ok,
+                        .else_likely,
+                    );
+                    wip.cursor = .{ .block = bad };
+                    try self.raiseIn(&wip, rt, .null_foreign);
+                    try self.cfuncStop(&wip, host, rt);
+                    wip.cursor = .{ .block = ok };
+                    try arguments.append(self.gpa, raw);
+                },
+                // `?` decodes C's 0 to `none` on the way in.
+                .optional => {
+                    const present = try wip.icmp(.ne, raw, zero, "arg.present");
+                    try arguments.append(self.gpa, try wip.buildAggregate(
+                        try self.valueType(parameter.value_type),
+                        &.{ raw, present },
+                        "arg.decoded",
+                    ));
+                },
+                else => try arguments.append(self.gpa, raw),
+            }
+        }
+        var out_slot: Builder.Value = .none;
+        if (callee.return_type != .none) {
+            out_slot = try wip.alloca(
+                .normal,
+                try self.valueType(callee.return_type),
+                .none,
+                Module.valueAlignment(callee.return_type),
+                .default,
+                "callback.out",
+            );
+            try arguments.append(self.gpa, out_slot);
+        }
+
+        const target = self.functions[function_index];
+        const outcome = try wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            target.typeOf(builder),
+            target.toValue(builder),
+            arguments.items,
+            "outcome",
+        );
+        // A trap inside the callback cannot unwind through the C
+        // frames above this one; it stops the program at the boundary.
+        const stopping = try wip.block(1, "stopping");
+        const good = try wip.block(1, "good");
+        _ = try wip.brCond(
+            try wip.icmp(.ne, outcome, try builder.intValue(.i32, outcome_ok), "trapped"),
+            stopping,
+            good,
+            .else_likely,
+        );
+        wip.cursor = .{ .block = stopping };
+        try self.cfuncStop(&wip, host, rt);
+
+        wip.cursor = .{ .block = good };
+        if (row.result == .none) {
+            _ = try wip.retVoid();
+        } else {
+            const held = try wip.load(
+                .normal,
+                try self.valueType(callee.return_type),
+                out_slot,
+                Module.valueAlignment(callee.return_type),
+                "answered",
+            );
+            switch (row.result.storage()) {
+                .foreign, .cfunc => {
+                    const bad = try wip.block(1, "result.null");
+                    const ok = try wip.block(1, "result.ok");
+                    _ = try wip.brCond(
+                        try wip.icmp(.eq, held, zero, "result.is.null"),
+                        bad,
+                        ok,
+                        .else_likely,
+                    );
+                    wip.cursor = .{ .block = bad };
+                    try self.raiseIn(&wip, rt, .null_foreign);
+                    try self.cfuncStop(&wip, host, rt);
+                    wip.cursor = .{ .block = ok };
+                    _ = try wip.ret(held);
+                },
+                // `?` encodes `none` as C's 0 on the way out.
+                .optional => {
+                    const inner = try wip.extractValue(held, &.{optional_payload}, "result.payload");
+                    const present = try wip.extractValue(held, &.{optional_present}, "result.present");
+                    _ = try wip.ret(try wip.select(.normal, present, inner, zero, "result.encoded"));
+                },
+                else => _ = try wip.ret(held),
+            }
+        }
+        try wip.finish();
+        return declared;
+    }
+
     /// `i32 @luce.worker(ptr host, ptr rt, i64 which, ptr args, i64
     /// count, ptr out, i64 depth)` — the one door a worker's thread
     /// enters this module through (docs/THREADS.md).
@@ -1971,6 +2321,12 @@ const Module = struct {
         const arguments = wip.arg(3);
         const out = wip.arg(5);
         const depth = wip.arg(6);
+
+        // Publish this worker thread's runtime context for callbacks:
+        // a callback C invokes on a worker's thread runs against that
+        // worker's own runtime, never main's (docs/FFI.md,
+        // docs/THREADS.md's share-nothing rule).
+        try self.publishCfuncContext(&wip, host, started, depth);
 
         // A worker owns a runtime of its own (THREADS.md D1), so it
         // owns a program-root table of its own too.  The generated
@@ -2565,7 +2921,7 @@ const Module = struct {
             .u16, .i16, .f16 => 2,
             .u32, .i32, .f32, .char => 4,
             // A function value travels as the pointer to its run.
-            .u64, .i64, .f64, .foreign, .strukt, .variant, .function, .heap => 8,
+            .u64, .i64, .f64, .foreign, .cfunc, .strukt, .variant, .function, .heap => 8,
             // `{ ptr, i64 }` — how a str travels.
             .str, .bytes => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
@@ -2574,7 +2930,7 @@ const Module = struct {
             // and `dereferenceable` must not claim more than the
             // caller's `alloca` provides.
             .optional => |payload| switch (payload.asType().storage()) {
-                .foreign => 16,
+                .foreign, .cfunc => 16,
                 .boolean, .u8, .i8 => 2,
                 // {i16, i1} and {half, i1} align to 2, so four.
                 .u16, .i16, .f16 => 4,
@@ -2697,6 +3053,10 @@ const Module = struct {
         wip.cursor = .{ .block = empty };
         _ = try wip.ret(try self.builder.intValue(.i32, @intFromEnum(runtime.Status.exhausted)));
         wip.cursor = .{ .block = running };
+
+        // Publish the main thread's runtime context for callbacks,
+        // before any Luce code can hand C a function (docs/FFI.md).
+        try self.publishCfuncContext(&wip, host, started, limit);
 
         // Constant containers are the program root of this runtime and
         // exist before the first instruction of `main`.  Keep the old
@@ -3411,6 +3771,8 @@ const Body = struct {
                 .foreign_get,
                 .foreign_set,
                 .call_indirect,
+                .const_cfunc,
+                .call_cfunc,
                 .binary,
                 .unary,
                 .convert,
@@ -3572,7 +3934,10 @@ const Body = struct {
         const of = written;
         return switch (of) {
             .boolean => .false,
-            .foreign => try self.module.builder.intValue(.i64, 0),
+            // A C function pointer's zero is the null pointer word —
+            // a value in a slot; only a boundary crossing or a call
+            // gives it the null_foreign meaning (docs/FFI.md).
+            .foreign, .cfunc => try self.module.builder.intValue(.i64, 0),
             .u8, .i8 => try self.module.builder.intValue(.i8, 0),
             .u16, .i16 => try self.module.builder.intValue(.i16, 0),
             .u32, .i32, .char => try self.module.builder.intValue(.i32, 0),
@@ -3820,7 +4185,7 @@ const Body = struct {
             .none => try self.module.builder.intValue(.i64, 0),
             .boolean => try self.wip.cast(.zext, held, .i64, "box.bits"),
             // A handle already *is* the `bits` word `Value` carries.
-            .u64, .i64, .foreign, .heap => held,
+            .u64, .i64, .foreign, .cfunc, .heap => held,
             .f64 => try self.wip.cast(.bitcast, held, .i64, "box.bits"),
             // A narrow scalar sits in the low half of the word,
             // zero-extended: `asI32` reads it back by truncating, so
@@ -3860,6 +4225,7 @@ const Body = struct {
             .none,
             .boolean,
             .foreign,
+            .cfunc,
             .u8,
             .u16,
             .u32,
@@ -4022,7 +4388,7 @@ const Body = struct {
         const of = written.storage();
         const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
-            .u64, .i64, .foreign, .heap => bits,
+            .u64, .i64, .foreign, .cfunc, .heap => bits,
             .u8, .i8 => try self.wip.cast(.trunc, bits, .i8, name),
             .u16, .i16 => try self.wip.cast(.trunc, bits, .i16, name),
             .u32, .i32, .char => try self.wip.cast(.trunc, bits, .i32, name),
@@ -4310,7 +4676,7 @@ const Body = struct {
         // An enum is a number in a cell, so it writes in place like one
         // (docs/ENUMS.md D9).
         return switch (written.storage()) {
-            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => true,
+            .boolean, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign, .cfunc => true,
             .none, .str, .bytes, .strukt, .variant, .function, .heap, .optional => false,
             .enumeration, .extern_type => unreachable, // answered by storage() above
         };
@@ -4563,7 +4929,7 @@ const Body = struct {
         const element = written.storage();
         return switch (element) {
             .f64 => .double,
-            .u64, .i64, .foreign => .i64,
+            .u64, .i64, .foreign, .cfunc => .i64,
             .f32 => .float,
             .u32, .i32, .char => .i32,
             .f16 => .half,
@@ -4590,6 +4956,7 @@ const Body = struct {
             .i64,
             .f64,
             .foreign,
+            .cfunc,
             .str,
             .bytes,
             .strukt,
@@ -4619,7 +4986,7 @@ const Body = struct {
             .boolean, .u8, .i8 => 1,
             .u16, .i16, .f16 => 2,
             .u32, .i32, .f32, .char => 4,
-            .u64, .i64, .f64, .foreign => 8,
+            .u64, .i64, .f64, .foreign, .cfunc => 8,
             // The boxed slot, whose size is `runtime.Value`'s and is
             // asserted against it by `runtime/test.zig`.
             .none, .str, .bytes, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
@@ -4882,7 +5249,7 @@ const Body = struct {
     fn loadCell(self: *Body, written: types.Type, address: Builder.Value) Error!Builder.Value {
         const element = written.storage();
         return switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => try self.cellLoad(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign, .cfunc => try self.cellLoad(
                 self.cellType(element),
                 address,
                 cellAlignment(element),
@@ -4920,7 +5287,7 @@ const Body = struct {
     ) Error!void {
         const element = written.storage();
         switch (element) {
-            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign => try self.cellStore(
+            .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64, .char, .foreign, .cfunc => try self.cellStore(
                 held,
                 address,
                 cellAlignment(element),
@@ -5948,6 +6315,20 @@ const Body = struct {
             },
             .const_function => |named| try self.emitConstFunction(register, named),
             .call_indirect => |called| try self.emitIndirectCall(register, called),
+            // A capture-free function's C pointer is the address of
+            // its wrapper, minted by `lowerCfuncSupport` before any
+            // body was lowered (docs/FFI.md).
+            .const_cfunc => |made| {
+                const key = (@as(u64, made.function) << 32) | made.signature;
+                const wrapper = self.module.cfunc_wrappers.get(key).?;
+                self.produced[register].value = try self.wip.cast(
+                    .ptrtoint,
+                    wrapper.toValue(self.module.builder),
+                    .i64,
+                    "cfunc.address",
+                );
+            },
+            .call_cfunc => |called| try self.emitCfuncCall(register, called),
             .local_get => |local| {
                 const held = self.function.locals[local];
                 const slot = self.local_slots[local];
@@ -6682,6 +7063,8 @@ const Body = struct {
             // (docs/FFI.md): arithmetic is refused before lowering,
             // whatever integer it is stored as.
             .extern_type,
+            // A cfunc value takes no operator at all (docs/FFI.md).
+            .cfunc,
             .optional,
             => return self.fail("arithmetic on a type that has none"),
         }
@@ -7124,6 +7507,9 @@ const Body = struct {
             // shape, and this arm keeps hostile MIR from reaching the old
             // partial comparison (docs/BINDING.md D6).
             .function => return self.fail("a comparison of function values"),
+            // A cfunc value has no equality either: a code address is
+            // the linker's accident, not a program fact (docs/FFI.md).
+            .cfunc => return self.fail("a comparison of cfunc values"),
             // A union is compared by match and nothing else
             // (docs/UNION.md D16): the analyzer refuses `==` on one.
             .variant => return self.fail("a comparison of two unions"),
@@ -7185,6 +7571,7 @@ const Body = struct {
                 .heap,
                 .enumeration,
                 .extern_type,
+                .cfunc,
                 .function,
                 .optional,
                 => return self.fail("negation of a type that has none"),
@@ -7294,8 +7681,9 @@ const Body = struct {
                 },
                 // A bare `foreign` is the enforced non-null contract:
                 // a zero token stops here, at the call, with a trace —
-                // never as a corrupt pointer inside C.
-                .foreign => {
+                // never as a corrupt pointer inside C.  A bare cfunc
+                // takes the same contract.
+                .foreign, .cfunc => {
                     try self.check(try self.wip.icmp(.eq, held, zero, "arg.is.null"), .null_foreign);
                     try arguments.append(gpa, held);
                 },
@@ -7479,7 +7867,7 @@ const Body = struct {
                     "result.decoded",
                 ) };
             },
-            .foreign => {
+            .foreign, .cfunc => {
                 try self.check(try self.wip.icmp(.eq, raw, zero, "result.is.null"), .null_foreign);
                 return .{ .of = written, .value = raw };
             },
@@ -7498,6 +7886,80 @@ const Body = struct {
             },
             else => return .{ .of = written, .value = raw },
         }
+    }
+
+    /// A call through a C function pointer (docs/FFI.md): the callee
+    /// arrives as the token word a boundary crossing or a bare field
+    /// read produced — a zero stops here, at the call — and the call
+    /// itself is an extern call through a register: the same encode,
+    /// the same effect lock, the same decode, with the target's
+    /// extension attributes rebuilt from the signature because there
+    /// is no declaration to carry them.
+    fn emitCfuncCall(
+        self: *Body,
+        register: mir.Register,
+        called: mir.Instruction.CfuncCall,
+    ) Error!void {
+        const gpa = self.module.gpa;
+        const builder = self.module.builder;
+        const signature = self.module.program.signatures[called.signature];
+        const zero = try builder.intValue(.i64, 0);
+
+        const token = self.produced[called.callee].value;
+        try self.check(try self.wip.icmp(.eq, token, zero, "callee.is.null"), .null_foreign);
+        const target = try self.wip.cast(.inttoptr, token, .ptr, "callee");
+
+        var parameters: std.ArrayList(Builder.Type) = .empty;
+        defer parameters.deinit(gpa);
+        var attributes: Builder.FunctionAttributes.Wip = .{};
+        defer attributes.deinit(builder);
+        if (self.module.boundaryExtension(signature.result)) |extension| {
+            try attributes.addRetAttr(extension, builder);
+        }
+        var arguments: std.ArrayList(Builder.Value) = .empty;
+        defer arguments.deinit(gpa);
+        for (signature.parameters, called.arguments, 0..) |parameter, argument, at| {
+            const facing = Module.foreignFacing(parameter.value_type);
+            try parameters.append(gpa, try self.module.valueType(facing));
+            if (self.module.boundaryExtension(facing)) |extension| {
+                try attributes.addParamAttr(at, extension, builder);
+            }
+            const held = self.produced[argument].value;
+            switch (parameter.value_type.storage()) {
+                // `none` encodes as C's 0; a present token passes.
+                .optional => {
+                    const inner = try self.wip.extractValue(held, &.{Module.optional_payload}, "arg.payload");
+                    const present = try self.wip.extractValue(held, &.{Module.optional_present}, "arg.present");
+                    try arguments.append(gpa, try self.wip.select(.normal, present, inner, zero, "arg.encoded"));
+                },
+                // The bare pointer-shaped contract, both kinds.
+                .foreign, .cfunc => {
+                    try self.check(try self.wip.icmp(.eq, held, zero, "arg.is.null"), .null_foreign);
+                    try arguments.append(gpa, held);
+                },
+                else => try arguments.append(gpa, held),
+            }
+        }
+        const result: Builder.Type = if (signature.result == .none)
+            .void
+        else
+            try self.module.valueType(Module.foreignFacing(signature.result));
+        const function_type = try builder.fnType(result, parameters.items, .normal);
+        try self.enterEffects();
+        const answer = try self.wip.call(
+            .normal,
+            .ccc,
+            try attributes.finish(builder),
+            function_type,
+            target,
+            arguments.items,
+            if (signature.result == .none) "" else "cfunc",
+        );
+        try self.leaveEffects();
+        if (signature.result == .none) return;
+        const decoded = try self.decodeForeignValue(signature.result, answer);
+        self.produced[register].value = decoded.value;
+        self.produced[register].box = decoded.box;
     }
 
     /// A C byte slot is allocated at 8 — at least the C alignment of
@@ -8295,6 +8757,7 @@ const Body = struct {
             .f64,
             .char,
             .foreign,
+            .cfunc,
             .strukt,
             .variant,
             .heap,
@@ -9491,6 +9954,7 @@ const Body = struct {
             .boolean,
             .char,
             .foreign,
+            .cfunc,
             .str,
             .bytes,
             .strukt,

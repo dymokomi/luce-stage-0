@@ -209,6 +209,134 @@ test "the verifier holds C globals and C-layout structs to their vocabularies" {
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "the verifier holds cfunc rows, conversions, and calls to their vocabularies" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    // One cfunc row — `cfunc(i64) -> i64` — plus a fallible row and a
+    // str-carrying row a hostile module could point a cfunc type at.
+    const signatures = try arena.alloc(types.Signature, 3);
+    const good_parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .i64 }});
+    signatures[0] = .{ .parameters = good_parameters, .result = .i64 };
+    signatures[1] = .{ .parameters = good_parameters, .result = .i64, .fallible = true };
+    const text_parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .str }});
+    signatures[2] = .{ .parameters = text_parameters, .result = .none };
+    program.signatures = signatures;
+
+    // The capture-free callee the conversion names, exactly the row's
+    // shape, and a second function of a different shape.
+    const functions = try arena.alloc(Function, 3);
+    functions[1] = .{
+        .name = "triple",
+        .parameter_count = 1,
+        .return_type = .i64,
+        .locals = try arena.dupe(Local, &.{.{ .name = "v", .local_type = .i64 }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .local_get = 0 },
+            .{ .ret = 0 },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .i64, .none }),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1 }),
+        }}),
+    };
+    functions[2] = .{
+        .name = "other",
+        .parameter_count = 1,
+        .return_type = .i64,
+        .locals = try arena.dupe(Local, &.{.{ .name = "v", .local_type = .i32 }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_integer = 0 },
+            .{ .ret = 0 },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .i64, .none }),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1 }),
+        }}),
+    };
+    // main converts, then calls through the value.
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_cfunc = .{ .function = 1, .signature = 0 } },
+            .{ .const_integer = 7 },
+            .{ .call_cfunc = .{
+                .callee = 0,
+                .signature = 0,
+                .arguments = try arena.dupe(Register, &.{1}),
+            } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .cfunc = 0 }, .i64, .i64, .none }),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }),
+        }}),
+    };
+    program.functions = functions;
+    program.entry_function = 0;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // A conversion naming a function that is not the row's shape, a
+    // function that does not exist, or a row outside the vocabulary.
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 2, .signature = 0 } };
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 9, .signature = 0 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 1, .signature = 9 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 1, .signature = 0 } };
+
+    // A fallible row and a str-carrying row have no C shape, wherever
+    // the type appears — the conversion, the call, or a slot.
+    functions[0].result_types[0] = .{ .cfunc = 1 };
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 1, .signature = 1 } };
+    functions[0].instructions[2] = .{ .call_cfunc = .{
+        .callee = 0,
+        .signature = 1,
+        .arguments = try arena.dupe(Register, &.{1}),
+    } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[0] = .{ .cfunc = 2 };
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 1, .signature = 2 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[0] = .{ .cfunc = 0 };
+    functions[0].instructions[0] = .{ .const_cfunc = .{ .function = 1, .signature = 0 } };
+    functions[0].instructions[2] = .{ .call_cfunc = .{
+        .callee = 0,
+        .signature = 0,
+        .arguments = try arena.dupe(Register, &.{1}),
+    } };
+    try verify_mod.verify(testing.allocator, &program);
+
+    // A call must agree with the callee register's row, argument for
+    // argument, and answer exactly what the row answers.
+    functions[0].instructions[2] = .{ .call_cfunc = .{
+        .callee = 1,
+        .signature = 0,
+        .arguments = try arena.dupe(Register, &.{1}),
+    } };
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[2] = .{ .call_cfunc = .{
+        .callee = 0,
+        .signature = 0,
+        .arguments = try arena.dupe(Register, &.{}),
+    } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[2] = .{ .call_cfunc = .{
+        .callee = 0,
+        .signature = 0,
+        .arguments = try arena.dupe(Register, &.{1}),
+    } };
+    functions[0].result_types[2] = .f64;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .i64;
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "a struct graph is checked for cycles in one pass, not one per path" {
     // Forty layouts, each holding the next one twice: no cycle, but
     // 2^39 distinct paths from the first to the last.  A per-path walk

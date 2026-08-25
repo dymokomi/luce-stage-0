@@ -624,6 +624,23 @@ pub fn failIncomparable(
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );
         },
+        .cfunc => {
+            if (!nested) {
+                try self.fail(
+                    "luce.sema.type",
+                    span,
+                    "a cfunc value is a code address the linker chose, not a fact about the program, so {s} has no honest answer (docs/FFI.md)",
+                    .{operator},
+                );
+                return;
+            }
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "{s} is compared field by field and it reaches {s}: a cfunc value is a code address the linker chose, so {s} has no honest answer (docs/FFI.md)",
+                .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
+            );
+        },
         .interface => try self.fail(
             "luce.sema.interface",
             span,
@@ -704,6 +721,12 @@ pub fn failUnsearchable(
                 .{ method_name, element_name, part_name },
             );
         },
+        .cfunc => try self.fail(
+            "luce.sema.method",
+            span,
+            "{s} compares elements with ==, but {s} reaches a cfunc value, which is a code address the linker chose and has no equality (docs/FFI.md); keep a stable key beside it and search that",
+            .{ method_name, element_name },
+        ),
         .interface => try self.fail(
             "luce.sema.method",
             span,

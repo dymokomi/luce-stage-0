@@ -872,41 +872,62 @@ fn boundaryScalar(of: Type) bool {
 }
 
 /// What crosses bare in either direction (docs/FFI.md): the boundary
-/// scalars, the opaque token, a named handle, and `str`.  A named
-/// handle is its representation at the boundary, and every
-/// representation it may declare crosses by construction.
+/// scalars, the opaque token, a named handle, a C function pointer,
+/// and `str`.  A named handle is its representation at the boundary,
+/// and every representation it may declare crosses by construction.
 fn boundaryParameter(of: Type) bool {
     return switch (of) {
-        .foreign, .extern_type, .str => true,
+        .foreign, .extern_type, .str, .cfunc => true,
         else => boundaryScalar(of),
     };
 }
 
-/// The nullable crossings (docs/FFI.md): `foreign?` and a
-/// pointer-shaped handle's `?` decode C's null to `none`; `str?`
+/// The nullable crossings (docs/FFI.md): `foreign?`, a pointer-shaped
+/// handle's `?`, and `cfunc(...)?` decode C's null to `none`; `str?`
 /// crosses `none` as NULL and takes the NUL-temporary rules
 /// otherwise.  The bare forms beside them are the enforced non-null
 /// contract.  An integer-shaped handle is not here on purpose —
 /// `refuseIntegerHandleOptional` owns that refusal.
 fn nullableBoundary(of: Type) bool {
     if (of != .optional) return false;
+    if (of.optional == .cfunc) return true;
     const payload = of.optional.asType();
     return payload == .foreign or payload == .str or
         (payload == .extern_type and payload.extern_type.representation == .foreign);
 }
 
 /// What an `out` slot may carry back (docs/FFI.md): the scalars and
-/// the handles — bare, `foreign`, or nullable pointer-shaped.  Not
-/// `str`: C fills a caller-allocated word there, and text has no
+/// the pointer-shaped values — handles bare or nullable, and C
+/// function pointers, the `vkGetInstanceProcAddr`-through-out shape.
+/// Not `str`: C fills a caller-allocated word there, and text has no
 /// word.
 fn boundaryOut(of: Type) bool {
-    if (of == .foreign or of == .extern_type) return true;
+    if (of == .foreign or of == .extern_type or of == .cfunc) return true;
     if (of == .optional) {
+        if (of.optional == .cfunc) return true;
         const payload = of.optional.asType();
         return payload == .foreign or
             (payload == .extern_type and payload.extern_type.representation == .foreign);
     }
     return boundaryScalar(of);
+}
+
+/// One slot of a `cfunc` signature (docs/FFI.md): the boundary
+/// scalars, the opaque token, and the named handles — the
+/// pointer-shaped ones also as their `?` forms.  Deliberately
+/// narrower than an extern's own vocabulary: no `str`, no extern
+/// structs, no nested cfunc, no `out` — a callback trampoline moves
+/// words, and the richer crossings arrive with the binding
+/// generator's shims.  Shared with `resolve.zig`, which holds a
+/// written cfunc type to it, and mirrored by the MIR verifier for
+/// hostile input.
+pub fn cfuncSlot(of: Type) bool {
+    return switch (of) {
+        .foreign, .extern_type => true,
+        .optional => |payload| payload == .foreign or
+            (payload == .extern_type and payload.extern_type.representation == .foreign),
+        else => boundaryScalar(of),
+    };
 }
 
 /// An `extern struct` at the boundary (docs/FFI.md): an ordinary

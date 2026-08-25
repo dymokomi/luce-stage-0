@@ -142,6 +142,18 @@ pub const Type = union(enum) {
     /// else.  Appended, so no earlier tag renumbers on the wire.
     extern_type: ExternTypeRef,
 
+    /// `cfunc(T, ...) -> R` — a **C function pointer** at the FFI
+    /// boundary (docs/FFI.md).  The index reaches the program's
+    /// signature table exactly as `function` does, interned the same
+    /// way, and the row is held to the boundary vocabulary where the
+    /// type is written.  A value of this type is the pointer word
+    /// itself — no ARC, no equality, no worker crossing — callable
+    /// with ordinary call syntax under extern-call semantics, and
+    /// zero-valued like a handle, which is why a bare slot's zero
+    /// traps `null_foreign` at a boundary crossing and a call.
+    /// Appended, so no earlier tag renumbers on the wire.
+    cfunc: u32,
+
     pub const ExternTypeRef = struct {
         index: u32,
         representation: Representation,
@@ -271,6 +283,11 @@ pub const Type = union(enum) {
         /// in the language, a handle's optional behaves like any other
         /// `T?`.  Appended, so no earlier payload tag renumbers.
         extern_type: ExternTypeRef,
+        /// `cfunc(...)?` — a C function pointer that may be C's null
+        /// (docs/FFI.md).  The boundary decodes 0 to `none` and
+        /// encodes `none` as 0, the pointer-shaped handle rule
+        /// exactly.  Appended, so no earlier payload tag renumbers.
+        cfunc: u32,
 
         pub fn asType(self: Payload) Type {
             return switch (self) {
@@ -296,6 +313,7 @@ pub const Type = union(enum) {
                 .variant => |index| .{ .variant = index },
                 .function => |index| .{ .function = index },
                 .extern_type => |reference| .{ .extern_type = reference },
+                .cfunc => |index| .{ .cfunc = index },
             };
         }
 
@@ -309,6 +327,7 @@ pub const Type = union(enum) {
                 .function => |index| other == .function and other.function == index,
                 .extern_type => |reference| other == .extern_type and
                     other.extern_type.index == reference.index,
+                .cfunc => |index| other == .cfunc and other.cfunc == index,
                 else => std.meta.activeTag(self) == std.meta.activeTag(other),
             };
         }
@@ -328,6 +347,9 @@ pub const Type = union(enum) {
             // index, the EnumRef discipline exactly.
             .extern_type => |reference| other == .extern_type and
                 other.extern_type.index == reference.index,
+            // A C function pointer's identity is its signature row,
+            // exactly as a function value's is (docs/FFI.md).
+            .cfunc => |index| other == .cfunc and other.cfunc == index,
             .optional => |payload| other == .optional and payload.eql(other.optional),
             else => std.meta.activeTag(self) == std.meta.activeTag(other),
         };
@@ -392,7 +414,7 @@ pub const Type = union(enum) {
             .u16, .i16, .f16 => 16,
             .u32, .i32, .f32 => 32,
             .u64, .i64, .f64 => 64,
-            .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => 0,
+            .none, .boolean, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type, .cfunc => 0,
         };
     }
 
@@ -412,7 +434,7 @@ pub const Type = union(enum) {
             .i16 => .{ .low = std.math.minInt(i16), .high = std.math.maxInt(i16) },
             .i32 => .{ .low = std.math.minInt(i32), .high = std.math.maxInt(i32) },
             .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
-            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type => unreachable,
+            .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .foreign, .strukt, .heap, .enumeration, .variant, .function, .optional, .extern_type, .cfunc => unreachable,
         };
     }
 
@@ -512,6 +534,9 @@ pub const Type = union(enum) {
             // extern boundary rules on which handles admit it
             // (docs/FFI.md).
             .extern_type => |reference| .{ .optional = .{ .extern_type = reference } },
+            // `cfunc(...)?` — the nullable C function pointer, the
+            // pointer-shaped handle rule exactly (docs/FFI.md).
+            .cfunc => |index| .{ .optional = .{ .cfunc = index } },
         };
     }
 
@@ -848,7 +873,8 @@ pub fn cAlignOf(layouts: []const StructLayout, of: Type) u32 {
         .boolean, .u8, .i8 => 1,
         .u16, .i16 => 2,
         .u32, .i32, .f32 => 4,
-        .u64, .i64, .f64, .foreign => 8,
+        // A C function pointer field is the pointer word (docs/FFI.md).
+        .u64, .i64, .f64, .foreign, .cfunc => 8,
         .strukt => |index| widest: {
             var widest: u32 = 1;
             for (layouts[index].fields) |field| {
@@ -867,7 +893,7 @@ pub fn cSizeOf(layouts: []const StructLayout, of: Type) u32 {
         .boolean, .u8, .i8 => 1,
         .u16, .i16 => 2,
         .u32, .i32, .f32 => 4,
-        .u64, .i64, .f64, .foreign => 8,
+        .u64, .i64, .f64, .foreign, .cfunc => 8,
         .strukt => |index| whole: {
             var offset: u32 = 0;
             for (layouts[index].fields) |field| {
@@ -1149,14 +1175,34 @@ fn writeTypeName(
                 try written.appendSlice(allocator, " -> !");
             }
         },
+        // `cfunc(...) -> R` reads exactly as a function type does,
+        // under its own head word; a cfunc signature is never fallible
+        // (docs/FFI.md).
+        .cfunc => |index| {
+            const signature = signatures[index];
+            try written.appendSlice(allocator, "cfunc(");
+            for (signature.parameters, 0..) |parameter, at| {
+                if (at != 0) try written.appendSlice(allocator, ", ");
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, parameter.value_type);
+            }
+            try written.appendSlice(allocator, ")");
+            if (signature.result != .none) {
+                try written.appendSlice(allocator, " -> ");
+                try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, signature.result);
+            }
+        },
         .optional => |payload| {
             // **A function payload is parenthesized**, because that is
             // the only spelling that reads back as this type: a bare
             // `func(i64) -> str?` is a function *answering* an
             // optional (docs/BINDING.md D7).  Every other payload takes
             // the `?` bare, and adding parentheses there would put a
-            // second spelling of every type into diagnostics.
-            const parenthesized = payload == .function;
+            // second spelling of every type into diagnostics.  A cfunc
+            // payload takes them for the same reason exactly when it
+            // answers something — `cfunc(u32)?` has no result for the
+            // `?` to reach and reads back bare.
+            const parenthesized = payload == .function or
+                (payload == .cfunc and signatures[payload.cfunc].result != .none);
             if (parenthesized) try written.appendSlice(allocator, "(");
             try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, extern_types, payload.asType());
             if (parenthesized) try written.appendSlice(allocator, ")");
