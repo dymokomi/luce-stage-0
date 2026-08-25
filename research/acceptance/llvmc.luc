@@ -1,0 +1,181 @@
+# The 0.21 FFI acceptance probe: drive the real LLVM-C API the way
+# the epoch-1 self-hosted compiler will.  Build a module holding
+# `i64 add(i64, i64)` and a constant global, verify it, print its IR,
+# look a function up by name (hit and miss), then feed the context
+# garbage bitcode so its diagnostic handler — a Luce function handed
+# to C as a plain function pointer — fires, and dispose everything.
+#
+# Every declaration below is the C shape as llvm-c/*.h states it;
+# the call sites are ordinary Luce (docs/FFI.md).
+
+import std.c
+import std.strings
+
+# -- the handles ------------------------------------------------------------
+
+extern type LLVMContextRef
+extern type LLVMModuleRef
+extern type LLVMBuilderRef
+extern type LLVMTypeRef
+extern type LLVMValueRef
+extern type LLVMBasicBlockRef
+extern type LLVMMemoryBufferRef
+extern type LLVMDiagnosticInfoRef
+
+# LLVMFunctionType wants `LLVMTypeRef *`: a contiguous run of handles.
+# 0.21 has no array crossing, but an extern struct crosses by pointer
+# with C's exact layout — two handle fields *are* LLVMTypeRef[2].
+extern struct TypePair:
+    first: LLVMTypeRef
+    second: LLVMTypeRef
+
+# LLVMVerifierFailureAction: C enum constants do not import; the value
+# is hand-copied from llvm-c/Analysis.h.
+const return_status_action: i32 = 2
+
+# -- contexts and diagnostics ----------------------------------------------
+
+extern func LLVMContextCreate() -> LLVMContextRef
+extern func LLVMContextDispose(context: LLVMContextRef)
+# The handler's second parameter is the DiagnosticContext handed in
+# here — ours is none, so the callback slot must say `foreign?`: a
+# bare `foreign` would trap null_foreign when C calls back with NULL.
+extern func LLVMContextSetDiagnosticHandler(context: LLVMContextRef, handler: cfunc(LLVMDiagnosticInfoRef, foreign?), diagnostic_context: foreign?)
+extern func LLVMGetDiagInfoSeverity(info: LLVMDiagnosticInfoRef) -> i32
+extern func LLVMGetDiagInfoDescription(info: LLVMDiagnosticInfoRef) -> foreign
+extern func LLVMDisposeMessage(message: foreign)
+
+# -- modules ----------------------------------------------------------------
+
+extern func LLVMModuleCreateWithNameInContext(name: str, context: LLVMContextRef) -> LLVMModuleRef
+extern func LLVMDisposeModule(module: LLVMModuleRef)
+extern func LLVMSetTarget(module: LLVMModuleRef, triple: str)
+# A borrowed `const char *` result: seamless `-> str` copies it at the
+# boundary and nothing needs disposing.
+extern func LLVMGetTarget(module: LLVMModuleRef) -> str
+# An *owned* `char *` result: declared `foreign` on purpose, because a
+# seamless `-> str` would copy the text and leak the C allocation —
+# the pointer itself is needed for LLVMDisposeMessage (take_message).
+extern func LLVMGetDefaultTargetTriple() -> foreign
+extern func LLVMPrintModuleToString(module: LLVMModuleRef) -> foreign
+# C's null-on-miss becomes none at the boundary.
+extern func LLVMGetNamedFunction(module: LLVMModuleRef, name: str) -> LLVMValueRef?
+
+# -- types and values -------------------------------------------------------
+
+extern func LLVMInt64TypeInContext(context: LLVMContextRef) -> LLVMTypeRef
+extern func LLVMFunctionType(result: LLVMTypeRef, parameters: TypePair, count: u32, is_vararg: i32) -> LLVMTypeRef
+extern func LLVMAddFunction(module: LLVMModuleRef, name: str, signature: LLVMTypeRef) -> LLVMValueRef
+extern func LLVMGetParam(function: LLVMValueRef, index: u32) -> LLVMValueRef
+# `const char *` result beside a `size_t *` out slot, in one call.
+extern func LLVMGetValueName2(value: LLVMValueRef, out length: u64) -> str
+extern func LLVMConstInt(int_type: LLVMTypeRef, value: u64, sign_extend: i32) -> LLVMValueRef
+extern func LLVMAddGlobal(module: LLVMModuleRef, global_type: LLVMTypeRef, name: str) -> LLVMValueRef
+extern func LLVMSetInitializer(global: LLVMValueRef, value: LLVMValueRef)
+
+# -- IR construction --------------------------------------------------------
+
+extern func LLVMAppendBasicBlockInContext(context: LLVMContextRef, function: LLVMValueRef, name: str) -> LLVMBasicBlockRef
+extern func LLVMCreateBuilderInContext(context: LLVMContextRef) -> LLVMBuilderRef
+extern func LLVMDisposeBuilder(builder: LLVMBuilderRef)
+extern func LLVMPositionBuilderAtEnd(builder: LLVMBuilderRef, block: LLVMBasicBlockRef)
+extern func LLVMBuildAdd(builder: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: str) -> LLVMValueRef
+extern func LLVMBuildRet(builder: LLVMBuilderRef, value: LLVMValueRef) -> LLVMValueRef
+
+# -- verification and bitcode ----------------------------------------------
+
+# C's `char **OutMessage` is a pointer-sized out slot C fills with an
+# owned `char *` (or leaves zero): `out message: foreign?` decodes the
+# untouched slot to none and hands the owned pointer back otherwise.
+extern func LLVMVerifyModule(module: LLVMModuleRef, action: i32, out message: foreign?) -> i32
+extern func LLVMCreateMemoryBufferWithMemoryRangeCopy(data: str, length: u64, name: str) -> LLVMMemoryBufferRef
+extern func LLVMDisposeMemoryBuffer(buffer: LLVMMemoryBufferRef)
+# Reports failure through the context's diagnostic handler — the seat
+# that proves C really invokes the Luce callback.
+extern func LLVMParseBitcodeInContext2(context: LLVMContextRef, buffer: LLVMMemoryBufferRef, out module: LLVMModuleRef?) -> i32
+
+# -- the probe --------------------------------------------------------------
+
+# Read an LLVM-owned message and release it: the one ownership shape
+# seamless `-> str` cannot spell, three lines once.
+func take_message(message: foreign) -> str:
+    let text = c.cstring_at(message)
+    LLVMDisposeMessage(message)
+    return text
+
+# The diagnostic handler C calls back.  Capture-free by construction;
+# it crosses as a plain C function pointer.
+func note_diagnostic(info: LLVMDiagnosticInfoRef, context: foreign?):
+    let severity = LLVMGetDiagInfoSeverity(info)
+    let description = take_message(LLVMGetDiagInfoDescription(info))
+    print(f"diagnostic (severity {severity}): {description}")
+
+func main():
+    let context = LLVMContextCreate()
+    LLVMContextSetDiagnosticHandler(context, note_diagnostic, none)
+
+    # Build the module the epoch-1 compiler would: a target triple,
+    # one function, one constant global.
+    let module = LLVMModuleCreateWithNameInContext("probe", context)
+    LLVMSetTarget(module, take_message(LLVMGetDefaultTargetTriple()))
+    print("target: " + LLVMGetTarget(module))
+
+    let int64 = LLVMInt64TypeInContext(context)
+    let signature = LLVMFunctionType(int64, TypePair(first = int64, second = int64), 2, 0)
+    let add = LLVMAddFunction(module, "add", signature)
+    let entry = LLVMAppendBasicBlockInContext(context, add, "entry")
+    let builder = LLVMCreateBuilderInContext(context)
+    LLVMPositionBuilderAtEnd(builder, entry)
+    let sum = LLVMBuildAdd(builder, LLVMGetParam(add, 0), LLVMGetParam(add, 1), "sum")
+    LLVMBuildRet(builder, sum)
+
+    # A u64 immediate at full width: i64.max survives the crossing.
+    let seed = LLVMAddGlobal(module, int64, "seed")
+    LLVMSetInitializer(seed, LLVMConstInt(int64, 9223372036854775807, 0))
+
+    # A clean module verifies; LLVM strdups even the empty message, so
+    # the out slot comes back present and still needs disposing.
+    let broken, complaint = LLVMVerifyModule(module, return_status_action)
+    print("verified: " + str(broken == 0))
+    if complaint != none:
+        let text = take_message(complaint)
+        if len(text) > 0:
+            print("verifier said: " + text)
+
+    # A sick module — a block with no terminator — answers status 1
+    # and the reason through the same char** out slot.
+    let sick = LLVMModuleCreateWithNameInContext("sick", context)
+    let hole = LLVMAddFunction(sick, "hole", signature)
+    LLVMAppendBasicBlockInContext(context, hole, "entry")
+    let failed, reason = LLVMVerifyModule(sick, return_status_action)
+    print("sick module rejected: " + str(failed != 0))
+    if reason != none:
+        print("verifier: " + strings.trim(take_message(reason)))
+
+    # Name lookup: the hit is a present handle, the miss is none.
+    let found = LLVMGetNamedFunction(module, "add")
+    if found != none:
+        let name, name_length = LLVMGetValueName2(found)
+        print(f"found @{name} ({name_length} chars)")
+    let missing = LLVMGetNamedFunction(module, "missing")
+    print("missing lookup is none: " + str(missing == none))
+
+    print("--- module IR ---")
+    print(strings.trim(take_message(LLVMPrintModuleToString(module))))
+    print("-----------------")
+
+    # Garbage bitcode: the parse fails, the zeroed out slot decodes to
+    # none, and C invokes note_diagnostic on this thread — the proof
+    # the cfunc crossing carries real calls, not just pointers.
+    let junk = "this is not bitcode"
+    let garbage = LLVMCreateMemoryBufferWithMemoryRangeCopy(junk, u64(len(junk)), "garbage")
+    let status, parsed = LLVMParseBitcodeInContext2(context, garbage)
+    print("bitcode parse failed: " + str(status != 0))
+    print("parsed module is none: " + str(parsed == none))
+    LLVMDisposeMemoryBuffer(garbage)
+
+    LLVMDisposeBuilder(builder)
+    LLVMDisposeModule(module)
+    LLVMDisposeModule(sick)
+    LLVMContextDispose(context)
+    print("clean shutdown")
