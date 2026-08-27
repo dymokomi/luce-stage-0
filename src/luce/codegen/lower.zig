@@ -8437,13 +8437,17 @@ const Body = struct {
             arguments.items,
             "interface.outcome",
         );
-        if (fallible) self.produced[register].outcome = outcome;
-        try self.propagate(try self.wip.icmp(
-            .ne,
-            outcome,
-            try builder.intValue(.i32, outcome_ok),
-            "interface.trapped",
-        ));
+        if (fallible) {
+            try self.propagateTrapOnly(outcome);
+            self.produced[register].outcome = outcome;
+        } else {
+            try self.propagate(try self.wip.icmp(
+                .ne,
+                outcome,
+                try builder.intValue(.i32, outcome_ok),
+                "interface.trapped",
+            ));
+        }
         if (result != .none) {
             self.produced[register].value = try self.wip.load(
                 .normal,

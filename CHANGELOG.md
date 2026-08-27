@@ -4,6 +4,18 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## Unreleased
+
+- **An error raised behind interface dispatch reaches its caller.** The
+  compiled interface call ran the non-fallible unwind edge, so a witness
+  method raising `error(...)` unwound like a trap with no record — the
+  process died with "the program trapped and said nothing" instead of the
+  caller's `catch`/`try` seeing the reason. The fallible interface call now
+  keeps its error outcome in hand exactly as direct and function-value
+  calls do; only a real trap unwinds. Every shape was affected — `-> T!`,
+  `-> !`, union payloads, parameters, `try` propagation, and mutating
+  witnesses — and each now has a two-engine regression spec.
+
 ## 0.21 — the C boundary
 
 Luce programs now speak to C directly. An `extern` declaration states a C

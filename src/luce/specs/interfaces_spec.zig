@@ -99,6 +99,113 @@ test "a fallible multi-value interface method can be received with try" {
     , "27\n");
 }
 
+test "an error raised by a class witness crosses the interface call" {
+    // Stage-0 regression: the compiled interface call once ran the
+    // non-fallible unwind edge, so a raised error unwound like a trap
+    // ("trapped and said nothing") instead of reaching catch/try.
+    // Covers the value, unit, and try-propagation shapes in one program.
+    try agree.prints(
+        \\interface Failer:
+        \\    func go() -> i64!
+        \\    func unit_go() -> !
+        \\
+        \\class Boom: Failer:
+        \\    pub init():
+        \\        return
+        \\    pub func go() -> i64!:
+        \\        error("boom")
+        \\    pub func unit_go() -> !:
+        \\        error("unit boom")
+        \\
+        \\func propagate(f: Failer) -> i64!:
+        \\    return try f.go()
+        \\
+        \\func main():
+        \\    let f: Failer = Boom()
+        \\    f.unit_go() catch reason:
+        \\        print("unit: " + reason)
+        \\    let v = f.go() catch reason:
+        \\        print("caught: " + reason)
+        \\        let p = propagate(f) catch propagated:
+        \\            print("propagated: " + propagated)
+        \\            return
+        \\        print("unreachable " + str(p))
+        \\        return
+        \\    print("unreachable " + str(v))
+        \\
+    ,
+        \\unit: unit boom
+        \\caught: boom
+        \\propagated: boom
+        \\
+    );
+}
+
+test "an error raised by a mutating witness crosses the interface call" {
+    // The inout dispatch shares the fallible edge: a raise leaves the
+    // receiver's earlier mutation in place and reaches the caller.
+    try agree.prints(
+        \\interface Counter:
+        \\    mutating func add(amount: i64) -> i64!
+        \\
+        \\struct Number: Counter:
+        \\    current: i64
+        \\    func add(amount: i64) -> i64!:
+        \\        self.current = self.current + amount
+        \\        if self.current > 100:
+        \\            error("overflowed at " + str(self.current))
+        \\        return self.current
+        \\
+        \\func main():
+        \\    var counter: Counter = Number(current = 40)
+        \\    let first = counter.add(2) catch reason:
+        \\        print("unreachable " + reason)
+        \\        return
+        \\    print(str(first))
+        \\    counter.add(70) catch reason:
+        \\        print("caught: " + reason)
+        \\
+    ,
+        \\42
+        \\caught: overflowed at 112
+        \\
+    );
+}
+
+test "a raising interface method with parameters and a multi-value answer" {
+    // Parameters ride behind the hidden receiver, and the multi-value
+    // result slot stays untouched on the error path.
+    try agree.prints(
+        \\interface Bounds:
+        \\    func limits(low: i64, label: str) -> (i64, i64)!
+        \\
+        \\struct Window: Bounds:
+        \\    width: i64
+        \\    func limits(low: i64, label: str) -> (i64, i64)!:
+        \\        if low < 0:
+        \\            error(label + " below zero")
+        \\        return low, low + self.width
+        \\
+        \\func total(item: Bounds, low: i64) -> i64!:
+        \\    let a, b = try item.limits(low, "start")
+        \\    return a + b
+        \\
+        \\func main():
+        \\    let window = Window(width = 7)
+        \\    let good = total(window, 10) catch reason:
+        \\        print("unreachable " + reason)
+        \\        return
+        \\    print(str(good))
+        \\    total(window, -1) catch reason:
+        \\        print("caught: " + reason)
+        \\
+    ,
+        \\27
+        \\caught: start below zero
+        \\
+    );
+}
+
 test "a multi-value interface answer can transfer an owned result field" {
     try agree.ok(
         \\interface Producer:
