@@ -58,9 +58,12 @@ cp "$here/Dockerfile" "$context/Dockerfile"
 cp "$root/vendor-llvm.sh" "$context/vendor-llvm.sh"
 
 echo "==> Linux $architecture release environment"
+# The LLVM build dominates image time; a builder with more cores than the
+# Dockerfile's conservative default sets LLVM_BUILD_JOBS to match.
 docker build \
     --platform "$platform" \
     --build-arg "BASE_IMAGE=$base_image" \
+    --build-arg "LLVM_BUILD_JOBS=${LLVM_BUILD_JOBS:-6}" \
     --tag "$image" \
     --file "$context/Dockerfile" \
     "$context"

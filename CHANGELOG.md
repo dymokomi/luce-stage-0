@@ -4,7 +4,7 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
-## Unreleased
+## 0.22 — errors cross interfaces
 
 - **An error raised behind interface dispatch reaches its caller.** The
   compiled interface call ran the non-fallible unwind edge, so a witness
