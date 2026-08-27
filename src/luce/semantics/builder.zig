@@ -1824,7 +1824,7 @@ pub const FunctionBuilder = struct {
                 // recorded flag is what makes lower emit the copy.
                 values[index].rewritten = .fresh;
                 copied[index] = true;
-                try ledger.parkFreshStorage(self, values[index], expression.span());
+                try ledger.parkCopiedBorrow(self, values[index], expression.span());
             }
         }
         // An operand a later one branches past does not survive in a

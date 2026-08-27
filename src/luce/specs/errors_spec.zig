@@ -9032,6 +9032,39 @@ test "class: deinit cannot create a new strong self reference" {
 // ERRORS.md R3 — fallible function values
 // ---------------------------------------------------------------------------
 
+test "a return inside a statement-form catch handler returns" {
+    // Pinned on a field report: the statement form's handler must own
+    // its exit exactly as the binding form's does — `return reason`
+    // leaves the function, and the line after the handler is only for
+    // the path where the call succeeded.
+    try agree.prints(
+        \\func f() -> !:
+        \\    error("boom")
+        \\
+        \\func ok() -> !:
+        \\    return
+        \\
+        \\func failure_of() -> str:
+        \\    f() catch reason:
+        \\        return reason
+        \\    return ""
+        \\
+        \\func success_path() -> str:
+        \\    ok() catch reason:
+        \\        return reason
+        \\    return "clean"
+        \\
+        \\pub func main():
+        \\    print(failure_of())
+        \\    print(success_path())
+        \\
+    ,
+        \\boom
+        \\clean
+        \\
+    );
+}
+
 test "R3: fallible functions are stored, tried, and caught through values" {
     // The stage-0 shape that ratified the ruling: a pass pipeline in
     // a container, `try` through the value, `catch` receiving the

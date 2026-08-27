@@ -3995,6 +3995,75 @@ test "ownership: a borrowed parameter is read without transfer" {
     );
 }
 
+test "ownership: a struct literal from a temporary receiver keeps its list fields" {
+    // Stage-0 regression: the operand batch's defensive copy of a
+    // borrowed field closed the borrow's storage without counting the
+    // list it shares, so a later operand produced by a call left the
+    // returned struct holding a list the receiver's release then freed.
+    // The receiver being a temporary made the free immediate.
+    try agree.prints(
+        \\struct Id:
+        \\    value: i64
+        \\
+        \\struct Table:
+        \\    definitions: list[i64]
+        \\
+        \\struct Program:
+        \\    table: Table
+        \\    entry: Id?
+        \\
+        \\class Builder:
+        \\    table: Table
+        \\    pub init():
+        \\        let definitions = list[i64]()
+        \\        definitions.append(10)
+        \\        definitions.append(20)
+        \\        self.table = Table(definitions = definitions)
+        \\    func find_entry() -> Id?:
+        \\        return none
+        \\    pub func make() -> Program!:
+        \\        return Program(table = self.table, entry = self.find_entry())
+        \\
+        \\pub func main():
+        \\    let program = Builder().make() catch reason:
+        \\        trap(reason)
+        \\    print(str(len(program.table.definitions)))
+        \\
+    , "2\n");
+}
+
+test "ownership: a copied borrow's list survives a later free-function operand" {
+    // The same defensive copy, non-fallible and through a free
+    // function: the copy counts the list it shares, the adopting
+    // struct takes that count, and the unadopted path releases it —
+    // which the leak census proves.
+    try agree.prints(
+        \\struct Table:
+        \\    definitions: list[i64]
+        \\
+        \\struct Pair:
+        \\    table: Table
+        \\    entry: i64?
+        \\
+        \\class Builder:
+        \\    table: Table
+        \\    pub init():
+        \\        let definitions = list[i64]()
+        \\        definitions.append(7)
+        \\        self.table = Table(definitions = definitions)
+        \\    pub func make() -> Pair:
+        \\        return Pair(table = self.table, entry = pick())
+        \\
+        \\func pick() -> i64?:
+        \\    return 3
+        \\
+        \\pub func main():
+        \\    let pair = Builder().make()
+        \\    print(str(len(pair.table.definitions)))
+        \\
+    , "1\n");
+}
+
 // ---------------------------------------------------------------------------
 // Late declarations and zero values
 // ---------------------------------------------------------------------------
@@ -5047,6 +5116,23 @@ test "unbounded recursion hits the call depth limit" {
         \\    assert(dive(0) == 0)
         \\
     , .call_depth_exceeded);
+}
+
+test "recursion is bounded by the stack, not a small count" {
+    // The *default* budget, deliberately: a compiler recurses per
+    // nesting level of its input, so the shared policy is tens of
+    // thousands of frames — 20000 must come nowhere near the limit
+    // on either engine.
+    try agree.prints(
+        \\func down(n: i64) -> i64:
+        \\    if n == 0:
+        \\        return 0
+        \\    return down(n - 1) + 1
+        \\
+        \\func main():
+        \\    print(str(down(20000)))
+        \\
+    , "20000\n");
 }
 
 test "lists grow, index, slice, iterate, and free explicitly" {

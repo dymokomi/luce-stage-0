@@ -313,6 +313,19 @@ pub fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!
     try registerTemp(self, value, true, false, span);
 }
 
+/// Park a borrow closed by a storage copy — the operand batch's
+/// defensive rewrite.  The copy owns fresh storage, but it *shares* the
+/// borrow's objects: a struct's list rides the copied run as the same
+/// reference, so the copy must count it (the replay retains exactly
+/// when this park claims objects).  An adopting store then transfers
+/// both halves; an unadopted copy releases both at the statement's end.
+pub fn parkCopiedBorrow(self: *FunctionBuilder, value: Typed, span: Span) Error!void {
+    if (!shapes.ownsStorage(self.analyzer, value.value_type)) return;
+    if (parkedForStorage(self, value.node)) return;
+    const objects = shapes.carriesObjects(self.analyzer, value.value_type);
+    try registerTemp(self, value, true, objects, span);
+}
+
 /// Explicitly park both halves of a fresh owning value before the generic
 /// expression boundary sees it. Interface fitting is the important caller:
 /// it constructs and retains bound witnesses during operand landing, then its

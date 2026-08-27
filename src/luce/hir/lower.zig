@@ -806,8 +806,12 @@ const Replay = struct {
             // allocated: fresh, whatever the borrow was.
             entry.provenance = .fresh;
             // The copy's park was recorded onto the operand node
-            // (nodes.OperandBatch's pre-copy convention).
+            // (nodes.OperandBatch's pre-copy convention).  A storage
+            // copy shares the borrow's objects — the same list rides
+            // the copied run — so when the park claims objects the
+            // copy takes the count the claim will release or transfer.
             if (entry.core.park()) |parked| {
+                if (parked.objects) try self.code.retainObject(entry.register);
                 try self.emitPark(parked, entry.register, entry.core.result());
             }
         } else {
