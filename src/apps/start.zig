@@ -88,7 +88,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     if (graphics) |*backend| macos_graphics.install(&services, backend);
 
     const table = services.table();
-    const status = luce_main(&table);
+    const status = host_mod.enterProgram(luce_main, &table);
 
     // Land back on the ordinary screen before saying anything, the
     // same order loom's runner uses.

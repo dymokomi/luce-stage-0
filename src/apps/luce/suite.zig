@@ -359,7 +359,7 @@ fn runOne(
     defer services.deinit();
 
     const table = services.table();
-    const status = loaded.entry(&table);
+    const status = host_mod.enterProgram(loaded.entry, &table);
 
     // Land back on the ordinary screen before reporting anything: a
     // full-screen test that trapped must not leave the terminal raw.

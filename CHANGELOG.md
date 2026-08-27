@@ -4,6 +4,30 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## Unreleased
+
+- **A struct literal keeps the lists a copied field shares.** When a
+  field read borrowed from a receiver was followed by a call operand,
+  the defensive copy that protects the borrow owned the copied storage
+  but never counted the list inside it — so `Builder().make()` returning
+  `Program(table = self.table, entry = self.find_entry())` handed back a
+  struct whose list died with the temporary receiver, and the program
+  trapped `use_after_free`.  The copy now retains what it shares, on
+  both engines, with the temporary-receiver shapes pinned as specs.
+
+- **The call depth budget fits real compilers.** The shared limit rises
+  from 128 frames to 32768, sized for programs that recurse per nesting
+  level of their input — parsers, lowerers, tree-walkers.  Every stack
+  that hosts Luce frames now reserves 64 MiB to hold it: macOS
+  executables at link time, Linux program entries and every worker on an
+  explicitly sized thread, and the `luce`/`loom` processes themselves.
+  The trap names the policy: `call depth exceeded (this host allows
+  32768 frames)`.
+
+- A `return` inside a statement-form `catch` handler — reported against
+  0.22, found already correct in seven shapes — is pinned by a
+  two-engine spec so it can never regress silently.
+
 ## 0.22 — errors cross interfaces
 
 - **An error raised behind interface dispatch reaches its caller.** The

@@ -405,7 +405,9 @@ test "a trap inside a function value's callee names the callee in the trace" {
 }
 
 test "recursion through a function value exhausts the same budget a call does" {
-    try agree.trap(
+    // A shallow explicit budget: the default is sized for real
+    // programs, and an unbounded dive only needs to prove which trap.
+    try agree.trapGiven(
         \\func down(f: func(i64) -> i64, n: i64) -> i64:
         \\    return f(n)
         \\
@@ -416,7 +418,7 @@ test "recursion through a function value exhausts the same budget a call does" {
         \\    var n = 0
         \\    print(str(down(step, n)))
         \\
-    , .call_depth_exceeded);
+    , .{ .call_depth = 512 }, .call_depth_exceeded);
 }
 
 test "a function value chosen by a branch dispatches to whichever was chosen" {

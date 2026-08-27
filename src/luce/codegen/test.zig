@@ -919,8 +919,11 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
     // A million frames is more than any native stack holds.  Compiled
     // code counts frames rather than hoping, so this is a trap with a
     // message and a trace, the way docs/LANGUAGE.md says it is — on
-    // both engines, at the same call.
-    try agree(
+    // both engines, at the same call.  The budget is explicit because
+    // this binary's own stack is not the products': the shipped
+    // default runs against the shipped reservation in the product
+    // depth test, not here.
+    try agreeGiven(
         \\func deep(n: i64) -> i64:
         \\    return 1 + deep(n - 1)
         \\
@@ -928,7 +931,7 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
         \\    print("before")
         \\    print(str(deep(1000000)))
         \\
-    );
+    , .{ .call_depth = 8192 });
 }
 
 test "mutual recursion and a shallow limit agree on where the depth ran out" {

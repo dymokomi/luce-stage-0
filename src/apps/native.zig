@@ -520,6 +520,18 @@ pub fn link(
     if (kind == .executable and @import("builtin").os.tag == .macos) {
         try arguments.append(gpa, "-Wl,-no_uuid");
     }
+    // The main thread's stack must hold `abi.default_call_depth` Luce
+    // frames, and on macOS the program runs on the main thread (the
+    // AppKit host is first-thread-only), so the link reserves it.
+    // Linux ignores link-time stack requests; there the start shim runs
+    // the program on a thread spawned with the same reservation
+    // (`host.enterProgram`), and this flag would only draw a warning.
+    if (kind == .executable and @import("builtin").os.tag == .macos) {
+        try arguments.append(gpa, std.fmt.comptimePrint(
+            "-Wl,-stack_size,0x{x}",
+            .{abi.stack_reserve_bytes},
+        ));
+    }
     // `libluce_start.a` carries the optional macOS AppKit/Metal host for
     // standalone programs. The framework flags belong on the final link,
     // not in the archive, so an executable produced by `luce build` gets

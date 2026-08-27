@@ -725,7 +725,7 @@ fn runLoaded(
     if (graphics) |*backend| macos_graphics.install(&services, backend);
 
     const table = services.table();
-    const status = loaded.entry(&table);
+    const status = host_mod.enterProgram(loaded.entry, &table);
 
     // Land back on the ordinary screen before reporting anything.
     services.restoreScreen();

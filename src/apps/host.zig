@@ -43,16 +43,50 @@ const WorkerBody = *const fn (argument: ?*anyopaque) callconv(.c) void;
 // Limits this host sets
 // ---------------------------------------------------------------------------
 
-/// How many nested Luce calls loom allows before a program traps
+/// How many nested Luce calls this host allows before a program traps
 /// `call_depth_exceeded`.  Depth is policy, not a native-stack
 /// accident, and the policy is the host's: this one number reaches a
 /// compiled artifact through the ABI's `call_depth` slot, and the
 /// specification hands the oracle the same one, so runaway recursion
-/// traps at the same call on either.  Conservative on purpose —
-/// deep enough for any reasonable program, shallow enough that a
-/// runaway one reports promptly and well inside the machine's own
-/// stack.
-pub const call_depth: u32 = 128;
+/// traps at the same call on either.  This host serves the ABI's
+/// shared default and honors its half of the bargain by reserving
+/// `abi.stack_reserve_bytes` under every stack that runs Luce frames
+/// (`enterProgram`, the worker spawn, and the products' own builds).
+pub const call_depth: u32 = @intCast(abi.default_call_depth);
+
+/// Call a program's entry with the stack the depth policy promises.
+///
+/// `call_depth` is only honest if the native stack under the Luce
+/// frames can hold that many of them.  On macOS the executable's link
+/// reserved the main thread's stack, and the main thread is where a
+/// program must run — the AppKit window host is first-thread-only.
+/// Linux ignores link-time stack requests and has no first-thread
+/// host, so the program runs on a thread spawned with the reservation.
+/// If no thread can be had, the entry still runs on the caller's
+/// stack: a shallow program is served and a deep one meets the native
+/// guard page, which is the best that moment offers.
+pub fn enterProgram(
+    entry: *const fn (host: *const abi.Host) callconv(.c) abi.Status,
+    table: *const abi.Host,
+) abi.Status {
+    if (comptime @import("builtin").os.tag.isDarwin()) return entry(table);
+    const Carrier = struct {
+        entry: *const fn (host: *const abi.Host) callconv(.c) abi.Status,
+        table: *const abi.Host,
+        status: abi.Status = .ok,
+        fn go(self: *@This()) void {
+            self.status = self.entry(self.table);
+        }
+    };
+    var carrier: Carrier = .{ .entry = entry, .table = table };
+    const thread = std.Thread.spawn(
+        .{ .stack_size = abi.stack_reserve_bytes },
+        Carrier.go,
+        .{&carrier},
+    ) catch return entry(table);
+    thread.join();
+    return carrier.status;
+}
 
 /// A reported trace keeps this many innermost frames; the rest are
 /// counted.  The runtime caps at the same number, so this only has to
@@ -397,7 +431,13 @@ pub const Host = struct {
             return null;
         };
         const handle: i64 = @intCast(self.threads.items.len);
-        const started = std.Thread.spawn(.{}, Runner.go, .{ body, argument }) catch {
+        // A worker runs Luce frames under the same depth policy as the
+        // program, so its thread carries the same stack reservation.
+        const started = std.Thread.spawn(
+            .{ .stack_size = abi.stack_reserve_bytes },
+            Runner.go,
+            .{ body, argument },
+        ) catch {
             self.threads.items.len -= 1;
             self.thread_mutex.unlock(self.io);
             return null;
@@ -1361,6 +1401,16 @@ pub const Host = struct {
         self.trap_code = @enumFromInt(code);
         @memcpy(self.trap_storage[0..kept], words[0..kept]);
         self.trap_length = kept;
+        // The depth trap names the policy: the runtime knows only that
+        // the budget ran out, and the host is the party that set it.
+        if (self.trap_code == .call_depth_exceeded) {
+            const said = std.fmt.bufPrint(
+                &self.trap_storage,
+                "call depth exceeded (this host allows {d} frames)",
+                .{call_depth},
+            ) catch self.trap_storage[0..self.trap_length];
+            self.trap_length = said.len;
+        }
 
         self.trace_count = 0;
         self.trace_used = 0;

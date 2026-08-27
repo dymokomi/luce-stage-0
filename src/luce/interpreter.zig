@@ -117,9 +117,10 @@ pub const Exited = struct {
 
 /// How deep a program may call.  Runaway recursion traps rather than
 /// overflowing the machine's stack — a language promise, kept from the
-/// same number on both engines (`codegen/abi.zig`'s `call_depth`).
+/// same number on both engines: this default *is* the ABI's, not a
+/// restatement of it.
 pub const Budget = struct {
-    call_depth: u32 = 256,
+    call_depth: u32 = @intCast(@import("codegen/abi.zig").default_call_depth),
 };
 
 // ---------------------------------------------------------------------------

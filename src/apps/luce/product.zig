@@ -1218,6 +1218,83 @@ test "a debug artifact says where it trapped; a release one says what trapped" {
     // docs/MODES.md makes.
 }
 
+test "a built program holds the advertised call depth, and the trap names the policy" {
+    // The depth budget is only a promise together with the stack under
+    // it (abi.stack_reserve_bytes): macOS reserves it at link time,
+    // Linux runs the program on a thread spawned with it.  This is the
+    // test the pairing is held together by — a program recursing most
+    // of the way to the budget must answer, and one that dives past it
+    // must trap with an annotated policy, not a native overflow.  This
+    // module cannot import the compiler, so the trap is held to the
+    // annotation's words and the 30000-frame floor rather than the
+    // exact number; the specification pins the number itself.
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("deep.luc",
+        \\func down(n: i64) -> i64:
+        \\    if n == 0:
+        \\        return 0
+        \\    return down(n - 1) + 1
+        \\
+        \\pub func main():
+        \\    print(str(down(30000)))
+        \\
+    );
+    const deep_source = try tree.at(gpa, "deep.luc");
+    defer gpa.free(deep_source);
+    var deep_build = try runLuce(gpa, &tree, &.{ "build", deep_source }, null);
+    defer deep_build.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), deep_build.status);
+    const deep_binary = try tree.at(gpa, "deep");
+    defer gpa.free(deep_binary);
+    var deep_ran = try tree.spawn(gpa, &.{deep_binary}, .{});
+    defer deep_ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), deep_ran.status);
+    try testing.expectEqualStrings("30000\n", deep_ran.out);
+
+    try tree.write("bottomless.luc",
+        \\func dive(n: i64) -> i64:
+        \\    return dive(n + 1)
+        \\
+        \\pub func main():
+        \\    print(str(dive(0)))
+        \\
+    );
+    const bottomless_source = try tree.at(gpa, "bottomless.luc");
+    defer gpa.free(bottomless_source);
+    var bottomless_build = try runLuce(gpa, &tree, &.{ "build", bottomless_source }, null);
+    defer bottomless_build.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), bottomless_build.status);
+    const bottomless_binary = try tree.at(gpa, "bottomless");
+    defer gpa.free(bottomless_binary);
+    var bottomless_ran = try tree.spawn(gpa, &.{bottomless_binary}, .{});
+    defer bottomless_ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), bottomless_ran.status);
+    try testing.expect(bottomless_ran.saysErr("call depth exceeded (this host allows "));
+    try testing.expect(bottomless_ran.saysErr(" frames) [call_depth_exceeded]"));
+
+    // `luce test` runs its artifacts in-process, so the runner's own
+    // stack carries the same promise.
+    try tree.write("deep_test.luc",
+        \\func down(n: i64) -> i64:
+        \\    if n == 0:
+        \\        return 0
+        \\    return down(n - 1) + 1
+        \\
+        \\pub func test_deep_recursion_is_bounded_by_stack_not_a_small_count():
+        \\    assert(down(30000) == 30000)
+        \\
+    );
+    const test_source = try tree.at(gpa, "deep_test.luc");
+    defer gpa.free(test_source);
+    var tested = try runLuce(gpa, &tree, &.{ "test", test_source }, null);
+    defer tested.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), tested.status);
+    try testing.expect(tested.saysOut("ok"));
+}
+
 test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncaught error" {
     // `apps/start.zig` is a whole product with no process of its own
     // to be tested in: it is the `main` a compiled program becomes an

@@ -1309,6 +1309,12 @@ pub fn build(b: *std.Build) void {
     compiler_module.addOptions("build_options", installed_libraries);
 
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });
+    // `luce test` runs test artifacts in-process on the main thread on
+    // macOS; the stack must hold the ABI's call-depth budget.  The
+    // number is `abi.stack_reserve_bytes` (src/luce/codegen/abi.zig),
+    // restated here because a build script cannot import the module it
+    // is building; the product depth test holds the pair together.
+    compiler.stack_size = 64 << 20;
     const install_compiler = b.addInstallArtifact(compiler, .{
         .dest_dir = .{ .override = .prefix },
     });
@@ -1374,6 +1380,9 @@ pub fn build(b: *std.Build) void {
         },
     });
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = terminal_module });
+    // `loom run` calls the loaded artifact on the main thread on macOS;
+    // same reservation as the compiler, same authority (abi.zig).
+    terminal.stack_size = 64 << 20;
     const install_terminal = b.addInstallArtifact(terminal, .{
         .dest_dir = .{ .override = .prefix },
     });
