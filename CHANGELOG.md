@@ -4,7 +4,7 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
-## Unreleased
+## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a
   field read borrowed from a receiver was followed by a call operand,
