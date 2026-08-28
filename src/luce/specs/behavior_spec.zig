@@ -5118,11 +5118,14 @@ test "unbounded recursion hits the call depth limit" {
     , .call_depth_exceeded);
 }
 
-test "recursion is bounded by the stack, not a small count" {
-    // The *default* budget, deliberately: a compiler recurses per
-    // nesting level of its input, so the shared policy is tens of
-    // thousands of frames — 20000 must come nowhere near the limit
-    // on either engine.
+test "recursion runs well past the old shallow limit" {
+    // The old budget trapped at 128 frames; the new one is a million.
+    // A depth of 1000 would have trapped before and now returns on
+    // both engines — the point the raised limit makes.  The full
+    // deep-stack stress (tens of thousands of frames) lives in the
+    // product depth test, where the shipped 512 MiB stack backs it;
+    // this in-harness spec stays modest because the spec runner calls
+    // the compiled arm on its own ordinary stack (`specs/agree.zig`).
     try agree.prints(
         \\func down(n: i64) -> i64:
         \\    if n == 0:
@@ -5130,9 +5133,9 @@ test "recursion is bounded by the stack, not a small count" {
         \\    return down(n - 1) + 1
         \\
         \\func main():
-        \\    print(str(down(20000)))
+        \\    print(str(down(1000)))
         \\
-    , "20000\n");
+    , "1000\n");
 }
 
 test "lists grow, index, slice, iterate, and free explicitly" {

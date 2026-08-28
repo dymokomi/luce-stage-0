@@ -437,20 +437,23 @@ pub const CallDepthFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 ///
 /// The number is sized for programs that recurse per nesting level of
 /// their *input* — parsers, lowerers, tree-walkers — which are
-/// well-formed at depths a hand-written loop never reaches.  It is a
-/// promise only together with `stack_reserve_bytes`: every stack that
-/// hosts Luce frames reserves that much, so the budget trips before
-/// the native guard page does.
-pub const default_call_depth: i64 = 32768;
+/// well-formed at depths a hand-written loop never reaches.  It is only
+/// a counter, so it costs nothing to set it far above what any honest
+/// program reaches; it is a promise only together with
+/// `stack_reserve_bytes`: every stack that hosts Luce frames reserves
+/// that much, so the budget trips before the native guard page does.
+pub const default_call_depth: i64 = 1_000_000;
 
-/// The native stack under `default_call_depth` frames.  64 MiB gives
-/// the budget an average of 2 KiB per frame, which generated code
-/// stays well under.  Reserved wherever Luce frames run: macOS
+/// The native stack under `default_call_depth` frames.  512 MiB gives
+/// the budget an average of ~512 bytes per frame, which generated code
+/// stays under for ordinary functions; a pathologically fat frame
+/// recursing to the ceiling is the one case that could still meet the
+/// guard page first.  Reserved wherever Luce frames run: macOS
 /// executables at link time (`apps/native.zig`), the products by
 /// their build, and Linux program entries and every worker on a
 /// thread spawned with this size (`apps/host.zig`) — Linux ignores
 /// link-time stack requests, so the thread is the reservation.
-pub const stack_reserve_bytes: usize = 64 << 20;
+pub const stack_reserve_bytes: usize = 512 << 20;
 
 /// The run ended after opening a runtime, leaving `leaked` objects alive
 /// after ordinary ARC cleanup. A nonzero census can expose a surviving strong

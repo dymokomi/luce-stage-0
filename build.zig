@@ -1314,7 +1314,7 @@ pub fn build(b: *std.Build) void {
     // number is `abi.stack_reserve_bytes` (src/luce/codegen/abi.zig),
     // restated here because a build script cannot import the module it
     // is building; the product depth test holds the pair together.
-    compiler.stack_size = 64 << 20;
+    compiler.stack_size = 512 << 20;
     const install_compiler = b.addInstallArtifact(compiler, .{
         .dest_dir = .{ .override = .prefix },
     });
@@ -1382,7 +1382,7 @@ pub fn build(b: *std.Build) void {
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = terminal_module });
     // `loom run` calls the loaded artifact on the main thread on macOS;
     // same reservation as the compiler, same authority (abi.zig).
-    terminal.stack_size = 64 << 20;
+    terminal.stack_size = 512 << 20;
     const install_terminal = b.addInstallArtifact(terminal, .{
         .dest_dir = .{ .override = .prefix },
     });
