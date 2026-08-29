@@ -1039,3 +1039,39 @@ test "D21: an arm binds every field in order, or none" {
         \\
     , "luce.sema.match");
 }
+
+test "a union arm names several members at once, binding none" {
+    // `add, sub:` — one arm covering several members (docs/UNION.md D5).
+    // A multi-member arm binds no payload, since a binding belongs to a
+    // single member; it mixes with a single-member arm and a
+    // payload-binding arm, on both engines.
+    try agree.prints(
+        \\union Op:
+        \\    add(x: i64)
+        \\    sub(x: i64)
+        \\    push(value: i64)
+        \\    halt
+        \\
+        \\func describe(o: Op) -> str:
+        \\    match o:
+        \\        add, sub:
+        \\            return "binary"
+        \\        push(value):
+        \\            return "push " + str(value)
+        \\        halt:
+        \\            return "halt"
+        \\
+        \\func main():
+        \\    print(describe(Op.add(x = 1)))
+        \\    print(describe(Op.sub(x = 2)))
+        \\    print(describe(Op.push(value = 7)))
+        \\    print(describe(Op.halt))
+        \\
+    ,
+        \\binary
+        \\binary
+        \\push 7
+        \\halt
+        \\
+    );
+}

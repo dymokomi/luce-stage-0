@@ -254,25 +254,67 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     const reference = scrutinee.value_type.enumeration;
     const declared = self.analyzer.enums.items[reference.index];
 
-    // Which member each arm names, and which members were named:
+    // Which members each arm names, and which members were named:
     // both are needed before anything is lowered, because whether
     // the *last* arm is a comparison or the fallthrough depends on
-    // the whole set.
-    const chosen = try self.temporary().alloc(u32, matched.arms.len);
-    defer self.temporary().free(chosen);
+    // the whole set.  An arm may name several members at once
+    // (`go, stop:`); the comma form arrives as `arm.values`, each a
+    // bare name, and a single member is the one-name `arm.name` form.
+    const chosen = try self.temporary().alloc([]u32, matched.arms.len);
+    defer {
+        for (chosen) |list| self.temporary().free(list);
+        self.temporary().free(chosen);
+    }
+    @memset(chosen, &.{});
     const covered = try self.temporary().alloc(bool, declared.members.len);
     defer self.temporary().free(covered);
     @memset(covered, false);
     var usable = true;
+    var any_multi = false;
     for (matched.arms, chosen) |arm, *slot| {
+        // `go, stop:` — several members behind commas.  Each comes
+        // through the value-pattern path as a bare name with no range;
+        // anything else there is a literal arm, which belongs to a
+        // match over a value, not over an enum.
         if (arm.values.len != 0) {
-            try self.fail(
-                "luce.sema.match",
-                arm.span,
-                "{s} dispatches by member name; a literal arm belongs to a match over a value",
-                .{declared.name},
-            );
-            usable = false;
+            const members = try self.temporary().alloc(u32, arm.values.len);
+            var ok = true;
+            for (arm.values, members) |pattern, *at| {
+                if (pattern.high != null or pattern.low.* != .name) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "{s} dispatches by member name; a literal arm belongs to a match over a value",
+                        .{declared.name},
+                    );
+                    ok = false;
+                    break;
+                }
+                const member = declared.findMember(pattern.low.name.text) orelse {
+                    try failUnknownMember(self, declared, pattern.low.name.text, pattern.low.name.span);
+                    ok = false;
+                    break;
+                };
+                if (covered[member]) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "{s} already has an arm in this match",
+                        .{pattern.low.name.text},
+                    );
+                    ok = false;
+                    break;
+                }
+                covered[member] = true;
+                at.* = member;
+            }
+            if (!ok) {
+                self.temporary().free(members);
+                usable = false;
+                continue;
+            }
+            if (members.len > 1) any_multi = true;
+            slot.* = members;
             continue;
         }
         const member = declared.findMember(arm.name) orelse {
@@ -303,7 +345,9 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
             continue;
         }
         covered[member] = true;
-        slot.* = member;
+        const one = try self.temporary().alloc(u32, 1);
+        one[0] = member;
+        slot.* = one;
     }
     if (!usable) return;
 
@@ -337,6 +381,14 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     // across the arms, because the match *is* the statement a
     // temporary lives to the end of (S3).
     const held = try recorder.recordLocal(self, null, scrutinee.value_type, false, matched.scrutinee.span());
+    // A multi-member arm tests several equalities, and MIR spells the
+    // `or` between them as a flag slot the way a value arm does; a
+    // match of only single-member arms needs none.  Allocated right
+    // after `held` so lower reproduces the slot table in step.
+    const flag: ?nodes.LocalId = if (any_multi)
+        try recorder.recordLocal(self, null, .boolean, false, matched.span)
+    else
+        null;
 
     // Facts an arm proves are the arm's own, and one that assigns
     // over a narrowed name unproves it for everybody after
@@ -351,10 +403,10 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
 
     const recorded_arms = try self.arena().alloc(nodes.Statement.Match.Arm, matched.arms.len);
     var else_recorded: ?nodes.Block = null;
-    for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, member, *recorded_arm| {
+    for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, members, *recorded_arm| {
         try flow.narrowRestore(self, entry);
         try lowerBlock(self, arm.body);
-        recorded_arm.* = .{ .chooses = .{ .member = member }, .bindings = &.{}, .body = self.recorded_block.? };
+        recorded_arm.* = .{ .chooses = try memberChoice(self, members), .bindings = &.{}, .body = self.recorded_block.? };
     }
     try flow.narrowRestore(self, entry);
     if (matched.else_block) |otherwise| {
@@ -364,7 +416,7 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
         const last = matched.arms[matched.arms.len - 1].body;
         try lowerBlock(self, last);
         recorded_arms[matched.arms.len - 1] = .{
-            .chooses = .{ .member = chosen[matched.arms.len - 1] },
+            .chooses = try memberChoice(self, chosen[matched.arms.len - 1]),
             .bindings = &.{},
             .body = self.recorded_block.?,
         };
@@ -383,10 +435,19 @@ pub fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     try recorder.recordStatement(self, .{ .match = .{
         .scrutinee = scrutinee.node,
         .held = held,
+        .flag = flag,
         .arms = recorded_arms,
         .else_body = else_recorded,
         .span = matched.span,
     } });
+}
+
+/// One member is a direct comparison; several are an `or` the flag
+/// slot spells.  The slice is duped into the tree's arena because
+/// `chosen`'s lives only for the check.
+fn memberChoice(self: *FunctionBuilder, members: []const u32) Error!nodes.Statement.Match.Choice {
+    if (members.len == 1) return .{ .member = members[0] };
+    return .{ .members = try self.arena().dupe(u32, members) };
 }
 
 /// `match code:` over a value — the integers, `char`, `str`, and
@@ -678,25 +739,64 @@ fn lowerVariantMatch(
     const variant_index = scrutinee.value_type.variant;
     const declared = self.analyzer.variants.items[variant_index];
 
-    // Which member each arm names, and which members were named:
+    // Which members each arm names, and which members were named:
     // both are needed before anything is lowered, because whether
     // the *last* arm is a comparison or the fallthrough depends on
-    // the whole set.
-    const chosen = try self.temporary().alloc(u32, matched.arms.len);
-    defer self.temporary().free(chosen);
+    // the whole set.  A `left, right:` arm names several members and
+    // binds none — a payload binding belongs to a single member.
+    const chosen = try self.temporary().alloc([]u32, matched.arms.len);
+    defer {
+        for (chosen) |list| self.temporary().free(list);
+        self.temporary().free(chosen);
+    }
+    @memset(chosen, &.{});
     const covered = try self.temporary().alloc(bool, declared.members.len);
     defer self.temporary().free(covered);
     @memset(covered, false);
     var usable = true;
+    var any_multi = false;
     for (matched.arms, chosen) |arm, *slot| {
+        // `left, right:` — several members behind commas, each a bare
+        // name with no range, binding nothing.
         if (arm.values.len != 0) {
-            try self.fail(
-                "luce.sema.match",
-                arm.span,
-                "{s} dispatches by member name; a literal arm belongs to a match over a value",
-                .{declared.name},
-            );
-            usable = false;
+            const members = try self.temporary().alloc(u32, arm.values.len);
+            var ok = true;
+            for (arm.values, members) |pattern, *at| {
+                if (pattern.high != null or pattern.low.* != .name) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "{s} dispatches by member name; a literal arm belongs to a match over a value",
+                        .{declared.name},
+                    );
+                    ok = false;
+                    break;
+                }
+                const member_index = declared.findMember(pattern.low.name.text) orelse {
+                    try failUnknownVariantMember(self, declared, pattern.low.name.text, pattern.low.name.span);
+                    ok = false;
+                    break;
+                };
+                if (covered[member_index]) {
+                    try self.fail(
+                        "luce.sema.match",
+                        pattern.span,
+                        "{s} already has an arm in this match",
+                        .{pattern.low.name.text},
+                    );
+                    ok = false;
+                    break;
+                }
+                covered[member_index] = true;
+                at.* = member_index;
+            }
+            if (!ok) {
+                self.temporary().free(members);
+                usable = false;
+                continue;
+            }
+            if (members.len > 1) any_multi = true;
+            slot.* = members;
             continue;
         }
         const member_index = declared.findMember(arm.name) orelse {
@@ -719,7 +819,9 @@ fn lowerVariantMatch(
             continue;
         }
         covered[member_index] = true;
-        slot.* = member_index;
+        const one = try self.temporary().alloc(u32, 1);
+        one[0] = member_index;
+        slot.* = one;
     }
     if (!usable) return;
 
@@ -749,6 +851,14 @@ fn lowerVariantMatch(
     // temporary lives to the end of (S3), and an arm's payload
     // binding aliases the run that park owns (D10).
     const held = try recorder.recordLocal(self, null, scrutinee.value_type, false, matched.scrutinee.span());
+    // A multi-member arm tests several tags, and MIR spells the `or`
+    // between them as a flag slot; a match of only single-member arms
+    // needs none.  Allocated right after `held` so lower reproduces
+    // the slot table in step.
+    const flag: ?nodes.LocalId = if (any_multi)
+        try recorder.recordLocal(self, null, .boolean, false, matched.span)
+    else
+        null;
 
     // Facts an arm proves are the arm's own, and one that assigns
     // over a narrowed name unproves it for everybody after.
@@ -763,9 +873,9 @@ fn lowerVariantMatch(
     const recorded_arms = try self.arena().alloc(nodes.Statement.Match.Arm, matched.arms.len);
     var arms_recorded = true;
     var else_recorded: ?nodes.Block = null;
-    for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, member_index, *recorded_arm| {
+    for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, members, *recorded_arm| {
         try flow.narrowRestore(self, entry);
-        if (try lowerVariantArm(self, variant_index, member_index, arm, held)) |lowered_arm| {
+        if (try lowerVariantArmMembers(self, variant_index, members, arm, held)) |lowered_arm| {
             recorded_arm.* = lowered_arm;
         } else arms_recorded = false;
     }
@@ -775,7 +885,7 @@ fn lowerVariantMatch(
         else_recorded = self.recorded_block.?;
     } else {
         const last = matched.arms[matched.arms.len - 1];
-        if (try lowerVariantArm(self, variant_index, chosen[matched.arms.len - 1], last, held)) |lowered_arm| {
+        if (try lowerVariantArmMembers(self, variant_index, chosen[matched.arms.len - 1], last, held)) |lowered_arm| {
             recorded_arms[matched.arms.len - 1] = lowered_arm;
         } else arms_recorded = false;
     }
@@ -794,11 +904,32 @@ fn lowerVariantMatch(
         try recorder.recordStatement(self, .{ .match = .{
             .scrutinee = scrutinee.node,
             .held = held,
+            .flag = flag,
             .arms = recorded_arms,
             .else_body = else_recorded,
             .span = matched.span,
         } });
     }
+}
+
+/// A union arm naming one member or several.  One member keeps the
+/// payload-binding path (docs/UNION.md D5); several bind nothing —
+/// a payload belongs to a single member — so the body lowers plain
+/// and the choice is the member list the flag slot dispatches on.
+fn lowerVariantArmMembers(
+    self: *FunctionBuilder,
+    variant_index: u32,
+    members: []const u32,
+    arm: ast.MatchArm,
+    held: LocalId,
+) Error!?nodes.Statement.Match.Arm {
+    if (members.len == 1) return lowerVariantArm(self, variant_index, members[0], arm, held);
+    try lowerBlock(self, arm.body);
+    return .{
+        .chooses = .{ .members = try self.arena().dupe(u32, members) },
+        .bindings = &.{},
+        .body = self.recorded_block.?,
+    };
 }
 
 /// One arm's binding list against its member's field list

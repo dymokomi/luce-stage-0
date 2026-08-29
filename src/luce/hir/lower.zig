@@ -2944,6 +2944,7 @@ const Replay = struct {
                         .right = number,
                     } }, .boolean);
                 },
+                .members => |members| try self.replayMemberTest(flag.?, held, scrutinee_type, members),
                 .values => |patterns| try self.replayValueTest(flag.?, held, scrutinee_type, patterns),
             };
             const arms = try self.code.openIf(same, true);
@@ -3014,6 +3015,53 @@ const Replay = struct {
                 try self.code.elseArm(arm);
                 try self.code.closeIf(arm);
             }
+        }
+        return self.code.load(flag);
+    }
+
+    /// A multi-member arm's admission test: the held scrutinee is any
+    /// of the arm's members.  The `or` is the same flag-slot the value
+    /// test uses, because MIR spells `or` as control flow — one body,
+    /// no duplication.  An enum compares the member's backing value; a
+    /// union compares its variant tag.
+    fn replayMemberTest(
+        self: *Replay,
+        flag: LocalId,
+        held: LocalId,
+        scrutinee_type: Type,
+        members: []const u32,
+    ) Error!mir.Register {
+        try self.code.store(flag, try self.code.emit(.{ .const_boolean = false }, .boolean));
+        for (members) |member| {
+            const same = if (scrutinee_type == .variant) variant_test: {
+                const tag = try self.code.emit(
+                    .{ .variant_tag = .{ .target = try self.code.load(held) } },
+                    .i64,
+                );
+                const number = try self.code.emit(.{ .const_integer = @intCast(member) }, .i64);
+                break :variant_test try self.code.emit(.{ .binary = .{
+                    .op = .equal,
+                    .operand_type = .i64,
+                    .left = tag,
+                    .right = number,
+                } }, .boolean);
+            } else enum_test: {
+                const declared = self.code.enums[scrutinee_type.enumeration.index];
+                const number = try self.code.emit(
+                    .{ .const_integer = declared.members[member].value },
+                    scrutinee_type,
+                );
+                break :enum_test try self.code.emit(.{ .binary = .{
+                    .op = .equal,
+                    .operand_type = scrutinee_type,
+                    .left = try self.code.load(held),
+                    .right = number,
+                } }, .boolean);
+            };
+            const arm = try self.code.openIf(same, true);
+            try self.code.store(flag, try self.code.emit(.{ .const_boolean = true }, .boolean));
+            try self.code.elseArm(arm);
+            try self.code.closeIf(arm);
         }
         return self.code.load(flag);
     }

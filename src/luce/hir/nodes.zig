@@ -1176,9 +1176,14 @@ pub const Statement = union(enum) {
         };
 
         /// How an arm claims the scrutinee: the member an enum or
-        /// union arm names, or a value arm's literal patterns.
+        /// union arm names, several members one arm names at once
+        /// (docs/ENUMS.md — `Block, Loop:`), or a value arm's literal
+        /// patterns.  A multi-member arm binds no payload, so it is only
+        /// ever the bare-name form; a single member keeps its own case
+        /// so the common arm needs no flag slot.
         pub const Choice = union(enum) {
             member: u32,
+            members: []const u32,
             values: []const Pattern,
         };
 

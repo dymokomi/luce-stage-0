@@ -6565,6 +6565,46 @@ test "luce.sema.match: an arm may not be written twice" {
     );
 }
 
+test "luce.sema.match: a member named twice across the comma form is refused" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red, green:
+        \\            return
+        \\        green:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "green already has an arm in this match",
+    );
+}
+
+test "luce.sema.match: a literal beside a member in an enum arm is refused" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red, 5:
+        \\            return
+        \\        green:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "Colour dispatches by member name; a literal arm belongs to a match over a value",
+    );
+}
+
 test "luce.sema.match: an arm that names no member says so, and offers one" {
     try expectSaying(
         \\enum Colour:

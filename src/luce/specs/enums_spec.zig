@@ -977,3 +977,61 @@ test "an enum survives a fallible call's branch" {
         \\
     );
 }
+
+test "one arm names several members, and the rest keep their own" {
+    // `block, loop:` — one arm covering several members (docs/ENUMS.md).
+    // The multi-member arm and a single-member arm mix, and an arm with
+    // several members still counts toward exhaustiveness, so no else is
+    // needed when the arms name every member.  Both engines.
+    try agree.prints(
+        \\enum Node:
+        \\    block
+        \\    loop
+        \\    leaf
+        \\    call
+        \\
+        \\func kind(n: Node) -> str:
+        \\    match n:
+        \\        block, loop:
+        \\            return "control"
+        \\        leaf:
+        \\            return "leaf"
+        \\        call:
+        \\            return "call"
+        \\
+        \\func main():
+        \\    print(kind(Node.block))
+        \\    print(kind(Node.loop))
+        \\    print(kind(Node.leaf))
+        \\    print(kind(Node.call))
+        \\
+    ,
+        \\control
+        \\control
+        \\leaf
+        \\call
+        \\
+    );
+}
+
+test "a multi-member arm as the exhaustive tail needs no else" {
+    try agree.ok(
+        \\enum Signal:
+        \\    go
+        \\    stop
+        \\    wait
+        \\
+        \\func weight(s: Signal) -> i64:
+        \\    match s:
+        \\        go:
+        \\            return 1
+        \\        stop, wait:
+        \\            return 2
+        \\
+        \\func main():
+        \\    assert(weight(Signal.go) == 1)
+        \\    assert(weight(Signal.stop) == 2)
+        \\    assert(weight(Signal.wait) == 2)
+        \\
+    );
+}
