@@ -19,7 +19,7 @@ pub func test_rows_and_columns_describe_nested_geometry():
     assert(frame.line(2) == "status  ")
 
 pub struct Names:
-    pub values: list[str]
+    pub let values: list[str]
 
     pub func at(index: i64) -> model.Line:
         return model.plain(self.values[index], model.Style(foreground = index + 1))
@@ -75,9 +75,9 @@ pub func test_overlapping_panels_merge_without_application_glyph_logic():
     assert(surface.cell_at(4, 5).text == "┴")
 
 pub class Recorder:
-    pub trace: str
-    pub left: i64
-    pub right: i64
+    pub var trace: str
+    pub var left: i64
+    pub var right: i64
 
     pub init():
         self.trace = ""

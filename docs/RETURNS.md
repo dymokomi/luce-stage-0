@@ -189,7 +189,7 @@ are exactly what the caller receives.
 
 ```luce
 struct Rng:
-    state: i64
+    var state: i64
 
     func next() -> i64:
         self.state = self.state * 48271 % 2147483647

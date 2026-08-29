@@ -39,9 +39,9 @@ pub const save_file = "adventure.sav"
 # whether the story is over.  A turn writes those value fields through
 # its implied receiver, while the whole realm is borrowed beside it.
 pub struct Play:
-    pub at: i64
-    pub moves: i64 = 0
-    pub done: bool = false
+    pub var at: i64
+    pub var moves: i64 = 0
+    pub var done: bool = false
 
     # One turn.
     #

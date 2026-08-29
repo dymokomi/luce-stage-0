@@ -43,10 +43,10 @@ func article(name: str) -> str:
 
 # A place, and what is said on arriving.
 pub struct Room:
-    pub name: str
+    pub var name: str
 
-    description: str
-    visited: bool = false
+    let description: str
+    var visited: bool = false
 
     pub static func make(name: str, description: str) -> Room:
         return Room(name = name, description = description)
@@ -60,12 +60,12 @@ pub struct Room:
 # A one-way passage.  Two of them make a door that opens both ways,
 # which is what `story.luc` writes and why `link` below takes both.
 pub struct Way:
-    pub direction: str
+    pub var direction: str
 
-    from: i64
-    to: i64
-    locked: bool = false
-    needs: str = ""
+    var from: i64
+    var to: i64
+    var locked: bool = false
+    let needs: str = ""
 
     # Half a door, and marked because half a door is not something a
     # story should be able to write: `Realm.link` below makes both
@@ -103,12 +103,12 @@ pub struct Way:
 
 # Something to pick up, or something too heavy to.
 pub struct Thing:
-    pub name: str
+    pub var name: str
 
-    description: str
-    at: i64
-    origin: i64
-    portable: bool = true
+    let description: str
+    var at: i64
+    let origin: i64
+    let portable: bool = true
 
     # `origin` is `at` and can be nothing else, which is why the field
     # is private and this is the only way to make a Thing: `forget`
@@ -141,9 +141,9 @@ pub struct Thing:
 # value; the lists are the state, and a borrow may edit what it may not
 # keep (OWNERSHIP.md S38).
 pub struct Realm:
-    rooms: list[Room]
-    ways: list[Way]
-    things: list[Thing]
+    var rooms: list[Room]
+    var ways: list[Way]
+    var things: list[Thing]
 
     pub static func empty() -> Realm:
         return Realm(

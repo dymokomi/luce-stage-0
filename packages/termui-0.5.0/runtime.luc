@@ -15,8 +15,8 @@ from canvas import Screen
 from view import View, route
 
 pub class Application:
-    root: View?
-    tick_ms: i64
+    var root: View?
+    var tick_ms: i64
 
     pub init():
         self.root = none

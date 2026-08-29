@@ -538,8 +538,8 @@ test "folding: a member is a parameter's default and a field's" {
         \\    deflated = 8
         \\
         \\struct Entry:
-        \\    size: i64
-        \\    method: Method = Method.stored
+        \\    let size: i64
+        \\    var method: Method = Method.stored
         \\
         \\func made(method: Method = Method.deflated) -> Method:
         \\    return method
@@ -567,7 +567,7 @@ test "containers: a list, a map, an array and a struct field all hold members" {
         \\    deflated = 8
         \\
         \\struct Entry:
-        \\    method: Method
+        \\    var method: Method
         \\
         \\func main():
         \\    var methods = list[Method]()

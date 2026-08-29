@@ -375,30 +375,30 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // honesty.  The refusal fires in the root module too, where the
     // mark lives in "this file".
     try expectOnlySayingAt(
-        "struct Inner:\n    n: i64\n\npub func read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub func read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "read is public and answers Inner, which is private in this file; remove pub from read or mark Inner pub",
         4,
         20,
     );
     try expectOnlySayingAt(
-        "struct Inner:\n    n: i64\n\npub func read(p: Inner) -> i64:\n    return 1\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub func read(p: Inner) -> i64:\n    return 1\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "read is public and takes Inner, which is private in this file; remove pub from read or mark Inner pub",
         4,
         18,
     );
     try expectOnlySayingAt(
-        "struct Inner:\n    n: i64\n\npub struct Outer:\n    pub held: Inner\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub struct Outer:\n    pub let held: Inner\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "held of Outer is public and holds Inner, which is private in this file; remove pub from held or mark Inner pub",
         5,
-        15,
+        19,
     );
     // A container in the surface publishes its element exactly as the
     // bare name would.
     try expectRejected(
-        "struct Inner:\n    n: i64\n\npub func read() -> list[Inner]:\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub func read() -> list[Inner]:\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
         "luce.sema.private",
     );
     // A map's **key** publishes as its value does, now that a key can
@@ -412,24 +412,24 @@ test "luce.sema.private: a public surface names public types, refused at the dec
     // The outer `func` tag must not hide a private parameter or result
     // from the same D4 check containers receive above.
     try expectSaying(
-        "struct Inner:\n    n: i64\n\npub func use(callback: func(Inner) -> i64) -> i64:\n    return 0\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub func use(callback: func(Inner) -> i64) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "use is public and takes Inner, which is private",
     );
     try expectSaying(
-        "struct Inner:\n    n: i64\n\npub func use(callback: func(i64) -> func(i64) -> Inner) -> i64:\n    return 0\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\npub func use(callback: func(i64) -> func(i64) -> Inner) -> i64:\n    return 0\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "which is private",
     );
     try expectSaying(
-        "struct Inner:\n    n: i64\n\nfunc reveal(n: i64) -> Inner:\n    return Inner(n = n)\n\npub func expose() -> func(i64) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
+        "struct Inner:\n    let n: i64\n\nfunc reveal(n: i64) -> Inner:\n    return Inner(n = n)\n\npub func expose() -> func(i64) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "expose is public and answers Inner, which is private",
     );
     // The quiet common case: a private function may traffic in the
     // private type freely, and a private field may hold one.
     try expectCompiles(
-        "struct Inner:\n    n: i64\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
+        "struct Inner:\n    let n: i64\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    let held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
     );
 }
 
@@ -732,7 +732,7 @@ test "luce.parse.type: a return shape is not a type, in any position" {
     for ([_][]const u8{
         "func main():\n    let p: (i64, i64) = 1\n",
         "func f(p: (i64, i64)):\n    return\n\nfunc main():\n    return\n",
-        "struct Pair:\n    both: (i64, i64)\n\nfunc main():\n    return\n",
+        "struct Pair:\n    let both: (i64, i64)\n\nfunc main():\n    return\n",
         "func main():\n    var xs: list[(i64, i64)] = []\n",
     }) |source| {
         try expectSaying(
@@ -981,7 +981,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     // receiver is separate from the declared return arity.
     try expectSaying(
         \\struct Rng:
-        \\    state: i64
+        \\    let state: i64
         \\
         \\    func next() -> i64:
         \\        return self.state, 1
@@ -1040,7 +1040,7 @@ test "luce.parse.self: an explicit receiver parameter is rejected everywhere" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    func grow(var self):
         \\        self.x += 1
@@ -1065,7 +1065,7 @@ test "luce.parse.static: self: static is only a struct or enum member modifier" 
 test "luce.sema.self: a static member cannot read self" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    static func read() -> i64:
         \\        return self.x
@@ -1079,7 +1079,7 @@ test "luce.sema.self: a static member cannot read self" {
 test "luce.sema.self: a static member is not callable through a value" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    static func origin() -> Point:
         \\        return Point(x = 0)
@@ -1094,7 +1094,7 @@ test "luce.sema.self: a static member is not callable through a value" {
 test "luce.sema.self: a method is not callable through its type" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func read() -> i64:
         \\        return self.x
@@ -1109,7 +1109,7 @@ test "luce.sema.self: a method is not callable through its type" {
 test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func length() -> i64:
         \\        return self.x
@@ -1125,7 +1125,7 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
     // With nothing close, the sentence still names both.
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -1140,7 +1140,7 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
 test "luce.sema.name: a method reference with no landing place is not a value" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func length() -> i64:
         \\        return self.x
@@ -1160,7 +1160,7 @@ test "luce.sema.name: a method reference with no landing place is not a value" {
 test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
     try expectSaying(
         \\struct Counter:
-        \\    total: i64
+        \\    var total: i64
         \\
         \\    func bump(by: i64):
         \\        self.total = self.total + by
@@ -1234,7 +1234,7 @@ test "luce.sema.type: a function value has no equality (BINDING.md D6)" {
 test "luce.sema.type: a bound value has no equality either (BINDING.md D6)" {
     try expectSaying(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -1314,15 +1314,15 @@ test "luce.sema.union: a struct carrying a union is not compared either (UNION.m
     // unchecked one.
     try expectSaying(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\union Shape:
         \\    at(p: Point)
         \\    count(n: i64)
         \\
         \\struct Cell:
-        \\    what: Shape
+        \\    let what: Shape
         \\
         \\func main():
         \\    let a = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
@@ -1344,10 +1344,10 @@ test "luce.sema.union: a struct carrying a union is not compared either (UNION.m
         \\    square(side: f64)
         \\
         \\struct Box:
-        \\    s: Shape
+        \\    let s: Shape
         \\
         \\struct Crate:
-        \\    b: Box
+        \\    let b: Box
         \\
         \\func main():
         \\    let a = Crate(b = Box(s = Shape.circle(radius = 1.0)))
@@ -1370,8 +1370,8 @@ test "luce.sema.type: a struct carrying a function value is not compared either 
         \\    return n * 2
         \\
         \\struct Button:
-        \\    label: str
-        \\    on_click: (func(i64) -> i64)?
+        \\    let label: str
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let a = Button(label = "ok", on_click = twice)
@@ -1388,13 +1388,13 @@ test "luce.sema.type: a struct carrying a function value is not compared either 
         \\    return n * 2
         \\
         \\struct Button:
-        \\    on_click: (func(i64) -> i64)?
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\struct Row:
-        \\    b: Button
+        \\    let b: Button
         \\
         \\struct Panel:
-        \\    r: Row
+        \\    let r: Row
         \\
         \\func main():
         \\    let a = Panel(r = Row(b = Button(on_click = twice)))
@@ -1417,8 +1417,8 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    return n * 2
         \\
         \\struct Button:
-        \\    label: str
-        \\    on_click: (func(i64) -> i64)?
+        \\    let label: str
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\func main():
         \\    var xs = list[Button]()
@@ -1434,10 +1434,10 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    return n * 2
         \\
         \\struct Button:
-        \\    on_click: (func(i64) -> i64)?
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\struct Row:
-        \\    b: Button
+        \\    let b: Button
         \\
         \\func main():
         \\    var rows = list[Row]()
@@ -1471,7 +1471,7 @@ test "luce.sema.method: a search asks what the element reaches, not what it is" 
         \\    square(side: f64)
         \\
         \\struct Box:
-        \\    s: Shape
+        \\    let s: Shape
         \\
         \\func main():
         \\    var xs = list[Box]()
@@ -1560,7 +1560,7 @@ test "luce.sema.type: a member constructor whose shape does not fit the place is
 test "luce.sema.type: a bind whose shape does not fit the place is refused" {
     try expectSaying(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -1581,7 +1581,7 @@ test "luce.sema.type: a bind whose shape does not fit the place is refused" {
 test "luce.sema.fallible: a fallible method binds only into a fallible slot (ERRORS.md R3)" {
     try expectSaying(
         \\struct Reader:
-        \\    at: i64
+        \\    let at: i64
         \\
         \\    func value(n: i64) -> i64!:
         \\        if n < 0:
@@ -1604,7 +1604,7 @@ test "luce.sema.fallible: a fallible method binds only into a fallible slot (ERR
 test "luce.sema.self: a writer needs a bare var receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    func grow():
         \\        self.x = self.x + 1
@@ -1617,7 +1617,7 @@ test "luce.sema.self: a writer needs a bare var receiver" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    static func origin() -> Point:
         \\        return Point(x = 0)
@@ -1636,13 +1636,13 @@ test "luce.sema.self: a writer needs a bare var receiver" {
     }) |call| {
         const source = try std.fmt.allocPrint(std.testing.allocator,
             \\struct Point:
-            \\    x: i64
+            \\    var x: i64
             \\
             \\    func grow():
             \\        self.x += 1
             \\
             \\struct Holder:
-            \\    point: Point
+            \\    let point: Point
             \\
             \\func main():
             \\    var holder = Holder(point = Point(x = 1))
@@ -1658,7 +1658,7 @@ test "luce.sema.self: a writer needs a bare var receiver" {
 test "luce.sema.self: an optional narrowing is not a receiver place" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    func grow():
         \\        self.x += 1
@@ -1677,7 +1677,7 @@ test "luce.sema.self: an optional narrowing is not a receiver place" {
 test "luce.sema.self: the receiver is separate from declared return values" {
     try expectSaying(
         \\struct Rng:
-        \\    state: i64
+        \\    var state: i64
         \\
         \\    func next() -> i64:
         \\        self.state = self.state + 1
@@ -1693,7 +1693,7 @@ test "luce.sema.self: the receiver is separate from declared return values" {
 test "luce.sema.method: a missing method argument is named, without the receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func moved(dx: i64, dy: i64) -> i64:
         \\        return self.x + dx + dy
@@ -1711,7 +1711,7 @@ test "luce.sema.method: a missing method argument is named, without the receiver
 test "luce.sema.method: a method checks its arity against its written parameters" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func moved(dx: i64, dy: i64) -> i64:
         \\        return self.x + dx + dy
@@ -1729,7 +1729,7 @@ test "luce.sema.method: a method checks its arity against its written parameters
 test "luce.sema.call: self: reader and writer methods are not function values" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func read() -> i64:
         \\        return self.x
@@ -1741,7 +1741,7 @@ test "luce.sema.call: self: reader and writer methods are not function values" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    func grow() -> i64:
         \\        self.x += 1
@@ -1758,7 +1758,7 @@ test "an expression lambda captures the implicit receiver like a closure" {
     // captures `self` exactly as a block closure does (docs/FUNCTIONS.md).
     try agree.prints(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func read() -> i64:
         \\        let f: func() -> i64 = () => self.x
@@ -1873,7 +1873,7 @@ test "closure: a typed body must return on every path" {
 test "closure: deinit cannot capture its dying self" {
     try expectSaying(
         \\class Resource:
-        \\    value: i64
+        \\    let value: i64
         \\    deinit:
         \\        let read: func() -> i64 = func():
         \\            return self.value
@@ -1887,8 +1887,8 @@ test "closure: deinit cannot capture its dying self" {
 test "closure: storing a strong self capture diagnoses the direct ARC cycle" {
     try expectSaying(
         \\class Node:
-        \\    value: i64
-        \\    callback: (func() -> i64)?
+        \\    let value: i64
+        \\    var callback: (func() -> i64)?
         \\    func install():
         \\        self.callback = func():
         \\            return self.value
@@ -2060,7 +2060,7 @@ test "luce.sema.name: a function used as a value is named, not denied" {
 test "luce.sema.name: a struct used as a value says how to build one" {
     try expectOnlySayingAt(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = Point
@@ -2106,7 +2106,7 @@ test "luce.sema.name: a missing namespace member offers one of that namespace" {
 test "luce.sema.name: a struct namespace answers for its own members" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: i64
+        \\    let count: i64
         \\
         \\    static func classify() -> i64:
         \\        return 1
@@ -2125,7 +2125,7 @@ test "luce.sema.name: a struct namespace answers for its own members" {
 test "luce.sema.name: a struct namespace with no such member says so" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: i64
+        \\    let count: i64
         \\
         \\    static func classify() -> i64:
         \\        return 1
@@ -2151,10 +2151,10 @@ test "luce.sema.duplicate: a name cannot be declared twice" {
 test "luce.sema.duplicate: a duplicate struct points at the first" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\struct P:
-        \\    y: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    return
@@ -2165,14 +2165,14 @@ test "luce.sema.duplicate: a duplicate struct points at the first" {
 test "luce.sema.duplicate: a duplicate field points at the first" {
     try expectOnlySayingAt(
         \\struct S:
-        \\    x: i64
-        \\    y: i64
-        \\    x: i64
+        \\    let x: i64
+        \\    let y: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.duplicate", "duplicate field x; the first is on line 2", 4, 5);
+    , "luce.sema.duplicate", "duplicate field x; the first is on line 2", 4, 9);
 }
 
 test "luce.sema.duplicate: a duplicate function points at the first" {
@@ -2688,7 +2688,7 @@ test "luce.sema.convert: numeric constructors reject non-numeric values" {
 test "luce.sema.field: an unknown struct field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -2765,8 +2765,8 @@ test "luce.sema.index: only heap containers index, with the right key" {
 test "luce.sema.construct: a struct needs all fields, named, once" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -2781,8 +2781,8 @@ test "luce.sema.construct: a struct needs all fields, named, once" {
 test "luce.sema.construct: one missing field is named in the singular" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: i64
-        \\    b: i64
+        \\    let a: i64
+        \\    let b: i64
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -2793,9 +2793,9 @@ test "luce.sema.construct: one missing field is named in the singular" {
 test "luce.sema.construct: two missing fields take no serial comma" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: i64
-        \\    b: i64
-        \\    c: i64
+        \\    let a: i64
+        \\    let b: i64
+        \\    let c: i64
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -2806,10 +2806,10 @@ test "luce.sema.construct: two missing fields take no serial comma" {
 test "luce.sema.construct: every missing field is named, in declaration order" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: i64
-        \\    b: i64
-        \\    c: i64
-        \\    d: i64
+        \\    let a: i64
+        \\    let b: i64
+        \\    let c: i64
+        \\    let d: i64
         \\
         \\func main():
         \\    let p = P(b = 1)
@@ -2822,9 +2822,9 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
     // different words for the same mistake at file scope (context.zig).
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: i64
-        \\    b: i64
-        \\    c: i64
+        \\    let a: i64
+        \\    let b: i64
+        \\    let c: i64
         \\
         \\const origin = P(a = 1)
         \\
@@ -2860,7 +2860,7 @@ test "luce.sema.return: return paths and value shape are checked" {
 test "luce.sema.struct: a struct cannot be empty or self-containing" {
     try expectRejected(
         \\struct Loop:
-        \\    inner: Loop
+        \\    let inner: Loop
         \\
         \\func main():
         \\    return
@@ -2878,8 +2878,8 @@ test "luce.sema.struct: a struct cannot be empty or self-containing" {
 test "luce.sema.struct: a direct cycle names the field and the fix" {
     try expectOnlySayingAt(
         \\struct Node:
-        \\    value: i64
-        \\    next: Node
+        \\    let value: i64
+        \\    let next: Node
         \\
         \\func main():
         \\    return
@@ -2887,7 +2887,7 @@ test "luce.sema.struct: a direct cycle names the field and the fix" {
     ,
         "luce.sema.struct",
         "struct Node contains itself: Node.next is Node; a struct is a value, " ++
-            "so write next: Node? to let the chain end at absence",
+            "so give next the optional type Node? to let the chain end at absence",
         3,
         5,
     );
@@ -2896,10 +2896,10 @@ test "luce.sema.struct: a direct cycle names the field and the fix" {
 test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
     try expectOnlySayingAt(
         \\struct A:
-        \\    b: B
+        \\    let b: B
         \\
         \\struct B:
-        \\    a: A
+        \\    let a: A
         \\
         \\func main():
         \\    return
@@ -2907,7 +2907,7 @@ test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
     ,
         "luce.sema.struct",
         "struct A contains itself: A.b is B, and B.a is A; a struct is a value, " ++
-            "so write b: B? to let the chain end at absence",
+            "so give b the optional type B? to let the chain end at absence",
         2,
         5,
     );
@@ -2916,14 +2916,14 @@ test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
 test "luce.sema.struct: a three-struct cycle reads the whole way round" {
     try expectOnlySayingAt(
         \\struct A:
-        \\    n: i64
-        \\    b: B
+        \\    let n: i64
+        \\    let b: B
         \\
         \\struct B:
-        \\    c: C
+        \\    let c: C
         \\
         \\struct C:
-        \\    a: A
+        \\    let a: A
         \\
         \\func main():
         \\    return
@@ -2931,7 +2931,7 @@ test "luce.sema.struct: a three-struct cycle reads the whole way round" {
     ,
         "luce.sema.struct",
         "struct A contains itself: A.b is B, B.c is C, and C.a is A; a struct is a value, " ++
-            "so write b: B? to let the chain end at absence",
+            "so give b the optional type B? to let the chain end at absence",
         3,
         5,
     );
@@ -2940,16 +2940,16 @@ test "luce.sema.struct: a three-struct cycle reads the whole way round" {
 test "luce.sema.struct: two independent cycles are two mistakes" {
     var result = try compile_mod.compile(testing.allocator,
         \\struct A:
-        \\    b: B
+        \\    let b: B
         \\
         \\struct B:
-        \\    a: A
+        \\    let a: A
         \\
         \\struct C:
-        \\    d: D
+        \\    let d: D
         \\
         \\struct D:
-        \\    c: C
+        \\    let c: C
         \\
         \\func main():
         \\    return
@@ -2969,8 +2969,8 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
     // suggestion, compiled.
     var result = try compile_mod.compile(testing.allocator,
         \\struct Node:
-        \\    value: i64
-        \\    next: Node?
+        \\    let value: i64
+        \\    let next: Node?
         \\
         \\func main():
         \\    let tail = Node(value = 2, next = none)
@@ -3263,7 +3263,7 @@ test "luce.parse.expected: a function needs a name" {
 }
 
 test "luce.parse.expected: a struct field needs a type after its colon" {
-    try expectRejected("struct P:\n    x:\n\nfunc main():\n    return\n", "luce.parse.expected");
+    try expectRejected("struct P:\n    let x:\n\nfunc main():\n    return\n", "luce.parse.expected");
 }
 
 test "luce.parse.type: array shape wildcards must come last" {
@@ -3286,10 +3286,10 @@ test "luce.parse.assign: cannot assign through a call result" {
 test "luce.sema.field: a nested place checks each field on the way down" {
     try expectRejected(
         \\struct Inner:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    var o = Outer(inner = Inner(n = 1))
@@ -3392,9 +3392,9 @@ test "luce.sema.reserved: an alias cannot replace a builtin type or reserved nam
 test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
     const cases = [_][]const u8{
         "alias Thing = i64\nalias Thing = str\n",
-        "struct Thing:\n    value: i64\nalias Thing = i64\n",
-        "alias Thing = i64\nstruct Thing:\n    value: i64\n",
-        "class Thing:\n    value: i64\nalias Thing = i64\n",
+        "struct Thing:\n    let value: i64\nalias Thing = i64\n",
+        "alias Thing = i64\nstruct Thing:\n    let value: i64\n",
+        "class Thing:\n    let value: i64\nalias Thing = i64\n",
         "interface Thing:\n    func value() -> i64\nalias Thing = i64\n",
         "enum Thing:\n    one\nalias Thing = i64\n",
         "union Thing:\n    one(value: i64)\nalias Thing = i64\n",
@@ -3413,12 +3413,12 @@ test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
 
 test "luce.sema.private: a public alias cannot expose a private nominal type" {
     try expectSaying(
-        "struct Secret:\n    value: i64\n\npub alias PublicSecret = Secret\n\nfunc main():\n    return\n",
+        "struct Secret:\n    let value: i64\n\npub alias PublicSecret = Secret\n\nfunc main():\n    return\n",
         "luce.sema.private",
         "alias PublicSecret is public and names Secret",
     );
     try expectCompiles(
-        "struct Secret:\n    value: i64\n\nalias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
+        "struct Secret:\n    let value: i64\n\nalias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
     );
 }
 
@@ -3454,10 +3454,10 @@ test "luce.sema.name: input is not a name in a script" {
 test "luce.sema.duplicate: a struct cannot be declared twice" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\struct P:
-        \\    y: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    return
@@ -3468,8 +3468,8 @@ test "luce.sema.duplicate: a struct cannot be declared twice" {
 test "luce.sema.duplicate: a struct cannot repeat a field" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
-        \\    x: i64
+        \\    let x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    return
@@ -3496,7 +3496,7 @@ test "luce.sema.reserved: a function cannot take a builtin's name" {
 }
 
 test "luce.sema.reserved: a struct cannot take a type keyword's name" {
-    try expectRejected("struct i64:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct i64:\n    let x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 test "luce.sema.reserved: a struct cannot take a builtin type's name" {
@@ -3504,9 +3504,9 @@ test "luce.sema.reserved: a struct cannot take a builtin type's name" {
     // spelled `list` would be a type nothing could write down, because
     // `resolveBase` answers that name first — so it is refused where it
     // is declared rather than shadowed where it is used.
-    try expectRejected("struct list:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("struct f64:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
-    try expectRejected("struct builder:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct list:\n    let x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct f64:\n    let x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct builder:\n    let x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 test "luce.sema.reserved: a function cannot take a conversion's name" {
@@ -3566,7 +3566,7 @@ test "luce.sema.type: a list literal is homogeneous" {
 test "luce.sema.type: a struct field takes its declared type" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = P(x = "s")
@@ -3700,7 +3700,7 @@ test "luce.sema.call: every missing argument is named at once" {
 test "luce.sema.self: the type spelling cannot name a method receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func read() -> i64:
         \\        return self.x
@@ -3715,7 +3715,7 @@ test "luce.sema.self: the type spelling cannot name a method receiver" {
 test "luce.sema.self: self is not a nameable argument on the method form" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func plus(other: i64) -> i64:
         \\        return self.x + other
@@ -3804,7 +3804,7 @@ test "luce.sema.const: a default folds once, at the declaration, called or not" 
 test "luce.parse.self: an explicit self with a default gets the retirement diagnostic" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func f(self = 1) -> i64:
         \\        return 0
@@ -3842,8 +3842,8 @@ test "luce.sema.call: only the required slots are ever missing" {
 test "luce.sema.struct: field defaults are trailing" {
     try expectSaying(
         \\struct State:
-        \\    cursor: i64 = 0
-        \\    path: str
+        \\    let cursor: i64 = 0
+        \\    let path: str
         \\
         \\func main():
         \\    return
@@ -3859,7 +3859,7 @@ test "luce.sema.const: a field default is a constant, called or not" {
         \\    return 1
         \\
         \\struct Config:
-        \\    budget: i64 = cost()
+        \\    let budget: i64 = cost()
         \\
         \\func main():
         \\    return
@@ -3870,7 +3870,7 @@ test "luce.sema.const: a field default is a constant, called or not" {
 test "luce.sema.type: a field default lands at the field's type or is refused" {
     try expectSaying(
         \\struct Config:
-        \\    budget: i64 = "much"
+        \\    let budget: i64 = "much"
         \\
         \\func main():
         \\    return
@@ -3881,10 +3881,10 @@ test "luce.sema.type: a field default lands at the field's type or is refused" {
 test "luce.sema.const: field defaults cannot lean on each other in a loop" {
     try expectSaying(
         \\struct A:
-        \\    x: i64 = B().y
+        \\    let x: i64 = B().y
         \\
         \\struct B:
-        \\    y: i64 = A().x
+        \\    let y: i64 = A().x
         \\
         \\func main():
         \\    return
@@ -3987,7 +3987,7 @@ test "luce.sema.method: a method the receiver does not have answers before its a
         \\    return str(n * 2)
         \\
         \\struct Box:
-        \\    v: i64
+        \\    let v: i64
         \\
         \\func main():
         \\    var b = Box(v = 1)
@@ -4142,7 +4142,7 @@ test "luce.sema.index: a map cannot be sliced" {
 test "luce.sema.construct: an unknown field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = P(x = 1, z = 2)
@@ -4153,7 +4153,7 @@ test "luce.sema.construct: an unknown field is rejected" {
 test "luce.sema.construct: a field cannot be given twice" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = P(x = 1, x = 2)
@@ -4164,7 +4164,7 @@ test "luce.sema.construct: a field cannot be given twice" {
 test "luce.sema.construct: fields are named, not positional" {
     try expectRejected(
         \\struct P:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = P(1)
@@ -4328,10 +4328,10 @@ test "luce.sema.return: a function with no result returns no value" {
 test "luce.sema.struct: mutually recursive structs have no finite value" {
     try expectRejected(
         \\struct A:
-        \\    b: B
+        \\    let b: B
         \\
         \\struct B:
-        \\    a: A
+        \\    let a: A
         \\
         \\func main():
         \\    return
@@ -4554,7 +4554,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
 test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
     try expectMessage(
         \\struct Bag:
-        \\    items: list[i64]?
+        \\    let items: list[i64]?
         \\
         \\func main():
         \\    let bag = Bag(items = none)
@@ -4829,8 +4829,8 @@ test "a misspelled function, field, type, and method each suggest the real one" 
     , "did you mean compute?");
     try expectMessage(
         \\struct Point:
-        \\    across: i64
-        \\    down: i64
+        \\    let across: i64
+        \\    let down: i64
         \\
         \\func main():
         \\    let p = Point(across = 1, down = 2)
@@ -4856,8 +4856,8 @@ test "a name too short to guess from suggests nothing" {
     // `z` is one edit from `x` and means nothing like it.
     try expectMessage(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -5348,10 +5348,10 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     // zero and a register to build.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    let v: i64\n");
     for (1..21) |level| {
         var line: [64]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    let a: S{d}\n    let b: S{d}\n", .{ level, level - 1, level - 1 }));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S20\n");
     try expectRejected(text.items, "luce.sema.struct");
@@ -5361,12 +5361,12 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
 /// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
 /// on line `3k` and its first field on line `3k + 1`.
 fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    let v: i64\n");
     for (1..levels + 1) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(
             &line,
-            "struct S{d}:\n    a: S{d}\n    b: S{d}\n",
+            "struct S{d}:\n    let a: S{d}\n    let b: S{d}\n",
             .{ level, level - 1, level - 1 },
         ));
     }
@@ -5415,7 +5415,7 @@ test "luce.sema.struct: a struct too wide from its own fields names no field" {
     try text.appendSlice(testing.allocator, "struct Wide:\n");
     for (0..4097) |index| {
         var line: [32]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: i64\n", .{index}));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let f{d}: i64\n", .{index}));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: Wide\n");
     try expectOnlySayingAt(
@@ -5447,12 +5447,12 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
 
     var optional: std.ArrayList(u8) = .empty;
     defer optional.deinit(testing.allocator);
-    try optional.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
+    try optional.appendSlice(testing.allocator, "struct S0:\n    let v: i64\n");
     for (1..14) |level| {
         var line: [64]u8 = undefined;
         try optional.appendSlice(testing.allocator, try std.fmt.bufPrint(
             &line,
-            "struct S{d}:\n    a: S{d}?\n    b: S{d}?\n",
+            "struct S{d}:\n    let a: S{d}?\n    let b: S{d}?\n",
             .{ level, level - 1, level - 1 },
         ));
     }
@@ -5466,8 +5466,8 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
     var recursive = try compile_mod.compile(
         testing.allocator,
         \\struct Node:
-        \\    value: i64
-        \\    next: Node?
+        \\    let value: i64
+        \\    var next: Node?
         \\
         \\func main():
         \\    var n: Node
@@ -5487,10 +5487,10 @@ test "a wide struct graph with no cycle compiles, and quickly" {
     // path is exponential here; both are settled once instead.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: i64\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    let v: i64\n");
     for (1..11) |level| {
         var line: [64]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    let a: S{d}\n    let b: S{d}\n", .{ level, level - 1, level - 1 }));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S10\n    assert(g.a.a.a.a.a.a.a.a.a.a.v == 0)\n");
     var result = try compile_mod.compile(testing.allocator, text.items, script);
@@ -5502,16 +5502,16 @@ test "a wide struct graph with no cycle compiles, and quickly" {
 test "luce.sema.struct: a cycle through a wide graph is still found" {
     try expectRejected(
         \\struct A:
-        \\    left: B
-        \\    right: B
+        \\    let left: B
+        \\    let right: B
         \\
         \\struct B:
-        \\    left: C
-        \\    right: C
+        \\    let left: C
+        \\    let right: C
         \\
         \\struct C:
-        \\    back: A
-        \\    value: i64
+        \\    let back: A
+        \\    let value: i64
         \\
         \\func main():
         \\    assert(true)
@@ -5768,8 +5768,8 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // A field of a let-bound struct.
     try expectSaying(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -5781,10 +5781,10 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // many steps down the leaf sits.
     try expectSaying(
         \\struct Inner:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    let held = Outer(inner = Inner(value = 1))
@@ -5795,10 +5795,10 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // And compound assignment through a chain is an assignment too.
     try expectSaying(
         \\struct Inner:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    let held = Outer(inner = Inner(value = 1))
@@ -5837,7 +5837,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // deleting a statement is the one failure a build cannot see).
     try expectSaying(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func bump():
         \\        self.value += 1
@@ -5855,7 +5855,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // nested place; each reaches it by its own path.
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -5864,7 +5864,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    var p = Point(x = 1)
@@ -5873,10 +5873,10 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Inner:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    var held = Outer(inner = Inner(value = 1))
@@ -5886,7 +5886,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // A near miss is spelled out; a name nothing resembles is not.
     try expectSaying(
         \\struct Point:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let p = Point(value = 1)
@@ -5898,10 +5898,10 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
 test "luce.sema.type: a nested place and a compound assignment check their own types" {
     try expectSaying(
         \\struct Inner:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    var held = Outer(inner = Inner(value = 1))
@@ -6254,7 +6254,7 @@ test "luce.sema.type: a written type is checked against the arguments it may tak
     , "luce.sema.type", "builder takes no type arguments");
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    var p: Point[i64] = Point(x = 1)
@@ -6274,7 +6274,7 @@ test "luce.sema.struct: a struct whose fields all fell away has an empty body" {
     // and nothing said why.
     try expectSaying(
         \\struct Bad:
-        \\    value: Nope
+        \\    let value: Nope
         \\
         \\func main():
         \\    return
@@ -6282,7 +6282,7 @@ test "luce.sema.struct: a struct whose fields all fell away has an empty body" {
     , "luce.sema.struct", "struct Bad has an empty body");
     try expectSaying(
         \\struct Bad:
-        \\    value: Nope
+        \\    let value: Nope
         \\
         \\func main():
         \\    return
@@ -6941,7 +6941,7 @@ test "luce.sema.match: a member that does not exist is not a value either" {
 test "luce.sema.duplicate: an enum shares the type-name space, and its members the member space" {
     try expectSaying(
         \\struct Method:
-        \\    size: i64
+        \\    let size: i64
         \\
         \\enum Method:
         \\    stored
@@ -7059,7 +7059,7 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
     );
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    var counts = map[Point, i64]()
@@ -7211,7 +7211,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
 
     try expectOnlySayingAt(
         \\struct Sink:
-        \\    marker: i64
+        \\    let marker: i64
         \\
         \\    func consume(items: list[i64]) -> i64:
         \\        return len(items) + self.marker
@@ -7263,7 +7263,7 @@ test "luce.sema.call: a task is spawned, not constructed" {
 test "luce.sema.self: a method cannot be spawned" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func doubled() -> i64:
         \\        return self.x * 2
@@ -7374,7 +7374,7 @@ test "luce.sema.call: a method reference is refused, and taught" {
     // which re-receives the receiver and therefore carries nothing.
     try expectHostSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func length() -> i64:
         \\        return self.x
@@ -7629,7 +7629,7 @@ test "luce.sema.type: a slot holds the optional form of a function value" {
 
     try expectHostSaying(
         \\struct Handler:
-        \\    run: func(i64) -> i64
+        \\    let run: func(i64) -> i64
         \\
         \\func main():
         \\    print("hi")
@@ -7651,7 +7651,7 @@ test "luce.sema.call: an unwrapped optional function is not callable" {
     // every other `T?` takes (docs/BINDING.md D7).
     try expectHostSaying(
         \\struct Row:
-        \\    action: (func(i64) -> i64)?
+        \\    let action: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let row = Row(action = (n) => n + 1)
@@ -7726,7 +7726,7 @@ test "luce.sema.const: a top-level const is not a place for a lambda" {
 test "luce.sema.call: a field holding a function value is not a method" {
     try expectHostSaying(
         \\struct Rows:
-        \\    render: (func(i64) -> str)?
+        \\    let render: (func(i64) -> str)?
         \\
         \\func label(index: i64) -> str:
         \\    return str(index)
@@ -7754,7 +7754,7 @@ test "luce.sema.call: an element that may hold none is not called in place" {
 test "luce.sema.call: a field read through a grouping is refused the same way" {
     try expectHostSaying(
         \\struct Rows:
-        \\    render: (func(i64) -> str)?
+        \\    let render: (func(i64) -> str)?
         \\
         \\func label(index: i64) -> str:
         \\    return str(index)
@@ -7855,7 +7855,7 @@ test "luce.sema.interface: a struct must implement every interface method" {
         \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: str
+        \\    let label: str
         \\
         \\func main():
         \\    let button = UIButton(label = "ok")
@@ -7871,7 +7871,7 @@ test "luce.sema.interface: a multi-method conformance checks every slot" {
         \\    func label() -> str
         \\
         \\struct Button: Drawable:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.marker
         \\
@@ -7888,7 +7888,7 @@ test "luce.sema.interface: an implementation must match the contract signature" 
         \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: str
+        \\    let label: str
         \\    func render(value: i64) -> str:
         \\        return value
         \\
@@ -7905,7 +7905,7 @@ test "luce.sema.interface: witness parameter count and types match exactly" {
         \\    func apply(value: i64, scale: i64) -> i64
         \\
         \\struct Short: Transform:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func apply(value: i64) -> i64:
         \\        return value
         \\
@@ -7918,7 +7918,7 @@ test "luce.sema.interface: witness parameter count and types match exactly" {
         \\    func apply(value: i64) -> i64
         \\
         \\struct Long: Transform:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func apply(value: i64, scale: i64) -> i64:
         \\        return value * scale
         \\
@@ -7931,7 +7931,7 @@ test "luce.sema.interface: witness parameter count and types match exactly" {
         \\    func apply(value: i64, label: str) -> i64
         \\
         \\struct Wrong: Transform:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func apply(value: i64, label: i64) -> i64:
         \\        return value + label
         \\
@@ -7947,7 +7947,7 @@ test "luce.sema.interface: a writing method cannot satisfy a read-only interface
         \\    func update(value: i64)
         \\
         \\struct Box: Counter:
-        \\    value: i64
+        \\    var value: i64
         \\    func update(value: i64):
         \\        self.value = value
         \\
@@ -7964,7 +7964,7 @@ test "luce.sema.interface: a mutating value witness needs a mutable bare local" 
         \\    mutating func bump()
         \\
         \\struct Box: Counter:
-        \\    value: i64
+        \\    var value: i64
         \\    func bump():
         \\        self.value += 1
         \\
@@ -7979,7 +7979,7 @@ test "luce.sema.interface: a mutating value witness needs a mutable bare local" 
         \\    mutating func bump()
         \\
         \\struct Box: Counter:
-        \\    value: i64
+        \\    var value: i64
         \\    func bump():
         \\        self.value += 1
         \\
@@ -7999,7 +7999,7 @@ test "luce.sema.interface: a mutating value witness cannot use a temporary or pr
         \\    mutating func bump()
         \\
         \\struct Box: Counter:
-        \\    value: i64
+        \\    var value: i64
         \\    func bump():
         \\        self.value += 1
         \\
@@ -8020,12 +8020,12 @@ test "luce.sema.interface: a mutating value witness cannot use a temporary or pr
             \\    mutating func bump()
             \\
             \\struct Box: Counter:
-            \\    value: i64
+            \\    var value: i64
             \\    func bump():
             \\        self.value += 1
             \\
             \\struct Holder:
-            \\    item: Counter
+            \\    let item: Counter
             \\
             \\func main():
             \\    var holder = Holder(item = Box(value = 0))
@@ -8050,7 +8050,7 @@ test "luce.parse.mutating: the marker belongs only on interface requirements" {
     , "luce.parse.mutating", "mutating belongs on an interface requirement");
     try expectHostSaying(
         \\struct Box:
-        \\    value: i64
+        \\    var value: i64
         \\    mutating func bump():
         \\        self.value += 1
         \\
@@ -8071,7 +8071,7 @@ test "luce.parse.mutating: the marker belongs only on interface requirements" {
 test "luce.sema.interface: a conformance list names interfaces only" {
     try expectHostSaying(
         \\struct Box: i64:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let box = Box(value = 0)
@@ -8086,7 +8086,7 @@ test "luce.sema.interface: hidden dispatch fields cannot be read" {
         \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: str
+        \\    let label: str
         \\    func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8106,7 +8106,7 @@ test "luce.sema.interface: a fallible witness cannot satisfy a non-fallible requ
         \\    func read(value: i64) -> i64
         \\
         \\struct Buffer: Reader:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func read(value: i64) -> i64!:
         \\        return value
         \\
@@ -8135,7 +8135,7 @@ test "luce.sema.interface: static methods cannot be witnesses" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable:
-        \\    marker: i64
+        \\    let marker: i64
         \\    static func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8152,7 +8152,7 @@ test "luce.sema.interface: a conformance cannot be listed twice" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable, Renderable:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8169,7 +8169,7 @@ test "luce.sema.interface: a non-conforming struct cannot be passed as the contr
         \\    func render(value: i64) -> i64
         \\
         \\struct Button:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8190,7 +8190,7 @@ test "luce.sema.interface: every required method must be implemented" {
         \\    func label() -> str
         \\
         \\struct Button: Drawable:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8207,7 +8207,7 @@ test "luce.sema.interface: witness parameters must match the contract" {
         \\    func read(value: i64) -> i64
         \\
         \\struct Buffer: Reader:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func read(value: str) -> i64:
         \\        return self.marker
         \\
@@ -8224,7 +8224,7 @@ test "luce.sema.interface: a non-mutating requirement rejects a writing witness"
         \\    func bump()
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func bump():
         \\        self.current += 1
         \\
@@ -8251,7 +8251,7 @@ test "luce.sema.interface: a multi-value witness must match every result" {
         \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func span(value: i64) -> (i64, str):
         \\        return value, "wrong"
         \\
@@ -8268,7 +8268,7 @@ test "luce.sema.interface: a fallible dispatch must be handled" {
         \\    func read(value: i64) -> i64!
         \\
         \\struct Buffer: Reader:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func read(value: i64) -> i64:
         \\        return value
         \\
@@ -8343,7 +8343,7 @@ test "luce.sema.method: dispatch exposes only declared interface methods" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Renderable:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value
         \\
@@ -8360,7 +8360,7 @@ test "luce.sema.call: a multi-value interface call must be destructured" {
         \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func span(value: i64) -> (i64, i64):
         \\        return value, value + 1
         \\
@@ -8417,7 +8417,7 @@ test "luce.sema.weak.target: values and resources cannot be weak targets" {
         \\
         ,
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    weak var value: Point? = none
@@ -8444,10 +8444,10 @@ test "luce.sema.weak.target: values and resources cannot be weak targets" {
 test "luce.sema.weak.target: value structs and interfaces reject weak fields and locals" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\struct Bad:
-        \\    weak point: Point? = none
+        \\    weak let point: Point? = none
         \\
         \\func main():
         \\    return
@@ -8466,8 +8466,8 @@ test "luce.sema.weak.target: value structs and interfaces reject weak fields and
 test "luce.sema.struct: an implicit weak default is trailing" {
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]?
-        \\    marker: i64
+        \\    weak let target: list[i64]?
+        \\    let marker: i64
         \\
         \\func main():
         \\    return
@@ -8484,7 +8484,7 @@ test "luce.sema.weak.access: weak places reject read-modify-write and traversal"
     , "luce.sema.weak.access", "cannot use compound assignment");
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak var target: list[i64]? = none
         \\
         \\func main():
         \\    var observer = Observer()
@@ -8493,13 +8493,13 @@ test "luce.sema.weak.access: weak places reject read-modify-write and traversal"
     , "luce.sema.weak.access", "cannot use compound assignment");
     try expectSaying(
         \\struct Cell:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\struct Observer:
-        \\    weak target: list[Cell]? = none
+        \\    weak var target: list[Cell]? = none
         \\
         \\struct Outer:
-        \\    observer: Observer
+        \\    var observer: Observer
         \\
         \\func main():
         \\    var outer = Outer(observer = Observer())
@@ -8522,7 +8522,7 @@ test "luce.sema.weak.access: weak reads do not create persistent narrowing" {
 test "luce.sema.weak.access: values containing weak storage have no hidden-handle equality" {
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak let target: list[i64]? = none
         \\
         \\func main():
         \\    assert(Observer() == Observer())
@@ -8530,7 +8530,7 @@ test "luce.sema.weak.access: values containing weak storage have no hidden-handl
     , "luce.sema.weak.access", "cannot compare hidden weak handles");
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak let target: list[i64]? = none
         \\
         \\func main():
         \\    let observers = [Observer()]
@@ -8542,7 +8542,7 @@ test "luce.sema.weak.access: values containing weak storage have no hidden-handl
 test "luce.sema.own: weak handles never cross worker runtime tables" {
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak let target: list[i64]? = none
         \\
         \\func inspect(observer: Observer) -> i64:
         \\    return 1
@@ -8554,7 +8554,7 @@ test "luce.sema.own: weak handles never cross worker runtime tables" {
     , "luce.sema.own", "a weak reference cannot cross a worker boundary");
     try expectSaying(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak var target: list[i64]? = none
         \\
         \\func make() -> Observer:
         \\    return Observer()
@@ -8574,7 +8574,7 @@ test "luce.sema.own: weak handles never cross worker runtime tables" {
 test "class: value equality points to identity syntax" {
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let left = Box(value = 1)
@@ -8587,7 +8587,7 @@ test "class: value equality points to identity syntax" {
 test "class: is rejects value types and names the offending side" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    let left = Point(x = 1)
@@ -8597,7 +8597,7 @@ test "class: is rejects value types and names the offending side" {
     , "luce.sema.class.identity", "left side of 'is' is Point, not a class reference");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let box = Box(value = 1)
@@ -8609,10 +8609,10 @@ test "class: is rejects value types and names the offending side" {
 test "class: is rejects references of different nominal classes" {
     try expectSaying(
         \\class Left:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\class Right:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let left = Left(value = 1)
@@ -8625,7 +8625,7 @@ test "class: is rejects references of different nominal classes" {
 test "class: let still rejects mutation of a value struct field" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\func main():
         \\    let point = Point(x = 1)
@@ -8637,10 +8637,10 @@ test "class: let still rejects mutation of a value struct field" {
 test "class: a non-interface cannot be used as inheritance" {
     try expectSaying(
         \\class Parent:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\class Child: Parent:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    return
@@ -8663,7 +8663,7 @@ test "class: method override syntax is rejected explicitly" {
 test "class: init is one class-only lifecycle body" {
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\    init(x: i64):
         \\        self.x = x
         \\func main():
@@ -8672,7 +8672,7 @@ test "class: init is one class-only lifecycle body" {
     , "luce.sema.class.lifecycle", "init belongs to a class");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    var value: i64
         \\    init(value: i64):
         \\        self.value = value
         \\    init():
@@ -8686,7 +8686,7 @@ test "class: init is one class-only lifecycle body" {
 test "class: init has lifecycle syntax and an implicit class result" {
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    var value: i64
         \\    func init(value: i64):
         \\        self.value = value
         \\func main():
@@ -8695,7 +8695,7 @@ test "class: init has lifecycle syntax and an implicit class result" {
     , "luce.sema.class.lifecycle", "not a method");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    static init(value: i64):
         \\        return
         \\func main():
@@ -8704,7 +8704,7 @@ test "class: init has lifecycle syntax and an implicit class result" {
     , "luce.sema.class.lifecycle", "not a static member");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64) -> Box:
         \\        self.value = value
         \\func main():
@@ -8713,7 +8713,7 @@ test "class: init has lifecycle syntax and an implicit class result" {
     , "luce.sema.class.lifecycle", "returns the new class implicitly");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        self.value = value
         \\        return self
@@ -8726,9 +8726,9 @@ test "class: init has lifecycle syntax and an implicit class result" {
 test "class: init must establish every field on every successful path" {
     try expectSaying(
         \\class Triple:
-        \\    first: i64
-        \\    second: i64
-        \\    third: i64
+        \\    let first: i64
+        \\    let second: i64
+        \\    let third: i64
         \\    init(value: i64):
         \\        self.first = value
         \\func main():
@@ -8737,8 +8737,8 @@ test "class: init must establish every field on every successful path" {
     , "luce.sema.class.init", "without initializing fields second and third");
     try expectSaying(
         \\class Pair:
-        \\    left: i64
-        \\    right: i64
+        \\    let left: i64
+        \\    let right: i64
         \\    init(value: i64):
         \\        self.left = value
         \\func main():
@@ -8747,8 +8747,8 @@ test "class: init must establish every field on every successful path" {
     , "luce.sema.class.init", "without initializing field right");
     try expectSaying(
         \\class Pair:
-        \\    left: i64
-        \\    right: i64
+        \\    let left: i64
+        \\    let right: i64
         \\    init(value: i64, choose: bool):
         \\        self.left = value
         \\        if choose:
@@ -8759,7 +8759,7 @@ test "class: init must establish every field on every successful path" {
     , "luce.sema.class.init", "without initializing field right");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(values: list[i64]):
         \\        for value in values:
         \\            self.value = value
@@ -8772,7 +8772,7 @@ test "class: init must establish every field on every successful path" {
 test "class: init cannot read a field before assigning it" {
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init():
         \\        self.value = self.value + 1
         \\func main():
@@ -8781,9 +8781,9 @@ test "class: init cannot read a field before assigning it" {
     , "luce.sema.class.init", "self.value is read before init has assigned it");
     try expectSaying(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\class Scene:
-        \\    point: Point
+        \\    let point: Point
         \\    init():
         \\        self.point.x = 42
         \\func main():
@@ -8792,7 +8792,7 @@ test "class: init cannot read a field before assigning it" {
     , "luce.sema.class.init", "self.point is read before init has assigned it");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init():
         \\        self.value += 1
         \\func main():
@@ -8804,7 +8804,7 @@ test "class: init cannot read a field before assigning it" {
 test "class: self cannot escape before init has made the class" {
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(self: i64):
         \\        self.value = 42
         \\func main():
@@ -8813,7 +8813,7 @@ test "class: self cannot escape before init has made the class" {
     , "luce.parse.self", "self is implied; remove the parameter");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        let self = value
         \\        self.value = value
@@ -8823,7 +8823,7 @@ test "class: self cannot escape before init has made the class" {
     , "luce.parse.expected", "'self' is a keyword and cannot be used as a name");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        let unfinished = self
         \\        self.value = value
@@ -8835,7 +8835,7 @@ test "class: self cannot escape before init has made the class" {
         \\func keep(box: Box):
         \\    return
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        keep(self)
         \\        self.value = value
@@ -8845,7 +8845,7 @@ test "class: self cannot escape before init has made the class" {
     , "luce.sema.class.lifecycle", "init may use self only to read or assign a stored field");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        let read: func() -> i64 = func():
         \\            return self.value
@@ -8856,7 +8856,7 @@ test "class: self cannot escape before init has made the class" {
     , "luce.sema.class.lifecycle", "init cannot capture self in a closure");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    var value: i64
         \\    init(value: i64):
         \\        self.reset()
         \\        self.value = value
@@ -8868,7 +8868,7 @@ test "class: self cannot escape before init has made the class" {
     , "luce.sema.class.lifecycle", "cannot call an instance method before the class exists");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        self = Box(value)
         \\func main():
@@ -8880,14 +8880,14 @@ test "class: self cannot escape before init has made the class" {
 test "class: a custom init is the class constructor surface" {
     try expectSaying(
         \\class Action:
-        \\    apply: func(i64) -> i64
+        \\    let apply: func(i64) -> i64
         \\func main():
         \\    return
         \\
     , "luce.sema.type", "a memberwise class field starts before anything fills it");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
@@ -8896,7 +8896,7 @@ test "class: a custom init is the class constructor surface" {
     , "luce.sema.call", "Box is missing number");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
@@ -8905,7 +8905,7 @@ test "class: a custom init is the class constructor surface" {
     , "luce.sema.call", "has no parameter value");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(number: i64):
         \\        self.value = number
         \\func main():
@@ -8914,7 +8914,7 @@ test "class: a custom init is the class constructor surface" {
     , "luce.sema.class.lifecycle", "write ClassName(...)");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64) -> !:
         \\        self.value = value
         \\func main():
@@ -8923,7 +8923,7 @@ test "class: a custom init is the class constructor surface" {
     , "luce.sema.fallible", "write 'try Box(…)'");
     try expectSaying(
         \\class Box:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        self.missing = value
         \\        self.value = value
@@ -8936,7 +8936,7 @@ test "class: a custom init is the class constructor surface" {
 test "class: init bounds a flat expression rather than overflowing" {
     const source = try longChain(
         testing.allocator,
-        "class Box:\n    value: i64\n    init():\n        self.value = ",
+        "class Box:\n    let value: i64\n    init():\n        self.value = ",
         "1",
         5000,
         "\nfunc main():\n    return\n",
@@ -8948,7 +8948,7 @@ test "class: init bounds a flat expression rather than overflowing" {
 test "class: only classes may declare one bare deinit lifecycle body" {
     try expectSaying(
         \\struct Value:
-        \\    number: i64
+        \\    let number: i64
         \\    deinit:
         \\        return
         \\func main():
@@ -9043,7 +9043,7 @@ test "class: deinit cannot create a new strong self reference" {
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
         \\class Resource:
-        \\    next: Resource?
+        \\    var next: Resource?
         \\    deinit:
         \\        self.next = self
         \\func main():
@@ -9052,7 +9052,7 @@ test "class: deinit cannot create a new strong self reference" {
     , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
     try expectSaying(
         \\class Resource:
-        \\    items: list[Resource]
+        \\    let items: list[Resource]
         \\    deinit:
         \\        self.items.append(self)
         \\func main():
@@ -9411,7 +9411,7 @@ test "fields: reassigning a let field of a value struct is refused" {
     try expectSaying(
         \\struct Point:
         \\    let x: i64
-        \\    var y: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
@@ -9433,4 +9433,33 @@ test "fields: a var field is freely reassigned" {
         \\    print(str(b.id))
         \\
     );
+}
+
+test "luce.parse.field: a field with neither let nor var is refused" {
+    // Reading the missing word as `var` would make the least considered
+    // declaration the most permissive one, so a field must say which it
+    // is.  The refusal names both words: which one is right is a fact
+    // about the design, and the compiler is not the one who knows it.
+    try expectSaying(
+        \\class Box:
+        \\    id: i64
+        \\    init(id: i64):
+        \\        self.id = id
+        \\
+        \\func main():
+        \\    print(str(Box(7).id))
+        \\
+    , "luce.parse.field", "write let id");
+}
+
+test "luce.parse.field: a value struct's field says which it is too" {
+    try expectSaying(
+        \\struct Point:
+        \\    pub x: i64
+        \\    let y: i64
+        \\
+        \\func main():
+        \\    print(str(Point(x = 1, y = 2).x))
+        \\
+    , "luce.parse.field", "var x");
 }

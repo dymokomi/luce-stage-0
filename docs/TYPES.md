@@ -212,8 +212,8 @@ each field:
 
 ```luce
 struct Point:
-    x: f64
-    y: f64
+    let x: f64
+    let y: f64
 
 func main():
     let p = Point(x = 1.0, y = 2.0)

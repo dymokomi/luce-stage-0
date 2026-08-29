@@ -36,7 +36,7 @@ import std.io
 # both are functions rather than a public init, because neither is
 # "make me a connection from parts": each asks the world.
 pub class Connection: io.Reader, io.Writer:
-    raw: handle
+    var raw: handle
 
     init(raw: handle):
         self.raw = raw
@@ -64,7 +64,7 @@ pub class Connection: io.Reader, io.Writer:
 # several workers may accept on their own listeners at once, and a
 # server loops on `accept` for as long as it means to serve.
 pub class Listener:
-    raw: handle
+    var raw: handle
 
     pub init(port: i64) -> !:
         self.raw = try Builtin.socket_listen(port)

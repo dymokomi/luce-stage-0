@@ -315,7 +315,7 @@ writes out.
 
 ```luce fail
 struct Rows:
-    render: (func(i64) -> str)?
+    let render: (func(i64) -> str)?
 
 func label(index: i64) -> str:
     return str(index)

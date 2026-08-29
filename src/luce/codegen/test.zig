@@ -133,8 +133,8 @@ test "floats, structs, and the host services all lower" {
     const gpa = std.testing.allocator;
     const rendered = (try renderHost(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    let x: f64
+        \\    let y: f64
         \\
         \\func main(args: list[str]) -> !:
         \\    let p = Point(x = 1.5, y = -0.0)
@@ -508,8 +508,8 @@ test "every runtime declaration carries what the compiler knows about it" {
 
 const flat_constants_source =
     \\struct Label:
-    \\    text: str
-    \\    rank: i64
+    \\    var text: str
+    \\    var rank: i64
     \\
     \\const labels: list[Label] = [Label(text = "first", rank = 1)]
     \\const axis: array[i64, _] = [3, 5, 8]
@@ -652,7 +652,7 @@ test "a compiled worker reads its runtime-local constant root" {
 test "inout calls mutate the caller on return, error, and nested forwarding" {
     try agree(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func step():
         \\        self.value += 1
@@ -666,7 +666,7 @@ test "inout calls mutate the caller on return, error, and nested forwarding" {
         \\        error("failed")
         \\
         \\struct Holder:
-        \\    values: list[i64]
+        \\    var values: list[i64]
         \\
         \\    func replace():
         \\        self = Holder(values = [9])
@@ -1393,12 +1393,12 @@ test "the i64 math builtins agree, and abs of the smallest i64 traps" {
 test "nested struct equality recurses into fields, not the slots holding them" {
     try agree(
         \\struct Inner:
-        \\    n: i64
-        \\    tag: str
+        \\    let n: i64
+        \\    let tag: str
         \\
         \\struct Outer:
-        \\    left: Inner
-        \\    right: Inner
+        \\    var left: Inner
+        \\    var right: Inner
         \\
         \\func main():
         \\    let a = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 2, tag = "y"))
@@ -1414,9 +1414,9 @@ test "nested struct equality recurses into fields, not the slots holding them" {
 test "a struct carrying a str copies by value and agrees" {
     try agree(
         \\struct Person:
-        \\    name: str
-        \\    age: i64
-        \\    score: f64
+        \\    var name: str
+        \\    var age: i64
+        \\    let score: f64
         \\
         \\func renamed(who: Person, to: str) -> Person:
         \\    var changed = who
@@ -1437,13 +1437,13 @@ test "a struct carrying a str copies by value and agrees" {
 test "zero-initialized structs agree, nested ones included" {
     try agree(
         \\struct Inner:
-        \\    n: i64
-        \\    tag: str
+        \\    var n: i64
+        \\    let tag: str
         \\
         \\struct Outer:
-        \\    label: str
-        \\    inner: Inner
-        \\    weight: f64
+        \\    let label: str
+        \\    var inner: Inner
+        \\    let weight: f64
         \\
         \\func main():
         \\    var grid = array[Outer](2, 2)
@@ -1561,8 +1561,8 @@ test "inline str scalar length and slicing agree with explicit raw bytes" {
 test "structs inside containers agree" {
     try agree(
         \\struct Cell:
-        \\    value: i64
-        \\    name: str
+        \\    var value: i64
+        \\    var name: str
         \\
         \\func main():
         \\    var cells = [Cell(value = 10, name = "a"), Cell(value = 20, name = "b")]
@@ -1580,8 +1580,8 @@ test "a struct carrying an object is owned and released through its fields" {
     // census is what says it did.
     try agree(
         \\struct Bag:
-        \\    items: list[i64]
-        \\    label: str
+        \\    let items: list[i64]
+        \\    let label: str
         \\
         \\func fill(label: str) -> Bag:
         \\    let xs = list[i64]()
@@ -1694,8 +1694,8 @@ test "an optional struct field agrees, absent and present" {
     // to box as the `none` tag and read back as the absent pair.
     try agree(
         \\struct Slot:
-        \\    label: str
-        \\    room: i64?
+        \\    let label: str
+        \\    var room: i64?
         \\
         \\func main():
         \\    var empty = Slot(label = "a", room = none)
@@ -1719,8 +1719,8 @@ test "a struct recurses through an optional field, which is what ends it" {
     // in it.  Reading one back is the boxed `strukt` payload.
     try agree(
         \\struct Node:
-        \\    value: i64
-        \\    next: Node?
+        \\    let value: i64
+        \\    let next: Node?
         \\
         \\func total(from: Node) -> i64:
         \\    var sum = from.value
@@ -1780,8 +1780,8 @@ test "optionals in a loop agree, boxed into container cells and back" {
     // than in a frame slot.
     try agree(
         \\struct Cell:
-        \\    tag: str
-        \\    room: i64?
+        \\    let tag: str
+        \\    let room: i64?
         \\
         \\func even(n: i64) -> i64?:
         \\    if n % 2 == 0:
@@ -1830,8 +1830,8 @@ test "every payload a T? can hold survives being returned" {
     // eight every other payload rounds up to.
     try agree(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func flag(want: bool) -> bool?:
         \\    if want:
@@ -2267,8 +2267,8 @@ test "owned str bytes agree, census included" {
         \\import std.strings
         \\
         \\struct Tag:
-        \\    label: str
-        \\    count: i64
+        \\    var label: str
+        \\    let count: i64
         \\
         \\func widen(s: str) -> str:
         \\    return strings.trim(s)
@@ -2340,7 +2340,7 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\import std.strings
         \\
         \\struct Held:
-        \\    label: str
+        \\    let label: str
         \\
         \\func echo(s: str) -> str:
         \\    return s
@@ -2436,8 +2436,8 @@ test "a loop name agrees whether it borrows its element or copies it" {
 test "a trap agrees while every frame is still holding str bytes" {
     try agree(
         \\struct Tag:
-        \\    label: str
-        \\    count: i64
+        \\    let label: str
+        \\    let count: i64
         \\
         \\func deeper(name: str) -> i64:
         \\    let held = name + "-held"

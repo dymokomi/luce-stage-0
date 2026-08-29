@@ -43,8 +43,8 @@ existing elements; reference elements keep their identity.
 import std.lists
 
 struct Player:
-    name: str
-    score: i64
+    let name: str
+    let score: i64
 
 func by_score(a: Player, b: Player) -> bool:
     return a.score > b.score

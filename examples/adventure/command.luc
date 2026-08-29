@@ -15,12 +15,12 @@ import std.strings
 
 # One parsed line: what to do, and what to do it to.
 pub struct Order:
-    pub verb: str
-    pub noun: str = ""
+    pub let verb: str
+    pub let noun: str = ""
 
     # What the player actually typed, case and all, kept for the
     # one message that has to quote it back.
-    typed: str = ""
+    let typed: str = ""
 
     pub static func make(verb: str, noun: str = "", typed: str = "") -> Order:
         return Order(verb = verb, noun = noun, typed = typed)

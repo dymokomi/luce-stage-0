@@ -66,7 +66,7 @@ interface UIElement:
     func render(value: i64) -> i64
 
 struct Button: Element:
-    offset: i64
+    let offset: i64
 
     func render(value: i64) -> i64:
         return value + self.offset

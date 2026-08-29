@@ -101,7 +101,7 @@ test "references: a struct and a union carry, share, and release their fields" {
     // census, which is what proves the fields were released.
     try agreeOk(
         \\struct Box:
-        \\    items: list[i64]
+        \\    let items: list[i64]
         \\
         \\union Node:
         \\    leaf(value: i64)
@@ -796,8 +796,8 @@ test "an explicitly converted operator answers an f64, printed as one" {
 test "contextual literals reach annotations, arguments, returns, and fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    let y: f64
         \\
         \\func scale(by: f64) -> f64:
         \\    return by * 2
@@ -837,8 +837,8 @@ test "contextual literals reach annotations, arguments, returns, and fields" {
 test "types: the language's own names are lowercase" {
     try agreeOk(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    let x: f64
+        \\    let y: f64
         \\
         \\func total(xs: list[i64]) -> i64:
         \\    var sum: i64 = 0
@@ -1125,7 +1125,7 @@ test "compound assignment concatenates strings with +=" {
 test "compound assignment on struct fields and container elements" {
     try agreeOk(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\func main():
         \\    var c = Counter(value = 1)
@@ -1161,11 +1161,11 @@ test "a let binding freezes the name, never the object it reached" {
     // that takes a container takes a `let`-bound name for it.
     try agreeOk(
         \\struct Cell:
-        \\    value: i64
-        \\    label: str
+        \\    var value: i64
+        \\    var label: str
         \\
         \\struct Bag:
-        \\    cells: list[Cell]
+        \\    var cells: list[Cell]
         \\
         \\func bump(cells: list[Cell]):
         \\    cells[0].value += 1
@@ -1318,7 +1318,7 @@ test "a compound store through a nested place defines its leaf too" {
     // does, so it has to mean the same thing.
     try agreeOk(
         \\struct Tally:
-        \\    counts: map[str, i64]
+        \\    var counts: map[str, i64]
         \\
         \\func main():
         \\    var t = Tally(counts = map[str, i64]())
@@ -1370,7 +1370,7 @@ test "trap: descending through a map key to reach a field is still a read" {
     // place defines.
     try agreeTrap(
         \\struct Cell:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\func main():
         \\    var m = map[str, Cell]()
@@ -1407,7 +1407,7 @@ test "trap: a compound store into an array cell keeps its bounds trap" {
 test "compound assignment computes at the place's explicit width" {
     try agreeOk(
         \\struct Pixel:
-        \\    level: u8
+        \\    var level: u8
         \\
         \\func main():
         \\    var b: u8 = 250
@@ -1765,8 +1765,8 @@ test "f-strings compose with methods and calls in holes" {
 test "structs: construction, field read, functional update, value copy" {
     try agreeOk(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
@@ -1785,15 +1785,15 @@ test "structs: construction, field read, functional update, value copy" {
 test "structs: namespaced functions and nested structs" {
     try agreeOk(
         \\struct Vec:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\    static func add(a: Vec, b: Vec) -> Vec:
         \\        return Vec(x = a.x + b.x, y = a.y + b.y)
         \\
         \\struct Line:
-        \\    from: Vec
-        \\    to: Vec
+        \\    let from: Vec
+        \\    var to: Vec
         \\
         \\func main():
         \\    let sum = Vec.add(Vec(x = 1, y = 2), Vec(x = 3, y = 4))
@@ -1956,7 +1956,7 @@ test "extend appends every element of one list to another, and itself exactly on
         \\import std.strings
         \\
         \\struct Note:
-        \\    words: str
+        \\    let words: str
         \\
         \\func main():
         \\    var xs = [1, 2]
@@ -2091,8 +2091,8 @@ test "returns: existing vars receive one snapshot through every call surface" {
         \\        return right, left
         \\
         \\struct PairSource:
-        \\    left: i64
-        \\    right: i64
+        \\    let left: i64
+        \\    let right: i64
         \\
         \\    func values() -> (i64, i64):
         \\        return self.left, self.right
@@ -2171,7 +2171,7 @@ test "returns: try and catch commit both replacement stores or neither" {
 test "returns: a failed assignment keeps RHS side effects but commits no replacements" {
     try agreeOk(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func bump() -> i64:
         \\        self.value += 1
@@ -2237,8 +2237,8 @@ test "returns: guarded assignment joins optional facts from both continuing path
 test "methods: a receiver reads its struct beside a static namespace function" {
     try agreeOk(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    var y: f64
         \\
         \\    func length() -> f64:
         \\        return sqrt(self.x * self.x + self.y * self.y)
@@ -2265,7 +2265,7 @@ test "methods: a receiver reads its struct beside a static namespace function" {
 test "methods: a reader sees the receiver value without changing it" {
     try agreeOk(
         \\struct Counter:
-        \\    count: i64
+        \\    var count: i64
         \\
         \\    func bumped() -> Counter:
         \\        var next = self
@@ -2285,13 +2285,13 @@ test "methods: a reader sees the receiver value without changing it" {
 test "methods: a receiver may be a field, an element, or a chain of both" {
     try agreeOk(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func doubled() -> i64:
         \\        return self.x * 2
         \\
         \\struct Box:
-        \\    corner: Point
+        \\    let corner: Point
         \\
         \\func main():
         \\    let box = Box(corner = Point(x = 3))
@@ -2305,7 +2305,7 @@ test "methods: a receiver may be a field, an element, or a chain of both" {
 test "methods: a method may take and answer objects, and ownership is the plain-call rule" {
     try agreeOk(
         \\struct Tally:
-        \\    total: i64
+        \\    let total: i64
         \\
         \\    func over(values: list[i64]) -> i64:
         \\        var sum = self.total
@@ -2330,7 +2330,7 @@ test "methods: a method may take and answer objects, and ownership is the plain-
 test "methods: method arguments land at their declared types" {
     try agreeOk(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func pick(fallback: i64?) -> i64:
         \\        return fallback else self.x
@@ -2346,7 +2346,7 @@ test "methods: method arguments land at their declared types" {
 test "methods: a literal argument lands at the parameter's width" {
     try agreeOk(
         \\struct Gauge:
-        \\    reading: f64
+        \\    var reading: f64
         \\
         \\    func matches(level: f64) -> bool:
         \\        return self.reading == level
@@ -2416,7 +2416,7 @@ test "named arguments: all four spellings of a user call take them" {
         \\import std.strings
         \\
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\    func plus(other: i64, twice: bool) -> i64:
         \\        if twice:
@@ -2491,8 +2491,8 @@ test "defaults: a constant, a str, a struct value, and none all serve" {
         \\const step_default = 4
         \\
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func stepped(base: i64, step: i64 = step_default * 2) -> i64:
         \\    return base + step
@@ -2522,7 +2522,7 @@ test "defaults: a constant, a str, a struct value, and none all serve" {
 test "defaults: methods fill omitted slots after the implicit receiver" {
     try agreeOk(
         \\struct Counter:
-        \\    count: i64
+        \\    let count: i64
         \\
         \\    func bumped(step: i64 = 1) -> i64:
         \\        return self.count + step
@@ -2542,10 +2542,10 @@ test "struct field defaults: the declaration absorbs the invariant" {
     // a second construction site cannot get them wrong (D8).
     try agreeOk(
         \\struct State:
-        \\    path: str
-        \\    cursor: i64 = 0
-        \\    dirty: bool = false
-        \\    message: str = ""
+        \\    let path: str
+        \\    var cursor: i64 = 0
+        \\    var dirty: bool = false
+        \\    var message: str = ""
         \\
         \\func main():
         \\    let fresh = State(path = "notes.txt")
@@ -2561,8 +2561,8 @@ test "struct field defaults: the declaration absorbs the invariant" {
 test "struct field defaults: a struct of nothing but defaults constructs bare" {
     try agreeOk(
         \\struct Options:
-        \\    depth: i64 = 3
-        \\    wide: bool = false
+        \\    var depth: i64 = 3
+        \\    let wide: bool = false
         \\
         \\func main():
         \\    let plain = Options()
@@ -2579,8 +2579,8 @@ test "struct field defaults: constants and parameter defaults reach them" {
     // defaults, and a parameter default may too.
     try agreeOk(
         \\struct Corner:
-        \\    x: i64 = 1
-        \\    y: i64 = 2
+        \\    var x: i64 = 1
+        \\    var y: i64 = 2
         \\
         \\const origin = Corner()
         \\
@@ -2619,7 +2619,7 @@ test "builtins: the table is the signature, so a call may name its slots" {
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:
-        \\    limit: i64
+        \\    let limit: i64
         \\
         \\    func check(n: i64) -> i64!:
         \\        if n > self.limit:
@@ -2649,8 +2649,8 @@ test "methods: a method can fail, and try and catch reach it through the receive
 test "methods: direct field and whole-self writes are inferred" {
     try agreeOk(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    var y: f64
         \\
         \\    func scale(factor: f64):
         \\        self.x = self.x * factor
@@ -2677,7 +2677,7 @@ test "methods: direct field and whole-self writes are inferred" {
 test "methods: an inferred writer may return a value and call another writer" {
     try agreeOk(
         \\struct Rng:
-        \\    state: i64
+        \\    var state: i64
         \\
         \\    func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
@@ -2709,7 +2709,7 @@ test "methods: an inferred writer may return a value and call another writer" {
 test "methods: a writer accepts a bare var receiver" {
     try agreeOk(
         \\struct Counter:
-        \\    n: i64
+        \\    var n: i64
         \\
         \\    func bump():
         \\        self.n = self.n + 1
@@ -2726,7 +2726,7 @@ test "methods: a writer accepts a bare var receiver" {
 test "methods: an error before a receiver write leaves it unchanged" {
     try agreeOk(
         \\struct Meter:
-        \\    reading: i64
+        \\    var reading: i64
         \\
         \\    func take(n: i64) -> i64!:
         \\        if n < 0:
@@ -2749,7 +2749,7 @@ test "methods: an error before a receiver write leaves it unchanged" {
 test "methods: readers and writers share the method call surface" {
     try agreeOk(
         \\struct Point:
-        \\    x: i64
+        \\    var x: i64
         \\
         \\    func doubled() -> i64:
         \\        return self.x * 2
@@ -2773,11 +2773,11 @@ test "methods: readers and writers share the method call surface" {
 test "chained assignment through nested struct fields" {
     try agreeOk(
         \\struct Inner:
-        \\    n: i64
+        \\    var n: i64
         \\
         \\struct Outer:
-        \\    label: str
-        \\    inner: Inner
+        \\    var label: str
+        \\    var inner: Inner
         \\
         \\func main():
         \\    var o = Outer(label = "x", inner = Inner(n = 1))
@@ -2796,7 +2796,7 @@ test "chained assignment through nested struct fields" {
 test "chained assignment into struct elements of lists and arrays" {
     try agreeOk(
         \\struct Cell:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\func main():
         \\    var cells = [Cell(value = 10), Cell(value = 20)]
@@ -2816,7 +2816,7 @@ test "chained assignment into struct elements of lists and arrays" {
 test "a chained index place evaluates its subscript once" {
     try agreeOk(
         \\struct Cell:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\func bump(counter: list[i64]) -> i64:
         \\    counter[0] = counter[0] + 1
@@ -3203,8 +3203,8 @@ test "equality: lists compare by identity, not contents" {
 test "equality: structs compare field by field (value semantics)" {
     try agreeOk(
         \\struct Pair:
-        \\    a: i64
-        \\    b: i64
+        \\    let a: i64
+        \\    let b: i64
         \\
         \\func main():
         \\    let p = Pair(a = 1, b = 2)
@@ -3683,7 +3683,7 @@ test "lists: value structs stored by copy are independent" {
     // slot is replaced whole with cells[i] = ..., not cells[i].v = ...)
     try agreeOk(
         \\struct Cell:
-        \\    v: i64
+        \\    var v: i64
         \\
         \\func main():
         \\    var cells = list[Cell]()
@@ -3865,8 +3865,8 @@ test "arrays: rank-1 sort, reverse, find, contains" {
 test "structs: assigning a copy leaves the source untouched for value fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\func main():
         \\    var a = Point(x = 1, y = 2)
@@ -3886,11 +3886,11 @@ test "structs: nested value structs copy deeply" {
     // rejected — so the whole inner field is replaced instead.)
     try agreeOk(
         \\struct Inner:
-        \\    n: i64
+        \\    var n: i64
         \\
         \\struct Outer:
-        \\    inner: Inner
-        \\    tag: i64
+        \\    var inner: Inner
+        \\    var tag: i64
         \\
         \\func main():
         \\    var o = Outer(inner = Inner(n = 1), tag = 0)
@@ -3907,7 +3907,7 @@ test "structs: nested value structs copy deeply" {
 test "structs: namespaced functions can recurse and call peers" {
     try agreeOk(
         \\struct Math:
-        \\    dummy: i64
+        \\    let dummy: i64
         \\
         \\    static func square(n: i64) -> i64:
         \\        return n * n
@@ -4003,17 +4003,17 @@ test "ownership: a struct literal from a temporary receiver keeps its list field
     // The receiver being a temporary made the free immediate.
     try agree.prints(
         \\struct Id:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\struct Table:
-        \\    definitions: list[i64]
+        \\    let definitions: list[i64]
         \\
         \\struct Program:
-        \\    table: Table
-        \\    entry: Id?
+        \\    var table: Table
+        \\    let entry: Id?
         \\
         \\class Builder:
-        \\    table: Table
+        \\    let table: Table
         \\    pub init():
         \\        let definitions = list[i64]()
         \\        definitions.append(10)
@@ -4039,14 +4039,14 @@ test "ownership: a copied borrow's list survives a later free-function operand" 
     // which the leak census proves.
     try agree.prints(
         \\struct Table:
-        \\    definitions: list[i64]
+        \\    let definitions: list[i64]
         \\
         \\struct Pair:
-        \\    table: Table
-        \\    entry: i64?
+        \\    var table: Table
+        \\    let entry: i64?
         \\
         \\class Builder:
-        \\    table: Table
+        \\    let table: Table
         \\    pub init():
         \\        let definitions = list[i64]()
         \\        definitions.append(7)
@@ -4071,9 +4071,9 @@ test "ownership: a copied borrow's list survives a later free-function operand" 
 test "late var declarations hold the zero value of their type" {
     try agreeOk(
         \\struct Vec3:
-        \\    x: i64
-        \\    y: i64
-        \\    z: i64
+        \\    var x: i64
+        \\    var y: i64
+        \\    var z: i64
         \\
         \\func main():
         \\    var n: i64
@@ -4341,8 +4341,8 @@ test "x else trap is the assert-unwrap" {
 test "an optional crosses a call, a return, and a struct field" {
     try agreeOk(
         \\struct Setting:
-        \\    name: str
-        \\    limit: i64?
+        \\    let name: str
+        \\    var limit: i64?
         \\
         \\func describe(limit: i64?) -> str:
         \\    if limit == none:
@@ -4374,8 +4374,8 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
     // and no reference counting anywhere.
     try agreeOk(
         \\struct Node:
-        \\    value: i64
-        \\    next: Node?
+        \\    let value: i64
+        \\    let next: Node?
         \\
         \\func total(head: Node?) -> i64:
         \\    var sum: i64 = 0
@@ -4413,7 +4413,7 @@ test "a compound assignment combines at the payload and stays present" {
 test "absence survives a round trip through a struct field and a var" {
     try agreeOk(
         \\struct Slot:
-        \\    held: str?
+        \\    var held: str?
         \\
         \\func main():
         \\    var slot = Slot(held = none)
@@ -4979,8 +4979,8 @@ test "catch: a diverging handler initializes a binding on both engines" {
 test "structs: a smooth pointer transform computes exactly" {
     try agreeOk(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    var y: f64
         \\
         \\func smooth(current: Point, target: Point, amount: f64) -> Point:
         \\    return Point(
@@ -5325,8 +5325,8 @@ test "short-circuit operands survive block splits everywhere" {
     // rejected the program as an internal compiler error.
     try agreeOk(
         \\struct Flags:
-        \\    left: bool
-        \\    right: bool
+        \\    let left: bool
+        \\    let right: bool
         \\
         \\func pick(first: bool, second: bool) -> bool:
         \\    return first or second
@@ -5399,9 +5399,9 @@ test "file-scope constants: an annotated none folds to the typed absence" {
 test "struct constants: the Theme case" {
     try agreeOk(
         \\struct Theme:
-        \\    keyword: i64
-        \\    comment: i64
-        \\    bold: bool
+        \\    var keyword: i64
+        \\    var comment: i64
+        \\    let bold: bool
         \\
         \\const theme = Theme(keyword = 114, comment = 238, bold = true)
         \\const accent = theme.keyword + 1
@@ -5977,9 +5977,9 @@ test "explicit widths: list[u8] round-trips through the boxed path" {
 test "explicit widths: struct fields retain their declared widths" {
     try agreeOk(
         \\struct Pixel:
-        \\    red: u8
-        \\    green: u8
-        \\    blue: u8
+        \\    var red: u8
+        \\    var green: u8
+        \\    var blue: u8
         \\
         \\func main():
         \\    let p = Pixel(red = 255, green = 128, blue = 0)
@@ -6025,7 +6025,7 @@ test "failure: a call that raises leaves nothing where its value would have gone
     // — was fine.  This is the two engines saying the same thing.
     try agree.errors(
         \\struct Cursor:
-        \\    position: i64
+        \\    var position: i64
         \\
         \\    func take(data: list[i64]) -> i64!:
         \\        if self.position >= len(data):
@@ -6373,7 +6373,7 @@ test "never: an infinite loop is a valid diverging body, and an else may use it"
 test "never: a fallible -> never! method is diverging through try" {
     try agree.prints(
         \\class Reader:
-        \\    label: str
+        \\    let label: str
         \\    init(label: str):
         \\        self.label = label
         \\    func fail(message: str) -> never!:
@@ -6396,7 +6396,7 @@ test "never: a fallible -> never! method is diverging through try" {
 test "never: a diverging fallible method raises what it raises, caught above" {
     try agree.prints(
         \\class Reader:
-        \\    label: str
+        \\    let label: str
         \\    init(label: str):
         \\        self.label = label
         \\    func fail(message: str) -> never!:

@@ -25,7 +25,7 @@ pub interface Constraint:
 # Exactly `cells` — never more, never less, until the axis itself is
 # smaller than everything's minimums.
 pub class Fixed: Constraint:
-    cells: i64
+    let cells: i64
 
     pub init(cells: i64):
         self.cells = cells
@@ -46,8 +46,8 @@ pub class Fixed: Constraint:
 # `weight`.  The default is the main content of a screen: everything
 # the siblings leave.
 pub class Grow: Constraint:
-    share: i64
-    floor: i64
+    let share: i64
+    let floor: i64
 
     pub init(weight: i64 = 1, minimum: i64 = 0):
         self.share = weight
@@ -68,9 +68,9 @@ pub class Grow: Constraint:
 # A pane that scales with the terminal: `percent` of the axis, kept
 # between `low` and `high`.
 pub class Ratio: Constraint:
-    low: i64
-    high: i64
-    percent: i64
+    var low: i64
+    var high: i64
+    let percent: i64
 
     pub init(low: i64, high: i64, percent: i64):
         self.low = low
@@ -92,9 +92,9 @@ pub class Ratio: Constraint:
 # A pane with a remembered size — after a person drags a divider —
 # kept between `low` and `high`.
 pub class Preferred: Constraint:
-    low: i64
-    ideal: i64
-    high: i64
+    var low: i64
+    let ideal: i64
+    var high: i64
 
     pub init(low: i64, ideal: i64, high: i64):
         self.low = low

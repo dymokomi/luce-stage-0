@@ -57,8 +57,8 @@ visible:
 
 ```luce module file=tests/parse_test.luc
 struct Case:
-    text: str
-    expected: i64
+    let text: str
+    let expected: i64
 
 pub func test_valid_integers():
     let cases = [

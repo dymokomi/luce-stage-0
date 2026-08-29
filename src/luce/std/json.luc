@@ -344,8 +344,8 @@ pub func parse(content: str) -> Json ! Malformed:
 # the cursor *is* the second half of every answer, and the position a
 # diagnostic names is the one the parser genuinely holds.
 struct Parser:
-    content: str
-    at: i64
+    var content: str
+    var at: i64
 
     # One value, with the read head left after it.
     #
@@ -689,8 +689,8 @@ pub func quote(content: str) -> str:
 # settled at construction, and the builder is a reference, so nothing
 # here writes a field: a Printer sits happily in a `let`.
 struct Printer:
-    out: builder
-    spaces: i64
+    let out: builder
+    var spaces: i64
 
     # One value and everything under it, as JSON text.
     #

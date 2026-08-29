@@ -121,8 +121,8 @@ fn hasCode(parsed: *const Parsed, code: []const u8) bool {
 test "the plan's scale example parses" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    let y: f64
         \\
         \\func scale_point(point: Point, factor: f64) -> Point:
         \\    return Point(
@@ -162,8 +162,8 @@ test "every declaration form at file scope parses into its own list" {
         \\const banner: str = "loom"
         \\
         \\struct Theme:
-        \\    keyword: i64
-        \\    comment: i64
+        \\    let keyword: i64
+        \\    let comment: i64
         \\
         \\    static func default() -> i64:
         \\        return 176
@@ -339,7 +339,7 @@ test "return types and dotted type names parse" {
 test "struct bodies parse fields and static namespace functions" {
     var parsed = try expectClean(
         \\struct Helpers:
-        \\    value: i64
+        \\    let value: i64
         \\    static func twice(value: i64) -> i64:
         \\        return value * 2
         \\
@@ -405,11 +405,11 @@ test "visibility markers parse onto every declaration form, and unmarked stays p
         \\const quiet = 0
         \\
         \\struct Inner:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\struct Session:
-        \\    name: str
-        \\    token: i64 = 0
+        \\    let name: str
+        \\    let token: i64 = 0
         \\    pub func label() -> str:
         \\        return self.name
         \\    func stamp() -> i64:
@@ -492,11 +492,11 @@ test "the bare underscore is refused as a declared name, everywhere one declares
     try expectDiagnostics("func _():\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = wildcard },
     });
-    try expectDiagnostics("struct _:\n    x: i64\n\nfunc main():\n    return\n", &.{
+    try expectDiagnostics("struct _:\n    let x: i64\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
     });
-    try expectDiagnostics("struct P:\n    _: i64\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = wildcard },
+    try expectDiagnostics("struct P:\n    let _: i64\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = wildcard },
     });
     try expectDiagnostics("func f(_: i64):\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
@@ -1214,7 +1214,7 @@ test "five unrelated mistakes yield five diagnostics, one each" {
         \\    let 3 = 4
         \\
         \\struct D
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func e():
         \\    if q = 2:
@@ -1238,7 +1238,7 @@ test "a header that fails takes its orphaned body with it" {
     try expectDiagnostics("func main():\n    if x > 1\n        y = 2\n        z = 3\n    print(4)\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 13 },
     });
-    try expectDiagnostics("struct D\n    x: i64\n    y: i64\n", &.{
+    try expectDiagnostics("struct D\n    let x: i64\n    let y: i64\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9 },
     });
     // A header whose ':' is the *only* thing wrong is read on anyway:
@@ -1255,9 +1255,9 @@ test "a header that fails takes its orphaned body with it" {
         .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "':' to open the block" },
         .{ .code = "luce.parse.expression", .line = 3, .column = 12, .contains = "found end of line" },
     });
-    try expectDiagnostics("struct D\n    x: i64\n    y:\n", &.{
+    try expectDiagnostics("struct D\n    let x: i64\n    let y:\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "':' after the struct name" },
-        .{ .code = "luce.parse.expected", .line = 3, .column = 7, .contains = "a type name" },
+        .{ .code = "luce.parse.expected", .line = 3, .column = 11, .contains = "a type name" },
     });
     // With no body to read on into there is nothing to recover, and
     // the header's own diagnostic stands alone.
@@ -1337,7 +1337,7 @@ test "the ordinary mistakes name themselves and point at the offending token" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'else' has no matching 'if'" },
         },
         .{
-            .source = "func main():\n    struct S:\n        x: i64\n",
+            .source = "func main():\n    struct S:\n        let x: i64\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "belong at file scope" },
         },
         // A missing expression names what it found instead.
@@ -1475,7 +1475,7 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'func', not 'Func'" },
         },
         .{
-            .source = "STRUCT Point:\n    x: i64\n",
+            .source = "STRUCT Point:\n    let x: i64\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'struct'" },
         },
         // Tuples do not exist, and "expected ')' , found ','" does not
@@ -1800,7 +1800,7 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\const width = 80
         \\
         \\struct Point:
-        \\    x: f64
+        \\    let x: f64
         \\    func length() -> f64:
         \\        return self.x
         \\    static func origin() -> Point:
@@ -1858,7 +1858,7 @@ test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
         "func main():\n    let x = 1 + 2\n",
         "func f(a: list[i64]) -> i64:\n    return len(a)\n",
-        "struct P:\n    x: f64\n    static func zero() -> P:\n        return P(x = 0.0)\n",
+        "struct P:\n    let x: f64\n    static func zero() -> P:\n        return P(x = 0.0)\n",
         "enum Method:\n    stored\n    func compressed() -> bool:\n        return self != Method.stored\n",
         "let k = 3\n",
         "func main():\n    if x = 1:\n        for i in range(0, 2):\n            m[f\"{i}\"] += 1\n",
@@ -1962,7 +1962,7 @@ fn writeNearMiss(random: std.Random, text: *std.ArrayList(u8)) !void {
 test "a trailing ? makes a type optional, and there is no second one" {
     var parsed = try expectClean(
         \\struct Slot:
-        \\    held: str?
+        \\    let held: str?
         \\
         \\func find(key: map[str, i64]?, fallback: i64) -> i64?:
         \\    var seen: list[i64]? = none
@@ -2099,7 +2099,7 @@ test "an else block still reads as a block, not as a fallback" {
 test "plain members imply self and static is an AST distinction" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: f64
+        \\    var x: f64
         \\
         \\    func length() -> f64:
         \\        return self.x
@@ -2806,7 +2806,7 @@ test "block closures parse inferred, strong, weak, and snapshot captures" {
 test "a closure capture list accepts the implicit self binding" {
     var parsed = try expectClean(
         \\class Item:
-        \\    callback: (func() -> i64)?
+        \\    var callback: (func() -> i64)?
         \\    func install():
         \\        self.callback = [weak self] func():
         \\            return 0

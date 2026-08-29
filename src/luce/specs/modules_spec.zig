@@ -27,8 +27,8 @@ const luce = @import("luce");
 
 const geo: agree.File = .{ .name = "geo", .source =
     \\pub struct Point:
-    \\    pub x: f64
-    \\    pub y: f64
+    \\    pub let x: f64
+    \\    pub let y: f64
     \\
     \\pub struct Text:
     \\    pub static func twice(value: i64) -> i64:
@@ -44,11 +44,11 @@ const geo: agree.File = .{ .name = "geo", .source =
 
 const member_kit: agree.File = .{ .name = "shapes", .source =
     \\pub struct Point:
-    \\    pub x: i64
-    \\    pub y: i64
+    \\    pub let x: i64
+    \\    pub let y: i64
     \\
     \\pub class Widget:
-    \\    pub width: i64
+    \\    pub let width: i64
     \\
     \\pub enum Color:
     \\    red
@@ -118,7 +118,7 @@ test "an interface arrives through a member import with bare conformance" {
         \\from shapes import Sized
         \\
         \\struct Tile: Sized:
-        \\    edge: i64
+        \\    let edge: i64
         \\
         \\    func size() -> i64:
         \\        return self.edge * self.edge
@@ -177,7 +177,7 @@ test "an interface and its witness can cross a module boundary" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: i64
+        \\    let offset: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
@@ -206,7 +206,7 @@ test "a private interface cannot leak through a module's type surface" {
         \\    func value() -> i64
         \\
         \\struct Thing: Secret:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func value() -> i64:
         \\        return self.marker
         \\
@@ -245,7 +245,7 @@ test "a private type alias stays inside its declaring module" {
 test "class: a private initializer is usable only inside its module" {
     const models: agree.File = .{ .name = "models", .source =
         \\pub class Token:
-        \\    value: i64
+        \\    let value: i64
         \\    init(value: i64):
         \\        self.value = value
         \\    pub static func make(value: i64) -> Token:
@@ -393,8 +393,8 @@ test "constants reach across modules through imports" {
     // under S46.  ownership_spec proves the rest within one file.
     const config: agree.File = .{ .name = "config", .source =
         \\pub struct Size:
-        \\    pub rows: i64
-        \\    pub cols: i64
+        \\    pub let rows: i64
+        \\    pub let cols: i64
         \\
         \\pub const version = "2.0"
         \\pub const rows = 24
@@ -494,14 +494,14 @@ test "a package module reached from outside and inside is one module: one struct
             .from = "",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
-            .source = "pub struct Rect:\n    pub width: f64\n    pub height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
+            .source = "pub struct Rect:\n    pub let width: f64\n    pub let height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
         },
         .{
             .name = "shapes",
             .from = "geo-1.2.0",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/shapes.luc",
-            .source = "pub struct Rect:\n    pub width: f64\n    pub height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
+            .source = "pub struct Rect:\n    pub let width: f64\n    pub let height: f64\n\npub func area(r: Rect) -> f64:\n    return r.width * r.height\n",
         },
     });
     defer program.deinit();
@@ -587,8 +587,8 @@ test "subfolder modules run: dots map to folders, and as picks the binding" {
     // for.
     const shapes: agree.File = .{ .name = "geo.shapes", .source =
         \\pub struct Rect:
-        \\    pub width: f64
-        \\    pub height: f64
+        \\    pub let width: f64
+        \\    pub let height: f64
         \\
         \\pub func area(r: Rect) -> f64:
         \\    return r.width * r.height

@@ -347,8 +347,8 @@ test "lists: sort_by specializes for a struct and accepts a lambda" {
         \\import std.lists
         \\
         \\struct Player:
-        \\    score: i64
-        \\    order: i64
+        \\    var score: i64
+        \\    var order: i64
         \\
         \\func by_score(a: Player, b: Player) -> bool:
         \\    return a.score < b.score
@@ -878,8 +878,8 @@ test "io: a program's own reader and writer feed drain and send" {
         \\import std.io
         \\
         \\class Feed: io.Reader:
-        \\    data: list[u8]
-        \\    at: i64
+        \\    let data: list[u8]
+        \\    var at: i64
         \\
         \\    init(data: list[u8]):
         \\        self.data = data
@@ -894,7 +894,7 @@ test "io: a program's own reader and writer feed drain and send" {
         \\        return filled
         \\
         \\class Sink: io.Writer:
-        \\    got: list[u8]
+        \\    let got: list[u8]
         \\
         \\    init():
         \\        self.got = list[u8]()
@@ -933,7 +933,7 @@ test "io: a source that stops writing is an error, not a spin" {
         \\import std.io
         \\
         \\class Stuck: io.Writer:
-        \\    marker: i64
+        \\    let marker: i64
         \\
         \\    init():
         \\        self.marker = 0

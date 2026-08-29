@@ -340,7 +340,7 @@ test "every byte of the input survives highlighting" {
     const gpa = std.testing.allocator;
     const source =
         \\struct Bag:
-        \\    items: list[i32]
+        \\    let items: list[i32]
         \\
         \\func main():
         \\    var bag = Bag(items = [1, 2])   # <&>

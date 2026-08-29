@@ -70,8 +70,8 @@ It is also stable, so elements that compare equally keep their input order.
 import std.lists
 
 struct Player:
-    name: str
-    score: i64
+    let name: str
+    let score: i64
 
 func main():
     var players = [

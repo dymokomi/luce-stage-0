@@ -23,7 +23,7 @@ body, the construction surface is memberwise:
 
 ```luce
 class Counter:
-    count: i64
+    var count: i64
 
     func add(amount: i64) -> i64:
         self.count += amount
@@ -51,10 +51,10 @@ purpose-built call surface:
 
 ```luce
 class Rectangle:
-    label: str = "rectangle"
-    width: i64
-    height: i64
-    area: i64
+    var label: str = "rectangle"
+    let width: i64
+    let height: i64
+    var area: i64
 
     init(width: i64, height: i64 = 1):
         self.width = width
@@ -94,7 +94,7 @@ rules:
 
 ```luce
 class Port:
-    number: i64
+    let number: i64
 
     init(number: i64) -> !:
         if number < 1:
@@ -116,7 +116,7 @@ partially initialized object model.
 
 ```luce
 class Token:
-    value: i64
+    let value: i64
 
 func main():
     let first = Token(value = 7)
@@ -152,11 +152,11 @@ value fields until it reaches the nearest class identity:
 
 ```luce
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    var y: i64
 
 class Scene:
-    point: Point
+    var point: Point
 
 func main():
     let scene = Scene(point = Point(x = 1, y = 2))
@@ -178,7 +178,7 @@ interface Incrementing:
     func add(amount: i64) -> i64
 
 class Counter: Incrementing:
-    count: i64
+    var count: i64
 
     func add(amount: i64) -> i64:
         self.count += amount
@@ -206,8 +206,8 @@ target alive is declared `weak` and therefore has an optional type:
 
 ```luce
 class Node:
-    value: i64
-    weak parent: Node?
+    var value: i64
+    weak let parent: Node?
 
 func main():
     weak var observed: Node?
@@ -233,7 +233,7 @@ the body returns:
 
 ```luce
 class Resource:
-    name: str
+    let name: str
 
     deinit:
         print("closed " + self.name)

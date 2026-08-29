@@ -11,9 +11,9 @@ import std.io
 import std.strings
 
 pub class Frames:
-    source: io.Reader
-    pending: list[u8]
-    taken: i64
+    let source: io.Reader
+    var pending: list[u8]
+    let taken: i64
 
     pub init(source: io.Reader):
         self.source = source

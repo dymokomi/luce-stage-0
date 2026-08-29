@@ -8,16 +8,16 @@
 # editor, which knows the sequence of keys.
 
 pub struct Revision:
-    pub content: str
-    pub cursor: i64
+    pub let content: str
+    pub let cursor: i64
 
 # Keep undo bounded so a long session over a large file does not grow
 # without limit; the oldest revision is the first to go.
 pub const depth = 200
 
 pub class History:
-    past: list[Revision]
-    future: list[Revision]
+    let past: list[Revision]
+    let future: list[Revision]
 
     pub init():
         self.past = list[Revision]()

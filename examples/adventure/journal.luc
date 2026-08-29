@@ -40,11 +40,11 @@ pub const tag = "adventure 1"
 # `make` below takes them with `give` and the `return` moves the whole
 # tree to the caller (OWNERSHIP.md S27, S28).
 pub struct Save:
-    pub room: str
-    pub moves: i64
+    pub let room: str
+    pub let moves: i64
 
-    held: list[str]
-    seen: list[str]
+    let held: list[str]
+    let seen: list[str]
 
     pub static func make(room: str, moves: i64, held: list[str], seen: list[str]) -> Save:
         return Save(room = room, moves = moves, held = held, seen = seen)

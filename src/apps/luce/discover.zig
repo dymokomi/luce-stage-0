@@ -451,7 +451,7 @@ test "a test that cannot run is refused by name, and the sentence names the fix"
             .says = "test_answers answers a value",
         },
         .{
-            .source = "struct Box:\n    value: i64\n\n    func test_inside():\n        assert(true)\n",
+            .source = "struct Box:\n    let value: i64\n\n    func test_inside():\n        assert(true)\n",
             .says = "Box.test_inside is inside a struct",
         },
         .{

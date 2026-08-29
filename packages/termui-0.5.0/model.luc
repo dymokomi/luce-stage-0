@@ -24,9 +24,9 @@ pub enum Color:
     bright_white
 
 pub struct Style:
-    pub foreground: i64 = 7
-    pub background: i64 = -1
-    pub bold: bool = false
+    pub let foreground: i64 = 7
+    pub let background: i64 = -1
+    pub let bold: bool = false
 
     pub static func of(colour: Color) -> Style:
         return Style(foreground = i64(colour))
@@ -34,10 +34,10 @@ pub struct Style:
 # A rectangle of terminal cells. Every operation is total because a small
 # terminal is a normal layout input, not an exceptional state.
 pub struct Rect:
-    pub row: i64 = 0
-    pub column: i64 = 0
-    pub rows: i64 = 0
-    pub columns: i64 = 0
+    pub var row: i64 = 0
+    pub let column: i64 = 0
+    pub var rows: i64 = 0
+    pub var columns: i64 = 0
 
     pub func is_empty() -> bool:
         return self.rows <= 0 or self.columns <= 0
@@ -109,13 +109,13 @@ pub struct Rect:
         )
 
 pub struct Span:
-    pub text: str = ""
-    pub style: Style = Style()
+    pub let text: str = ""
+    pub let style: Style = Style()
 
 # One styled terminal row. A provider builds a Line for the current frame;
 # the view traversal owns clipping and placement.
 pub struct Line:
-    pub spans: list[Span]
+    pub let spans: list[Span]
 
     pub func width() -> i64:
         var total: i64 = 0
@@ -128,8 +128,8 @@ pub func plain(text: str, style: Style = Style()) -> Line:
     return Line(spans = spans)
 
 pub struct Cursor:
-    pub row: i64 = 0
-    pub column: i64 = 0
+    pub var row: i64 = 0
+    pub let column: i64 = 0
 
 pub enum Response:
     ignored
@@ -140,7 +140,7 @@ pub enum Response:
 # available to its content; the returned interior is inset only on edges that
 # exist.
 pub struct Edges:
-    pub top: bool = true
-    pub right: bool = true
-    pub bottom: bool = true
-    pub left: bool = true
+    pub let top: bool = true
+    pub let right: bool = true
+    pub let bottom: bool = true
+    pub let left: bool = true

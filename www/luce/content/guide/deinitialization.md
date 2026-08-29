@@ -16,7 +16,7 @@ class therefore delays `deinit` until the last alias is gone:
 
 ```luce run
 class Session:
-    name: str
+    let name: str
 
     deinit:
         print("closed " + self.name)
@@ -50,13 +50,13 @@ order:
 
 ```luce run
 class Child:
-    name: str
+    let name: str
 
     deinit:
         print("child " + self.name)
 
 class Parent:
-    child: Child
+    let child: Child
 
     deinit:
         print("parent sees " + self.child.name)
@@ -125,8 +125,8 @@ Make the semantically non-owning back-edge weak:
 
 ```luce run
 class Node:
-    value: i64
-    weak parent: Node?
+    let value: i64
+    weak let parent: Node?
 
     deinit:
         print("closed " + str(self.value))

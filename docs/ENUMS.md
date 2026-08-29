@@ -339,8 +339,8 @@ const default_method = Method.deflated
 const default_name = str(Method.deflated)
 
 struct Entry:
-    size: i64
-    method: Method = Method.stored
+    let size: i64
+    var method: Method = Method.stored
 
 func made(method: Method = Method.deflated) -> Method:
     return method

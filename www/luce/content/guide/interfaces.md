@@ -30,8 +30,8 @@ interface Drawable:
     func label() -> str
 
 struct Button: Drawable:
-    caption: str
-    offset: i64
+    let caption: str
+    let offset: i64
 
     func render(value: i64) -> i64:
         return value + self.offset
@@ -40,7 +40,7 @@ struct Button: Drawable:
         return self.caption
 
 struct Badge: Drawable:
-    caption: str
+    let caption: str
 
     func render(value: i64) -> i64:
         return value + 2
@@ -163,7 +163,7 @@ interface Bounds:
     func limits(value: i64) -> (i64, i64)!
 
 struct Window: Bounds:
-    width: i64
+    let width: i64
 
     func limits(value: i64) -> (i64, i64):
         return value, value + self.width
@@ -198,13 +198,13 @@ interface Formatter:
     func format(value: i64) -> str
 
 struct Decimal: Formatter:
-    marker: i64
+    let marker: i64
 
     func format(value: i64) -> str:
         return str(value)
 
 struct Brackets: Formatter:
-    marker: i64
+    let marker: i64
 
     func format(value: i64) -> str:
         return "[" + str(value) + "]"
@@ -245,7 +245,7 @@ interface Sequence:
     func next() -> i64
 
 class Counter: Sequence:
-    value: i64
+    var value: i64
 
     func next() -> i64:
         self.value += 1

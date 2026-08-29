@@ -190,7 +190,7 @@ test "class deinitializers and their callees survive implicit lifetime reachabil
         \\    print("never")
         \\
         \\class Resource:
-        \\    name: str
+        \\    let name: str
         \\    func announce():
         \\        print(self.name)
         \\    deinit:
@@ -268,8 +268,8 @@ test "every pass on its own leaves verifiable MIR" {
         \\
         ,
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
@@ -395,7 +395,7 @@ test "std sort_by is an ordinary call whose indirect comparator survives prune" 
         \\import std.lists
         \\
         \\struct Row:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func before(a: i64, b: i64) -> bool:
         \\    return a < b

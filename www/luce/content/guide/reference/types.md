@@ -220,7 +220,7 @@ interface Named:
     func measure(value: i64) -> (i64, i64)
 
 struct Label: Named:
-    text: str
+    let text: str
 
     func name() -> str:
         return self.text
@@ -271,10 +271,11 @@ struct Point:
 let point = Point(x = 2.5)
 ```
 
-A field is written `let` or `var`. A `let` field is set once — at
-construction, or in a class `init` — and cannot be reassigned afterward; a
-`var` field may be reassigned through a mutable path. A bare `x: T` field is
-the transitional spelling, accepted for one release and read as `var`.
+A field is written `let` or `var`, and one of the two is required. A `let`
+field is set once — at construction, or in a class `init` — and cannot be
+reassigned afterward; a `var` field may be reassigned through a mutable path.
+A bare `x: T` field is refused: reading a missing word as `var` would make
+the least considered declaration the most permissive one.
 
 A `func` declared inside a struct is a method with implied `self`; source does
 not declare a receiver parameter. A `static func` has no receiver and is
@@ -501,7 +502,7 @@ declared type must be an optional class, `list`, `map`, `array`, or `builder`:
 
 ```luce run
 struct Link:
-    weak root: list[Link]?
+    weak var root: list[Link]?
 
 func main():
     let root: list[Link] = [Link()]

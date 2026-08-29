@@ -20,9 +20,9 @@ func draft_path(path: str) -> str:
 # exactly what is on disk, which is the safety net for a draft that is
 # offered but not wanted.
 pub struct Loaded:
-    pub opened: Document
-    pub base: str
-    pub recovered: bool
+    pub let opened: Document
+    pub let base: str
+    pub let recovered: bool
 
 # Open `path`.  A file that will not read is a new file, not an error.
 # A draft that differs from the file is offered as recovered unsaved

@@ -21,8 +21,8 @@ const testing = std.testing;
 test "a module encoded and decoded again is the same program on both engines" {
     var program = try agree.program(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\func twice(value: i64) -> i64:
         \\    return value * 2
@@ -69,8 +69,8 @@ test "optimized object graphs execute after module round-trip" {
     // decoded program through both engines.
     var program = try agree.program(
         \\struct Item:
-        \\    prefix: str
-        \\    scale: i64
+        \\    let prefix: str
+        \\    let scale: i64
         \\    func render(value: i64) -> str:
         \\        return self.prefix + str(value * self.scale)
         \\
@@ -79,8 +79,8 @@ test "optimized object graphs execute after module round-trip" {
         \\    batch(items: list[Item])
         \\
         \\struct Plan:
-        \\    work: Work
-        \\    finish: (func(i64) -> str)? = none
+        \\    let work: Work
+        \\    let finish: (func(i64) -> str)? = none
         \\
         \\func suffix(value: i64) -> str:
         \\    return "!" + str(value)
@@ -92,7 +92,7 @@ test "optimized object graphs execute after module round-trip" {
         \\    return total
         \\
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\    func add(amount: i64):
         \\        self.value = self.value + amount
         \\

@@ -23,15 +23,15 @@ import std.json
 # directly; held by reference, so `needs` edges added after
 # construction are seen by the plan that holds it.
 pub class Step:
-    name: str
-    kind: str
-    source: str
-    emit_kind: str
-    output: str
-    release: bool
-    argv: list[str]
-    carried: list[str]
-    wants: list[str]
+    let name: str
+    var kind: str
+    var source: str
+    var emit_kind: str
+    var output: str
+    var release: bool
+    var argv: list[str]
+    let carried: list[str]
+    let wants: list[str]
 
     pub init(name: str, kind: str):
         self.name = name
@@ -108,8 +108,8 @@ pub class Step:
 #         app.needs(tool)
 #         b.emit()
 pub class Plan:
-    steps: list[Step]
-    chosen: str
+    let steps: list[Step]
+    var chosen: str
 
     pub init():
         self.steps = list[Step]()

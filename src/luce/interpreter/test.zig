@@ -46,8 +46,8 @@ fn compileScript(source: []const u8) !mir.Program {
 test "interpreter memory is bounded by depth and data, not by calls made" {
     var program = try compileScript(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    let y: i64
         \\
         \\func nudge(p: Point) -> i64:
         \\    var scratch: Point
@@ -127,7 +127,7 @@ test "the explicit frame stack survives deep recursion" {
 test "an inout frame aliases through nested calls and its errored edge" {
     var program = try compileScript(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func step():
         \\        self.value += 1

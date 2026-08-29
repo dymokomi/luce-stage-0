@@ -9,7 +9,7 @@ const agree = @import("agree.zig");
 test "self: implied receiver reads and writes a bare var binding" {
     try agree.ok(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func read() -> i64:
         \\        return self.value
@@ -29,7 +29,7 @@ test "self: implied receiver reads and writes a bare var binding" {
 test "self: writer inference reaches a fixed point across forward transitive calls" {
     try agree.ok(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func outer():
         \\        self.middle()
@@ -51,10 +51,10 @@ test "self: writer inference reaches a fixed point across forward transitive cal
 test "self: writer inference includes calls made while evaluating assignment places" {
     try agree.ok(
         \\struct Cell:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\struct Cursor:
-        \\    at: i64
+        \\    var at: i64
         \\
         \\    func write(items: list[i64]):
         \\        items[self.bump()] = 0
@@ -83,7 +83,7 @@ test "self: writer inference includes calls made while evaluating assignment pla
 test "self: mutating object contents is a reader and works through let" {
     try agree.ok(
         \\struct Bag:
-        \\    items: list[i64]
+        \\    var items: list[i64]
         \\
         \\    func add(value: i64):
         \\        self.items.append(value)
@@ -100,8 +100,8 @@ test "self: mutating object contents is a reader and works through let" {
 test "self: an owning object-carry receiver may replace a field and its whole value" {
     try agree.ok(
         \\struct Box:
-        \\    items: list[i64]
-        \\    label: str
+        \\    var items: list[i64]
+        \\    var label: str
         \\
         \\    func replace_field(value: i64):
         \\        self.items = [value]
@@ -130,7 +130,7 @@ test "self: an owning object-carry receiver may replace a field and its whole va
 test "self: multi-return assignment to self infers an object-carrying writer" {
     try agree.ok(
         \\struct Box:
-        \\    items: list[i64]
+        \\    var items: list[i64]
         \\
         \\    func refresh(value: i64) -> i64:
         \\        var answer: i64 = 0
@@ -153,7 +153,7 @@ test "self: multi-return assignment to self infers an object-carrying writer" {
 test "self: writes before a fallible method errors remain visible" {
     try agree.ok(
         \\struct Meter:
-        \\    reading: i64
+        \\    var reading: i64
         \\
         \\    func fail_after_write() -> !:
         \\        self.reading += 1
@@ -171,7 +171,7 @@ test "self: writes before a fallible method errors remain visible" {
 test "self: writers support zero one and multiple declared return values" {
     try agree.ok(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func zero():
         \\        self.value += 1
@@ -238,10 +238,10 @@ test "self: a static member is a function value and a spawn target" {
 test "self: writer results with owned storage survive binding and statement discard" {
     try agree.ok(
         \\struct Payload:
-        \\    items: list[i64]
+        \\    var items: list[i64]
         \\
         \\struct Maker:
-        \\    made: i64
+        \\    var made: i64
         \\
         \\    func text() -> str:
         \\        self.made += 1
@@ -271,7 +271,7 @@ test "self: an earlier optional str argument outlives a later receiver write" {
         \\const replacement = "the replacement string is long enough to require outside owned storage too"
         \\
         \\struct Box:
-        \\    text: str?
+        \\    var text: str?
         \\
         \\    func clear() -> i64:
         \\        self.text = none
@@ -301,7 +301,7 @@ test "self: writer arguments borrowed from the receiver outlive whole-self repla
         \\const replacement = "the replacement receiver string is also long enough to require outside storage"
         \\
         \\struct Box:
-        \\    text: str
+        \\    var text: str
         \\
         \\    func replace(previous_text: str, previous_box: Box) -> bool:
         \\        self = Box(text = replacement)

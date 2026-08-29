@@ -6,7 +6,7 @@ from constraints import Fixed
 # A retained component: constructed once, drawing its current state
 # each frame and updating that state in place when routed an event.
 pub class Ticker: termui.View:
-    pub value: i64
+    pub var value: i64
 
     pub init(value: i64):
         self.value = value

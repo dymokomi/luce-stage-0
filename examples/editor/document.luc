@@ -18,18 +18,18 @@ from history import History
 # it answers questions about any text (the output pane's transcript
 # included), while a Document owns one text and moves it.
 pub class Document:
-    pub path: str
-    pub content: str
-    pub message: str
-    pub cursor: i64
-    pub scroll: i64
-    pub dirty: bool
-    pub history: History
+    pub var path: str
+    pub var content: str
+    pub var message: str
+    pub var cursor: i64
+    pub var scroll: i64
+    pub var dirty: bool
+    pub var history: History
     # Where a selection began, or `none` when nothing is selected.  The
     # selection is everything between the anchor and the cursor, in
     # whichever order the two sit; extending a selection moves only the
     # cursor, so shift+arrow and a mouse drag are the same gesture.
-    pub anchor: i64?
+    pub var anchor: i64?
 
     pub init(
         path: str = "",

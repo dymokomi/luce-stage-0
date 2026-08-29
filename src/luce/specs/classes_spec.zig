@@ -9,7 +9,7 @@ const agree = @import("agree.zig");
 test "bare new constructs a class whose init takes no arguments" {
     try agree.ok(
         \\class Timer:
-        \\    ticks: i64
+        \\    var ticks: i64
         \\    init():
         \\        self.ticks = 0
         \\
@@ -26,10 +26,10 @@ test "bare new constructs a class whose init takes no arguments" {
 test "custom init computes several fields and keeps defaults and call defaults" {
     try agree.ok(
         \\class Rectangle:
-        \\    label: str = "rectangle"
-        \\    width: i64
-        \\    height: i64
-        \\    area: i64
+        \\    var label: str = "rectangle"
+        \\    let width: i64
+        \\    let height: i64
+        \\    var area: i64
         \\    init(width: i64, height: i64 = 2):
         \\        self.width = width
         \\        self.height = height
@@ -48,8 +48,8 @@ test "custom init computes several fields and keeps defaults and call defaults" 
 test "custom init joins branches and permits a complete early return" {
     try agree.ok(
         \\class Number:
-        \\    value: i64
-        \\    sign: str
+        \\    var value: i64
+        \\    var sign: str
         \\    init(value: i64):
         \\        if value == 0:
         \\            self.value = 0
@@ -73,12 +73,12 @@ test "custom init joins branches and permits a complete early return" {
 test "custom init supports nested updates after the root field exists" {
     try agree.ok(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    let y: i64
         \\
         \\class Scene:
-        \\    point: Point
-        \\    values: list[i64]
+        \\    var point: Point
+        \\    var values: list[i64]
         \\    init(x: i64):
         \\        self.point = Point(x = x, y = 1)
         \\        self.point.x += 1
@@ -96,7 +96,7 @@ test "custom init supports nested updates after the root field exists" {
 test "custom init carries function fields aliases lists and maps" {
     try agree.ok(
         \\class Action:
-        \\    apply: func(i64) -> i64
+        \\    let apply: func(i64) -> i64
         \\    init(apply: func(i64) -> i64):
         \\        self.apply = apply
         \\    func run(value: i64) -> i64:
@@ -120,8 +120,8 @@ test "custom init carries function fields aliases lists and maps" {
 test "fallible custom init cleans unfinished fields and finalizes only finished objects" {
     try agree.prints(
         \\class Resource:
-        \\    name: str
-        \\    values: list[i64]
+        \\    var name: str
+        \\    let values: list[i64]
         \\    init(name: str, accept: bool) -> !:
         \\        self.name = name
         \\        self.values = [1, 2, 3]
@@ -152,8 +152,8 @@ test "custom init joins exhaustive matches and handled assignments" {
         \\    return 41
         \\
         \\class Score:
-        \\    value: i64
-        \\    label: str
+        \\    var value: i64
+        \\    var label: str
         \\    init(kind: Kind, ok: bool):
         \\        match kind:
         \\            exact:
@@ -180,8 +180,8 @@ test "custom initialized classes satisfy interfaces in heterogeneous containers"
         \\    func name() -> str
         \\
         \\class Person: Named:
-        \\    first: str
-        \\    last: str
+        \\    let first: str
+        \\    let last: str
         \\    init(first: str, last: str):
         \\        self.first = first
         \\        self.last = last
@@ -189,7 +189,7 @@ test "custom initialized classes satisfy interfaces in heterogeneous containers"
         \\        return self.first + " " + self.last
         \\
         \\class Label: Named:
-        \\    text: str
+        \\    let text: str
         \\    init(text: str):
         \\        self.text = text
         \\    func name() -> str:
@@ -211,9 +211,9 @@ test "custom initialized classes satisfy interfaces in heterogeneous containers"
 test "custom init handles recursive references weak defaults static helpers and empty classes" {
     try agree.ok(
         \\class Node:
-        \\    value: i64
-        \\    next: Node?
-        \\    weak parent: Node?
+        \\    var value: i64
+        \\    let next: Node?
+        \\    weak var parent: Node?
         \\    init(value: i64, next: Node? = none):
         \\        self.value = Node.normalize(value)
         \\        self.next = next
@@ -242,7 +242,7 @@ test "custom init handles recursive references weak defaults static helpers and 
 test "a public custom initializer and private state cross a module boundary" {
     const models: agree.File = .{ .name = "models", .source =
         \\pub class User:
-        \\    name: str
+        \\    let name: str
         \\    pub init(name: str):
         \\        self.name = name
         \\    pub func greeting() -> str:
@@ -264,7 +264,7 @@ test "a public custom initializer and private state cross a module boundary" {
 test "class aliases observe shared field mutation through let bindings" {
     try agree.ok(
         \\class Counter:
-        \\    count: i64
+        \\    var count: i64
         \\
         \\func main():
         \\    let first = Counter(count = 1)
@@ -278,7 +278,7 @@ test "class aliases observe shared field mutation through let bindings" {
 test "class identity uses is while equal field values stay distinct" {
     try agree.ok(
         \\class Token:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\func main():
         \\    let first = Token(value = 7)
@@ -293,7 +293,7 @@ test "class identity uses is while equal field values stay distinct" {
 test "class methods mutate shared self and expose multiple methods" {
     try agree.ok(
         \\class Counter:
-        \\    count: i64
+        \\    var count: i64
         \\    func add(amount: i64) -> i64:
         \\        self.count += amount
         \\        return self.count
@@ -313,14 +313,14 @@ test "class methods mutate shared self and expose multiple methods" {
 test "nested value fields rebuild until the nearest class identity" {
     try agree.ok(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\class Scene:
-        \\    point: Point
+        \\    var point: Point
         \\
         \\struct Holder:
-        \\    scene: Scene
+        \\    var scene: Scene
         \\
         \\func main():
         \\    let scene = Scene(point = Point(x = 1, y = 2))
@@ -338,7 +338,7 @@ test "a class witness keeps identity through interfaces lists and maps" {
         \\    func add(amount: i64) -> i64
         \\
         \\class Counter: Incrementing:
-        \\    count: i64
+        \\    var count: i64
         \\    func add(amount: i64) -> i64:
         \\        self.count += amount
         \\        return self.count
@@ -362,7 +362,7 @@ test "a class witness keeps identity through interfaces lists and maps" {
 test "class references retain identity through parameters returns optionals lists and maps" {
     try agree.ok(
         \\class Box:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\func forward(box: Box) -> Box:
         \\    return box
@@ -391,8 +391,8 @@ test "class references retain identity through parameters returns optionals list
 test "a weak class back edge zeros after the last strong reference" {
     try agree.ok(
         \\class Node:
-        \\    value: i64
-        \\    weak parent: Node?
+        \\    var value: i64
+        \\    weak let parent: Node?
         \\
         \\func main():
         \\    weak var observed: Node?
@@ -410,7 +410,7 @@ test "a weak class back edge zeros after the last strong reference" {
 test "deinit runs exactly once at the last alias and sees live fields" {
     try agree.prints(
         \\class Resource:
-        \\    value: i64
+        \\    var value: i64
         \\    func prepare():
         \\        self.value += 1
         \\    deinit:
@@ -430,13 +430,13 @@ test "deinit runs exactly once at the last alias and sees live fields" {
 test "deinit runs before releasing class-owned child fields" {
     try agree.prints(
         \\class Child:
-        \\    name: str
+        \\    var name: str
         \\    deinit:
         \\        print("child " + self.name)
         \\
         \\class Parent:
-        \\    name: str
-        \\    child: Child
+        \\    var name: str
+        \\    var child: Child
         \\    deinit:
         \\        print("parent " + self.name + " owns " + self.child.name)
         \\
@@ -454,7 +454,7 @@ test "optionals interfaces lists and maps preserve one class lifetime" {
         \\    func name() -> str
         \\
         \\class Item: Named:
-        \\    label: str
+        \\    let label: str
         \\    func name() -> str:
         \\        return self.label
         \\    deinit:
@@ -485,7 +485,7 @@ test "optionals interfaces lists and maps preserve one class lifetime" {
 test "weak self is permitted during deinit but cannot upgrade" {
     try agree.prints(
         \\class Node:
-        \\    weak observed: Node?
+        \\    weak var observed: Node?
         \\    deinit:
         \\        self.observed = self
         \\        assert(self.observed == none)
@@ -503,7 +503,7 @@ test "weak self is permitted during deinit but cannot upgrade" {
 test "recoverable error unwinding runs deinit before the handler" {
     try agree.prints(
         \\class Resource:
-        \\    name: str
+        \\    var name: str
         \\    deinit:
         \\        print("closed " + self.name)
         \\
@@ -522,7 +522,7 @@ test "recoverable error unwinding runs deinit before the handler" {
 test "a deinit trap stops the releasing operation and preserves its trace" {
     try agree.trapSays(
         \\class Resource:
-        \\    name: str
+        \\    let name: str
         \\    deinit:
         \\        trap("failed to close " + self.name)
         \\
@@ -536,7 +536,7 @@ test "a deinit trap stops the releasing operation and preserves its trace" {
 test "worker-local classes use the worker runtime's finalizer channel" {
     try agree.prints(
         \\class Resource:
-        \\    name: str
+        \\    var name: str
         \\    deinit:
         \\        print("worker closed " + self.name)
         \\

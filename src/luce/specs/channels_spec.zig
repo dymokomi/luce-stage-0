@@ -57,8 +57,8 @@ test "channels: values come back in send order, rebuilt whole" {
     // reach what was parked.
     try agreeOk(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\func main() -> !:
         \\    var c = channel[Point](4)
@@ -184,7 +184,7 @@ test "channels: a channel element that cannot cross is refused where it is writt
     , "luce.sema.channel");
     try expectRejected(
         \\class Counter:
-        \\    count: i64
+        \\    let count: i64
         \\
         \\    init():
         \\        self.count = 0

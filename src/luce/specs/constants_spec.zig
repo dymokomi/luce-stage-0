@@ -117,9 +117,9 @@ test "constants: values and every flat container shape materialize once" {
         \\    special = 8
         \\
         \\struct Cell:
-        \\    label: str
-        \\    value: i64
-        \\    fallback: i64?
+        \\    var label: str
+        \\    var value: i64
+        \\    var fallback: i64?
         \\
         \\const TITLE = "constant text whose bytes live beyond an inline value"
         \\const ANSWER: i64 = 40 + 2
@@ -290,15 +290,15 @@ test "constants: every flat element value survives materialization" {
         \\    ready = 7
         \\
         \\struct Entry:
-        \\    label: str
-        \\    weight: f64
-        \\    enabled: bool
-        \\    mode: Mode
-        \\    fallback: i64?
+        \\    var label: str
+        \\    var weight: f64
+        \\    let enabled: bool
+        \\    var mode: Mode
+        \\    var fallback: i64?
         \\
         \\struct NarrowEntry:
-        \\    small: u8?
-        \\    fraction: f16?
+        \\    let small: u8?
+        \\    let fraction: f16?
         \\
         \\const FLAGS = [true, false, true]
         \\const REALS: list[f64] = [1, 2.5]
@@ -378,7 +378,7 @@ test "constants: public imports keep identity and private constants stay inside"
 
     try expectRefusedAt(
         \\struct Hidden:
-        \\    value: i64
+        \\    let value: i64
         \\
         \\pub const TABLE = [Hidden(value = 1)]
         \\

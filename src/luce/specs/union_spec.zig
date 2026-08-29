@@ -717,15 +717,15 @@ test "D16: a struct carrying a union is compared by matching what it carries" {
     // carry, which is the sentence the diagnostic says out loud.
     try agree.prints(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    var x: i64
+        \\    var y: i64
         \\
         \\union Shape:
         \\    at(p: Point)
         \\    count(n: i64)
         \\
         \\struct Cell:
-        \\    what: Shape
+        \\    let what: Shape
         \\
         \\enum Kind:
         \\    at

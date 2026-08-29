@@ -16,9 +16,9 @@ does not force call-site order because construction arguments are named:
 
 ```luce run
 struct Connection:
-    host: str
-    port: i64 = 443
-    secure: bool = true
+    let host: str
+    let port: i64 = 443
+    let secure: bool = true
 
 func main():
     let primary = Connection(host = "example.com")
@@ -48,8 +48,8 @@ identity comes from constructing a class — not from any keyword.
 
 ```luce run
 class User:
-    name: str
-    visits: i64 = 0
+    let name: str
+    var visits: i64 = 0
 
 func main():
     let user = User(name = "Ada")
@@ -76,10 +76,10 @@ construction:
 
 ```luce run
 class Rectangle:
-    label: str = "rectangle"
-    width: i64
-    height: i64
-    area: i64
+    let label: str = "rectangle"
+    let width: i64
+    let height: i64
+    let area: i64
 
     init(width: i64, height: i64 = 1):
         self.width = width
@@ -118,9 +118,9 @@ visible:
 
 ```luce module file=measurement.luc
 class Measurement:
-    width: i64
-    height: i64
-    area: i64
+    let width: i64
+    let height: i64
+    let area: i64
 
     init(width: i64, height: i64):
         self.width = width
@@ -145,7 +145,7 @@ some fields do not exist. Put reusable pure calculations in a static function:
 
 ```luce module file=normalized.luc
 class Normalized:
-    value: i64
+    let value: i64
 
     static func clamp(value: i64) -> i64:
         if value < 0:
@@ -168,7 +168,7 @@ uses the ordinary recoverable-error mechanism:
 
 ```luce run
 class Port:
-    number: i64
+    let number: i64
 
     init(number: i64) -> !:
         if number < 1 or number > 65535:

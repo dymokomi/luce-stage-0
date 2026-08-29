@@ -297,7 +297,7 @@ pub enum Mode:
 # owns it, the way a Swift descriptor stays behind the session object
 # wrapping it.
 pub class File: io.Reader, io.Writer:
-    raw: handle
+    let raw: handle
 
     # Open a file: `try File(path)` to read,
     # `try File(path, files.Mode.append)` for a log.  The world
@@ -357,9 +357,9 @@ pub func append_bytes(path: str, data: list[u8]) -> !:
 # join, and the join deleted from the top of every walk loop is the
 # one that was getting written wrong.
 pub struct Entry:
-    pub name: str
-    pub path: str
-    pub kind: Kind
+    pub let name: str
+    pub let path: str
+    pub let kind: Kind
 
 # What is in a directory, sorted by name, each entry carrying its kind
 # — `os.scandir`.

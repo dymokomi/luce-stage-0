@@ -62,9 +62,9 @@ importers name it:
 
 ```luce module file=gauge.luc
 pub struct Gauge:
-    pub label: str
-    reading: i64
-    scale: i64
+    pub let label: str
+    var reading: i64
+    let scale: i64
 
     pub func show() -> str:
         return f"{self.label}: {self.reading * self.scale}"
@@ -143,8 +143,8 @@ pub func banner(title: str) -> str:
     return title
 
 pub struct Line:
-    pub text: str
-    marker: i64
+    pub let text: str
+    var marker: i64
 
     func mark():
         self.marker = self.marker + 1

@@ -339,8 +339,8 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
     );
     try install.write("project/.luce/packages/geo-1.2.0/shapes.luc",
         \\pub struct Rect:
-        \\    pub width: i64
-        \\    pub height: i64
+        \\    pub let width: i64
+        \\    pub let height: i64
         \\
     );
     try install.write("project/.luce/packages/geo-1.2.0/util.luc",

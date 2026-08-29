@@ -148,9 +148,9 @@ factory pattern, named in the diagnostic.
 
 ```luce module file=session.luc
 pub struct Session:
-    pub name: str
-    id: i64
-    token: i64 = 0
+    pub let name: str
+    let id: i64
+    let token: i64 = 0
 
 pub func open(name: str) -> Session:
     return Session(name = name, id = 7)
@@ -208,7 +208,7 @@ file.
 
 ```luce fail
 struct Inner:
-    n: i64
+    let n: i64
 
 pub func read() -> Inner:
     return Inner(n = 1)
@@ -304,8 +304,8 @@ The modules are [`io`](/library/io/), [`math`](/library/math/),
 pub const unit = 1.0
 
 pub struct Rect:
-    pub width: f64
-    pub height: f64
+    pub let width: f64
+    pub let height: f64
 
     pub static func area(r: Rect) -> f64:
         return r.width * r.height
@@ -517,8 +517,8 @@ pub func area(r: brushes.Rect) -> i64:
 
 ```luce module file=.luce/packages/paint-0.3.0/brushes.luc
 pub struct Rect:
-    pub width: i64
-    pub height: i64
+    pub let width: i64
+    pub let height: i64
 ```
 
 ```luce module file=.luce/packages/paint-0.3.0/util.luc

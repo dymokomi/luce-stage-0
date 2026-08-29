@@ -14,8 +14,8 @@ naming every required field:
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    let x: i64
+    let y: i64
 
 func distance_squared(point: Point) -> i64:
     return point.x * point.x + point.y * point.y
@@ -34,13 +34,29 @@ visible, and argument order does not need to repeat declaration order. A
 missing, duplicated, unknown, or wrongly typed field is reported at the
 construction.
 
+Every field says whether it changes. A `let` field is set once — at
+construction, or in a class `init` — and assigning to it afterward is
+refused; a `var` field may be reassigned through a mutable path. One of the
+two words is required, so a field is never silently mutable because its
+author left a word out:
+
+```luce module file=cursor.luc
+struct Cursor:
+    let file: str      # decided at construction and fixed
+    var line: i64      # moves as the program runs
+```
+
+Reach for `let` first. A field that never changes is a fact a reader can rely
+on and the compiler can enforce, and the compiler will tell you when you were
+wrong — it refuses the assignment and names the field.
+
 Fields can have folded defaults:
 
 ```luce run
 struct Request:
-    path: str
-    retries: i64 = 3
-    verbose: bool = false
+    let path: str
+    let retries: i64 = 3
+    let verbose: bool = false
 
 func main():
     let normal = Request(path = "/status")
@@ -63,8 +79,8 @@ one copy does not change another:
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    let y: i64
 
 func main():
     var first = Point(x = 2, y = 3)
@@ -93,12 +109,12 @@ binding can:
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    let y: i64
 
 struct Scene:
-    origin: Point
-    title: str
+    var origin: Point
+    var title: str
 
 func main():
     var scene = Scene(origin = Point(x = 1, y = 2), title = "draft")
@@ -127,8 +143,8 @@ the same referenced objects:
 
 ```luce run
 struct Model:
-    title: str
-    values: list[i64]
+    var title: str
+    let values: list[i64]
 
 func main():
     var first = Model(title = "first", values = [1])

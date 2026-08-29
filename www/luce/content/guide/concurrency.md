@@ -39,8 +39,8 @@ not race with it:
 
 ```luce run
 struct Work:
-    first: i64
-    second: i64
+    let first: i64
+    var second: i64
 
 func total(work: Work) -> i64:
     return work.first + work.second

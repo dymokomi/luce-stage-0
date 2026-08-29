@@ -8,7 +8,7 @@ from widgets import CursorHost
 # A test-local component: the openness the interface buys.  It takes
 # part in layout, drawing, and routing exactly like a shipped class.
 pub class Meter: view.View:
-    pub filled: i64
+    pub let filled: i64
 
     pub init(filled: i64):
         self.filled = filled
@@ -28,7 +28,7 @@ pub func test_a_user_component_draws_through_the_same_contract():
     assert(frame.line(0) == "###  ")
 
 pub class Tally: view.View:
-    pub seen: i64
+    pub var seen: i64
 
     pub init():
         self.seen = 0

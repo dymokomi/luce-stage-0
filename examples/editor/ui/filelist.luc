@@ -8,7 +8,7 @@ from ui.keymap import intent_of
 from ui.theme import palette, pane_style
 
 pub class FileList: View:
-    model: Model
+    var model: Model
 
     pub init(shared: Model):
         self.model = shared

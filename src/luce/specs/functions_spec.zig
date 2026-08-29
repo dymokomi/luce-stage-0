@@ -153,8 +153,8 @@ test "a function value answering nothing is called as a statement" {
 test "a function value takes and answers every shape a function does" {
     try agree.prints(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func flip(p: Point) -> Point:
         \\    return Point(x = p.y, y = p.x)
@@ -519,7 +519,7 @@ test "a stored bound method is called out of the map that holds it" {
     // it in place calls it on the state it carries.
     try agree.prints(
         \\struct Counter:
-        \\    step: i64
+        \\    let step: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.step
@@ -546,14 +546,14 @@ test "a bound method carries a union callback into another struct's function" {
         \\    action(run: (func(i64) -> i64)?, value: i64)
         \\
         \\struct Runner:
-        \\    bias: i64
+        \\    let bias: i64
         \\
         \\    func apply(f: func(i64) -> i64, value: i64) -> i64:
         \\        return f(value + self.bias)
         \\
         \\struct Envelope:
-        \\    job: Job
-        \\    runner: Runner
+        \\    let job: Job
+        \\    let runner: Runner
         \\
         \\    func run() -> i64:
         \\        match self.job:
@@ -589,7 +589,7 @@ test "a field narrowed into a local is still called through the local" {
     // so the optional function is bound first.
     try agree.prints(
         \\struct Rows:
-        \\    render: (func(i64) -> str)?
+        \\    let render: (func(i64) -> str)?
         \\
         \\func label(index: i64) -> str:
         \\    return "row " + str(index)
@@ -668,7 +668,7 @@ test "a function value in a struct field is called through a grouping" {
     // first, it runs.
     try agree.prints(
         \\struct Rows:
-        \\    render: (func(i64) -> str)?
+        \\    let render: (func(i64) -> str)?
         \\
         \\func label(index: i64) -> str:
         \\    return "row " + str(index)
@@ -688,7 +688,7 @@ test "a fresh function value called in place is released with the statement" {
     // temporary like any other — the leak census is what proves it.
     try agree.prints(
         \\struct Counter:
-        \\    step: i64
+        \\    let step: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.step

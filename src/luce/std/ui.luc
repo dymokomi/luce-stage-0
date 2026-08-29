@@ -17,7 +17,7 @@
 import std.gpu
 
 pub class Window:
-    raw: handle
+    let raw: handle
 
     # Ask the host for a window.  The world decides whether one
     # opens, so construction is fallible.

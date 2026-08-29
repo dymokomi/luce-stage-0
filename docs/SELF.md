@@ -21,7 +21,7 @@ written signature lists only the arguments a caller passes:
 
 ```luce
 struct Counter:
-    value: i64
+    var value: i64
 
     func read() -> i64:
         return self.value
@@ -47,7 +47,7 @@ value:
 
 ```luce
 struct Cursor:
-    pos: i64
+    var pos: i64
 
     static func start() -> Cursor:
         return Cursor(pos = 0)
@@ -105,7 +105,7 @@ mutability is the whole permission, exactly as it is for `xs.append`.
 
 ```luce
 struct Cursor:
-    pos: i64
+    var pos: i64
 
     func advance(by: i64):
         self.pos += by

@@ -14,8 +14,8 @@ Declare a method inside a type and call it with dot syntax:
 
 ```luce run
 struct Rectangle:
-    width: i64
-    height: i64
+    let width: i64
+    let height: i64
 
     func area() -> i64:
         return self.width * self.height
@@ -50,8 +50,8 @@ be stored back into that place.
 
 ```luce run
 struct Cursor:
-    row: i64
-    column: i64
+    var row: i64
+    let column: i64
 
     func move_down(lines: i64):
         self.row += lines
@@ -85,7 +85,7 @@ binding still names the same object, so no copy-back is needed:
 
 ```luce run
 class Counter:
-    value: i64
+    var value: i64
 
     func add(amount: i64) -> i64:
         self.value += amount
@@ -119,7 +119,7 @@ A static function belongs to the type rather than an instance. Declare it with
 import std.strings
 
 struct Temperature:
-    celsius: f64
+    let celsius: f64
 
     static func freezing() -> Temperature:
         return Temperature(celsius = 0.0)
@@ -148,13 +148,13 @@ receiver:
 
 ```luce run
 struct Scale:
-    factor: i64
+    var factor: i64
 
     func apply(value: i64) -> i64:
         return value * self.factor
 
 class Counter:
-    value: i64
+    var value: i64
 
     func current() -> i64:
         return self.value

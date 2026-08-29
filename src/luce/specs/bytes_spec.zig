@@ -150,10 +150,10 @@ test "file and handle are a program's own words, not the language's" {
     // colliding with anything the compiler keeps for itself.
     try agree.prints(
         \\struct file:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\class handle:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\func main():
         \\    let a = file(x = 40)
@@ -192,8 +192,8 @@ test "a struct owns an optional file while a callback consumes its result" {
         \\import std.files
         \\
         \\struct Packet:
-        \\    handle: files.File?
-        \\    callback: (func(i64) -> i64)?
+        \\    let handle: files.File?
+        \\    let callback: (func(i64) -> i64)?
         \\
         \\func scale(value: i64) -> i64:
         \\    return value * 2

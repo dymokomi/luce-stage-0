@@ -148,7 +148,7 @@ ARC does not collect a strong cycle. `weak` makes a storage place non-owning:
 
 ```luce
 struct Link:
-    weak root: list[Link]?
+    weak var root: list[Link]?
 
 func main():
     let root: list[Link] = [Link()]

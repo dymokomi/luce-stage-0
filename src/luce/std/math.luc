@@ -281,7 +281,7 @@ pub func axpy(xs: array[f64, _], factor: f64, ys: array[f64, _]):
 pub class Rng:
     # The generator's whole state.  Any seed works: one out of
     # range is brought into range on first use.
-    state: i64
+    var state: i64
 
     pub init(seed: i64):
         self.state = seed

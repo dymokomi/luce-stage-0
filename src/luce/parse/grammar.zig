@@ -1697,6 +1697,36 @@ pub const Parser = struct {
         };
     }
 
+    /// `let` or `var` in front of a stored field, which is required.
+    ///
+    /// **A field states whether it changes.**  Reading a missing word as
+    /// `var` would make the least considered declaration the most
+    /// permissive one — a field silently mutable because its author left
+    /// a word out — and a reader could not tell an intended mutable
+    /// field from an unfinished one.  So the bare spelling is refused,
+    /// and the refusal names both words rather than choosing for the
+    /// author; which one is right is a fact about the design that the
+    /// compiler does not know.
+    ///
+    /// Answers null after reporting, or when the member is not a field
+    /// at all and the caller's own expectation is the better message.
+    fn fieldMutability(self: *Parser) Error!?ast.FieldMutability {
+        if (self.accept(.keyword_let) != null) return .immutable;
+        if (self.accept(.keyword_var) != null) return .mutable;
+        if (self.peekKind() != .identifier or self.peekAhead(1) != .colon) {
+            _ = try self.expect(.identifier, "let or var, then a field name");
+            return null;
+        }
+        const named = self.peek();
+        try self.report(
+            "luce.parse.field",
+            named.span,
+            "a field says whether it changes: write let {s} for a field set once at construction, or var {s} for one that is reassigned",
+            .{ self.text(named), self.text(named) },
+        );
+        return null;
+    }
+
     /// One struct member — a function or a field — carrying `visibility`:
     /// `.public` when `pub` fronts it, `.private` for the unmarked default
     /// (docs/VISIBILITY.md).
@@ -1826,20 +1856,12 @@ pub const Parser = struct {
             }
             return;
         }
-        // `let`/`var` in front of a field says whether it may be
-        // reassigned after it is first set (docs/VISIBILITY.md §10.1).
-        // Bare `x: T` is the transitional spelling, accepted for one
-        // release and read as `var`.
-        const mutability: ast.FieldMutability = switch (self.peekKind()) {
-            .keyword_let => blk: {
-                _ = self.advance();
-                break :blk .immutable;
-            },
-            .keyword_var => blk: {
-                _ = self.advance();
-                break :blk .mutable;
-            },
-            else => .unspecified,
+        // A field's span starts where its declaration does — at `weak`
+        // if it is there, else at the `let`/`var` every field writes.
+        const mutability_marker = self.peek();
+        const mutability = (try self.fieldMutability()) orelse {
+            self.recover();
+            return;
         };
         const field_name = (try self.expect(.identifier, "a field name")) orelse {
             self.recover();
@@ -1877,7 +1899,7 @@ pub const Parser = struct {
             .mutability = mutability,
             .visibility = visibility,
             .span = .{
-                .start = if (weak_marker) |marker| marker.span.start else field_name.span.start,
+                .start = if (weak_marker) |marker| marker.span.start else mutability_marker.span.start,
                 .end = written_end,
             },
         });
@@ -2329,6 +2351,12 @@ pub const Parser = struct {
                     .name_span = field_name.span,
                     .type_name = field_type,
                     .default = default_value,
+                    // A payload field writes no `let`/`var` and needs
+                    // none: a union member's payload is built with the
+                    // member and read through a match binding, so there
+                    // is no place to assign through and nothing for an
+                    // author to choose between.
+                    .mutability = .immutable,
                     .span = .{ .start = field_name.span.start, .end = field_end },
                 });
                 previous_end = field_end;

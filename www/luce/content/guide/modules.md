@@ -22,8 +22,8 @@ sample/
 
 ```luce module file=geometry.luc
 pub struct Point:
-    pub x: f64
-    pub y: f64
+    pub let x: f64
+    pub let y: f64
 
 pub const unit = 1.0
 
@@ -74,8 +74,8 @@ file writes `Point`, not `geometry.Point`:
 
 ```luce module file=geometry.luc
 pub struct Point:
-    pub x: f64
-    pub y: f64
+    pub let x: f64
+    pub let y: f64
 
 pub func distance(a: Point, b: Point) -> f64:
     let dx = a.x - b.x

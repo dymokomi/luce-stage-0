@@ -151,8 +151,8 @@ and an instance method receives an implied `self`:
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    var y: i64
 
     func moved(dx: i64, dy: i64) -> Point:
         return Point(x = self.x + dx, y = self.y + dy)
@@ -265,7 +265,7 @@ compares that identity.
 
 ```luce run
 class Counter:
-    value: i64
+    var value: i64
 
     init(start: i64 = 0):
         self.value = start
@@ -311,13 +311,13 @@ interface Named:
     func name() -> str
 
 struct FileName: Named:
-    path: str
+    let path: str
 
     func name() -> str:
         return self.path
 
 class User: Named:
-    label: str
+    let label: str
 
     func name() -> str:
         return self.label

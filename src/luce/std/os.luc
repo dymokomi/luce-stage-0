@@ -41,7 +41,7 @@ pub func clock_ms() -> i64:
 # Every call takes what is *left* of the same moment, so "200 ms for
 # the whole exchange" is one construction, not arithmetic per call.
 pub struct Deadline:
-    pub expires: i64
+    pub let expires: i64
 
     # What remains of the moment, clamped at zero once it has passed.
     pub func remaining_ms() -> i64:
@@ -98,7 +98,7 @@ pub func run(command: str, input: str = "") -> str!:
 # decides whether the channel exists, and a host may withhold it.
 
 pub class Input: io.Reader:
-    raw: handle
+    var raw: handle
 
     pub init(which: i64) -> !:
         self.raw = try Builtin.os_standard_stream(which)
@@ -109,7 +109,7 @@ pub class Input: io.Reader:
         return try Builtin.handle_read(self.raw, buffer)
 
 pub class Output: io.Writer:
-    raw: handle
+    var raw: handle
 
     pub init(which: i64) -> !:
         self.raw = try Builtin.os_standard_stream(which)
@@ -131,7 +131,7 @@ pub class Output: io.Writer:
 # belong.
 
 pub class Process: io.Reader:
-    raw: handle
+    var raw: handle
 
     # Spawn `command` through the host shell with its input and
     # output piped.  The world decides whether the spawn lands, so

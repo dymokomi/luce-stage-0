@@ -168,8 +168,8 @@ test "a worker's nested object crosses whole" {
 test "a worker's struct crosses, and a struct carrying a list with it" {
     try agree.prints(
         \\struct Report:
-        \\    label: str
-        \\    total: i64
+        \\    let label: str
+        \\    let total: i64
         \\
         \\func measure() -> Report:
         \\    return Report(label = "a label longer than a value holds", total = 7)
@@ -326,9 +326,9 @@ test "a struct composes a union optional task callback and recursive children" {
         \\    running(task: task[i64]?)
         \\
         \\struct Envelope:
-        \\    job: Job
-        \\    callback: (func(i64) -> i64)?
-        \\    children: list[Envelope]
+        \\    let job: Job
+        \\    let callback: (func(i64) -> i64)?
+        \\    let children: list[Envelope]
         \\
         \\func work() -> i64:
         \\    return 21
@@ -366,10 +366,10 @@ test "a resource graph survives union optional container give return and failure
         \\    loaded(tasks: list[task[i64]], extra: task[i64]?)
         \\
         \\struct Crate:
-        \\    parcel: Parcel
-        \\    callback: (func(i64) -> i64)?
-        \\    contents: map[str, i64]
-        \\    grid: array[i64, _]
+        \\    let parcel: Parcel
+        \\    let callback: (func(i64) -> i64)?
+        \\    let contents: map[str, i64]
+        \\    let grid: array[i64, _]
         \\
         \\func work(value: i64) -> i64:
         \\    return value

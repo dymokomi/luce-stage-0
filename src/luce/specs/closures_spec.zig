@@ -45,7 +45,7 @@ test "closure: a capture-free block closure can return no value" {
 test "closure: capturing self keeps a class alive until the function dies" {
     try agree.prints(
         \\class Counter:
-        \\    value: i64
+        \\    let value: i64
         \\    func reader() -> func() -> i64:
         \\        return func():
         \\            return self.value
@@ -79,7 +79,7 @@ test "closure: a capture list snapshot is evaluated exactly once" {
 test "closure: a weak capture zeros while a strong capture retains" {
     try agree.prints(
         \\class Item:
-        \\    value: i64
+        \\    let value: i64
         \\    deinit:
         \\        print("closed " + str(self.value))
         \\
@@ -122,8 +122,8 @@ test "closure: function-valued captures dispatch through their own environment" 
 test "closure: different closures share one mutable cell" {
     try agree.ok(
         \\struct Pair:
-        \\    add: (func(i64) -> i64)?
-        \\    read: (func() -> i64)?
+        \\    let add: (func(i64) -> i64)?
+        \\    let read: (func() -> i64)?
         \\
         \\func make_pair() -> Pair:
         \\    var total = 0
@@ -250,8 +250,8 @@ test "closure: outer and closure writes share one text cell" {
 test "closure: outer and closure writes share one value-struct cell" {
     try agree.ok(
         \\struct State:
-        \\    count: i64
-        \\    label: str
+        \\    var count: i64
+        \\    var label: str
         \\
         \\func main():
         \\    var state = State(count = 1, label = "a")
@@ -285,8 +285,8 @@ test "closure: outer and closure writes share one optional cell" {
 test "closure: outer writes and closure writes share scalar str struct and optional cells" {
     try agree.prints(
         \\struct State:
-        \\    count: i64
-        \\    label: str
+        \\    var count: i64
+        \\    var label: str
         \\
         \\func main():
         \\    var number = 1
@@ -341,7 +341,7 @@ test "closure: an interface capture retains its complete dispatch state" {
         \\    func score(value: i64) -> i64
         \\
         \\class Scale: Scorer:
-        \\    factor: i64
+        \\    let factor: i64
         \\    func score(value: i64) -> i64:
         \\        return value * self.factor
         \\    deinit:
@@ -362,7 +362,7 @@ test "closure: an interface capture retains its complete dispatch state" {
 test "closure: a bound-method capture retains and releases its receiver" {
     try agree.ok(
         \\class Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\    func score(value: i64) -> i64:
         \\        return value * self.factor
         \\
@@ -415,8 +415,8 @@ test "closure: destructured mutables transfer independently into shared cells" {
 test "closure: weak self breaks a stored callback cycle and zeros afterward" {
     try agree.prints(
         \\class Node:
-        \\    value: i64
-        \\    callback: (func() -> i64)?
+        \\    let value: i64
+        \\    var callback: (func() -> i64)?
         \\    func install():
         \\        self.callback = [weak self] func():
         \\            let live = self else Node(value = 0, callback = none)

@@ -15,8 +15,8 @@ file-scope, compile-time choice visible at a use site.
 
 ```luce run
 struct Entry:
-    label: str
-    fallback: i64?
+    let label: str
+    let fallback: i64?
 
 const WIDTH = 80
 const NUMBERS: list[i64] = [3, 1, 2]

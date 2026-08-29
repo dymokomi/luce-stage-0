@@ -204,12 +204,12 @@ enum Method(u16):
 # the methods below and builds one only by reading an archive
 # (docs/VISIBILITY.md §6).
 pub struct Entry:
-    path: str
-    method: i64
-    checksum: i64
-    packed_size: i64
-    plain_size: i64
-    header_at: i64
+    let path: str
+    var method: i64
+    let checksum: i64
+    let packed_size: i64
+    let plain_size: i64
+    let header_at: i64
 
     # The entry's name inside the archive, exactly as it is stored:
     # "/" separated, never absolute in an archive worth trusting.
@@ -270,8 +270,8 @@ func end_record(archive: list[u8]) -> i64 ! ZipError:
 # damaged archive fails where it is opened rather than on first use;
 # the contents are untouched until `extract` asks for an entry.
 pub class Archive:
-    data: list[u8]
-    found: list[Entry]
+    let data: list[u8]
+    let found: list[Entry]
 
     pub init(archive: list[u8]) -> ! ZipError:
         self.data = archive
@@ -376,8 +376,8 @@ func verify(entry: Entry, plain: list[u8]) -> ! ZipError:
 # accumulator with identity — two bindings to one writer see one
 # archive — made with `zip.Writer()` and owned like any object.
 pub class Writer:
-    out: list[u8]
-    written: list[Entry]
+    let out: list[u8]
+    let written: list[Entry]
 
     pub init():
         self.out = list[u8]()
@@ -557,7 +557,7 @@ enum Block(u8):
 # Its methods advance that cursor directly through their implied
 # receiver; callers need only supply a mutable Stream place.
 struct Stream:
-    position: i64
+    var position: i64
 
     # `count` bits, least significant first.  RFC 1951 §3.1.1: data
     # elements pack into bytes starting at the least significant bit,
@@ -770,8 +770,8 @@ pub func inflate(data: list[u8]) -> list[u8] ! ZipError:
 # way: bits go out least significant first, and a Huffman code goes
 # out most significant first, which is `put_code`'s whole job.
 struct Packer:
-    held: i64
-    count: i64
+    var held: i64
+    var count: i64
 
     func put(out: list[u8], value: i64, count: i64):
         var bits = self.held | value << self.count

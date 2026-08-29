@@ -121,8 +121,8 @@ the intended grouping easier to see.
 
 ```luce run
 struct Setting:
-    name: str
-    limit: i64?
+    let name: str
+    let limit: i64?
 
 func describe(setting: Setting) -> str:
     let limit = setting.limit

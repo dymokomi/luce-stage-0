@@ -22,9 +22,9 @@ pub class Editor: View:
     pub static func minimum_columns() -> i64:
         return gutter_width + 1
 
-    model: Model
-    language: Syntax
-    language_path: str
+    var model: Model
+    var language: Syntax
+    var language_path: str
 
     pub init(shared: Model):
         self.model = shared

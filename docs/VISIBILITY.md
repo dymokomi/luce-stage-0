@@ -66,9 +66,9 @@ On a struct field, the marker goes on the field's own line:
 
 ```luce
 pub struct Session:
-    pub name: str
-    id: i64
-    token: i64 = 0
+    pub let name: str
+    let id: i64
+    let token: i64 = 0
 ```
 
 Here `name` crosses the boundary and `id`/`token` do not. There is no
@@ -84,7 +84,7 @@ refused at the declaration:
 
 ```luce refused
 struct Inner:
-    n: i64
+    let n: i64
 
 pub func read() -> Inner:
     return Inner(n = 1)

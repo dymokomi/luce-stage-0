@@ -12,8 +12,8 @@ from view import View, route
 # Pairing a child with its constraint makes a row/column mismatch
 # impossible.
 struct Slot:
-    pub size: Constraint
-    pub content: View
+    pub let size: Constraint
+    pub let content: View
 
 func constraints_of(slots: list[Slot]) -> list[Constraint]:
     var sizes = list[Constraint]()
@@ -30,8 +30,8 @@ func slot_constraint(size: Constraint?) -> Constraint:
 
 
 pub class VStack: View:
-    slots: list[Slot]
-    spacing: i64
+    var slots: list[Slot]
+    var spacing: i64
 
     pub init(spacing: i64 = 0):
         self.slots = list[Slot]()
@@ -66,8 +66,8 @@ pub class VStack: View:
         return Response.ignored
 
 pub class HStack: View:
-    slots: list[Slot]
-    spacing: i64
+    var slots: list[Slot]
+    var spacing: i64
 
     pub init(spacing: i64 = 0):
         self.slots = list[Slot]()
@@ -104,7 +104,7 @@ pub class HStack: View:
 # Children draw in list order, so the last is visually on top — and
 # events visit the visually topmost child first.
 pub class ZStack: View:
-    children: list[View]
+    let children: list[View]
 
     pub init():
         self.children = list[View]()

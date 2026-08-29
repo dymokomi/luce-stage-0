@@ -138,12 +138,12 @@ required fields must still be written.
 
 ```luce
 struct State:
-    path: str
-    content: str
-    cursor: i64 = 0
-    scroll: i64 = 0
-    dirty: bool = false
-    message: str = ""
+    let path: str
+    let content: str
+    let cursor: i64 = 0
+    let scroll: i64 = 0
+    let dirty: bool = false
+    let message: str = ""
 
 func main():
     var state = State(path = "notes", content = "hello")
@@ -171,8 +171,8 @@ may be named or defaulted like any others:
 
 ```luce
 struct Point:
-    x: f64
-    y: f64
+    let x: f64
+    let y: f64
     func scaled(factor: f64 = 2.0) -> f64:
         return self.x * factor
     static func origin() -> Point:

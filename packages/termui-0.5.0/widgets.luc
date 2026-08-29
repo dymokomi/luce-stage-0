@@ -84,10 +84,10 @@ func draw_frame(
 # A junction-aware border around one child.  Adjacent panels share
 # clean tees because strokes merge in the surface, not here.
 pub class Panel: View:
-    title: str
-    content: View
-    style: Style
-    edges: Edges
+    var title: str
+    var content: View
+    var style: Style
+    var edges: Edges
 
     pub init(
         title: str,
@@ -108,7 +108,7 @@ pub class Panel: View:
         return route(self.content, event, frame_interior(area, self.edges))
 
 pub class Label: View:
-    lines: list[Line]
+    var lines: list[Line]
 
     pub init(text: str, style: Style = Style()):
         let one: list[Line] = [plain(text, style)]
@@ -125,7 +125,7 @@ pub class Label: View:
         return Response.ignored
 
 pub class StyledText: View:
-    lines: list[Line]
+    var lines: list[Line]
 
     pub init(lines: list[Line]):
         self.lines = lines
@@ -143,12 +143,12 @@ pub class StyledText: View:
 # A lazily rendered window over indexed lines.  The application owns
 # `top`, the selection, and the data; Rows owns no hidden collection.
 pub class Rows: View:
-    total: i64
-    render: func(i64) -> Line
-    top: i64
-    anchor: i64?
-    selected: i64?
-    selected_style: Style
+    var total: i64
+    var render: func(i64) -> Line
+    var top: i64
+    var anchor: i64?
+    var selected: i64?
+    var selected_style: Style
 
     pub init(
         total: i64,
@@ -205,8 +205,8 @@ pub class Rows: View:
         return Response.ignored
 
 pub class Fill: View:
-    glyph: str
-    style: Style
+    let glyph: str
+    var style: Style
 
     pub init(glyph: str = " ", style: Style = Style()):
         self.glyph = glyph
@@ -236,8 +236,8 @@ pub class Empty: View:
 # its child — outer before inner — so a root host can own global
 # commands.
 pub class EventHost: View:
-    content: View
-    respond: func(Event, Rect) -> Response
+    var content: View
+    let respond: func(Event, Rect) -> Response
 
     pub init(content: View, respond: func(Event, Rect) -> Response):
         self.content = content
@@ -256,8 +256,8 @@ pub class EventHost: View:
 # Cursor placement wraps content.  The child's request is computed
 # first and the host's `locate` overrides it when it answers one.
 pub class CursorHost: View:
-    content: View
-    locate: func(Rect) -> Cursor?
+    var content: View
+    let locate: func(Rect) -> Cursor?
 
     pub init(content: View, locate: func(Rect) -> Cursor?):
         self.content = content

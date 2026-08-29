@@ -15,8 +15,8 @@ are values. Assignment and argument passing copy them.
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    let y: i64
 
 func main():
     var first = Point(x = 2, y = 3)
@@ -34,8 +34,8 @@ and retains its reference fields:
 
 ```luce run
 struct Model:
-    title: str
-    values: list[i64]
+    var title: str
+    let values: list[i64]
 
 func main():
     var first = Model(title = "first", values = [1])
@@ -61,7 +61,7 @@ retain the same object.
 
 ```luce run
 class Counter:
-    value: i64
+    var value: i64
 
 func main():
     let first = Counter(value = 1)
@@ -120,8 +120,8 @@ non-owning back-edge weak:
 
 ```luce run
 class Node:
-    value: i64
-    weak parent: Node?
+    let value: i64
+    weak let parent: Node?
 
 func main():
     weak var observed: Node?

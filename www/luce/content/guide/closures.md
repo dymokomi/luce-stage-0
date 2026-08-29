@@ -142,7 +142,7 @@ already disappeared:
 
 ```luce run
 class Item:
-    value: i64
+    let value: i64
 
 func make_reader(item: Item) -> func() -> i64:
     return [weak item] func():
@@ -177,8 +177,8 @@ to the owner weak:
 
 ```luce run
 class Node:
-    value: i64
-    callback: (func() -> i64)?
+    let value: i64
+    var callback: (func() -> i64)?
 
     func install():
         self.callback = [weak self] func():
@@ -218,7 +218,7 @@ is meaningful, or require a present function through a custom initializer:
 
 ```luce module file=action.luc
 class Action:
-    apply: func(i64) -> i64
+    let apply: func(i64) -> i64
 
     init(apply: func(i64) -> i64):
         self.apply = apply

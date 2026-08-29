@@ -58,9 +58,9 @@ pub func describe(failed: HttpError) -> str:
 # model of every duplicate-header corner — and `body` is the decoded
 # bytes: what the server meant, after chunking is removed.
 pub struct Response:
-    pub status: i64
-    pub headers: map[str, str]
-    pub body: bytes
+    pub var status: i64
+    pub let headers: map[str, str]
+    pub let body: bytes
 
     # Whether the status says success: 200 through 299.  The number
     # stays data either way; this is the one predicate almost every
@@ -105,8 +105,8 @@ pub func post(url: str, body: list[u8], content_type: str) -> Response ! HttpErr
 # A client with no base takes whole URLs, which makes it exactly the
 # free functions plus default headers.
 pub class Client:
-    base: str
-    defaults: map[str, str]
+    let base: str
+    var defaults: map[str, str]
 
     pub init(base: str = ""):
         self.base = base
@@ -161,9 +161,9 @@ func exchange(method: str, url: str, body: list[u8], content_type: str, extra: m
 
 # Where a URL points: the machine, the door, and the path asked for.
 struct Place:
-    pub host: str
-    pub port: i64
-    pub path: str
+    pub let host: str
+    pub let port: i64
+    pub let path: str
 
 # `http://host[:port]/path` and nothing more exotic.  The path keeps
 # whatever query it carries; a missing path is `/`.

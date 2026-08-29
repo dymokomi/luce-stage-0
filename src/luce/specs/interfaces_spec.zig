@@ -12,7 +12,7 @@ test "a conforming struct is passed by interface and dispatches its method" {
         \\    func render(value: i64) -> i64
         \\
         \\struct UIButton: UIElement:
-        \\    label: str
+        \\    let label: str
         \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
@@ -32,12 +32,12 @@ test "lists and maps store different concrete implementations behind one interfa
         \\    func render(value: i64) -> i64
         \\
         \\struct AddOne: UIElement:
-        \\    label: str
+        \\    let label: str
         \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
         \\struct AddTwo: UIElement:
-        \\    label: str
+        \\    let label: str
         \\    func render(value: i64) -> i64:
         \\        return value + 2
         \\
@@ -64,7 +64,7 @@ test "a non-fallible witness can satisfy a fallible interface requirement" {
         \\    func read(value: i64) -> i64!
         \\
         \\struct Buffer: Reader:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func read(value: i64) -> i64:
         \\        return value + 1
         \\
@@ -84,7 +84,7 @@ test "a fallible multi-value interface method can be received with try" {
         \\    func limits(value: i64) -> (i64, i64)!
         \\
         \\struct Window: Bounds:
-        \\    width: i64
+        \\    let width: i64
         \\    func limits(value: i64) -> (i64, i64):
         \\        return value, value + self.width
         \\
@@ -149,7 +149,7 @@ test "an error raised by a mutating witness crosses the interface call" {
         \\    mutating func add(amount: i64) -> i64!
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64) -> i64!:
         \\        self.current = self.current + amount
         \\        if self.current > 100:
@@ -180,7 +180,7 @@ test "a raising interface method with parameters and a multi-value answer" {
         \\    func limits(low: i64, label: str) -> (i64, i64)!
         \\
         \\struct Window: Bounds:
-        \\    width: i64
+        \\    let width: i64
         \\    func limits(low: i64, label: str) -> (i64, i64)!:
         \\        if low < 0:
         \\            error(label + " below zero")
@@ -212,7 +212,7 @@ test "a multi-value interface answer can transfer an owned result field" {
         \\    func produce(seed: i64) -> (list[i64], i64)
         \\
         \\struct Source: Producer:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func produce(seed: i64) -> (list[i64], i64):
         \\        var values = [seed, seed + 1]
         \\        return values, len(values)
@@ -233,8 +233,8 @@ test "a multi-method interface dispatches every contract slot" {
         \\    func label() -> str
         \\
         \\struct Button: Drawable:
-        \\    caption: str
-        \\    offset: i64
+        \\    let caption: str
+        \\    let offset: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\    func label() -> str:
@@ -259,7 +259,7 @@ test "an interface conversion before a nested carrying argument preserves local 
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: i64
+        \\    let offset: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
@@ -287,7 +287,7 @@ test "an interface conversion before a nested carrying argument preserves local 
 test "a multi-value method does not invalidate a later method with a carrying argument" {
     try agree.prints(
         \\struct Grid:
-        \\    cells: list[i64]
+        \\    let cells: list[i64]
         \\    func area() -> i64:
         \\        return len(self.cells)
         \\
@@ -296,7 +296,7 @@ test "a multi-value method does not invalidate a later method with a carrying ar
         \\    func draw(into: Grid) -> i64
         \\
         \\struct Label: View:
-        \\    width: i64
+        \\    let width: i64
         \\    func measure(size: i64) -> (i64, i64):
         \\        return size, self.width
         \\    func draw(into: Grid) -> i64:
@@ -320,7 +320,7 @@ test "a multi-value interface method uses the ordinary return shape" {
         \\    func span(value: i64) -> (i64, i64)
         \\
         \\struct Range: Measured:
-        \\    width: i64
+        \\    let width: i64
         \\    func span(value: i64) -> (i64, i64):
         \\        return value, value + self.width
         \\
@@ -348,8 +348,8 @@ test "one struct may satisfy multiple interfaces" {
         \\    func size() -> i64
         \\
         \\struct Item: Named, Sized:
-        \\    title: str
-        \\    amount: i64
+        \\    let title: str
+        \\    let amount: i64
         \\    func name() -> str:
         \\        return self.title
         \\    func size() -> i64:
@@ -375,7 +375,7 @@ test "an interface method may answer no value and still dispatch" {
         \\    func write(value: i64)
         \\
         \\struct Recorder: Sink:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func write(value: i64):
         \\        print(str(value + self.marker))
         \\
@@ -392,12 +392,12 @@ test "arrays and struct fields store interface values" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: i64
+        \\    let offset: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
         \\struct Panel:
-        \\    element: Drawable
+        \\    let element: Drawable
         \\
         \\func main():
         \\    let one = Button(offset = 1)
@@ -418,7 +418,7 @@ test "interface values can be returned and narrowed through an optional" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: Drawable:
-        \\    offset: i64
+        \\    let offset: i64
         \\    func render(value: i64) -> i64:
         \\        return value + self.offset
         \\
@@ -445,7 +445,7 @@ test "interface methods take object arguments" {
         \\    func accept(value: list[i64]) -> i64
         \\
         \\struct Collector: Sink:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func accept(value: list[i64]) -> i64:
         \\        return len(value)
         \\
@@ -465,7 +465,7 @@ test "a named carrying receiver can live behind an interface while its owner liv
         \\    func size() -> i64
         \\
         \\struct Box: Sized:
-        \\    values: list[i64]
+        \\    let values: list[i64]
         \\    func size() -> i64:
         \\        return len(self.values)
         \\
@@ -485,7 +485,7 @@ test "witness slots follow contract order rather than implementation order" {
         \\    func right() -> str
         \\
         \\struct Reversed: Pair:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func right() -> str:
         \\        return "right"
         \\    func left() -> str:
@@ -507,7 +507,7 @@ test "one method can witness two contracts with the same requirement" {
         \\    func text() -> str
         \\
         \\struct Label: Named, Titled:
-        \\    value: str
+        \\    let value: str
         \\    func text() -> str:
         \\        return self.value
         \\
@@ -533,12 +533,12 @@ test "an interface method can return another owned interface value" {
         \\    func make(value: i64) -> Named
         \\
         \\class Item: Named:
-        \\    value: i64
+        \\    let value: i64
         \\    func text() -> str:
         \\        return "item " + str(self.value)
         \\
         \\struct Maker: Factory:
-        \\    offset: i64
+        \\    let offset: i64
         \\    func make(value: i64) -> Named:
         \\        return Item(value = value + self.offset)
         \\
@@ -557,7 +557,7 @@ test "replacing heterogeneous class witnesses releases the old receiver first" {
         \\    func read() -> i64
         \\
         \\class First: Reading:
-        \\    value: i64
+        \\    let value: i64
         \\    func kind() -> str:
         \\        return "first"
         \\    func read() -> i64:
@@ -566,7 +566,7 @@ test "replacing heterogeneous class witnesses releases the old receiver first" {
         \\        print("closed first")
         \\
         \\class Second: Reading:
-        \\    value: i64
+        \\    let value: i64
         \\    func read() -> i64:
         \\        return self.value
         \\    func kind() -> str:
@@ -591,7 +591,7 @@ test "a mutating interface requirement preserves one value payload across method
         \\    func value() -> i64
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self.current = self.current + amount
         \\    func value() -> i64:
@@ -613,7 +613,7 @@ test "a mutating multi-value requirement uses the ordinary return shape" {
         \\    func position() -> i64
         \\
         \\struct Index: Cursor:
-        \\    value: i64
+        \\    var value: i64
         \\    func advance(amount: i64) -> (i64, i64):
         \\        let before = self.value
         \\        self.value = self.value + amount
@@ -635,7 +635,7 @@ test "a non-fallible mutating witness satisfies a fallible requirement" {
         \\    mutating func add(amount: i64) -> i64!
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64) -> i64:
         \\        self.current = self.current + amount
         \\        return self.current
@@ -653,7 +653,7 @@ test "a non-mutating witness can satisfy a mutating requirement" {
         \\    mutating func reset()
         \\
         \\struct Noop: Reset:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func reset():
         \\        return
         \\
@@ -672,7 +672,7 @@ test "copied class existentials retain shared identity" {
         \\    func value() -> i64
         \\
         \\class Shared: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self.current = self.current + amount
         \\    func value() -> i64:
@@ -694,7 +694,7 @@ test "a closure can retain and mutate an interface existential" {
         \\    func value() -> i64
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self.current = self.current + amount
         \\    func value() -> i64:
@@ -722,7 +722,7 @@ test "copied struct existentials mutate independently" {
         \\    func value() -> i64
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self.current = self.current + amount
         \\    func value() -> i64:
@@ -745,14 +745,14 @@ test "heterogeneous collections can round-trip mutating interface values" {
         \\    func value() -> i64
         \\
         \\struct Number: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self.current = self.current + amount
         \\    func value() -> i64:
         \\        return self.current
         \\
         \\struct Offset: Counter:
-        \\    current: i64
+        \\    var current: i64
         \\    func add(amount: i64):
         \\        self = Offset(current = self.current + amount + 1)
         \\    func value() -> i64:

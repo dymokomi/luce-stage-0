@@ -37,10 +37,10 @@ func is_global(intent: Intent) -> bool:
             return false
 
 pub class Workbench: View:
-    model: Model
-    across: HStack
-    screen: VStack
-    subscribed: bool
+    var model: Model
+    let across: HStack
+    let screen: VStack
+    var subscribed: bool
 
     pub init(shared: Model, across: HStack, screen: VStack):
         self.model = shared

@@ -668,7 +668,7 @@ fn reportStructCycles(self: *Analyzer, cyclic: []const bool) Error!void {
         try self.fail(
             if (start < self.structs.items.len) "luce.sema.struct" else "luce.sema.union",
             chainSpan(self, opening),
-            "{s} {s} contains itself: {s}; a {s} is a value, so write {s}: {s}? to let the chain end at absence",
+            "{s} {s} contains itself: {s}; a {s} is a value, so give {s} the optional type {s}? to let the chain end at absence",
             .{
                 nodeKind(self, start),
                 nodeName(self, start),

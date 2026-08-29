@@ -29,9 +29,9 @@ pub const indent_unit = "    "
 # view; this value only remembers which result is selected and where its
 # visible window begins.
 pub class Selection:
-    pub count: i64
-    pub top: i64
-    pub selected: i64
+    pub var count: i64
+    pub var top: i64
+    pub var selected: i64
 
     pub init():
         self.count = 0
@@ -162,30 +162,30 @@ pub enum Drag:
     output
 
 pub class Model:
-    pub documents: list[Document]
-    pub names: list[str]
-    pub search_matches: list[i64]
-    pub files: Selection
-    pub directory: str = "."
-    pub output: str = ""
-    pub search_query: str = ""
-    pub clipboard: str = ""
-    pub active: i64 = 0
-    pub output_scroll: i64 = 0
-    pub search_current: i64 = -1
-    pub last_draft_ms: i64 = 0
-    pub file_pane: bool = false
-    pub output_pane: bool = false
-    pub quit_pending: bool = false
-    pub coalescing: bool = false
-    pub quit: bool = false
-    pub focus: Focus = Focus.editor
-    pub dragging: Drag = Drag.idle
-    pub files_width: i64 = 0
-    pub output_height: i64 = 0
-    pub lsp: Client?
-    last_sent: str = ""
-    watchers: list[(func())?]
+    pub var documents: list[Document]
+    pub var names: list[str]
+    pub let search_matches: list[i64]
+    pub var files: Selection
+    pub var directory: str = "."
+    pub var output: str = ""
+    pub var search_query: str = ""
+    pub var clipboard: str = ""
+    pub var active: i64 = 0
+    pub var output_scroll: i64 = 0
+    pub var search_current: i64 = -1
+    pub var last_draft_ms: i64 = 0
+    pub var file_pane: bool = false
+    pub var output_pane: bool = false
+    pub var quit_pending: bool = false
+    pub var coalescing: bool = false
+    pub var quit: bool = false
+    pub var focus: Focus = Focus.editor
+    pub var dragging: Drag = Drag.idle
+    pub var files_width: i64 = 0
+    pub var output_height: i64 = 0
+    pub var lsp: Client?
+    var last_sent: str = ""
+    let watchers: list[(func())?]
 
     pub init(documents: list[Document]):
         self.documents = documents

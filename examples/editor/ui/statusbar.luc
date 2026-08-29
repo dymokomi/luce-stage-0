@@ -21,7 +21,7 @@ func focus_label(where: Focus) -> str:
             return "  [search]"
 
 pub class StatusBar: View:
-    model: Model
+    var model: Model
 
     pub init(shared: Model):
         self.model = shared

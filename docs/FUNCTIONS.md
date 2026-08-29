@@ -97,8 +97,8 @@ two copies:
 
 ```luce
 struct CounterPair:
-    add: (func(i64) -> i64)?
-    read: (func() -> i64)?
+    let add: (func(i64) -> i64)?
+    let read: (func() -> i64)?
 
 func make_pair() -> CounterPair:
     var total = 0
@@ -151,7 +151,7 @@ optional value inside the body. It never dangles:
 
 ```luce
 class Model:
-    value: i64
+    let value: i64
 
 func make_reader(model: Model) -> func() -> i64:
     return [weak model] func():
@@ -181,8 +181,8 @@ stores a closure that captures the same object. Luce diagnoses the direct
 
 ```luce
 class Node:
-    value: i64
-    callback: (func() -> i64)?
+    let value: i64
+    var callback: (func() -> i64)?
 
     func install():
         self.callback = [weak self] func():

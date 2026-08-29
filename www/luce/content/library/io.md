@@ -61,8 +61,8 @@ import std.io
 import std.strings
 
 class Feed: io.Reader:
-    data: list[u8]
-    at: i64
+    let data: list[u8]
+    var at: i64
 
     init(text: str):
         self.data = strings.to_bytes(text)

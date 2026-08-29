@@ -8,7 +8,7 @@ from server import Server, Compiler
 
 # The toolchain as a script: whatever the test says the compiler said.
 pub class Scripted: Compiler:
-    pub answer: str
+    pub let answer: str
 
     pub init(answer: str):
         self.answer = answer

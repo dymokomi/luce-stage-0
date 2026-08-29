@@ -10,26 +10,26 @@ from termui import Style
 import highlight
 
 pub struct Theme:
-    pub keyword: Style
-    pub type_name: Style
-    pub builtin: Style
-    pub text: Style
-    pub number: Style
-    pub comment: Style
-    pub plain: Style
-    pub punct: Style
-    pub gutter: Style
-    pub gutter_current: Style
-    pub gutter_diagnostic: Style
-    pub status: Style
-    pub status_key: Style
-    pub selected: Style
+    pub let keyword: Style
+    pub let type_name: Style
+    pub let builtin: Style
+    pub let text: Style
+    pub let number: Style
+    pub let comment: Style
+    pub let plain: Style
+    pub let punct: Style
+    pub let gutter: Style
+    pub let gutter_current: Style
+    pub let gutter_diagnostic: Style
+    pub let status: Style
+    pub let status_key: Style
+    pub let selected: Style
     # The text-selection background; `in_selection` keeps each token's
     # own foreground over it.
-    pub selection: i64
-    pub pane_border: Style
-    pub pane_active: Style
-    pub match_here: Style
+    pub let selection: i64
+    pub let pane_border: Style
+    pub let pane_active: Style
+    pub let match_here: Style
 
 pub const palette = Theme(
     keyword = Style(foreground = 176, bold = true),

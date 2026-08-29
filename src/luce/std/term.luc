@@ -103,10 +103,10 @@ pub enum Key:
 # stays the distinct `Key.ctrl_a`..`ctrl_z` it always was; `control`
 # marks ctrl held with a named key (ctrl+left, ctrl+home).
 pub struct KeyPress:
-    pub key: Key = Key.unknown
-    pub shift: bool = false
-    pub alt: bool = false
-    pub control: bool = false
+    pub let key: Key = Key.unknown
+    pub let shift: bool = false
+    pub let alt: bool = false
+    pub let control: bool = false
 
 # What a mouse did.
 pub enum Pointer:
@@ -120,12 +120,12 @@ pub enum Pointer:
 # middle=1, right=2; a wheel event carries the direction in `wheel`,
 # +1 up and -1 down.
 pub struct Mouse:
-    pub kind: Pointer = Pointer.move
-    pub row: i64 = 0
-    pub column: i64 = 0
-    pub button: i64 = 0
-    pub modifiers: i64 = 0
-    pub wheel: i64 = 0
+    pub let kind: Pointer = Pointer.move
+    pub let row: i64 = 0
+    pub let column: i64 = 0
+    pub let button: i64 = 0
+    pub let modifiers: i64 = 0
+    pub let wheel: i64 = 0
 
     pub func has_shift() -> bool:
         return (self.modifiers & 1) != 0

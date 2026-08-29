@@ -22,17 +22,17 @@ pub interface Compiler:
 # send (a response, and sometimes a diagnostics notification), and
 # whether the server should leave its loop.
 pub class Outcome:
-    pub frames: list[list[u8]]
-    pub leaving: bool
+    pub let frames: list[list[u8]]
+    pub var leaving: bool
 
     pub init(leaving: bool = false):
         self.frames = list[list[u8]]()
         self.leaving = leaving
 
 pub class Server:
-    compiler: Compiler
-    documents: map[str, str]
-    leaving_asked: bool
+    let compiler: Compiler
+    var documents: map[str, str]
+    var leaving_asked: bool
 
     pub init(compiler: Compiler):
         self.compiler = compiler

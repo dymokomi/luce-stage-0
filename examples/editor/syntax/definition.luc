@@ -9,20 +9,20 @@
 
 pub struct Syntax:
     # The language's name, for a status line or a picker.
-    pub name: str
+    pub let name: str
     # What opens a line comment; "" for a language without one.
-    pub line_comment: str
+    pub let line_comment: str
     # The quotes that open a string; each runs to its match on the
     # same line, with backslash escaping the next scalar.
-    pub quotes: list[char]
+    pub let quotes: list[char]
     # A quote prefix like Luce's f-strings or Python's f/r-strings:
     # a word character that may sit immediately before a quote and
     # belong to the string.  Empty for most languages.
-    pub quote_prefixes: list[char]
+    pub let quote_prefixes: list[char]
     # The word tables.  A capitalized word outside every table is
     # still classified a type when `capitalized_types` says so — the
     # convention Luce, Swift, and Go share.
-    pub keywords: list[str]
-    pub types: list[str]
-    pub builtins: list[str]
-    pub capitalized_types: bool
+    pub let keywords: list[str]
+    pub let types: list[str]
+    pub let builtins: list[str]
+    pub let capitalized_types: bool

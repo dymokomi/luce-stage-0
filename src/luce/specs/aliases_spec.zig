@@ -95,7 +95,7 @@ test "forward aliases name structs enums unions and interfaces" {
         \\    func render(value: i64) -> i64
         \\
         \\struct Button: View:
-        \\    offset: i64
+        \\    let offset: i64
         \\    static func shifted(offset: i64) -> Button:
         \\        return Button(offset = offset)
         \\
@@ -138,7 +138,7 @@ test "aliases are transparent while file-scope constants fold" {
         \\alias Choice = Method
         \\
         \\struct Point:
-        \\    x: Count
+        \\    let x: Count
         \\
         \\enum Method:
         \\    first
@@ -163,12 +163,12 @@ test "an interface alias keeps heterogeneous list and map dispatch" {
         \\    func render(value: i64) -> i64
         \\
         \\struct AddOne: Element:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value + 1
         \\
         \\struct AddTwo: Element:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func render(value: i64) -> i64:
         \\        return value + 2
         \\
@@ -210,7 +210,7 @@ test "public aliases cross a module boundary without runtime identity" {
 test "a public alias may re-export an imported nominal type" {
     const models: agree.File = .{ .name = "models", .source =
         \\pub struct User:
-        \\    pub id: i64
+        \\    pub let id: i64
         \\
     };
     const facade: agree.File = .{ .name = "facade", .source =

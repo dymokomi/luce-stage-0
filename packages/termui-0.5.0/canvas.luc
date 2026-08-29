@@ -5,21 +5,21 @@ import std.strings
 from model import Rect, Style, Cursor
 
 pub struct Cell:
-    pub text: str = " "
-    pub style: Style = Style()
+    pub let text: str = " "
+    pub var style: Style = Style()
 
 pub struct Painted:
-    pub cells: i64 = 0
-    pub runs: i64 = 0
-    pub moves: i64 = 0
+    pub var cells: i64 = 0
+    pub var runs: i64 = 0
+    pub var moves: i64 = 0
 
 # A read-only rendered frame for tests and previews. The cell array is owned
 # by the snapshot; callers inspect it through `cell` and `line`.
 pub struct Snapshot:
-    cells: array[Cell, _, _]
-    pub rows: i64
-    pub columns: i64
-    pub cursor: Cursor?
+    var cells: array[Cell, _, _]
+    pub var rows: i64
+    pub var columns: i64
+    pub let cursor: Cursor?
 
     pub func cell(row: i64, column: i64) -> Cell:
         if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
@@ -40,9 +40,9 @@ pub struct Snapshot:
 # one — so a user component draws for tests and for the terminal with
 # the same calls.
 pub class Surface:
-    cells: array[Cell, _, _]
-    pub rows: i64
-    pub columns: i64
+    var cells: array[Cell, _, _]
+    pub var rows: i64
+    pub let columns: i64
 
     pub init(rows: i64, columns: i64):
         let high = max(rows, 1)
@@ -120,10 +120,10 @@ pub class Surface:
 # The sides continuing through one cell, and the merge that keeps
 # junctions honest when two borders cross.
 struct Strokes:
-    pub up: bool = false
-    pub right: bool = false
-    pub down: bool = false
-    pub left: bool = false
+    pub let up: bool = false
+    pub let right: bool = false
+    pub let down: bool = false
+    pub let left: bool = false
 
     pub func glyph() -> str:
         return term.junction(top = self.up, right = self.right, bottom = self.down, left = self.left)
@@ -165,9 +165,9 @@ func strokes_of(glyph: str) -> Strokes:
 # frame into terminal writes.  Only the runtime holds one; components
 # never see it, which is what keeps `draw` host-free.
 pub class Screen:
-    pub surface: Surface
-    front: array[Cell, _, _]
-    stale: bool
+    pub var surface: Surface
+    var front: array[Cell, _, _]
+    var stale: bool
 
     pub init(rows: i64, columns: i64):
         self.surface = Surface(rows, columns)

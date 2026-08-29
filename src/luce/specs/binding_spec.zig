@@ -46,7 +46,7 @@ const agree = @import("agree.zig");
 test "a method bound to its receiver lands where a function type is expected" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -66,8 +66,8 @@ test "a method bound to its receiver lands where a function type is expected" {
 test "the written type drops the receiver's parameter and keeps every other" {
     try agree.prints(
         \\struct Between:
-        \\    low: i64
-        \\    high: i64
+        \\    var low: i64
+        \\    let high: i64
         \\
         \\    func holds(n: i64, slack: i64) -> bool:
         \\        return n >= self.low - slack and n <= self.high + slack
@@ -94,7 +94,7 @@ test "the written type drops the receiver's parameter and keeps every other" {
 test "a bind lands on a let of function type and is called through the binding" {
     try agree.prints(
         \\struct Greeter:
-        \\    greeting: str
+        \\    let greeting: str
         \\
         \\    func to(name: str) -> str:
         \\        return self.greeting + ", " + name
@@ -111,7 +111,7 @@ test "a bind lands on a let of function type and is called through the binding" 
 test "a bound value is answered by a function and called by its caller" {
     try agree.prints(
         \\struct Offset:
-        \\    by: i64
+        \\    let by: i64
         \\
         \\    func shift(n: i64) -> i64:
         \\        return n + self.by
@@ -155,7 +155,7 @@ test "an enum receiver binds exactly as a struct receiver does" {
 test "the bound value carries its own receiver: writing the original misses it" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    var factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -173,7 +173,7 @@ test "the bound value carries its own receiver: writing the original misses it" 
 test "a receiver holding text is copied into the value and both are released" {
     try agree.prints(
         \\struct Label:
-        \\    text: str
+        \\    let text: str
         \\
         \\    func of(n: i64) -> str:
         \\        return self.text + str(n)
@@ -195,7 +195,7 @@ test "a receiver holding text is copied into the value and both are released" {
 test "a bound value copies freely into a parameter, a local and back out" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -225,7 +225,7 @@ test "a bound comparator sorts by state the comparator carries" {
         \\import std.lists
         \\
         \\struct Nearest:
-        \\    origin: i64
+        \\    let origin: i64
         \\
         \\    func before(a: i64, b: i64) -> bool:
         \\        return abs(a - self.origin) < abs(b - self.origin)
@@ -249,7 +249,7 @@ test "two binds of one method with different receivers sort differently" {
         \\import std.lists
         \\
         \\struct Nearest:
-        \\    origin: i64
+        \\    let origin: i64
         \\
         \\    func before(a: i64, b: i64) -> bool:
         \\        return abs(a - self.origin) < abs(b - self.origin)
@@ -276,7 +276,7 @@ test "two binds of one method with different receivers sort differently" {
 test "str of a bound value is the method's qualified name" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -296,7 +296,7 @@ test "str of a bound value is the method's qualified name" {
 test "a bind of a carrying receiver aliases the receiver's graph" {
     try agree.prints(
         \\struct Bag:
-        \\    items: list[i64]
+        \\    let items: list[i64]
         \\
         \\    func at(i: i64) -> i64:
         \\        return self.items[i]
@@ -314,8 +314,8 @@ test "a bind of a carrying receiver aliases the receiver's graph" {
 test "a carrying receiver needs no source verb, and the census is zero" {
     try agree.prints(
         \\struct Bag:
-        \\    label: str
-        \\    items: list[i64]
+        \\    let label: str
+        \\    let items: list[i64]
         \\
         \\    func total() -> i64:
         \\        var sum: i64 = 0
@@ -335,7 +335,7 @@ test "a carrying receiver needs no source verb, and the census is zero" {
 test "a carrying receiver outlives the scope that created it" {
     try agree.prints(
         \\struct Bag:
-        \\    items: list[i64]
+        \\    let items: list[i64]
         \\
         \\    func at(i: i64) -> i64:
         \\        return self.items[i]
@@ -362,12 +362,12 @@ test "a bound method takes a union task and callback graph through another struc
         \\    running(task: task[i64])
         \\
         \\struct Packet:
-        \\    job: Job
-        \\    values: list[i64]
-        \\    callback: (func(i64) -> i64)?
+        \\    let job: Job
+        \\    let values: list[i64]
+        \\    let callback: (func(i64) -> i64)?
         \\
         \\struct Scorer:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func score(packet: Packet, value: i64) -> i64:
         \\        var answer: i64 = 0
@@ -380,7 +380,7 @@ test "a bound method takes a union task and callback graph through another struc
         \\        return chosen((answer + value + len(packet.values)) * self.factor)
         \\
         \\struct Runner:
-        \\    operation: (func(Packet, i64) -> i64)?
+        \\    let operation: (func(Packet, i64) -> i64)?
         \\
         \\    func execute(packet: Packet, value: i64) -> i64:
         \\        let chosen = self.operation else fallback
@@ -418,10 +418,10 @@ test "a function field resolves give through a later resource-bearing struct" {
     // declaration-order-dependent partial layout.
     try agree.prints(
         \\struct Runner:
-        \\    operation: (func(Packet) -> i64)?
+        \\    let operation: (func(Packet) -> i64)?
         \\
         \\struct Packet:
-        \\    values: list[i64]
+        \\    let values: list[i64]
         \\
         \\func count(packet: Packet) -> i64:
         \\    return len(packet.values)
@@ -516,7 +516,7 @@ test "a carrying payload takes give through the constructor value, as its constr
 test "a plain function, a lambda and a bind fill one function-typed place" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -549,8 +549,8 @@ test "a plain function, a lambda and a bind fill one function-typed place" {
 test "a function value lives in a struct field and is called through narrowing" {
     try agree.prints(
         \\struct Button:
-        \\    label: str
-        \\    on_click: (func(i64) -> i64)?
+        \\    let label: str
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\func twice(n: i64) -> i64:
         \\    return n * 2
@@ -636,7 +636,7 @@ test "absence is the zero of a slot declared before it is filled" {
         \\    return n * 2
         \\
         \\struct Row:
-        \\    action: (func(i64) -> i64)?
+        \\    var action: (func(i64) -> i64)?
         \\
         \\func main():
         \\    var slot: (func(i64) -> i64)?
@@ -652,14 +652,14 @@ test "absence is the zero of a slot declared before it is filled" {
 test "a bound method is stored in a field and called out of it" {
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
         \\
         \\struct Step:
-        \\    name: str
-        \\    action: (func(i64) -> i64)?
+        \\    let name: str
+        \\    let action: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let three = Scale(factor = 3)
@@ -676,7 +676,7 @@ test "a stored function value is released with what holds it" {
     // zero when the list and the receiver's other owner both die.
     try agree.prints(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -702,7 +702,7 @@ test "a stored function value is released with what holds it" {
 test "a lambda stored in a slot is a function value like any other" {
     try agree.prints(
         \\struct Row:
-        \\    action: (func(i64) -> i64)?
+        \\    let action: (func(i64) -> i64)?
         \\
         \\func main():
         \\    let row = Row(action = (n) => n + 1)
@@ -735,10 +735,10 @@ test "a function value lands on a field two steps in, through a local and throug
         \\    return "plain " + str(index)
         \\
         \\struct Rows:
-        \\    render: (func(i64) -> str)? = none
+        \\    var render: (func(i64) -> str)? = none
         \\
         \\struct App:
-        \\    rows: Rows
+        \\    var rows: Rows
         \\
         \\    func wire():
         \\        self.rows.render = plain
@@ -769,13 +769,13 @@ test "a function value lands on the field of an element, in a list, an array and
     // read back out through the narrowing D7 asks for.
     try agree.prints(
         \\struct Names:
-        \\    items: list[str]
+        \\    let items: list[str]
         \\
         \\    func at(index: i64) -> str:
         \\        return self.items[index]
         \\
         \\struct Cell:
-        \\    render: (func(i64) -> str)? = none
+        \\    var render: (func(i64) -> str)? = none
         \\
         \\func plain(index: i64) -> str:
         \\    return "plain " + str(index)
@@ -826,11 +826,11 @@ test "a nested place takes a union constructor, a match arm, a guarded call and 
         \\    error("no")
         \\
         \\struct Rows:
-        \\    make: (func(str) -> Msg)? = none
-        \\    render: (func(i64) -> str)? = none
+        \\    var make: (func(str) -> Msg)? = none
+        \\    var render: (func(i64) -> str)? = none
         \\
         \\struct App:
-        \\    rows: Rows
+        \\    var rows: Rows
         \\
         \\func main():
         \\    var app = App(rows = Rows())
@@ -868,8 +868,8 @@ test "a union payload composes with a bound method and a stored callback" {
     // to treat one of those shapes as a special case.
     try agree.prints(
         \\struct Item:
-        \\    prefix: str
-        \\    scale: i64
+        \\    let prefix: str
+        \\    let scale: i64
         \\    func render(value: i64) -> str:
         \\        return self.prefix + str(value * self.scale)
         \\
@@ -878,8 +878,8 @@ test "a union payload composes with a bound method and a stored callback" {
         \\    batch(items: list[Item])
         \\
         \\struct Plan:
-        \\    work: Work
-        \\    finish: (func(i64) -> str)? = none
+        \\    let work: Work
+        \\    let finish: (func(i64) -> str)? = none
         \\
         \\func suffix(value: i64) -> str:
         \\    return "!" + str(value)
@@ -915,10 +915,10 @@ test "a nested place under try lands what the call answers" {
         \\    error("no")
         \\
         \\struct Rows:
-        \\    render: (func(i64) -> str)? = none
+        \\    var render: (func(i64) -> str)? = none
         \\
         \\struct App:
-        \\    rows: Rows
+        \\    var rows: Rows
         \\
         \\func main() -> !:
         \\    var app = App(rows = Rows())
@@ -947,7 +947,7 @@ test "a builtin method's parameter is a landing place, whatever the receiver nam
         \\import std.lists
         \\
         \\struct Row:
-        \\    weight: i64
+        \\    let weight: i64
         \\
         \\    func heavier(a: i64, b: i64) -> bool:
         \\        return a * self.weight > b * self.weight
@@ -995,12 +995,12 @@ test "the leaf of a nested place names the width its value is read at" {
     // same leaf.
     try agree.prints(
         \\struct Inner:
-        \\    small: u8 = 0
-        \\    wide: i64 = 0
-        \\    ratio: f64 = 0.0
+        \\    var small: u8 = 0
+        \\    var wide: i64 = 0
+        \\    var ratio: f64 = 0.0
         \\
         \\struct Outer:
-        \\    inner: Inner
+        \\    var inner: Inner
         \\
         \\func main():
         \\    var outer = Outer(inner = Inner())
@@ -1029,13 +1029,13 @@ test "the leaf of a nested place names the width its value is read at" {
 test "a struct of ordinary values still compares, field for field" {
     try agree.prints(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\struct Line:
-        \\    a: Point
-        \\    b: Point
-        \\    label: str
+        \\    let a: Point
+        \\    let b: Point
+        \\    let label: str
         \\
         \\func main():
         \\    let one = Line(a = Point(x = 1, y = 2), b = Point(x = 3, y = 4), label = "l")
@@ -1062,10 +1062,10 @@ test "a struct holding a container of function values compares by handle, and is
         \\    return n * 2
         \\
         \\struct Button:
-        \\    on_click: (func(i64) -> i64)?
+        \\    let on_click: (func(i64) -> i64)?
         \\
         \\struct Panel:
-        \\    buttons: list[Button]
+        \\    let buttons: list[Button]
         \\
         \\func main():
         \\    var buttons = list[Button]()
@@ -1084,8 +1084,8 @@ test "a struct holding a container of function values compares by handle, and is
 test "searching a container of values that do compare is untouched" {
     try agree.prints(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    var numbers = list[i64]()
@@ -1110,8 +1110,8 @@ test "values() of an ordinary map still answers the list of them" {
     // `values()` exactly as it always did.
     try agree.prints(
         \\struct Point:
-        \\    x: i64
-        \\    y: i64
+        \\    let x: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    var counts = map[str, i64]()

@@ -450,7 +450,7 @@ test "the extern type declaration's refusals" {
     // A handle shares the type namespace: one name, one declaration.
     try expectRejected(
         \\struct Window:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\extern type Window
         \\
@@ -662,10 +662,10 @@ test "an extern struct crosses by pointer with C's layout" {
     // value proves an ordinary Luce zero struct packs as C zeroes.
     try agree.prints(
         \\extern struct Rect:
-        \\    x: i32
-        \\    y: i32
-        \\    w: i32
-        \\    h: i32
+        \\    let x: i32
+        \\    let y: i32
+        \\    let w: i32
+        \\    let h: i32
         \\
         \\extern func luce_ffi_probe_rect_sum(rect: Rect) -> i64
         \\
@@ -689,10 +689,10 @@ test "an out extern struct reads back per field" {
     // destructuring receives.
     try agree.prints(
         \\extern struct Rect:
-        \\    x: i32
-        \\    y: i32
-        \\    w: i32
-        \\    h: i32
+        \\    let x: i32
+        \\    let y: i32
+        \\    let w: i32
+        \\    let h: i32
         \\
         \\extern func luce_ffi_probe_rect_union(a: Rect, b: Rect, out result: Rect) -> bool
         \\
@@ -723,14 +723,14 @@ test "nested extern structs keep their inner offsets, both directions" {
     // offsets in the out direction.
     try agree.prints(
         \\extern struct Inner:
-        \\    a: i8
-        \\    b: i32
+        \\    let a: i8
+        \\    let b: i32
         \\
         \\extern struct Outer:
-        \\    a: i8
-        \\    inner: Inner
-        \\    b: i8
-        \\    tail: Inner
+        \\    let a: i8
+        \\    let inner: Inner
+        \\    let b: i8
+        \\    let tail: Inner
         \\
         \\extern func luce_ffi_probe_outer_sum(outer: Outer) -> i64
         \\extern func luce_ffi_probe_outer_fill(seed: i32, out outer: Outer)
@@ -762,14 +762,14 @@ test "every C-layout field family packs at its own width" {
         \\extern type Blob
         \\
         \\extern struct Mixed:
-        \\    a: bool
-        \\    b: f64
-        \\    c: i8
-        \\    d: f32
-        \\    e: i16
-        \\    f: Blob
-        \\    g: u8
-        \\    h: i64
+        \\    let a: bool
+        \\    let b: f64
+        \\    let c: i8
+        \\    let d: f32
+        \\    let e: i16
+        \\    let f: Blob
+        \\    let g: u8
+        \\    let h: i64
         \\
         \\extern func luce_ffi_probe_mixed_sum(mixed: Mixed) -> f64
         \\extern func luce_ffi_probe_token() -> Blob
@@ -792,8 +792,8 @@ test "a handle field read out of an out struct carries no trap" {
         \\extern type Chunk
         \\
         \\extern struct Pair:
-        \\    first: Chunk
-        \\    second: Chunk
+        \\    var first: Chunk
+        \\    var second: Chunk
         \\
         \\extern func luce_ffi_probe_pair_fill(token: u64, out pair: Pair)
         \\
@@ -865,8 +865,8 @@ test "the extern struct declaration's refusals" {
     // shims (docs/FFI.md).
     try expectRejected(
         \\extern struct Rect:
-        \\    x: i32
-        \\    y: i32
+        \\    let x: i32
+        \\    let y: i32
         \\
         \\extern func bad() -> Rect
         \\
@@ -878,7 +878,7 @@ test "the extern struct declaration's refusals" {
     // str has no C byte form; a field cannot hold one.
     try expectRejected(
         \\extern struct Bad:
-        \\    words: str
+        \\    let words: str
         \\
         \\func main():
         \\    print("never")
@@ -888,10 +888,10 @@ test "the extern struct declaration's refusals" {
     // extern one.
     try expectRejected(
         \\struct Plain:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\extern struct Bad:
-        \\    inner: Plain
+        \\    let inner: Plain
         \\
         \\func main():
         \\    print("never")
@@ -901,7 +901,7 @@ test "the extern struct declaration's refusals" {
     // arrays carry runtime shape and have no C-layout form.
     try expectRejected(
         \\extern struct Bad:
-        \\    data: array[i32, _]
+        \\    let data: array[i32, _]
         \\
         \\func main():
         \\    print("never")
@@ -911,7 +911,7 @@ test "the extern struct declaration's refusals" {
     // refusal names the one-keyword fix.
     try expectRejected(
         \\struct Plain:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\extern func bad(p: Plain) -> i64
         \\
@@ -922,7 +922,7 @@ test "the extern struct declaration's refusals" {
     // An extern struct's optional has no C encoding.
     try expectRejected(
         \\extern struct Rect:
-        \\    x: i32
+        \\    let x: i32
         \\
         \\extern func bad(r: Rect?) -> i64
         \\
@@ -943,7 +943,7 @@ test "the extern struct declaration's refusals" {
     // C has no reference classes; the aggregate keyword is struct.
     try expectRejected(
         \\extern class Bad:
-        \\    n: i64
+        \\    let n: i64
         \\
         \\func main():
         \\    print("never")
@@ -1136,9 +1136,9 @@ test "an extern struct's cfunc field is a bare word: read, called, and zero trap
     // the null field arrives as a value; the call is where zero stops.
     try agree.prints(
         \\extern struct Ops:
-        \\    tag: i64
-        \\    op: cfunc(i64) -> i64
-        \\    missing: cfunc(i64) -> i64
+        \\    let tag: i64
+        \\    let op: cfunc(i64) -> i64
+        \\    let missing: cfunc(i64) -> i64
         \\
         \\extern func luce_ffi_probe_ops_fill(out ops: Ops)
         \\
@@ -1154,9 +1154,9 @@ test "an extern struct's cfunc field is a bare word: read, called, and zero trap
     );
     try agree.trap(
         \\extern struct Ops:
-        \\    tag: i64
-        \\    op: cfunc(i64) -> i64
-        \\    missing: cfunc(i64) -> i64
+        \\    let tag: i64
+        \\    let op: cfunc(i64) -> i64
+        \\    let missing: cfunc(i64) -> i64
         \\
         \\extern func luce_ffi_probe_ops_fill(out ops: Ops)
         \\
@@ -1221,7 +1221,7 @@ test "the cfunc conversion refuses what C cannot receive, with the reason" {
         \\extern func luce_ffi_probe_apply(callback: cfunc(i64) -> i64, value: i64) -> i64
         \\
         \\struct Counter:
-        \\    base: i64
+        \\    let base: i64
         \\
         \\    func shifted(v: i64) -> i64:
         \\        return self.base + v
@@ -1269,8 +1269,8 @@ test "the cfunc type's own vocabulary is the boundary's, and stays closed" {
     // site's business, not a callback trampoline's.
     try expectRejected(
         \\extern struct Rect:
-        \\    x: i32
-        \\    y: i32
+        \\    let x: i32
+        \\    let y: i32
         \\
         \\extern func bad(callback: cfunc(Rect) -> i64) -> i64
         \\
@@ -1418,7 +1418,7 @@ test "the borrowed list's refusals: inward only, and only word-shaped elements" 
     // it has none.
     try expectRejected(
         \\extern struct Bad:
-        \\    xs: list[i64]
+        \\    let xs: list[i64]
         \\
         \\func main():
         \\    print("never")

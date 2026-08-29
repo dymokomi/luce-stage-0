@@ -1487,8 +1487,8 @@ test "constant value decode depth is bounded" {
 test "a compiled program round-trips through the module format" {
     const source =
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    let y: f64
         \\
         \\func length(point: Point) -> f64:
         \\    return sqrt(point.x * point.x + point.y * point.y)
@@ -1539,7 +1539,7 @@ test "a compiled program round-trips through the module format" {
 test "an inout receiver and call round-trip through the current format" {
     var program = try compileScript(
         \\struct Counter:
-        \\    value: i64
+        \\    var value: i64
         \\
         \\    func add(amount: i64):
         \\        self.value = self.value + amount
@@ -1583,7 +1583,7 @@ test "an inout receiver and call round-trip through the current format" {
 test "weak locals, fields, and operations round-trip through the current format" {
     var program = try compileScript(
         \\struct Observer:
-        \\    weak target: list[i64]? = none
+        \\    weak var target: list[i64]? = none
         \\
         \\func main():
         \\    let source = [42]
@@ -1667,7 +1667,7 @@ test "a boxed storage bridge survives the module round trip without becoming an 
 test "a class heap descriptor and hidden deinitializer round-trip together" {
     var program = try compileScript(
         \\class Resource:
-        \\    value: i64
+        \\    var value: i64
         \\    deinit:
         \\        self.value += 1
         \\
@@ -1859,7 +1859,7 @@ test "decoded function types and conversions are verified before execution" {
 test "a decoded bound function value rejects a forged receiver" {
     var program = try compileScript(
         \\struct Scale:
-        \\    factor: i64
+        \\    let factor: i64
         \\
         \\    func times(n: i64) -> i64:
         \\        return n * self.factor
@@ -1922,7 +1922,7 @@ test "a decoded bound function value rejects a forged receiver" {
 test "an optional type round-trips with its payload, and T?? is rejected" {
     var program = try compileScript(
         \\struct Slot:
-        \\    held: str?
+        \\    var held: str?
         \\
         \\func widen(n: i64) -> i64?:
         \\    return n
@@ -2107,8 +2107,8 @@ test "a damaged register reference fails verification, not execution" {
 // the corpus keeps it by being acyclic (see `forwardOnly`).
 const mutation_source =
     \\struct Point:
-    \\    x: f64
-    \\    tag: str
+    \\    let x: f64
+    \\    let tag: str
     \\
     \\const seeds: list[i64] = [3, 1, 2]
     \\
@@ -2529,8 +2529,8 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\    deflated = 8
         \\
         \\struct Entry:
-        \\    method: Method
-        \\    fallback: Method?
+        \\    let method: Method
+        \\    var fallback: Method?
         \\
         \\const MODES = [Method.stored, Method.deflated]
         \\const BINDINGS = {Method.stored: Method.deflated}
@@ -2735,7 +2735,7 @@ test "interface witness slots keep contract order across serialization" {
         \\    func right() -> i64
         \\
         \\struct Reversed: Pair:
-        \\    marker: i64
+        \\    let marker: i64
         \\    func right() -> i64:
         \\        return self.marker + 2
         \\    func left() -> i64:

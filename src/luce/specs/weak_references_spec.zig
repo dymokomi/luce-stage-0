@@ -48,11 +48,11 @@ test "an upgraded weak snapshot keeps its target alive until that snapshot dies"
 test "weak fields initialize, assign through a nested value place, and zero" {
     try agree.ok(
         \\struct Observer:
-        \\    weak target: list[i64]?
+        \\    weak var target: list[i64]?
         \\
         \\struct Pair:
-        \\    observer: Observer
-        \\    marker: i64
+        \\    var observer: Observer
+        \\    var marker: i64
         \\
         \\func main():
         \\    var pair = Pair(observer = Observer(), marker = 7)
@@ -70,7 +70,7 @@ test "weak fields initialize, assign through a nested value place, and zero" {
 test "a weak field breaks a recursive struct and container cycle" {
     try agree.ok(
         \\struct Link:
-        \\    weak root: list[Link]?
+        \\    weak var root: list[Link]?
         \\
         \\func main():
         \\    let root: list[Link] = [Link()]
@@ -108,7 +108,7 @@ test "every ARC object family can be observed weakly" {
 test "zero templates and semantic copies preserve weak storage" {
     try agree.ok(
         \\struct Observer:
-        \\    weak target: list[i64]?
+        \\    weak var target: list[i64]?
         \\
         \\func main():
         \\    var zeroed: Observer
@@ -156,7 +156,7 @@ test "an alias may name the optional type of weak storage" {
 test "a reference stored only weakly dies at the statement boundary" {
     try agree.ok(
         \\struct Observer:
-        \\    weak target: list[i64]?
+        \\    weak var target: list[i64]?
         \\
         \\func main():
         \\    weak var local: list[i64]? = [41]

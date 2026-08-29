@@ -23,7 +23,7 @@ value by landing (`docs/FUNCTIONS.md`).
 
 ```luce
 struct Scale:
-    factor: i64
+    let factor: i64
 
     func times(n: i64) -> i64:
         return n * self.factor
@@ -81,8 +81,8 @@ value has no zero and absence is the zero `T?` already means:
 
 ```luce
 struct Button:
-    label: str
-    on_click: (func(i64) -> i64)?
+    let label: str
+    let on_click: (func(i64) -> i64)?
 
 func twice(n: i64) -> i64:
     return n * 2
@@ -121,7 +121,7 @@ function field:
 
 ```luce
 class Action:
-    apply: func(i64) -> i64
+    let apply: func(i64) -> i64
 
     init(apply: func(i64) -> i64):
         self.apply = apply

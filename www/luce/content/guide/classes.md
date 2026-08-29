@@ -19,7 +19,7 @@ fields and may omit defaulted fields:
 
 ```luce run
 class Counter:
-    value: i64 = 0
+    var value: i64 = 0
 
     func add(amount: i64) -> i64:
         self.value += amount
@@ -51,7 +51,7 @@ storage retain the same object rather than copying its fields:
 
 ```luce run
 class Counter:
-    value: i64
+    var value: i64
 
 func change(counter: Counter):
     counter.value = 42
@@ -83,7 +83,7 @@ refer to a different object:
 
 ```luce run
 class Box:
-    value: i64
+    var value: i64
 
 func main():
     let stable = Box(value = 1)
@@ -102,13 +102,21 @@ This distinction keeps binding intent useful. `let` still promises that the
 name’s identity does not change, even when the object intentionally has
 mutable state.
 
+The same two words appear on the fields themselves, where they mean the same
+thing one level in: a `let` field is set once, in `init` or at construction,
+and a `var` field may be reassigned afterward. Both words are required — a
+field with neither is refused rather than read as `var` — so `class Box: var
+value: i64` above is saying that `value` is meant to move. A `let` field of a
+class is still reached through any binding that shares the object; what it
+fixes is that field, not the object around it.
+
 ## Comparing identity
 
 `is` asks whether two values name the same object:
 
 ```luce run
 class Token:
-    value: i64
+    let value: i64
 
 func main():
     let first = Token(value = 7)
@@ -149,11 +157,11 @@ the value portion until it reaches the surrounding class identity:
 
 ```luce run
 struct Point:
-    x: i64
-    y: i64
+    var x: i64
+    let y: i64
 
 class Scene:
-    origin: Point
+    var origin: Point
 
 func main():
     let scene = Scene(origin = Point(x = 1, y = 2))
@@ -176,8 +184,8 @@ placed in lists, maps, and arrays. Every place retains the same identity:
 
 ```luce run
 class Item:
-    name: str
-    count: i64
+    var name: str
+    var count: i64
 
 func find(items: list[Item], name: str) -> Item?:
     for item in items:
@@ -207,8 +215,8 @@ own children strongly while each child observes its parent weakly:
 
 ```luce run
 class Node:
-    value: i64
-    weak parent: Node?
+    let value: i64
+    weak let parent: Node?
 
 func main():
     weak var observed: Node?
@@ -245,7 +253,7 @@ interface Adjustable:
     func adjust(amount: i64) -> i64
 
 class Counter: Adjustable:
-    value: i64
+    var value: i64
 
     func adjust(amount: i64) -> i64:
         self.value += amount

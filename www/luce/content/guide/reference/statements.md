@@ -409,7 +409,7 @@ because a value lives in the name.
 
 ```luce run
 struct Cell:
-    value: i64
+    var value: i64
 
 func bump(cells: list[Cell]):
     cells[0].value += 1

@@ -152,7 +152,7 @@ test "semantic diagnostics carry the right code and location" {
     // An unknown field, pointed at the access.
     try expectDiagnostics(
         \\struct Point:
-        \\    x: f64
+        \\    let x: f64
         \\
         \\func main():
         \\    var p = Point(x = 1.0)
@@ -180,7 +180,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 6 }});
     try expectDiagnostics(
         \\struct print:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    return
@@ -217,10 +217,10 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 6 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\struct Point:
-        \\    y: i64
+        \\    let y: i64
         \\
         \\func main():
         \\    return
@@ -228,13 +228,13 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 8 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: i64
-        \\    x: i64
+        \\    let x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    return
         \\
-    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 3, .column = 5 }});
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 3, .column = 9 }});
     try expectDiagnostics(
         \\func f(a: i64, a: i64) -> i64:
         \\    return a
@@ -300,8 +300,8 @@ test "the pipeline survives every allocation failure" {
     // enforces error.NondeterministicMemoryUsage.
     const representative =
         \\struct Point:
-        \\    x: f64
-        \\    tag: str
+        \\    let x: f64
+        \\    let tag: str
         \\
         \\func total(values: list[i64]) -> i64:
         \\    var sum = 0
@@ -394,7 +394,7 @@ test "struct namespaces collect functions and reject invalid members" {
         \\        return value * 2
         \\
         \\struct Pair:
-        \\    left: i64
+        \\    let left: i64
         \\    static func sum(left: i64, right: i64) -> i64:
         \\        return left + right
         \\
@@ -407,7 +407,7 @@ test "struct namespaces collect functions and reject invalid members" {
 
     try expectRejected(
         \\struct Bad:
-        \\    value: i64
+        \\    let value: i64
         \\    static func value() -> i64:
         \\        return 1
         \\
@@ -438,8 +438,8 @@ test "struct namespaces collect functions and reject invalid members" {
 test "the plan's scale example compiles and verifies" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    var y: f64
         \\
         \\func scale_point(point: Point, factor: f64) -> Point:
         \\    return Point(
@@ -764,8 +764,8 @@ test "return paths are checked on every branch" {
 test "struct construction is complete, named, and typed" {
     const source_prefix =
         \\struct Color:
-        \\    red: f64
-        \\    green: f64
+        \\    let red: f64
+        \\    let green: f64
         \\
     ;
     try expectRejected(source_prefix ++
@@ -787,7 +787,7 @@ test "struct construction is complete, named, and typed" {
     , "luce.sema.type");
     try expectRejected(
         \\struct Loop:
-        \\    inner: Loop
+        \\    let inner: Loop
         \\
         \\func main():
         \\    let never = 1
@@ -839,8 +839,8 @@ test "break and continue require a loop" {
 test "var struct fields update through functional struct_set" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: f64
-        \\    y: f64
+        \\    var x: f64
+        \\    let y: f64
         \\
         \\func main():
         \\    var point = Point(x = 0.0, y = 0.0)
@@ -1080,8 +1080,8 @@ const geo_module: TestModule = .{ .name = "geo", .source =
     \\import util
     \\
     \\struct Point:
-    \\    x: f64
-    \\    y: f64
+    \\    let x: f64
+    \\    let y: f64
     \\
     \\struct Text:
     \\    static func twice(value: i64) -> i64:
@@ -1185,22 +1185,22 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\pub const answer = seed + 1
     \\
     \\struct Inner:
-    \\    n: i64
+    \\    let n: i64
     \\
     \\    static func make() -> Inner:
     \\        return Inner(n = 1)
     \\
     \\pub struct Handle:
-    \\    slot: i64
-    \\    pub label: i64
+    \\    var slot: i64
+    \\    pub let label: i64
     \\
     \\pub func fresh() -> Handle:
     \\    return Handle(slot = 1, label = 2)
     \\
     \\pub struct Session:
-    \\    pub name: str
-    \\    id: i64
-    \\    token: i64 = 0
+    \\    pub let name: str
+    \\    let id: i64
+    \\    let token: i64 = 0
     \\
     \\    pub func title() -> str:
     \\        return self.name
@@ -1215,7 +1215,7 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\    return Session(name = name, id = 7)
     \\
     \\pub struct Box:
-    \\    pub held: Handle
+    \\    pub var held: Handle
     \\
     \\enum Hidden:
     \\    first
@@ -1668,7 +1668,7 @@ test "an unmarked field is private, and the factory beside it crosses" {
     // (VISIBILITY.md: private is the floor, `pub` lifts one name).
     const rng: TestModule = .{ .name = "rng", .source =
         \\pub struct Rng:
-        \\    state: i64
+        \\    var state: i64
         \\
         \\    pub func next() -> i64:
         \\        self.state = self.state * 48271 % 2147483647
@@ -1764,7 +1764,7 @@ test "luce.sema.duplicate: an import cannot take a struct's name" {
         \\import util
         \\
         \\struct util:
-        \\    x: i64
+        \\    let x: i64
         \\
         \\func main():
         \\    return
@@ -2388,7 +2388,7 @@ test "member imports are checked at the import line" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{.{
         .name = "geo",
-        .source = "pub struct Point:\n    pub x: i64\n\nfunc hidden() -> i64:\n    return 1\n\npub func span(p: Point) -> i64:\n    return p.x\n",
+        .source = "pub struct Point:\n    pub let x: i64\n\nfunc hidden() -> i64:\n    return 1\n\npub func span(p: Point) -> i64:\n    return p.x\n",
     }} };
 
     // A member that does not exist is refused where it was asked for.
@@ -2422,7 +2422,7 @@ test "member imports are checked at the import line" {
         \\from geo import Point
         \\
         \\struct Point:
-        \\    z: i64
+        \\    let z: i64
         \\
         \\func main():
         \\    return
@@ -2682,7 +2682,7 @@ test "constants are compile-time: calls and nested objects are refused" {
     , "luce.sema.const");
     try failsWith(
         \\struct Bag:
-        \\    items: list[i64]
+        \\    let items: list[i64]
         \\
         \\const bad = Bag(items = [1])
         \\
@@ -2853,7 +2853,7 @@ test "a plain store through a nested place reads nothing either" {
     // that is a compound store.
     var program = try expectCompilesOptions(
         \\struct Tally:
-        \\    counts: map[str, i64]
+        \\    var counts: map[str, i64]
         \\
         \\func main():
         \\    var t = Tally(counts = map[str, i64]())

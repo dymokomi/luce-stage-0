@@ -14,11 +14,11 @@ import std.strings
 # One diagnostic the way the panes want it: 0-based positions against
 # the buffer the server was shown, and the sentence to show.
 pub struct Diagnostic:
-    pub line: i64 = 0
-    pub column: i64 = 0
-    pub end_line: i64 = 0
-    pub end_column: i64 = 0
-    pub message: str = ""
+    pub var line: i64 = 0
+    pub var column: i64 = 0
+    pub var end_line: i64 = 0
+    pub var end_column: i64 = 0
+    pub var message: str = ""
 
 # --- pure: frames out of accumulated bytes ---------------------------
 
@@ -128,15 +128,15 @@ func number(row: json.Json, name: str) -> i64:
 # --- the held server -------------------------------------------------
 
 pub class Client:
-    server: os.Process?
-    pending: list[u8]
-    next_id: i64
-    broken: bool
+    var server: os.Process?
+    let pending: list[u8]
+    var next_id: i64
+    var broken: bool
 
-    pub command: str
-    pub uri: str
-    pub diagnostics: list[Diagnostic]
-    pub fresh: bool
+    pub let command: str
+    pub var uri: str
+    pub var diagnostics: list[Diagnostic]
+    pub var fresh: bool
 
     # `command` is data — any LSP server plugs in; `luce-lsp` is the
     # one the toolchain installs for Luce.

@@ -8,9 +8,9 @@ import std.strings
 # A Reader serving scripted bytes in fixed-size chunks, so the tests
 # drive exactly the arrival patterns a pipe produces.
 pub class Chunked: io.Reader:
-    held: list[u8]
-    at: i64
-    chunk: i64
+    let held: list[u8]
+    var at: i64
+    let chunk: i64
 
     pub init(wire: list[u8], chunk: i64):
         self.held = wire

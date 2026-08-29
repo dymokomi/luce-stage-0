@@ -658,8 +658,8 @@ test "a call site that raised after it returned gives nothing back twice" {
     // back — and releasing that frees nothing.
     try hosted.ok(
         \\struct Turn:
-        \\    at: i64 = 0
-        \\    note: str = "start"
+        \\    var at: i64 = 0
+        \\    var note: str = "start"
         \\
         \\    func act(order: str) -> !:
         \\        if order == "no":

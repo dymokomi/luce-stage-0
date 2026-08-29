@@ -136,8 +136,8 @@ test "character escapes cover quotes slashes and scalar zero" {
 test "characters retain their type in optionals lists arrays and structs" {
     try agree.prints(
         \\struct Mark:
-        \\    value: char
-        \\    fallback: char?
+        \\    let value: char
+        \\    let fallback: char?
         \\
         \\func main():
         \\    let mark = Mark(value = 'λ', fallback = none)
@@ -226,8 +226,8 @@ test "bytes concatenate compare slice and reject invalid UTF-8 as text" {
 test "bytes iterate as u8 and preserve empty inline and outside storage" {
     try agree.prints(
         \\struct Packet:
-        \\    body: bytes
-        \\    mark: char
+        \\    let body: bytes
+        \\    let mark: char
         \\
         \\func packet(body: bytes) -> Packet:
         \\    return Packet(body = body, mark = '✓')

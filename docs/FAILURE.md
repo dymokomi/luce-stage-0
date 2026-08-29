@@ -46,7 +46,7 @@ an ordinary value that a `T?` place can hold.
 
 ```luce
 struct User:
-    name: str
+    let name: str
 
 func find() -> User?:
     return none
