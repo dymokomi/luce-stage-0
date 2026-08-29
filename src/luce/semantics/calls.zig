@@ -1059,7 +1059,12 @@ fn lowerUserCall(
     }
     // A spawn always answers something — the task — so the
     // "returns nothing" sentence is not about it.
-    if (info.return_type == .none and !as_statement and spawning == null) {
+    // A `-> never` callee never comes back, so it stands where a value
+    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
+    // value to be missing on a path that does not exist.  Saying it
+    // "returns nothing" would be answering a question about its result to
+    // a reader who declared that it has none.
+    if (info.return_type == .none and !as_statement and spawning == null and !info.diverges) {
         try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
         return null;
     }
@@ -1836,6 +1841,11 @@ fn lowerInterfaceCall(
             .copied = run.copied[index + 1],
         };
     }
+    // An interface contract cannot declare `-> never`: a requirement
+    // says what an implementer answers, and "does not return" is a
+    // promise about control rather than an answer.  So there is no
+    // divergence to exempt here, and a slot answering nothing in value
+    // position is the ordinary mistake.
     if (info.return_type == .none and !as_statement) {
         try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
         return null;
@@ -2020,7 +2030,12 @@ fn lowerReceiverCall(
         };
         next_entry += 1;
     }
-    if (info.results.len == 0 and !as_statement) {
+    // A `-> never` callee never comes back, so it stands where a value
+    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
+    // value to be missing on a path that does not exist.  Saying it
+    // "returns nothing" would be answering a question about its result to
+    // a reader who declared that it has none.
+    if (info.results.len == 0 and !as_statement and !info.diverges) {
         try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
         return null;
     }
@@ -2684,7 +2699,12 @@ fn callUser(
             .slot = @intCast(slot),
         };
     }
-    if (info.return_type == .none and !as_statement) {
+    // A `-> never` callee never comes back, so it stands where a value
+    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
+    // value to be missing on a path that does not exist.  Saying it
+    // "returns nothing" would be answering a question about its result to
+    // a reader who declared that it has none.
+    if (info.return_type == .none and !as_statement and !info.diverges) {
         try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
         return null;
     }

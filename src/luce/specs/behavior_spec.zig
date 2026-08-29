@@ -6580,3 +6580,92 @@ test "optional elements: an array zero-fills to absence and takes values" {
         \\
     );
 }
+
+test "never: a diverging method stands in an else fallback" {
+    // A diagnostic helper on a compiler is naturally a method — it needs
+    // the receiver to reach the source map and the sink — so the
+    // assert-unwrap has to accept one, exactly as it accepts a bare
+    // diverging function (docs/FAILURE.md).
+    try agree.prints(
+        \\class Sink:
+        \\    var tag: str
+        \\    init(tag: str):
+        \\        self.tag = tag
+        \\    func bail(message: str) -> never:
+        \\        trap(self.tag + ": " + message)
+        \\
+        \\func look(table: map[str, i64], sink: Sink) -> i64:
+        \\    return table.get("k") else sink.bail("missing")
+        \\
+        \\func main():
+        \\    var table = {"k": 7}
+        \\    print(str(look(table, Sink("s"))))
+        \\
+    ,
+        \\7
+        \\
+    );
+}
+
+test "never: a diverging method in an else fallback traps when the path is taken" {
+    try agreeTrap(
+        \\class Sink:
+        \\    var tag: str
+        \\    init(tag: str):
+        \\        self.tag = tag
+        \\    func bail(message: str) -> never:
+        \\        trap(self.tag + ": " + message)
+        \\
+        \\func look(table: map[str, i64], sink: Sink) -> i64:
+        \\    return table.get("absent") else sink.bail("missing")
+        \\
+        \\func main():
+        \\    var table = {"k": 7}
+        \\    print(str(look(table, Sink("s"))))
+        \\
+    , .explicit_trap);
+}
+
+test "never: a try of a diverging fallible call stands in an else fallback" {
+    try agree.prints(
+        \\func bail(message: str) -> never!:
+        \\    error(message)
+        \\
+        \\func look(table: map[str, i64]) -> i64!:
+        \\    return table.get("k") else try bail("missing")
+        \\
+        \\func main() -> !:
+        \\    var table = {"k": 9}
+        \\    print(str(try look(table)))
+        \\
+    ,
+        \\9
+        \\
+    );
+}
+
+test "never: a diverging method stands in a catch fallback" {
+    try agree.prints(
+        \\class Sink:
+        \\    var tag: str
+        \\    init(tag: str):
+        \\        self.tag = tag
+        \\    func bail(message: str) -> never:
+        \\        trap(self.tag + ": " + message)
+        \\
+        \\func risky(ok: bool) -> i64!:
+        \\    if ok:
+        \\        return 5
+        \\    error("no")
+        \\
+        \\func guarded(ok: bool, sink: Sink) -> i64:
+        \\    return risky(ok) catch sink.bail("caught")
+        \\
+        \\func main():
+        \\    print(str(guarded(true, Sink("s"))))
+        \\
+    ,
+        \\5
+        \\
+    );
+}

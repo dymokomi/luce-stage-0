@@ -1628,14 +1628,41 @@ fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
 /// (the fallback is not lowered yet, so the recorded set is not read
 /// here).  A `self.method()` fallback that diverges is not recognized;
 /// it is refused as a value, which the reader fixes by binding it first.
-pub fn isLeavingCall(self: *const FunctionBuilder, expression: *const ast.Expression) bool {
-    if (expression.* != .call) return false;
-    const callee = expression.call.callee;
-    if (std.mem.eql(u8, callee, "trap") or
-        std.mem.eql(u8, callee, "error") or
-        std.mem.eql(u8, callee, "exit")) return true;
-    const index = self.analyzer.function_names.get(callee) orelse return false;
-    return self.analyzer.functions.items[index].diverges;
+pub fn isLeavingCall(self: *FunctionBuilder, expression: *const ast.Expression) bool {
+    return switch (expression.*) {
+        // `try f(…)` leaves when `f` does: a `-> never!` callee either
+        // raises — which leaves through the try — or does not come back
+        // at all.  Either way nothing arrives here to store.
+        .try_call => |attempt| isLeavingCall(self, attempt.operand),
+        .call => |call| {
+            if (std.mem.eql(u8, call.callee, "trap") or
+                std.mem.eql(u8, call.callee, "error") or
+                std.mem.eql(u8, call.callee, "exit")) return true;
+            const index = self.analyzer.function_names.get(call.callee) orelse return false;
+            return self.analyzer.functions.items[index].diverges;
+        },
+        // `x.bail(…)` — a diverging *method*.  A diagnostic helper on a
+        // compiler is naturally one: it needs the receiver to reach the
+        // source map and the sink, so refusing it here is refusing the
+        // shape the feature exists for.  Resolved without lowering
+        // anything, because the fallback has not been lowered yet: the
+        // receiver's type comes from the local it names, and
+        // `calls.structMethod` is the same non-emitting lookup the call
+        // uses.  A receiver that is not a plain name is left alone —
+        // answering "no" only costs the reader a binding.
+        .method => |method| {
+            const receiver = switch (method.target.*) {
+                .name => |name| name.text,
+                else => return false,
+            };
+            const found = self.findLocal(receiver) orelse return false;
+            const receiver_type = recorder.localType(self, found.info.local);
+            const index = (calls.structMethod(self, receiver_type, method.name) catch return false) orelse
+                return false;
+            return self.analyzer.functions.items[index].diverges;
+        },
+        else => false,
+    };
 }
 
 /// `a else b` — `a` when it is there, `b` when it is not.  The
