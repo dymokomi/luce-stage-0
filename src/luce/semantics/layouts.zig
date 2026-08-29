@@ -613,6 +613,8 @@ pub fn collectStructs(self: *Analyzer) Error!void {
         defer field_defaults.deinit(self.arena);
         var field_visibility: std.ArrayList(ast.Visibility) = .empty;
         defer field_visibility.deinit(self.arena);
+        var field_mutability: std.ArrayList(ast.FieldMutability) = .empty;
+        defer field_mutability.deinit(self.arena);
         // The first field that declared a default, for D3's
         // sentence when a required one follows it — the same
         // trailing rule a parameter list keeps (docs/ARGS.md D8).
@@ -738,6 +740,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             });
             try field_defaults.append(self.arena, .{ .expression = field.default });
             try field_visibility.append(self.arena, field.visibility);
+            try field_mutability.append(self.arena, field.mutability);
         }
         for (declaration.functions) |function| {
             for (declaration.fields) |field| {
@@ -776,6 +779,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
         self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);
         self.struct_decls.items[index].field_defaults = try field_defaults.toOwnedSlice(self.arena);
         self.struct_decls.items[index].field_visibility = try field_visibility.toOwnedSlice(self.arena);
+        self.struct_decls.items[index].field_mutability = try field_mutability.toOwnedSlice(self.arena);
     }
 
     self.diagnostics.scope = source_mod.root_file;

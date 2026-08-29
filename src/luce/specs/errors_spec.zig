@@ -9376,3 +9376,60 @@ test "never: a declaration may not take the reserved word never" {
         \\
     , "luce.sema.reserved");
 }
+
+test "fields: reassigning a let field from outside is refused" {
+    try expectSaying(
+        \\class Box:
+        \\    let id: i64
+        \\    init(id: i64):
+        \\        self.id = id
+        \\
+        \\func main():
+        \\    let b = Box(7)
+        \\    b.id = 9
+        \\
+    , "luce.sema.let", "let field");
+}
+
+test "fields: reassigning a let field inside a method is refused" {
+    try expectSaying(
+        \\class Box:
+        \\    let id: i64
+        \\    init(id: i64):
+        \\        self.id = id
+        \\    func retag(next: i64):
+        \\        self.id = next
+        \\
+        \\func main():
+        \\    Box(1).retag(2)
+        \\
+    , "luce.sema.let", "let field");
+}
+
+test "fields: reassigning a let field of a value struct is refused" {
+    try expectSaying(
+        \\struct Point:
+        \\    let x: i64
+        \\    var y: i64
+        \\
+        \\func main():
+        \\    var p = Point(x = 1, y = 2)
+        \\    p.x = 5
+        \\
+    , "luce.sema.let", "let field");
+}
+
+test "fields: a var field is freely reassigned" {
+    try expectCompiles(
+        \\class Box:
+        \\    var id: i64
+        \\    init(id: i64):
+        \\        self.id = id
+        \\
+        \\func main():
+        \\    let b = Box(7)
+        \\    b.id = 9
+        \\    print(str(b.id))
+        \\
+    );
+}

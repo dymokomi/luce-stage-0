@@ -29,6 +29,11 @@ release is a complete toolchain rather than a compatibility promise.
   would be stored, and it replaces the compiler's built-in list of names
   that happen not to return with a fact a program can declare.
 
+- **A struct or class field is written `let` or `var`.** A `let` field is
+  set once — at construction or in `init` — and cannot be reassigned; a
+  `var` field may be. A bare `x: T` field is accepted for this one release
+  and read as `var`, so the tree migrates in steps.
+
 ## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a

@@ -461,6 +461,13 @@ pub const StructDeclInfo = struct {
     /// precedent: what lowering needs lives in the layout, what
     /// checking needs lives here.
     field_visibility: []ast.Visibility = &.{},
+    /// One entry per collected field, beside `field_visibility`: whether
+    /// the field may be reassigned after it is first set
+    /// (docs/VISIBILITY.md §10.1).  An immutable field is written only at
+    /// construction or in `init`; the assignment checker reads this to
+    /// refuse a later store.  Lowering is untouched, exactly as
+    /// visibility is: immutability is a checking fact.
+    field_mutability: []ast.FieldMutability = &.{},
     /// Hidden factory function installed for `init(...)`, or null while the
     /// class keeps its public memberwise constructor.
     initializer: ?u32 = null,

@@ -531,6 +531,13 @@ pub const AliasDecl = struct {
     span: Span,
 };
 
+/// Whether a stored field may be reassigned after it is first set
+/// (docs/VISIBILITY.md §10.1).  `let` is immutable — set once, at
+/// construction or in `init`, and never assigned again; `var` is
+/// mutable.  `unspecified` is the bare `x: T` spelling, accepted for one
+/// release while the tree migrates and treated as `var` until then.
+pub const FieldMutability = enum { unspecified, immutable, mutable };
+
 pub const Field = struct {
     name: []const u8,
     name_span: Span,
@@ -542,6 +549,9 @@ pub const Field = struct {
     /// Zeroing non-owning storage. The modifier belongs to the place, not
     /// to `type_name`, and therefore never appears in a `TypeName`.
     weak: bool = false,
+    /// Written `let`/`var` in front of the field (docs/VISIBILITY.md
+    /// §10.1); `unspecified` is the transitional bare spelling.
+    mutability: FieldMutability = .unspecified,
     visibility: Visibility = .private,
     span: Span,
 };

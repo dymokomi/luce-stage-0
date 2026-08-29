@@ -65,6 +65,17 @@ pub fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
     }
 }
 
+/// Whether this field was declared `let` (docs/VISIBILITY.md §10.1).
+/// Mutability lives beside the layout, in the checking-side struct
+/// declaration, exactly as visibility does; a bare or `var` field is
+/// writable.  Out-of-range indexes read as writable so a field the
+/// collector dropped never becomes a second, confusing refusal.
+fn immutableField(self: *FunctionBuilder, layout_index: u32, field_index: u32) bool {
+    const mutability = self.analyzer.struct_decls.items[layout_index].field_mutability;
+    if (field_index >= mutability.len) return false;
+    return mutability[field_index] == .immutable;
+}
+
 fn chainRootIsSelf(expression: *const ast.Expression) bool {
     return switch (expression.*) {
         .name => |name| std.mem.eql(u8, name.text, "self"),
@@ -258,6 +269,22 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                     return;
                 };
                 if (!try refusals.fieldReachable(self, layout_index, field_index, field.span)) return;
+                // A let field cannot be reassigned.  It is reassigned when
+                // it is the leaf of the write, and also when a value-struct
+                // chain rebuilds it on the way to the root — `writes_root`
+                // is exactly that rebuild.  An `init` never reaches here:
+                // `self.field =` is rewritten to its hidden local first.
+                if (immutableField(self, layout_index, field_index) and
+                    (step_index + 1 == steps.items.len or writes_root))
+                {
+                    try self.fail(
+                        "luce.sema.let",
+                        field.span,
+                        "{s} is a let field; it is set once and cannot be reassigned — declare it var to allow assignment",
+                        .{field.name},
+                    );
+                    return;
+                }
                 const declared = layout.fields[field_index];
                 if (declared.weak and step_index + 1 != steps.items.len) {
                     try self.fail(
@@ -659,6 +686,15 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         return;
     };
     if (!try refusals.fieldReachable(self, layout_index, field_index, target.span)) return;
+    if (immutableField(self, layout_index, field_index)) {
+        try self.fail(
+            "luce.sema.let",
+            target.span,
+            "{s} is a let field; it is set once and cannot be reassigned — declare it var to allow assignment",
+            .{target.field},
+        );
+        return;
+    }
     const expected = layout.fields[field_index].field_type;
     if (layout.fields[field_index].weak and assign.compound != null) {
         try self.fail(

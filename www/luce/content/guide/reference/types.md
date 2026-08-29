@@ -265,11 +265,16 @@ reference fields still name the same objects.
 
 ```text
 struct Point:
-    x: f64
-    y: f64 = 0.0
+    let x: f64
+    var y: f64 = 0.0
 
 let point = Point(x = 2.5)
 ```
+
+A field is written `let` or `var`. A `let` field is set once — at
+construction, or in a class `init` — and cannot be reassigned afterward; a
+`var` field may be reassigned through a mutable path. A bare `x: T` field is
+the transitional spelling, accepted for one release and read as `var`.
 
 A `func` declared inside a struct is a method with implied `self`; source does
 not declare a receiver parameter. A `static func` has no receiver and is
@@ -287,7 +292,7 @@ fields, optionals, and container elements retain and share one object. A stable
 
 ```luce run
 class Counter:
-    value: i64
+    var value: i64
 
     func add(amount: i64) -> i64:
         self.value += amount

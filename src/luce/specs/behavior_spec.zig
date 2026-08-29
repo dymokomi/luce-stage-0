@@ -6436,3 +6436,56 @@ test "never: a user diverging call is the assert-unwrap in an else" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// let / var fields (docs/VISIBILITY.md §10.1)
+// ---------------------------------------------------------------------------
+//
+// A field written `let` is set once — at construction, or in `init` — and
+// never reassigned; a `var` field may be reassigned through a mutable path.
+// A bare field keeps the transitional mutable behavior for one release.
+
+test "fields: a var field is reassigned, a let field is read, on both engines" {
+    try agree.prints(
+        \\class Account:
+        \\    let id: i64
+        \\    var balance: i64
+        \\    init(id: i64):
+        \\        self.id = id
+        \\        self.balance = 0
+        \\    func deposit(amount: i64):
+        \\        self.balance = self.balance + amount
+        \\
+        \\func main():
+        \\    let a = Account(42)
+        \\    a.deposit(10)
+        \\    a.deposit(5)
+        \\    print(str(a.id))
+        \\    print(str(a.balance))
+        \\
+    ,
+        \\42
+        \\15
+        \\
+    );
+}
+
+test "fields: a struct let field rides its copies and stays readable" {
+    try agree.prints(
+        \\struct Tagged:
+        \\    let tag: str
+        \\    var count: i64
+        \\
+        \\func main():
+        \\    var a = Tagged(tag = "x", count = 1)
+        \\    var b = a
+        \\    b.count = 9
+        \\    print(a.tag + " " + str(a.count))
+        \\    print(b.tag + " " + str(b.count))
+        \\
+    ,
+        \\x 1
+        \\x 9
+        \\
+    );
+}

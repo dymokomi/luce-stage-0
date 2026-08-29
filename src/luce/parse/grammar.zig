@@ -1826,6 +1826,21 @@ pub const Parser = struct {
             }
             return;
         }
+        // `let`/`var` in front of a field says whether it may be
+        // reassigned after it is first set (docs/VISIBILITY.md §10.1).
+        // Bare `x: T` is the transitional spelling, accepted for one
+        // release and read as `var`.
+        const mutability: ast.FieldMutability = switch (self.peekKind()) {
+            .keyword_let => blk: {
+                _ = self.advance();
+                break :blk .immutable;
+            },
+            .keyword_var => blk: {
+                _ = self.advance();
+                break :blk .mutable;
+            },
+            else => .unspecified,
+        };
         const field_name = (try self.expect(.identifier, "a field name")) orelse {
             self.recover();
             return;
@@ -1859,6 +1874,7 @@ pub const Parser = struct {
             .type_name = field_type,
             .default = default_value,
             .weak = weak_marker != null,
+            .mutability = mutability,
             .visibility = visibility,
             .span = .{
                 .start = if (weak_marker) |marker| marker.span.start else field_name.span.start,
