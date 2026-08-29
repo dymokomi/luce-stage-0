@@ -4,6 +4,21 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.24 — boring limits, and `pass`
+
+- **Limits made boring.** The call-depth budget rises from 32,768 to
+  **1,000,000** frames, and the native stack reserved under it from 64 MiB
+  to **512 MiB** — sized so a compiler that recurses per nesting level of
+  its input has room, and a deep tree-walk answers instead of hitting a
+  bus error. The reservation applies wherever Luce frames run (macOS
+  link-time, Linux program and worker threads, the `luce`/`loom`
+  processes), and the depth trap names the policy: `call depth exceeded
+  (this host allows 1000000 frames)`.
+
+- **`pass`, a no-op statement.** A block cannot be empty, so `pass`
+  is how a branch or a match arm says "do nothing here" without a busy
+  placeholder like `x = x`. Control falls through it.
+
 ## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a
