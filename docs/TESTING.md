@@ -110,13 +110,21 @@ parameter, refuses itself through ordinary name resolution.
   screen-restore-before-report duty, so a full-screen test that traps
   does not leave the terminal raw, and the worker slots, so a test may
   itself `spawn`.
-- **The artifact is a scratch file.** It is written beside the source
-  under a name distinct per writer (`NAME.luc.<pid>-<tid>.test.lc`),
-  claimed exclusively before it is built, and removed when the file's
-  tests are done. It is never `NAME.lc` — that is the name `luce build`
-  writes, and a test runner must not be able to delete a built artifact
-  — and never the project's `.luce/cache/`, which is loom's warm-run
-  path. `luce test` leaves a directory exactly as it found it.
+- **The artifact is cached under a governing project, hermetic without
+  one.** When a `luce.yaml` governs, the built artifact is kept in the
+  project's `.luce/cache/tests/`, named by the program's content hash: a
+  second `luce test` over an unchanged file re-runs the front end, sees
+  the same hash, and loads the cached machine code instead of building
+  and linking it again — which is the whole cost of a test run. The hash
+  is the gate, so a changed source is a changed program and is rebuilt
+  over a new name; a stale artifact is never loaded, and `rm -rf
+  .luce/cache` costs only a recompile. Without a `luce.yaml` the run
+  stays hermetic: it writes the artifact beside the source under a name
+  distinct per writer (`NAME.luc.<pid>-<tid>.test.lc`), claimed
+  exclusively before it is built, and removes it when the file's tests
+  are done. Either way the artifact is never `NAME.lc` — that is the name
+  `luce build` writes, and a test runner must not be able to delete a
+  built artifact.
 - Tests run in declaration order within a file, files in sorted order.
 
 ## The report, and what fails a test

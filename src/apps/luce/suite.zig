@@ -39,6 +39,7 @@ const palette_mod = @import("palette");
 const report = @import("report");
 
 const discover = @import("discover.zig");
+const files = @import("files");
 const front = @import("front.zig");
 
 const Allocator = std.mem.Allocator;
@@ -186,6 +187,63 @@ fn runFile(
     defer gpa.free(encoded);
     const source_hash = luce.codegen.artifact.sourceHash(encoded);
 
+    // Under a governing `luce.yaml`, the built artifact is cached in the
+    // project's `.luce/cache/` and kept: the next `luce test` over an
+    // unchanged file re-runs the front end, sees the same `source_hash`,
+    // and `native.open` hands the cached machine code straight back —
+    // skipping the object build and link, which is the whole cost.  The
+    // hash is the gate, so a changed source (changed MIR, changed hash)
+    // never opens a stale artifact; it is rebuilt over the same name.
+    // A rootless file keeps the hermetic build-and-remove path below.
+    if (try cacheArtifactFor(gpa, io, path, source_hash)) |cache_path| {
+        defer gpa.free(cache_path);
+        // A hit hands the warm artifact straight back; a miss builds over
+        // the cache name (`native.write` publishes by atomic rename, so a
+        // concurrent reader never sees a partial file and the stale one is
+        // replaced whole) and opens the result.
+        var loaded = switch (native.open(io, cache_path, source_hash)) {
+            .loaded => |opened| opened,
+            else => build: {
+                switch (try object.build(gpa, io, tools, &program, .{
+                    .kind = .library,
+                    .output = cache_path,
+                    .source_hash = source_hash,
+                })) {
+                    .written => {},
+                    .unsupported => |what| {
+                        try out.print("  luce: damaged IR reached the backend ({s}); recompile from source and report this\n", .{what});
+                        tally.unrun += 1;
+                        return;
+                    },
+                    .failed => |why| {
+                        defer gpa.free(why);
+                        try out.print("  luce: {s}\n", .{why});
+                        tally.unrun += 1;
+                        return;
+                    },
+                }
+                break :build switch (native.open(io, cache_path, source_hash)) {
+                    .loaded => |opened| opened,
+                    .unopenable => {
+                        try out.print("  luce: the artifact just built could not be loaded\n", .{});
+                        tally.unrun += 1;
+                        return;
+                    },
+                    .mismatch => |why| {
+                        var sentence: [native.explanation_bytes]u8 = undefined;
+                        try out.print("  luce: {s}\n", .{native.explain(why, &sentence)});
+                        tally.unrun += 1;
+                        return;
+                    },
+                };
+            },
+        };
+        defer loaded.close();
+        tally.files += 1;
+        for (names) |name| try runOne(gpa, io, out, err, palette, &loaded, name, tally);
+        return;
+    }
+
     const artifact_path = try artifactFor(gpa, path);
     defer gpa.free(artifact_path);
     // Claimed before it is built, because this is a file the runner
@@ -271,6 +329,40 @@ fn compile(
         // them (docs/TESTING.md D2).
         .entry = .{ .tests = names },
     });
+}
+
+/// The kept, content-addressed place a test artifact is cached, or null
+/// when there is none to be had — a rootless file, or a cache directory
+/// that cannot be made.  Under a governing `luce.yaml` the artifact goes
+/// to `<root>/.luce/cache/tests/<source_hash>.test.lc`, mirroring loom's
+/// own cache (docs/PACKAGES.md D5): a directory a project ignores and
+/// `rm -rf` costs only a recompile.
+///
+/// The name is the program's content hash, so a name anyone holding the
+/// same program can compute — a rebuilt program lands on a new name and
+/// the old one is simply never opened again.  `native.open` still checks
+/// the tag against `source_hash`, so a hash collision or a foreign file
+/// at the name is refused, never run.
+fn cacheArtifactFor(gpa: Allocator, io: std.Io, path: []const u8, source_hash: u64) !?[:0]u8 {
+    var discovery = std.heap.ArenaAllocator.init(gpa);
+    defer discovery.deinit();
+    const root: []const u8 = switch (try files.discoverProject(discovery.allocator(), io, path)) {
+        .governed => |project| project.root,
+        .rootless, .refused => return null,
+    };
+    const directory = try std.fmt.allocPrint(
+        gpa,
+        "{s}{c}.luce{c}cache{c}tests",
+        .{ root, std.fs.path.sep, std.fs.path.sep, std.fs.path.sep },
+    );
+    defer gpa.free(directory);
+    std.Io.Dir.cwd().createDirPath(io, directory) catch return null;
+    return try std.fmt.allocPrintSentinel(
+        gpa,
+        "{s}{c}{x:0>16}.test.lc",
+        .{ directory, std.fs.path.sep, source_hash },
+        0,
+    );
 }
 
 /// Where a test file's artifact goes: beside the source, under a name

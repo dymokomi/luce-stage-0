@@ -450,6 +450,69 @@ test "a build.luc plan runs its steps in dependency order and governs the bare b
     try testing.expect(optioned.saysErr("a scripted build takes no options"));
 }
 
+test "luce test caches a governed file's artifact and the hash gates it" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("luce.yaml",
+        \\name: shop
+        \\version: 0.1.0
+        \\
+    );
+    try tree.write("tests/math_test.luc",
+        \\pub func test_adds():
+        \\    assert(2 + 2 == 4)
+        \\
+    );
+
+    // The cold run builds and passes, and keeps the artifact under the
+    // project's cache rather than beside the source or not at all.
+    var cold = try runLuceHere(gpa, &tree, &.{ "test", "tests/math_test.luc" });
+    defer cold.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), cold.status);
+    try testing.expect(cold.saysOut("1 passed, 0 failed"));
+    try testing.expect(tree.exists(".luce/cache/tests"));
+    try testing.expect(!tree.exists("tests/math_test.luc.test.lc"));
+
+    // The warm run over the unchanged file passes from the cache.
+    var warm = try runLuceHere(gpa, &tree, &.{ "test", "tests/math_test.luc" });
+    defer warm.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), warm.status);
+    try testing.expect(warm.saysOut("1 passed, 0 failed"));
+
+    // The hash is the gate: a changed source is a changed program, so
+    // the run reflects the change rather than replaying a stale artifact.
+    try tree.write("tests/math_test.luc",
+        \\pub func test_adds():
+        \\    assert(2 + 2 == 5)
+        \\
+    );
+    var changed = try runLuceHere(gpa, &tree, &.{ "test", "tests/math_test.luc" });
+    defer changed.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), changed.status);
+    try testing.expect(changed.saysOut("0 passed, 1 failed"));
+}
+
+test "luce test leaves no artifact beside a rootless file" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    // No luce.yaml governs, so the run stays hermetic: it builds beside
+    // the source and removes the artifact when the file's tests are done.
+    try tree.write("lone_test.luc",
+        \\pub func test_ok():
+        \\    assert(true)
+        \\
+    );
+    var ran = try runLuceHere(gpa, &tree, &.{ "test", "lone_test.luc" });
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(ran.saysOut("1 passed, 0 failed"));
+    try testing.expect(!tree.exists(".luce/cache/tests"));
+}
+
 test "a plan that fails a step, or chooses nothing, says so and builds nothing" {
     const gpa = testing.allocator;
     var tree = try installTree(gpa);

@@ -39,6 +39,18 @@ release is a complete toolchain rather than a compatibility promise.
   in one cell; an array of optionals zero-fills to all absent. A `map` value
   stays non-optional, since a lookup already answers `V?`.
 
+- **`luce test` caches its artifact under a governing project.** A second
+  run over an unchanged file loads the cached machine code from
+  `.luce/cache/tests/` instead of building and linking it again; the content
+  hash gates it, so a changed source is always rebuilt. A rootless file stays
+  hermetic — built beside the source and removed after.
+
+- **Stack-slot reuse stays LLVM's.** Coalescing slots across mutually
+  exclusive match arms is left to LLVM, which owns it: containers are
+  heap-allocated (no frame slot), scalars promote to registers, and value
+  structs fall to LLVM's stack coloring — so the earlier frame-inflation
+  concern is answered without a bespoke pass.
+
 ## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a
