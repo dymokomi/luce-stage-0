@@ -189,6 +189,6 @@ fn statementMayMutateContainers(statement: ast.Statement) bool {
             blockAnyMutates(matched.arms) or
             (matched.else_block != null and
                 blockMayMutateContainers(matched.else_block.?)),
-        .break_statement, .continue_statement => false,
+        .break_statement, .continue_statement, .pass_statement => false,
     };
 }

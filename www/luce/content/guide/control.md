@@ -187,6 +187,37 @@ A statement after an unconditional `break`, `continue`, `return`, `trap`, or
 `error` in the same block is rejected as unreachable, which usually exposes
 an accidental ordering mistake rather than code worth keeping.
 
+## `pass`
+
+`pass` does nothing. A block cannot be empty, so `pass` is how a branch
+or a match arm says "handle this case by doing nothing" without a busy
+placeholder:
+
+```luce run
+enum Signal:
+    go
+    stop
+    wait
+
+func main():
+    var log = ""
+    for s in [Signal.go, Signal.stop, Signal.wait, Signal.go]:
+        match s:
+            go:
+                log = log + "g"
+            stop:
+                log = log + "s"
+            wait:
+                pass
+    print(log)
+```
+
+```output
+gsg
+```
+
+Control falls through `pass` to whatever follows it.
+
 ## Recursion
 
 Functions can call themselves. A recursion limit turns runaway recursion

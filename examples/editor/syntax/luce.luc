@@ -17,7 +17,7 @@ pub func syntax() -> Syntax:
             "alias", "and", "break", "catch", "class", "const", "continue",
             "deinit", "elif", "else", "enum", "extern", "false", "for", "func", "if",
             "import", "in", "init", "interface", "is", "let", "match",
-            "mutating", "none", "not", "or", "pub", "return",
+            "mutating", "none", "not", "or", "pass", "pub", "return",
             "self", "spawn", "static", "struct", "true", "try", "union",
             "var", "weak", "while",
         ],

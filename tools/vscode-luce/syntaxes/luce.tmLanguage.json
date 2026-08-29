@@ -224,7 +224,7 @@
       "patterns": [
         {
           "name": "keyword.control.luce",
-          "match": "\\b(?:match|if|elif|else|while|for|in|return|break|continue|and|or|not)\\b"
+          "match": "\\b(?:match|if|elif|else|while|for|in|return|break|continue|pass|and|or|not)\\b"
         },
         {
           "name": "keyword.operator.word.luce",

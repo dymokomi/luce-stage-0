@@ -132,6 +132,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_return,
         .keyword_break,
         .keyword_continue,
+        .keyword_pass,
         // `match` is a dispatch statement, so it is control flow — the
         // class every editor already colours `switch` with.
         .keyword_match,

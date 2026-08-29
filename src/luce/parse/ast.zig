@@ -488,6 +488,9 @@ pub const Statement = union(enum) {
     return_statement: Return,
     break_statement: Marker,
     continue_statement: Marker,
+    /// pass — a statement that does nothing, so a match arm or block
+    /// can be deliberately empty without a busy no-op like `x = x`.
+    pass_statement: Marker,
     expression: ExpressionStatement,
     /// call catch: — the handler runs only where the call raised.
     guarded: Guarded,

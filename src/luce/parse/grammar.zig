@@ -2843,6 +2843,11 @@ pub const Parser = struct {
                 try self.endOfStatement("end of line after continue");
                 return .{ .continue_statement = .{ .span = item.span } };
             },
+            .keyword_pass => {
+                const item = self.advance();
+                try self.endOfStatement("end of line after pass");
+                return .{ .pass_statement = .{ .span = item.span } };
+            },
             // Keywords that can only open something else: name the
             // mistake instead of failing as "expected an expression".
             .keyword_elif, .keyword_else => {
@@ -3995,6 +4000,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_return => "the keyword 'return'",
         .keyword_break => "the keyword 'break'",
         .keyword_continue => "the keyword 'continue'",
+        .keyword_pass => "the keyword 'pass'",
         .keyword_and => "the keyword 'and'",
         .keyword_or => "the keyword 'or'",
         .keyword_not => "the keyword 'not'",

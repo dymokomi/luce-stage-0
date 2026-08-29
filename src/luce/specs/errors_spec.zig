@@ -1012,7 +1012,7 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
         \\func minmax() -> (i64, i64):
         \\    return 1, 2
         \\
-        \\func pass() -> (i64, i64):
+        \\func forward() -> (i64, i64):
         \\    return minmax()
         \\
         \\func main():

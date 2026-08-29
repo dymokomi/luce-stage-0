@@ -364,7 +364,7 @@ test "class references retain identity through parameters returns optionals list
         \\class Box:
         \\    value: i64
         \\
-        \\func pass(box: Box) -> Box:
+        \\func forward(box: Box) -> Box:
         \\    return box
         \\
         \\func update(box: Box):
@@ -377,7 +377,7 @@ test "class references retain identity through parameters returns optionals list
         \\
         \\func main():
         \\    let original = Box(value = 1)
-        \\    let returned = pass(original)
+        \\    let returned = forward(original)
         \\    let optional = maybe(returned, true)
         \\    let present = optional else Box(value = 0)
         \\    let items: list[Box] = [present]

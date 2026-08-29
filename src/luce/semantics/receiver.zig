@@ -112,7 +112,7 @@ fn statementWritesReceiver(
             break :blk matched.else_block != null and
                 blockWritesReceiver(self, info, matched.else_block.?);
         },
-        .break_statement, .continue_statement => false,
+        .break_statement, .continue_statement, .pass_statement => false,
     };
 }
 

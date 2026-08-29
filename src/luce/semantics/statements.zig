@@ -179,6 +179,18 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
                 .span = continued.span,
             } });
         },
+        .pass_statement => |marker| {
+            // A no-op that still records something: an empty block
+            // scope. Recording nothing would read as a gap (a
+            // diagnostic abandoned the statement, lowerBlock's
+            // recorded_gaps rule), so `pass` records a real statement
+            // that lowers to an empty sequence and falls through.
+            try recorder.recordStatement(self, .{ .block = .{
+                .statements = &.{},
+                .releases = &.{},
+                .span = marker.span,
+            } });
+        },
         .expression => |expression| {
             if (try self.lowerExpression(expression.value, true)) |value| {
                 try recorder.recordStatement(self, .{ .expression = .{

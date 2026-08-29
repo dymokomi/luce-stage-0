@@ -148,7 +148,7 @@ fn scanStatement(
             for (matched.arms) |arm| try scanBlockForClosures(self, arm.body, mutable, inside);
             if (matched.else_block) |otherwise| try scanBlockForClosures(self, otherwise, mutable, inside);
         },
-        .break_statement, .continue_statement => {},
+        .break_statement, .continue_statement, .pass_statement => {},
     }
 }
 
@@ -580,7 +580,7 @@ const Collector = struct {
                 for (matched.arms) |arm| try c.blockWith(arm.body, arm.bindings);
                 if (matched.else_block) |otherwise| try c.block(otherwise);
             },
-            .break_statement, .continue_statement => {},
+            .break_statement, .continue_statement, .pass_statement => {},
         }
     }
 
@@ -856,6 +856,7 @@ fn validateOuterBindings(
             .expression,
             .break_statement,
             .continue_statement,
+            .pass_statement,
             => {},
         }
     }

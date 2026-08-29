@@ -130,6 +130,8 @@ fn validateStatement(self: *FunctionBuilder, flow: *Flow, statement: ast.Stateme
             flow.falls_through = false;
         },
         .break_statement, .continue_statement => flow.falls_through = false,
+        // A no-op: it neither initializes a field nor leaves the block.
+        .pass_statement => {},
         .expression => |written| {
             try validateExpression(self, flow.initialized, written.value);
             if (leavesByCall(written.value)) flow.falls_through = false;
@@ -487,7 +489,7 @@ fn statementContainsSelf(statement: ast.Statement) bool {
             }
             break :blk matched.else_block != null and blockContainsSelf(matched.else_block.?);
         },
-        .break_statement, .continue_statement => false,
+        .break_statement, .continue_statement, .pass_statement => false,
     };
 }
 

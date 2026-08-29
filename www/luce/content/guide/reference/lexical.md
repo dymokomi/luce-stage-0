@@ -88,7 +88,7 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array[i64, _]); a bindi
 alias    and      break    catch    class    const    continue deinit
 elif     else     enum     extern   false    for      func     if       import
 in       init     interface is     let      match    mutating none
-not      or       pub      return   self     spawn    static
+not      or       pass     pub      return   self     spawn    static
 struct   true     try      union   var      weak     while
 ```
 

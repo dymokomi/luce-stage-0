@@ -250,3 +250,45 @@ test "the scrutinee is read once, before any arm runs" {
         \\
     );
 }
+
+test "pass is a no-op arm, so an arm can be deliberately empty" {
+    // Without `pass` an arm that means "do nothing" had to write a
+    // busy no-op like `x = x`; `pass` records nothing and falls
+    // through, on both engines.
+    try agree.prints(
+        \\enum Signal:
+        \\    go
+        \\    stop
+        \\    wait
+        \\
+        \\func main():
+        \\    var log = ""
+        \\    for s in [Signal.go, Signal.stop, Signal.wait, Signal.go]:
+        \\        match s:
+        \\            go:
+        \\                log = log + "g"
+        \\            stop:
+        \\                log = log + "s"
+        \\            wait:
+        \\                pass
+        \\    print(log)
+        \\
+    , "gsg\n");
+}
+
+test "pass fills any block, and control falls through it" {
+    try agree.prints(
+        \\func main():
+        \\    var n = 0
+        \\    if n == 0:
+        \\        pass
+        \\    else:
+        \\        n = 1
+        \\    while n < 3:
+        \\        n = n + 1
+        \\        if n == 2:
+        \\            pass
+        \\    print(str(n))
+        \\
+    , "3\n");
+}
