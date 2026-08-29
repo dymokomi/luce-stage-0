@@ -191,17 +191,97 @@ fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
                 .span = marker.span,
             } });
         },
-        .expression => |expression| {
-            if (try self.lowerExpression(expression.value, true)) |value| {
-                try recorder.recordStatement(self, .{ .expression = .{
-                    .value = value.node,
-                    .span = expression.span,
-                } });
-            }
-        },
+        .expression => |expression| try lowerExpressionStatement(self, expression),
         .guarded => |guarded| try lowerGuarded(self, guarded),
         .match => |matched| try lowerMatch(self, matched),
     }
+}
+
+/// An expression standing alone as a statement, which is a statement
+/// only when it is there for what it *does*.
+///
+/// **A produced value that nothing receives is a mistake in every case
+/// but one.**  It is the shape of a forgotten `let`, of a method
+/// mistaken for the mutating one beside it, and of a result whose
+/// failure the caller meant to check.  The one honest case — a call
+/// worth making whose answer is genuinely not wanted — is spelled
+/// `discard(...)`, so that dropping a result is a thing a reader can
+/// see rather than a thing they have to notice is absent.
+fn lowerExpressionStatement(self: *FunctionBuilder, expression: ast.ExpressionStatement) Error!void {
+    if (try refuseMisspokenDiscard(self, expression.value)) return;
+    if (discarded(expression.value)) |wanted| {
+        // The operand's place is neither of the usual two.  It is not a
+        // value position — a call answering several values may be
+        // discarded, and there is no single value there to be had — and
+        // it is not a plain statement either, because a call that
+        // answers nothing has nothing to discard and saying so of it is
+        // untrue.  So it is lowered as a statement and then held to the
+        // one thing `discard` requires: that there was a result.
+        const value = (try self.lowerExpression(wanted, true)) orelse return;
+        if (value.value_type == .none and !value.diverges) {
+            try self.fail(
+                "luce.sema.call",
+                wanted.span(),
+                "discard drops a result, and this answers none; write the call on its own line",
+                .{},
+            );
+            return;
+        }
+        try recorder.recordStatement(self, .{ .expression = .{
+            .value = value.node,
+            .span = expression.span,
+        } });
+        return;
+    }
+    const value = (try self.lowerExpression(expression.value, true)) orelse return;
+    if (value.value_type != .none and !value.diverges) {
+        try self.fail(
+            "luce.sema.unused",
+            expression.value.span(),
+            "this {s} is produced and nothing receives it; bind it with let, or write discard(...) around it to drop it on purpose",
+            .{try self.analyzer.typeName(value.value_type)},
+        );
+        return;
+    }
+    try recorder.recordStatement(self, .{ .expression = .{
+        .value = value.node,
+        .span = expression.span,
+    } });
+}
+
+/// The operand of a `discard(...)` statement, or null when this
+/// expression is not one.
+fn discarded(expression: *const ast.Expression) ?*ast.Expression {
+    const call = switch (expression.*) {
+        .call => |written| written,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, call.callee, "discard")) return null;
+    if (call.arguments.len != 1) return null;
+    return call.arguments[0].value;
+}
+
+/// Say what `discard` takes when it was written with something else.
+///
+/// It has no row in the builtin table — it accepts any type and
+/// answers none, which is not a signature that table can hold — so
+/// without this the ordinary resolver reaches "unknown function
+/// discard", which is untrue of a reserved word.  Answers whether it
+/// reported.
+fn refuseMisspokenDiscard(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
+    const call = switch (expression.*) {
+        .call => |written| written,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, call.callee, "discard")) return false;
+    if (call.arguments.len == 1 and call.arguments[0].name == null) return false;
+    try self.fail(
+        "luce.sema.call",
+        call.span,
+        "discard takes one value, positionally: discard(EXPRESSION)",
+        .{},
+    );
+    return true;
 }
 
 /// `match m:` — dispatch over an enum (docs/ENUMS.md R1).

@@ -535,11 +535,36 @@ caller before releasing the frame.
 
 ## Expression statements
 
-A call may stand alone as a statement. A **fallible** call standing
-alone must be `try`ed or `catch`ed; ignoring it is
-`luce.sema.fallible`.
+A call may stand alone as a statement when it answers nothing. An expression
+that produces a value and gives it to no one is `luce.sema.unused` — the
+shape of a forgotten `let`, of a method mistaken for the mutating one beside
+it, and of a result whose failure the caller meant to check.
 
-An ignored returned reference is a statement temporary and is released at the
+A **fallible** call standing alone must be `try`ed or `catch`ed; ignoring it
+is `luce.sema.fallible`.
+
+### discard {#discard}
+
+`discard(EXPRESSION)` is the one statement that drops a result on purpose:
+
+```text
+discard(session.close())
+discard(try parse(line))
+discard(counter.bump()) catch reason:
+    print(reason)
+```
+
+It takes exactly one value, positionally, and the value must be one there was
+something to drop — `discard` of a call that answers nothing is refused,
+because the call belongs on its own line. It accepts any type, including a
+multi-value answer, which is why it has no ordinary signature and is a
+reserved word instead.
+
+`discard` says nothing about errors. A fallible call inside one is still
+`try`ed or `catch`ed as it would be anywhere else; only the value is
+dropped.
+
+A discarded returned reference is a statement temporary and is released at the
 end of the statement.
 
 ## Guarded statements

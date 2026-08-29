@@ -143,7 +143,7 @@ func parse_count(text: str) -> i64!:
     return value
 
 func main():
-    parse_count("many") catch reason:
+    discard(parse_count("many")) catch reason:
         print(reason)
 ```
 

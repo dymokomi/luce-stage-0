@@ -49,7 +49,9 @@ pub class Application:
             let surface = screen.surface
             surface.clear()
             let requested = root.draw(surface, surface.area())
-            screen.present()
+            # The paint report is for a test to read; a live frame
+            # has nowhere to put it.
+            discard(screen.present())
             var cursor = Cursor()
             if requested != none:
                 cursor = requested

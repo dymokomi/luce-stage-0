@@ -42,7 +42,7 @@ import std.zip
 
 func main():
     var scraps: list[u8] = [80, 75, 3]
-    zip.Archive(scraps) catch reason:
+    discard(zip.Archive(scraps)) catch reason:
         match reason:
             damaged(why):
                 print("damaged: " + why)

@@ -68,9 +68,9 @@ pub func test_overlapping_panels_merge_without_application_glyph_logic():
     let surface = canvas.Surface(5, 10)
     surface.clear()
     let one = Panel("", Empty())
-    one.draw(surface, model.Rect(rows = 5, columns = 6))
+    discard(one.draw(surface, model.Rect(rows = 5, columns = 6)))
     let two = Panel("", Empty())
-    two.draw(surface, model.Rect(row = 2, column = 5, rows = 3, columns = 5))
+    discard(two.draw(surface, model.Rect(row = 2, column = 5, rows = 3, columns = 5)))
     assert(surface.cell_at(2, 5).text == "├")
     assert(surface.cell_at(4, 5).text == "┴")
 
@@ -124,7 +124,7 @@ pub func test_overlay_dispatches_the_visually_topmost_child_first():
     var overlay = ZStack()
     overlay.add(EventHost(Label("bottom"), recorder.left_event))
     overlay.add(EventHost(Label("top"), recorder.right_event))
-    view.route(overlay, input.Event.key(press = input.KeyPress(key = input.Key.enter)), model.Rect(rows = 2, columns = 10))
+    discard(view.route(overlay, input.Event.key(press = input.KeyPress(key = input.Key.enter)), model.Rect(rows = 2, columns = 10)))
     assert(recorder.left == 0 and recorder.right == 1)
 
 pub func test_a_cursor_host_uses_the_rectangle_the_view_received():

@@ -591,7 +591,7 @@ test "a worker trap unwinds a nested union graph before the join" {
         \\
         \\func main():
         \\    let task = spawn boom()
-        \\    task.wait()
+        \\    discard(task.wait())
         \\
     , .divide_by_zero);
 }
@@ -855,7 +855,7 @@ test "worker exit unwinds a nested union graph before the join" {
         \\
         \\func main():
         \\    let task = spawn bail()
-        \\    task.wait()
+        \\    discard(task.wait())
         \\
     , .{}, 11);
 }

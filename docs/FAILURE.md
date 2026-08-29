@@ -184,7 +184,7 @@ func read(path: str) -> str!:
     return try files.read(path)
 
 func main() -> !:
-    read("missing.txt") catch reason:
+    discard(read("missing.txt")) catch reason:
         print("failed: " + reason)
 ```
 

@@ -213,9 +213,12 @@ fn stoppingScope(builtin: luce.semantics.Builtin) ?[]const u8 {
 ///
 /// `range` is *syntax*: the parser recognises it only in
 /// `for i in range(a, b)` (`parse/grammar.zig`) and there is no
-/// entry for it in the builtin table.  It is written like a call and
-/// reads like one, so it is coloured like one.
-const reserved_syntax = [_][]const u8{"range"};
+/// entry for it in the builtin table.  `discard` is syntax for the
+/// same reason from the other end — it takes any type and answers
+/// none, which is not a row the builtin table can hold, so the
+/// statement walker recognises it directly.  Both are written like a
+/// call and read like one, so both are coloured like one.
+const reserved_syntax = [_][]const u8{ "range", "discard" };
 
 /// Reserved and unspellable: a name the language keeps out of a
 /// program's reach with nothing behind it.

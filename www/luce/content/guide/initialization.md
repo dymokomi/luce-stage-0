@@ -177,7 +177,7 @@ class Port:
 
 func main() -> !:
     let web = try Port(8080)
-    Port(70000) catch reason:
+    discard(Port(70000)) catch reason:
         print(reason)
     print(str(web.number))
 ```

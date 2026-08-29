@@ -58,7 +58,7 @@ pub func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
 pub func test_a_one_cell_change_is_one_diff_run():
     let screen = canvas.Screen(2, 4)
     screen.surface.clear()
-    screen.present()
+    discard(screen.present())
     screen.surface.put(1, 2, "x", model.Style(foreground = 4))
     let painted = screen.present()
     assert(painted.cells == 1)

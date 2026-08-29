@@ -1319,7 +1319,7 @@ test "files: exists, is_file and is_dir answer bool! and let a refusal through" 
         \\    print(str(try files.is_dir("papers")))
         \\    print(str(try files.is_file("papers")))
         \\    print(str(try files.exists("ghost.txt")))
-        \\    files.exists("locked/inside.txt") catch reason:
+        \\    discard(files.exists("locked/inside.txt")) catch reason:
         \\        print(reason)
         \\    print(str(files.exists("locked/inside.txt") catch false))
         \\
@@ -1385,7 +1385,7 @@ test "files: a refused entries listing is an error on both engines" {
         \\import std.files
         \\
         \\func main():
-        \\    files.entries("elsewhere") catch reason:
+        \\    discard(files.entries("elsewhere")) catch reason:
         \\        print(reason)
         \\
     , budget);

@@ -91,7 +91,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.luce",
-          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_i64|parse_f64|parse_str)\\b"
+          "match": "\\b(?:range|discard|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_i64|parse_f64|parse_str)\\b"
         },
         {
           "name": "support.function.builtin.host.luce",

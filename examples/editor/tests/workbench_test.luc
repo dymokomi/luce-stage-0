@@ -84,10 +84,10 @@ pub func test_global_commands_and_search_are_reflected_in_the_frame():
         Rect(rows = 12, columns = 60),
     ) == Response.handled)
     assert(shared.focus == Focus.search)
-    pane.source_event(
+    discard(pane.source_event(
         Event.text(typed = "let"),
         Rect(rows = 11, columns = 60),
-    )
+    ))
     let screen = snapshot(bench, 12, 60)
     assert(strings.contains(screen.line(11), "find: let"))
     assert(strings.contains(screen.line(11), "1 of 1"))
@@ -106,13 +106,13 @@ pub func test_divider_drag_crosses_panes_through_the_model():
         )),
         pane_area,
     ) == Response.handled)
-    bench.dispatch(
+    discard(bench.dispatch(
         Event.mouse(pointer = Mouse(kind = Pointer.drag, row = 3, column = 13)),
         Rect(rows = 12, columns = 60),
-    )
+    ))
     assert(shared.files_width == 14)
-    bench.dispatch(
+    discard(bench.dispatch(
         Event.mouse(pointer = Mouse(kind = Pointer.release, row = 3, column = 13)),
         Rect(rows = 12, columns = 60),
-    )
+    ))
     assert(shared.dragging == Drag.idle)

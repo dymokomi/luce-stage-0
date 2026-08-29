@@ -457,10 +457,10 @@ test "zip: bytes that are not an archive answer by name" {
     ++ shows ++
         \\func main():
         \\    var scraps: list[u8] = [80, 75, 3]
-        \\    zip.Archive(scraps) catch reason:
+        \\    discard(zip.Archive(scraps)) catch reason:
         \\        print(shown(reason))
         \\    let prose = zip.to_bytes("this file is prose, not an archive at all")
-        \\    zip.Archive(prose) catch reason:
+        \\    discard(zip.Archive(prose)) catch reason:
         \\        print(zip.describe(reason))
         \\
     ,
@@ -482,7 +482,7 @@ test "zip: an archive cut short says it is truncated" {
         \\    for index in range(0, len(whole)):
         \\        if index < 60 or index >= len(whole) - 22:
         \\            cut.append(whole[index])
-        \\    zip.Archive(cut) catch reason:
+        \\    discard(zip.Archive(cut)) catch reason:
         \\        print(shown(reason))
         \\
     ++ fixtures,
@@ -500,7 +500,7 @@ test "zip: a directory entry with no header on it says which one" {
         \\    var damaged = copied()
         \\    # The central directory starts at 96; break its signature.
         \\    damaged[96] = 88
-        \\    zip.Archive(damaged) catch reason:
+        \\    discard(zip.Archive(damaged)) catch reason:
         \\        print(shown(reason))
         \\
     ++ fixtures,
@@ -520,7 +520,7 @@ test "zip: contents that do not match their checksum are refused" {
         \\    damaged[35] = 106
         \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
-        \\    opened.extract(found[0]) catch reason:
+        \\    discard(opened.extract(found[0])) catch reason:
         \\        print(shown(reason))
         \\
     ++ fixtures,
@@ -540,7 +540,7 @@ test "zip: a compression method this module does not have is named" {
         \\    damaged[106] = 14
         \\    let opened = try zip.Archive(damaged)
         \\    let found = opened.entries()
-        \\    opened.extract(found[0]) catch reason:
+        \\    discard(opened.extract(found[0])) catch reason:
         \\        print(shown(reason))
         \\
     ++ fixtures,
@@ -558,7 +558,7 @@ test "zip: an entry an archive says is encrypted is not half-read" {
         \\    var damaged = copied()
         \\    # Flag bit 0, in the directory's copy of the flags.
         \\    damaged[104] = 1
-        \\    zip.Archive(damaged) catch reason:
+        \\    discard(zip.Archive(damaged)) catch reason:
         \\        print(shown(reason))
         \\
     ++ fixtures,
@@ -575,15 +575,15 @@ test "zip: a compressed stream that is not one says so" {
         \\func main():
         \\    # Block kind 3 is the one DEFLATE reserves and never uses.
         \\    var nonsense: list[u8] = [7, 0, 0, 0]
-        \\    zip.inflate(nonsense) catch reason:
+        \\    discard(zip.inflate(nonsense)) catch reason:
         \\        print(shown(reason))
         \\    # A final stored block whose length and complement disagree.
         \\    var wrong: list[u8] = [1, 4, 0, 0, 0, 65, 66, 67, 68]
-        \\    zip.inflate(wrong) catch reason:
+        \\    discard(zip.inflate(wrong)) catch reason:
         \\        print(shown(reason))
         \\    # A fixed-Huffman block that ends before its codes do.
         \\    var fragment: list[u8] = [3]
-        \\    zip.inflate(fragment) catch reason:
+        \\    discard(zip.inflate(fragment)) catch reason:
         \\        print(shown(reason))
         \\
     ,

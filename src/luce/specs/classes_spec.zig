@@ -131,7 +131,7 @@ test "fallible custom init cleans unfinished fields and finalizes only finished 
         \\        print("closed " + self.name + " " + str(len(self.values)))
         \\
         \\func main() -> !:
-        \\    Resource("bad", false) catch reason:
+        \\    discard(Resource("bad", false)) catch reason:
         \\        print(reason)
         \\    if true:
         \\        let resource = try Resource("good", true)

@@ -504,7 +504,7 @@ test "out parameters become extra results after the declared return" {
         \\    print(str(sign))
         \\    print(str(top))
         \\    print(str(bottom))
-        \\    luce_ffi_probe_split(7)
+        \\    discard(luce_ffi_probe_split(7))
         \\
     ,
         \\true

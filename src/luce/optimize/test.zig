@@ -664,7 +664,7 @@ test "reading the error channel is never pure either, for the same reason" {
         \\    return n
         \\
         \\func main():
-        \\    check(-1) catch reason:
+        \\    discard(check(-1)) catch reason:
         \\        print(reason)
         \\
     );

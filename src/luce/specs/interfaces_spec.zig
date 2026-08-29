@@ -162,7 +162,7 @@ test "an error raised by a mutating witness crosses the interface call" {
         \\        print("unreachable " + reason)
         \\        return
         \\    print(str(first))
-        \\    counter.add(70) catch reason:
+        \\    discard(counter.add(70)) catch reason:
         \\        print("caught: " + reason)
         \\
     ,
@@ -196,7 +196,7 @@ test "a raising interface method with parameters and a multi-value answer" {
         \\        print("unreachable " + reason)
         \\        return
         \\    print(str(good))
-        \\    total(window, -1) catch reason:
+        \\    discard(total(window, -1)) catch reason:
         \\        print("caught: " + reason)
         \\
     ,

@@ -1865,8 +1865,8 @@ test "returns: a discarded call is a statement temporary and dies with its state
         \\    return head, tail
         \\
         \\func main():
-        \\    two()
-        \\    two()
+        \\    discard(two())
+        \\    discard(two())
         \\    assert(true)
         \\
     );
@@ -1906,7 +1906,7 @@ test "returns: T! composes, and try is the only composition there is" {
         \\    assert(p == 8 and q == 4)
         \\    # A statement discards the values; the handler runs where
         \\    # it raised, and supplies none.
-        \\    pair(-1) catch:
+        \\    discard(pair(-1)) catch:
         \\        assert(true)
         \\
     );
@@ -2700,7 +2700,7 @@ test "methods: an inferred writer may return a value and call another writer" {
         \\    # At statement position the declared value is discarded
         \\    # while the receiver write still happens.
         \\    let third = rng.state
-        \\    rng.next()
+        \\    discard(rng.next())
         \\    assert(rng.state != third)
         \\
     );
@@ -3356,7 +3356,7 @@ test "a nested try reconciles a fallible for-in temporary before propagating" {
         \\
         \\func main():
         \\    var stopped = false
-        \\    run() catch reason:
+        \\    discard(run()) catch reason:
         \\        assert(reason == "stop")
         \\        stopped = true
         \\    assert(stopped)
@@ -6444,6 +6444,54 @@ test "never: a user diverging call is the assert-unwrap in an else" {
 // A field written `let` is set once — at construction, or in `init` — and
 // never reassigned; a `var` field may be reassigned through a mutable path.
 // A bare field keeps the transitional mutable behavior for one release.
+
+test "discard: the call runs, its answer is dropped, and its objects are freed" {
+    // The point of the word is that the *effect* is still wanted.  The
+    // print happens, the list the call built is released on the way out
+    // of the statement like any temporary, and the census both engines
+    // take at the end agrees that nothing was left behind.
+    try agree.prints(
+        \\func gather(n: i64) -> list[i64]:
+        \\    print("gathering")
+        \\    var made = list[i64]()
+        \\    for at in range(0, n):
+        \\        made.append(at)
+        \\    return made
+        \\
+        \\func main():
+        \\    discard(gather(3))
+        \\    print("done")
+        \\
+    ,
+        \\gathering
+        \\done
+        \\
+    );
+}
+
+test "discard: a fallible call still propagates, and only its value is dropped" {
+    try agree.prints(
+        \\func risky(ok: bool) -> i64!:
+        \\    if not ok:
+        \\        error("refused")
+        \\    return 7
+        \\
+        \\func run() -> !:
+        \\    discard(try risky(true))
+        \\    print("first survived")
+        \\    discard(try risky(false))
+        \\    print("unreachable")
+        \\
+        \\func main():
+        \\    run() catch e:
+        \\        print("caught " + e)
+        \\
+    ,
+        \\first survived
+        \\caught refused
+        \\
+    );
+}
 
 test "fields: a var field is reassigned, a let field is read, on both engines" {
     try agree.prints(

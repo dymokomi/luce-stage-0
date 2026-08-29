@@ -117,17 +117,21 @@ indexes, compound forms (`+=`), and `_` are not assignment targets here.
 
 ### Discard
 
-A call that answers a shape may stand as a statement, discarding every
-value:
+A call that answers a shape may have every value dropped, said out loud:
 
 ```text
-minmax(temperatures)            # values computed and released
+discard(minmax(temperatures))   # values computed and released
 ```
 
-There is no `_` discard. When a bind wants only some of the values, name
-the rest; a named binding is released at the end of its block exactly as
-a discarded value would be, and it tells the next reader what was
-ignored.
+`discard` is the only way to drop a result — a bare `minmax(temperatures)`
+statement is `luce.sema.unused`.  It takes any type, a shape included, which
+is why it is a reserved word rather than a function: no signature can be
+written for "anything, and nothing back".
+
+There is no `_` discard, and none is wanted: `discard` is about a whole
+result. When a bind wants only some of the values, name the rest; a named
+binding is released at the end of its block exactly as a discarded value
+would be, and it tells the next reader what was ignored.
 
 ```text
 let word, count = heaviest(counts)

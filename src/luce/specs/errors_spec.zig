@@ -5137,8 +5137,8 @@ test "luce.sema.fallible: catch with a binding names the binding in the refusal"
     // half the advice, because the name goes too — and the reason it
     // goes is the sentence worth reading.
     try expectHostSayingAt(
-        \\func plain(n: i64) -> i64:
-        \\    return n
+        \\func plain(n: i64):
+        \\    print(str(n))
         \\
         \\func main():
         \\    plain(1) catch reason:
@@ -5160,14 +5160,14 @@ test "luce.sema.duplicate: a handler's binding obeys the no-shadowing rule" {
         \\
         \\func main():
         \\    let reason = "already here"
-        \\    risky() catch reason:
+        \\    discard(risky()) catch reason:
         \\        print(reason)
         \\
     ,
         "luce.sema.duplicate",
         "reason is already declared on line 5",
         6,
-        19,
+        28,
     );
 }
 
@@ -9210,13 +9210,13 @@ test "R2: a declared error union is raised, caught, and matched apart" {
         \\    let good = read_number("42") catch reason:
         \\        return
         \\    print(str(good))
-        \\    read_number("x") catch reason:
+        \\    discard(read_number("x")) catch reason:
         \\        match reason:
         \\            unexpected(found, line):
         \\                print("unexpected " + found + " on line " + str(line))
         \\            ended_early(wanted):
         \\                print("wanted " + wanted)
-        \\    read_number("") catch reason:
+        \\    discard(read_number("")) catch reason:
         \\        match reason:
         \\            unexpected(found, line):
         \\                print("unexpected " + found)
@@ -9247,7 +9247,7 @@ test "R2: try passes the same error type up, and a mismatch is refused" {
         \\    return try inner(n)
         \\
         \\func main():
-        \\    outer(-7) catch reason:
+        \\    discard(outer(-7)) catch reason:
         \\        match reason:
         \\            off_by(amount):
         \\                print(str(amount))
@@ -9462,4 +9462,110 @@ test "luce.parse.field: a value struct's field says which it is too" {
         \\    print(str(Point(x = 1, y = 2).x))
         \\
     , "luce.parse.field", "var x");
+}
+
+// ---------------------------------------------------------------------------
+// luce.sema.unused — a produced value nothing receives
+// ---------------------------------------------------------------------------
+
+test "luce.sema.unused: a call's result cannot be dropped in silence" {
+    try expectSaying(
+        \\func answer() -> i64:
+        \\    return 7
+        \\
+        \\func main():
+        \\    answer()
+        \\
+    , "luce.sema.unused", "nothing receives it");
+}
+
+test "luce.sema.unused: the refusal names the type that was produced" {
+    try expectSaying(
+        \\struct Point:
+        \\    let x: i64
+        \\
+        \\func origin() -> Point:
+        \\    return Point(x = 0)
+        \\
+        \\func main():
+        \\    origin()
+        \\
+    , "luce.sema.unused", "this Point is produced");
+}
+
+test "luce.sema.unused: an expression that is only a value is not a statement" {
+    // The rule is about the value, not about the call: a bare `1 + 1`
+    // has the same nothing-happens shape and the same missing `let`.
+    try expectSaying("func main():\n    1 + 1\n", "luce.sema.unused", "nothing receives it");
+}
+
+test "luce.sema.unused: a method's result counts the same as a function's" {
+    try expectSaying(
+        \\class Counter:
+        \\    var count: i64
+        \\
+        \\    init():
+        \\        self.count = 0
+        \\
+        \\    pub func bump() -> i64:
+        \\        self.count += 1
+        \\        return self.count
+        \\
+        \\func main():
+        \\    let c = Counter()
+        \\    c.bump()
+        \\
+    , "luce.sema.unused", "nothing receives it");
+}
+
+test "discard: a result dropped on purpose is accepted, and the call still runs" {
+    try expectCompiles(
+        \\func answer() -> i64:
+        \\    print("called")
+        \\    return 7
+        \\
+        \\func main():
+        \\    discard(answer())
+        \\
+    );
+}
+
+test "luce.sema.call: discarding a call that answers nothing says so" {
+    // `discard` is about a value there was no room for.  Its operand
+    // stands where a value belongs, so a void call is refused by the
+    // ordinary rule rather than accepted as a discard of nothing.
+    try expectSaying(
+        \\func nothing():
+        \\    return
+        \\
+        \\func main():
+        \\    discard(nothing())
+        \\
+    , "luce.sema.call", "discard drops a result, and this answers none");
+}
+
+test "luce.sema.call: discard takes exactly one positional value" {
+    try expectSaying(
+        \\func answer() -> i64:
+        \\    return 7
+        \\
+        \\func main():
+        \\    discard(answer(), answer())
+        \\
+    , "luce.sema.call", "discard takes one value, positionally");
+    try expectSaying(
+        \\func answer() -> i64:
+        \\    return 7
+        \\
+        \\func main():
+        \\    discard(value = answer())
+        \\
+    , "luce.sema.call", "discard takes one value, positionally");
+}
+
+test "luce.sema.reserved: discard is the language's word" {
+    try expectRejected(
+        "func discard(n: i64):\n    return\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+    );
 }

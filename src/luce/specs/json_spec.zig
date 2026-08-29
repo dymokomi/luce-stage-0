@@ -928,7 +928,7 @@ test "json: a refusal names the problem and its scalar position" {
         \\import std.json
         \\
         \\func shown(text: str) -> str:
-        \\    json.parse(text) catch reason:
+        \\    discard(json.parse(text)) catch reason:
         \\        match reason:
         \\            syntax(why, at):
         \\                return why + " @ " + str(at)
@@ -958,7 +958,7 @@ test "json: a refusal names the problem and its scalar position" {
         \\    print(shown(deep.build()))
         \\
         \\    # And the one rendering, for the caller that only prints.
-        \\    json.parse("{} {}") catch reason:
+        \\    discard(json.parse("{} {}")) catch reason:
         \\        print(json.describe(reason))
         \\
     , budget,

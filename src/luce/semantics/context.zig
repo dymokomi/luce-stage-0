@@ -236,6 +236,12 @@ pub const reserved_names = [_][]const u8{
     // return.  It is only ever a function's whole return type, so no
     // declaration may take the word for a value.
     "never",
+    // The one statement that is allowed to throw a result away.  It is
+    // not in the `builtins` table because it takes any type and answers
+    // nothing, which is not a signature that table can hold; the
+    // statement walker recognises it directly.  The name is reserved so
+    // that `discard(x)` always means the same thing.
+    "discard",
 };
 
 pub fn isReserved(name: []const u8) bool {

@@ -203,7 +203,7 @@ union Malformed:
 import std.json
 
 func main():
-    json.parse("[1, 2") catch reason:
+    discard(json.parse("[1, 2")) catch reason:
         match reason:
             syntax(why, at):
                 print(why + " at " + str(at))

@@ -191,7 +191,7 @@ test "self: writers support zero one and multiple declared return values" {
         \\    let left, right = counter.pair()
         \\    assert(counter.value == 3)
         \\    assert(one == 2 and left == 3 and right == 6)
-        \\    counter.pair()
+        \\    discard(counter.pair())
         \\    assert(counter.value == 4)
         \\
     );
@@ -255,10 +255,10 @@ test "self: writer results with owned storage survive binding and statement disc
         \\    var maker = Maker(made = 0)
         \\    let text = maker.text()
         \\    assert(text == "a heap-backed string returned from writer number 1")
-        \\    maker.text()
+        \\    discard(maker.text())
         \\    let payload = maker.payload()
         \\    assert(payload.items[0] == 3 and payload.items[1] == 4)
-        \\    maker.payload()
+        \\    discard(maker.payload())
         \\    assert(maker.made == 4)
         \\
     );

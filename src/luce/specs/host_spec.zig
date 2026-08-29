@@ -398,7 +398,7 @@ test "a world that will not say is an error, not an absence" {
     world.refused_kinds = &[_][]const u8{"locked"};
     var session = try hosted.compare(
         \\func main() -> !:
-        \\    try files.kind("locked/inside.txt")
+        \\    discard(try files.kind("locked/inside.txt"))
         \\
     , .{ .world = world });
     defer session.deinit();
@@ -595,7 +595,7 @@ test "catch NAME: binds the words the error carried, whichever code it was" {
         \\    return n
         \\
         \\func main():
-        \\    check(-4) catch reason:
+        \\    discard(check(-4)) catch reason:
         \\        print("user: " + reason)
         \\    files.write("out.txt", "body") catch reason:
         \\        print("io: " + reason)
@@ -690,7 +690,7 @@ test "the caught error is consumed: the binding reads it, forget still clears it
         \\    return n
         \\
         \\func guard(n: i64) -> i64:
-        \\    check(n) catch reason:
+        \\    discard(check(n)) catch reason:
         \\        print("handled " + reason)
         \\        return 0
         \\    return n
@@ -719,7 +719,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
         \\    return n
         \\
         \\func early() -> i64:
-        \\    check(-1) catch reason:
+        \\    discard(check(-1)) catch reason:
         \\        assert(len(reason) > 22)
         \\        return len(reason)
         \\    return 0
@@ -728,7 +728,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
         \\    var seen: i64 = 0
         \\    var index = 0
         \\    while index < 100:
-        \\        check(0 - index - 1) catch reason:
+        \\        discard(check(0 - index - 1)) catch reason:
         \\            seen = seen + len(reason)
         \\        index = index + 1
         \\    assert(seen > 2200)
@@ -737,7 +737,7 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
         \\    # scopes innermost first, and the binding's is one of them.
         \\    var stopped: i64 = 0
         \\    while true:
-        \\        check(-7) catch reason:
+        \\        discard(check(-7)) catch reason:
         \\            stopped = len(reason)
         \\            break
         \\    assert(stopped > 22)

@@ -32,7 +32,7 @@ pub class Frames:
         var body = list[u8]()
         for at in range(header_end + 4, header_end + 4 + length):
             body.append(self.pending[at])
-        self.discard(header_end + 4 + length)
+        self.consume(header_end + 4 + length)
         let text = strings.from_bytes(body)
         if text == none:
             error("frame body is not UTF-8")
@@ -77,7 +77,7 @@ pub class Frames:
             at += 1
         return got
 
-    func discard(count: i64):
+    func consume(count: i64):
         var kept = list[u8]()
         for at in range(count, len(self.pending)):
             kept.append(self.pending[at])

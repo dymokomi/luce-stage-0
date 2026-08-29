@@ -67,9 +67,12 @@ pub const type_names = [_][]const u8{
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
-    "abs",   "min",   "max",       "clamp",     "sqrt",      "floor",
-    "ceil",  "trunc", "len",       "range",     "assert",    "trap",
-    "error", "exit",  "parse_i64", "parse_f64", "parse_str", "print",
+    "abs",     "min",   "max",       "clamp",     "sqrt",      "floor",
+    "ceil",    "trunc", "len",       "range",     "assert",    "trap",
+    "error",   "exit",  "parse_i64", "parse_f64", "parse_str", "print",
+    // Not in that table and reserved on its own path, like `range`:
+    // it takes any type and answers none (docs/RETURNS.md).
+    "discard",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

@@ -226,7 +226,7 @@ test "opening a file that is not there is an error, not a trap" {
         \\
         \\func main():
         \\    var note = ""
-        \\    files.File("missing.txt") catch reason:
+        \\    discard(files.File("missing.txt")) catch reason:
         \\        note = reason
         \\    print("no: " + note)
         \\
