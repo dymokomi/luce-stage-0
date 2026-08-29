@@ -457,6 +457,11 @@ fn typeNames(gpa: Allocator) Allocator.Error!Words {
     var words: Words = .{ .gpa = gpa };
     errdefer words.deinit();
     try words.addAll(&luce.types.builtin_names);
+    // `never` is a type name a program may write (a function's return),
+    // but it is not a builtin the resolver dispatches like `str`: it is
+    // reserved and handled on its own path, so it is named here rather
+    // than read out of the builtin table (docs/FAILURE.md).
+    try words.add("never");
     return words;
 }
 
