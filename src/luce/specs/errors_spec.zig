@@ -5955,7 +5955,15 @@ test "luce.sema.index: every shape of index says what it will accept" {
         \\    var grid = array[i64](2, 2)
         \\    let bad = grid[0, 1.5]
         \\
-    , "luce.sema.index", "array indices are i64");
+    , "luce.sema.index", "array indices are integer positions");
+    // An integer of any width names a position (docs/TYPES.md); a float
+    // does not, and neither does a string.
+    try expectSaying(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    let bad = xs["one"]
+        \\
+    , "luce.sema.index", "lists index with one integer position");
     try expectSaying(
         \\func main():
         \\    var b = builder()

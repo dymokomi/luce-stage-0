@@ -881,9 +881,33 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     }
 }
 
+/// **An index is a position, and every integer names one.**  A `u32`
+/// identity indexing the flat table it identifies is the shape a
+/// data-oriented program is written in, and requiring `i64(id)` at every
+/// such site buys nothing: the value is already a number, the bounds
+/// check already stands behind it, and the conversion only hides the
+/// indexing behind ceremony.  So an index of any integer type widens
+/// here, and the position it names is checked exactly as before.
+///
+/// Widening is what a narrower type always allows; `u64` is the one
+/// width with values `i64` cannot hold, and it takes the same checked
+/// conversion `i64(x)` would — out of range is `conversion_range`, at
+/// the index, rather than a silently negative position.
+///
+/// **A map key is not a position and does not widen.**  `m[k]` names the
+/// key `m[k] = …` stores, so it must be the declared key type exactly;
+/// widening there would make `m[1]` and `m[u8(1)]` two spellings that
+/// could reach different entries.
+fn widenIndex(self: *FunctionBuilder, index: *Typed) Error!bool {
+    if (index.value_type.eql(.i64)) return true;
+    if (!index.value_type.isInteger()) return false;
+    index.* = try self.convertNumeric(index.*, .i64);
+    return true;
+}
+
 /// Type-check lowered index values against a heap object: lists take one
-/// `i64`, arrays take one `i64` per rank, and maps take one exact key.
-/// Returns the element/value type.
+/// integer position, arrays take one per rank, and maps take one exact
+/// key.  Returns the element/value type.
 pub fn checkIndex(
     self: *FunctionBuilder,
     object_type: Type,
@@ -891,8 +915,8 @@ pub fn checkIndex(
     span: Span,
 ) Error!?Type {
     if (object_type == .str or object_type == .bytes) {
-        if (indices.len != 1 or !indices[0].value_type.eql(.i64)) {
-            try self.fail("luce.sema.index", span, "{s} indexes with one i64", .{try self.analyzer.typeName(object_type)});
+        if (indices.len != 1 or !try widenIndex(self, &indices[0])) {
+            try self.fail("luce.sema.index", span, "{s} indexes with one integer position", .{try self.analyzer.typeName(object_type)});
             return null;
         }
         return if (object_type == .str) .char else .u8;
@@ -919,8 +943,8 @@ pub fn checkIndex(
             return null;
         },
         .list => |element| {
-            if (indices.len != 1 or !indices[0].value_type.eql(.i64)) {
-                try self.fail("luce.sema.index", span, "lists index with one i64", .{});
+            if (indices.len != 1 or !try widenIndex(self, &indices[0])) {
+                try self.fail("luce.sema.index", span, "lists index with one integer position", .{});
                 return null;
             }
             return element;
@@ -933,9 +957,9 @@ pub fn checkIndex(
                 });
                 return null;
             }
-            for (indices) |index_value| {
-                if (!index_value.value_type.eql(.i64)) {
-                    try self.fail("luce.sema.index", span, "array indices are i64", .{});
+            for (indices) |*index_value| {
+                if (!try widenIndex(self, index_value)) {
+                    try self.fail("luce.sema.index", span, "array indices are integer positions", .{});
                     return null;
                 }
             }
