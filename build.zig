@@ -1689,6 +1689,11 @@ fn addProgressTestRun(
     return run;
 }
 
+/// `abi.stack_reserve_bytes` (src/luce/codegen/abi.zig), restated because a
+/// build script cannot import the module it is building — the same
+/// restatement `compiler.stack_size` makes.
+const spec_stack_bytes: usize = 512 << 20;
+
 /// One independently runnable slice of the fused executable specification.
 /// These steps are developer feedback lanes; `zig build test` uses the single
 /// unfiltered binary above so every specification executes once in the gate.
@@ -1707,6 +1712,13 @@ fn addSpecificationSuite(
             .mode = .simple,
         },
     });
+    // A specification runs the compiled arm **in this process**
+    // (`specs/agree.zig`), so this binary is one of the stacks that hosts
+    // Luce frames and reserves what `codegen.abi.stack_reserve_bytes`
+    // says they get.  Without it a recursion the language promises to
+    // hold dies of a native overflow here and nowhere else, which is a
+    // fact about the harness masquerading as a fact about the language.
+    tests.stack_size = spec_stack_bytes;
     const step = b.step(definition.step, definition.description);
     step.dependOn(&addProgressTestRun(b, tests, definition.label).step);
     return step;
