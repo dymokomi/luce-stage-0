@@ -166,6 +166,21 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     if (written.result != null or std.mem.eql(u8, written.name, "func")) {
         return resolveSignature(self, module, written);
     }
+    // `never` (docs/FAILURE.md) is the type of what does not return.  A
+    // declared function's return reads it before reaching here
+    // (signatures.zig); anywhere a value would be stored — a parameter,
+    // a field, a local, a container element — there is no value of type
+    // never to store, so it is refused with the reason rather than left
+    // to fail as an unknown name.
+    if (std.mem.eql(u8, written.name, "never") and written.arguments.len == 0) {
+        try self.fail(
+            "luce.sema.type",
+            written.span,
+            "never is not a value type: it is only a function's return type, meaning the function does not return",
+            .{},
+        );
+        return null;
+    }
     // A standard-only spelling (`handle`) is the language's inside
     // embedded standard source and an ordinary name everywhere else —
     // the type-name half of the `Builtin.NAME` gate.  Falling through

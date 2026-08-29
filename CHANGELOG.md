@@ -4,6 +4,31 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.25 — the boring limits and the honest bottom
+
+- **The call budget and the stack grow to boring numbers.** The shared
+  depth limit rises to 1,000,000 frames and every stack that hosts Luce
+  reserves 512 MiB to hold them, so a compiler that recurses per nesting
+  level of its input runs without tuning.
+
+- **`pass` is a no-op statement** for a block that is deliberately empty.
+
+- **A match arm may name several members.** `off, standby:` is one arm
+  covering two enum members or two union tags, resolved as a bare-name
+  OR across the members it lists.
+
+- **A file-scope binding may be spelled `let`.** `let` and `const` mean
+  the same compile-time constant at file scope; `var` is refused, because
+  a module has no mutable globals.
+
+- **`never` is the type of what does not return.** A `-> never` function
+  must leave on every path — a trap, an exit, an endless loop, or (when
+  it is `-> never!`) a raise — and a call to one covers the branch it
+  ends, stands as the assert-unwrap after `else`, and leaves through a
+  `try`. `never` is a return type only; it is refused wherever a value
+  would be stored, and it replaces the compiler's built-in list of names
+  that happen not to return with a fact a program can declare.
+
 ## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a

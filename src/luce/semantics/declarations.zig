@@ -584,6 +584,7 @@ pub const Analyzer = struct {
             .results = info.results,
             .return_type = info.return_type,
             .fallible = info.fallible,
+            .diverges = info.diverges,
             .error_type = info.error_type,
             .lifecycle = info.lifecycle,
             .static_member = info.lifecycle == .ordinary and info.enclosing != null and info.receiver == .not,
@@ -642,7 +643,7 @@ pub const Analyzer = struct {
         // reader has to change if they meant something else.
         if (info.lifecycle != .initializer and
             info.results.len != 0 and
-            !helpers.returnsOnAllPaths(info.declaration.body))
+            !helpers.returnsOnAllPaths(builder.divergeView(), info.declaration.body))
         {
             const at = info.declaration.returnsSpan() orelse info.declaration.span;
             try self.fail(
@@ -650,6 +651,20 @@ pub const Analyzer = struct {
                 at,
                 "{s} must return {s} on every path, and some path reaches the end of its body without returning",
                 .{ info.declaration.name, try signatures.writtenResults(self, &info) },
+            );
+        }
+        // A `-> never` function makes the opposite promise: no path may
+        // reach the end and none may return, so the whole body must
+        // leave and every `return` is a broken claim (docs/FAILURE.md).
+        if (info.diverges and
+            !helpers.alwaysExits(builder.divergeView(), info.declaration.body))
+        {
+            const at = info.declaration.returnsSpan() orelse info.declaration.span;
+            try self.fail(
+                "luce.sema.return",
+                at,
+                "{s} answers never, so it must not return; some path reaches the end of its body — end every path with a trap, error, exit, or a loop that does not stop",
+                .{info.declaration.name},
             );
         }
         return builder.recorded_body;

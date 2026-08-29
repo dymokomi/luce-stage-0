@@ -305,9 +305,26 @@ fn collectFunction(
         try parameter_types.append(self.arena, resolved);
         try parameter_defaults.append(self.arena, folded);
     }
+    // `-> never` (docs/FAILURE.md): the function does not return, so it
+    // answers nothing and `diverges` carries the fact.  `never` is the
+    // whole return type — never one answer of a shape and never a value
+    // type — so it is read here, before `resolveType`, which refuses it
+    // everywhere a value would be stored.
+    var diverges = false;
     var results: std.ArrayList(Type) = .empty;
     defer results.deinit(self.arena);
-    for (declaration.returns) |written| {
+    if (declaration.returns.len == 1 and isNever(declaration.returns[0])) {
+        diverges = true;
+    } else for (declaration.returns) |written| {
+        if (isNever(written)) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "never is the whole return type of a function that does not return; it cannot be one answer of a return shape",
+                .{},
+            );
+            continue;
+        }
         const resolved = (try resolve.resolveType(self, module, written)) orelse continue;
         if (surface) {
             if (naming.privateMentioned(self, resolved)) |hidden| {
@@ -372,7 +389,20 @@ fn collectFunction(
         .error_type = error_type,
         .is_entry = is_entry,
         .lifecycle = lifecycle,
+        .diverges = diverges,
     });
+}
+
+/// Is this written return type the bare word `never`?  It is the whole
+/// return type or nothing: no `?`, no arguments, no wildcards, and not
+/// the `func`/`cfunc` shapes that wear a name of their own.
+fn isNever(written: ast.TypeName) bool {
+    return std.mem.eql(u8, written.name, "never") and
+        written.arguments.len == 0 and
+        written.wildcards == 0 and
+        !written.optional and
+        written.result == null and
+        !written.cfunc;
 }
 
 /// Register a top-level function stage 4 synthesized, and answer its

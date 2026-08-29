@@ -108,6 +108,12 @@ pub const Typed = struct {
     /// the walk records, and what `hir.lower` consumes.
     node: nodes.NodeRef,
     value_type: Type,
+    /// True when this expression is a call that does not return — a
+    /// `-> never` function or method, or a `try` of a fallible one
+    /// (docs/FAILURE.md).  `lowerExpression` records the expression in
+    /// the builder's diverging set from this bit, so flow analysis can
+    /// see the statement leaves without resolving the callee again.
+    diverges: bool = false,
     /// The batch-rewrite override (docs/STRINGS.md): a defensive
     /// borrow copy leaves the value *fresh* whatever the borrow was,
     /// and a spill reload leaves it a *view* of its slot — facts the
@@ -314,6 +320,15 @@ pub const FunctionBuilder = struct {
     /// Whether the declaration wrote `!` — what `raise` and the
     /// try-pass-through check against (docs/FAILURE.md).
     fallible: bool = false,
+    /// Whether the declaration wrote `-> never`: the body must not
+    /// return, so every `return` in it is refused and the whole body is
+    /// held to `alwaysExits` (docs/FAILURE.md).
+    diverges: bool = false,
+    /// The call expressions this walk resolved as leaving — a call to a
+    /// `-> never` function or method, and a `try` of one.  Keyed by the
+    /// source expression so flow analysis (`helpers.zig`) reads the fact
+    /// off the AST it already walks, needing no resolver of its own.
+    diverging_calls: std.AutoHashMapUnmanaged(*const ast.Expression, void) = .empty,
     /// What this function fails with (docs/ERRORS.md R2): the union
     /// `error(...)` must be given and `try` must match, or `.str`.
     error_type: Type = .str,
@@ -478,6 +493,22 @@ pub const FunctionBuilder = struct {
         return self.analyzer.temporary;
     }
 
+    /// Record that this call expression does not return, so flow
+    /// analysis reads the statement as leaving (docs/FAILURE.md).
+    pub fn recordDiverges(self: *FunctionBuilder, expression: *const ast.Expression) Error!void {
+        try self.diverging_calls.put(self.temporary(), expression, {});
+    }
+
+    /// The diverging-call set as flow analysis reads it, beside the
+    /// collected function table it resolves bare names through.
+    pub fn divergeView(self: *const FunctionBuilder) helpers.Diverges {
+        return .{
+            .set = &self.diverging_calls,
+            .functions = self.analyzer.functions.items,
+            .names = &self.analyzer.function_names,
+        };
+    }
+
     /// The declaration tables `nodes.splitsBlocks` reads — the member
     /// counts that tell a one-constant text conversion from a
     /// compare-and-branch chain.  The same tables lower hands it.
@@ -499,6 +530,7 @@ pub const FunctionBuilder = struct {
         self.undeclared.deinit(self.temporary());
         self.narrowed.deinit(self.temporary());
         self.captured_mutables.deinit(self.temporary());
+        self.diverging_calls.deinit(self.temporary());
         for (self.recorded_blocks.items) |*frame| frame.statements.deinit(self.temporary());
         self.recorded_blocks.deinit(self.temporary());
         self.recorded_locals.deinit(self.temporary());
@@ -1873,6 +1905,10 @@ pub const FunctionBuilder = struct {
         defer self.depth -= 1;
 
         const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
+        // A call that does not return leaves the statement it sits in;
+        // recorded here, off the one expression flow analysis will read
+        // (docs/FAILURE.md).
+        if (value.diverges) try self.recordDiverges(expression);
         if (value.value_type == .none) return value;
         // A freshly made value is parked as a statement temporary so the
         // statement's end reclaims what nothing adopts (docs/STRINGS.md,
@@ -2592,7 +2628,7 @@ pub const FunctionBuilder = struct {
             const floor = self.temps.items.len;
             const handled = (try self.lowerExpression(binary.right, true)) orelse return null;
             const fallback: nodes.Expression.CatchExpr.Fallback =
-                if (expressions.isLeavingCall(binary.right)) .{ .leaving = handled.node } else .{ .value = handled.node };
+                if (expressions.isLeavingCall(self, binary.right)) .{ .leaving = handled.node } else .{ .value = handled.node };
             ledger.flushTemps(self, floor);
             return .{
                 .node = try recorder.recordNode(self, .{ .catch_expr = .{
@@ -2610,7 +2646,7 @@ pub const FunctionBuilder = struct {
         // its reload — a view of what the slot holds.
         _ = try recorder.recordLocal(self, null, value.value_type, false, binary.span);
         var fallback: ?nodes.Expression.CatchExpr.Fallback = null;
-        if (expressions.isLeavingCall(binary.right)) {
+        if (expressions.isLeavingCall(self, binary.right)) {
             // `f() catch trap("…")` and `f() catch error("…")` never
             // come back, so they leave nothing to store — the same
             // shape `x else trap("…")` has, and the node files the

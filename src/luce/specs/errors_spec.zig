@@ -5276,8 +5276,8 @@ test "luce.sema.unreachable: an if counts only when both arms leave" {
         \\        return 1
         \\    else:
         \\        return 2
-        \\    let never = n
-        \\    return never
+        \\    let stranded = n
+        \\    return stranded
         \\
         \\func main():
         \\    assert(pick(1) == 1)
@@ -9311,4 +9311,68 @@ test "R2: bare ! stays the str message form, unchanged" {
         \\negative: -3
         \\
     );
+}
+
+test "never: a -> never body that can fall through is refused" {
+    try expectRejected(
+        \\func bail(message: str) -> never:
+        \\    print(message)
+        \\
+        \\func main():
+        \\    bail("x")
+        \\
+    , "luce.sema.return");
+}
+
+test "never: a return inside a -> never function is refused" {
+    try expectSaying(
+        \\func bail() -> never:
+        \\    return
+        \\
+        \\func main():
+        \\    bail()
+        \\
+    , "luce.sema.return", "does not return");
+}
+
+test "never: never as a value type is refused" {
+    try expectSaying(
+        \\func main():
+        \\    let x: never = 3
+        \\    print(str(x))
+        \\
+    , "luce.sema.type", "not a value type");
+}
+
+test "never: never as a parameter type is refused" {
+    try expectSaying(
+        \\func take(x: never):
+        \\    trap("unreachable")
+        \\
+        \\func main():
+        \\    trap("x")
+        \\
+    , "luce.sema.type", "not a value type");
+}
+
+test "never: never as one answer of a return shape is refused" {
+    try expectSaying(
+        \\func two() -> (i64, never):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, b = two()
+        \\
+    , "luce.sema.type", "whole return type");
+}
+
+test "never: a declaration may not take the reserved word never" {
+    try expectRejected(
+        \\func never():
+        \\    trap("x")
+        \\
+        \\func main():
+        \\    trap("y")
+        \\
+    , "luce.sema.reserved");
 }

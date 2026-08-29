@@ -97,7 +97,7 @@ fn validateStatement(self: *FunctionBuilder, flow: *Flow, statement: ast.Stateme
             // A loop may run zero times, so its stores establish no fact
             // after it. A literal endless loop without a break has no path
             // to the initializer's implicit return.
-            if (helpers.exitingStatement(statement) != null) flow.falls_through = false;
+            if (helpers.exitingStatement(self.divergeView(), statement) != null) flow.falls_through = false;
         },
         .for_range => |loop| {
             try refuseSelfBinding(self, loop.name, loop.span, "loop binding");
@@ -134,7 +134,7 @@ fn validateStatement(self: *FunctionBuilder, flow: *Flow, statement: ast.Stateme
         .pass_statement => {},
         .expression => |written| {
             try validateExpression(self, flow.initialized, written.value);
-            if (leavesByCall(written.value)) flow.falls_through = false;
+            if (leavesByCall(self, written.value)) flow.falls_through = false;
         },
         .guarded => |guarded| try validateGuarded(self, flow, guarded),
         .match => |matched| try validateMatch(self, flow, matched),
@@ -521,12 +521,21 @@ fn isBareSelf(expression: *const ast.Expression) bool {
     return expression.* == .name and std.mem.eql(u8, expression.name.text, "self");
 }
 
-fn leavesByCall(expression: *const ast.Expression) bool {
+/// Does this expression statement leave the block it sits in — a
+/// diverging builtin, or a bare call to a `-> never` function?  The
+/// initializer flow pass runs before the body is lowered, so it cannot
+/// read the builder's recorded set; a bare name resolves through the
+/// already-collected function table instead.  A `self.method()` that
+/// diverges is not read here, which only ever asks a field for one more
+/// explicit assignment — never accepts an uninitialized one.
+fn leavesByCall(self: *const FunctionBuilder, expression: *const ast.Expression) bool {
     if (expression.* != .call) return false;
     const name = expression.call.callee;
-    return std.mem.eql(u8, name, "error") or
+    if (std.mem.eql(u8, name, "error") or
         std.mem.eql(u8, name, "trap") or
-        std.mem.eql(u8, name, "exit");
+        std.mem.eql(u8, name, "exit")) return true;
+    const index = self.analyzer.function_names.get(name) orelse return false;
+    return self.analyzer.functions.items[index].diverges;
 }
 
 fn initializerFieldIndex(self: *const FunctionBuilder, name: []const u8) ?u32 {

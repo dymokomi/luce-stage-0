@@ -1623,12 +1623,20 @@ fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
 /// expression that never yields one and is still legal there,
 /// because it never comes back; `trap` is a reserved name, so
 /// nothing else can wear it.
-pub fn isLeavingCall(expression: *const ast.Expression) bool {
+/// Does this fallback — the right of `else` or `catch` — leave rather
+/// than answer a value?  The diverging builtins do, and so does a bare
+/// call to a `-> never` function, resolved through the collected table
+/// (the fallback is not lowered yet, so the recorded set is not read
+/// here).  A `self.method()` fallback that diverges is not recognized;
+/// it is refused as a value, which the reader fixes by binding it first.
+pub fn isLeavingCall(self: *const FunctionBuilder, expression: *const ast.Expression) bool {
     if (expression.* != .call) return false;
     const callee = expression.call.callee;
-    return std.mem.eql(u8, callee, "trap") or
+    if (std.mem.eql(u8, callee, "trap") or
         std.mem.eql(u8, callee, "error") or
-        std.mem.eql(u8, callee, "exit");
+        std.mem.eql(u8, callee, "exit")) return true;
+    const index = self.analyzer.function_names.get(callee) orelse return false;
+    return self.analyzer.functions.items[index].diverges;
 }
 
 /// `a else b` — `a` when it is there, `b` when it is not.  The
@@ -1654,7 +1662,7 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     // its reload — a view of what the slot holds.
     _ = try recorder.recordLocal(self, null, payload, false, binary.span);
     var fallback: ?nodes.Expression.Coalesce.Fallback = null;
-    if (isLeavingCall(binary.right)) {
+    if (isLeavingCall(self, binary.right)) {
         // `x else trap("…")` is the assert-unwrap, and it is
         // greppable — which is why Luce has no force-unwrap sigil
         // (docs/FAILURE.md).  The fallback leaves nothing behind

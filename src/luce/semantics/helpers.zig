@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const ast = @import("../parse.zig").ast;
+const context = @import("context.zig");
 const vocabulary = @import("../support/vocabulary.zig");
 const Span = @import("../source.zig").Span;
 const Type = @import("../support/types.zig").Type;
@@ -365,10 +366,35 @@ fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     return previous[b.len];
 }
 
+/// The calls this walk treats as leaving — never returning to the
+/// statement after them.  Built by the builder as it resolves each call
+/// (`builder.recordDiverges`): a `-> never` function or method, and a
+/// `try` of a fallible one (docs/FAILURE.md).  Reading the set here lets
+/// flow analysis stay a walk over the AST with no resolver of its own.
+pub const Diverges = struct {
+    set: *const std.AutoHashMapUnmanaged(*const ast.Expression, void),
+    /// The collected function table, so a bare call to a `-> never`
+    /// function is read as leaving even in the passes that run before
+    /// the walk records it (the unreachable lint, initializer flow).
+    /// A method call is only in `set`, recorded when it was checked.
+    functions: []const context.FunctionDeclInfo,
+    names: *const std.StringHashMapUnmanaged(u32),
+
+    pub fn has(self: Diverges, expression: *const ast.Expression) bool {
+        if (self.set.contains(expression)) return true;
+        if (expression.* != .call) return false;
+        const index = self.names.get(expression.call.callee) orelse return false;
+        return self.functions[index].diverges;
+    }
+};
+
 /// `trap("…")` and `error("…")` never come back, so a block ending in
 /// one leaves as surely as one that returns.  Both names are reserved,
-/// so nothing a reader declares can wear them.
-fn leavesByCall(expression: *const ast.Expression) bool {
+/// so nothing a reader declares can wear them.  A call to a `-> never`
+/// function or method — and a `try` of one — leaves for the same
+/// reason, which the builder recorded in `d`.
+fn leavesByCall(d: Diverges, expression: *const ast.Expression) bool {
+    if (d.has(expression)) return true;
     if (expression.* != .call) return false;
     const callee = expression.call.callee;
     return std.mem.eql(u8, callee, "trap") or
@@ -433,18 +459,18 @@ fn neverFallsThrough(loop: ast.While) bool {
 /// certainly returns; an if returns only when both arms do.  Loops
 /// guarantee a return only when their condition is literally `true` and
 /// no break can target that loop.
-pub fn returnsOnAllPaths(block: ast.Block) bool {
+pub fn returnsOnAllPaths(d: Diverges, block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
             .return_statement => return true,
-            .expression => |written| if (leavesByCall(written.value)) return true,
+            .expression => |written| if (leavesByCall(d, written.value)) return true,
             .conditional => |conditional| {
                 if (conditional.else_block) |else_block| {
-                    if (returnsOnAllPaths(conditional.then_block) and
-                        returnsOnAllPaths(else_block)) return true;
+                    if (returnsOnAllPaths(d, conditional.then_block) and
+                        returnsOnAllPaths(d, else_block)) return true;
                 }
             },
-            .match => |matched| if (everyArm(matched, returnsOnAllPaths)) return true,
+            .match => |matched| if (everyArm(d, matched, returnsOnAllPaths)) return true,
             .while_loop => |loop| if (neverFallsThrough(loop)) return true,
             else => {},
         }
@@ -460,18 +486,18 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
 /// there.  A wrong "no" costs a diagnostic the reader can work around;
 /// a wrong "yes" would be unsound, so only a literal infinite loop with
 /// no break counts.
-pub fn alwaysExits(block: ast.Block) bool {
+pub fn alwaysExits(d: Diverges, block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
             .return_statement, .break_statement, .continue_statement => return true,
-            .expression => |written| if (leavesByCall(written.value)) return true,
+            .expression => |written| if (leavesByCall(d, written.value)) return true,
             .conditional => |conditional| {
                 if (conditional.else_block) |else_block| {
-                    if (alwaysExits(conditional.then_block) and
-                        alwaysExits(else_block)) return true;
+                    if (alwaysExits(d, conditional.then_block) and
+                        alwaysExits(d, else_block)) return true;
                 }
             },
-            .match => |matched| if (everyArm(matched, alwaysExits)) return true,
+            .match => |matched| if (everyArm(d, matched, alwaysExits)) return true,
             .while_loop => |loop| if (neverFallsThrough(loop)) return true,
             else => {},
         }
@@ -487,24 +513,36 @@ pub fn alwaysExits(block: ast.Block) bool {
 /// An `if` counts only when *both* arms leave, which is `alwaysExits`'
 /// rule and is conservative in the safe direction — a missed one costs
 /// nothing, a wrong one would refuse a running program.
-pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
+pub fn exitingStatement(d: Diverges, statement: ast.Statement) ?[]const u8 {
     return switch (statement) {
         .return_statement => "return",
         .break_statement => "break",
         .continue_statement => "continue",
-        .expression => |written| if (written.value.* == .call and leavesByCall(written.value))
-            written.value.call.callee
+        .expression => |written| if (leavesByCall(d, written.value))
+            leavingName(written.value)
         else
             null,
         .conditional => |conditional| blk: {
             const otherwise = conditional.else_block orelse break :blk null;
-            if (!alwaysExits(conditional.then_block)) break :blk null;
-            if (!alwaysExits(otherwise)) break :blk null;
+            if (!alwaysExits(d, conditional.then_block)) break :blk null;
+            if (!alwaysExits(d, otherwise)) break :blk null;
             break :blk "if";
         },
-        .match => |matched| if (everyArm(matched, alwaysExits)) "match" else null,
+        .match => |matched| if (everyArm(d, matched, alwaysExits)) "match" else null,
         .while_loop => |loop| if (neverFallsThrough(loop)) "while" else null,
         else => null,
+    };
+}
+
+/// The word a diagnostic about code after a leaving call names it by —
+/// the callee, the method, or `try` when a `try` of a `-> never` call is
+/// what took the control away.
+fn leavingName(expression: *const ast.Expression) []const u8 {
+    return switch (expression.*) {
+        .call => |call| call.callee,
+        .method => |method| method.name,
+        .try_call => "try",
+        else => "call",
     };
 }
 
@@ -518,12 +556,12 @@ pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
 /// the check failed the program is refused anyway, so being generous
 /// here can only cost a second diagnostic on a program that already has
 /// one.
-fn everyArm(matched: ast.Match, comptime answers: fn (ast.Block) bool) bool {
+fn everyArm(d: Diverges, matched: ast.Match, comptime answers: fn (Diverges, ast.Block) bool) bool {
     if (matched.arms.len == 0) return false;
     for (matched.arms) |arm| {
-        if (!answers(arm.body)) return false;
+        if (!answers(d, arm.body)) return false;
     }
-    if (matched.else_block) |otherwise| return answers(otherwise);
+    if (matched.else_block) |otherwise| return answers(d, otherwise);
     return true;
 }
 
@@ -576,6 +614,14 @@ test "edit distance stops counting once it is past the limit" {
     try testing.expect(editDistance("a", "abcdefgh", 2) > 2);
 }
 
+// A flow view with nothing diverging — the structural cases below
+// (return, break, if, loop) need no recorded calls.
+const no_diverging: std.AutoHashMapUnmanaged(*const ast.Expression, void) = .empty;
+const no_names: std.StringHashMapUnmanaged(u32) = .empty;
+fn plainFlow() Diverges {
+    return .{ .set = &no_diverging, .functions = &.{}, .names = &no_names };
+}
+
 test "a block leaves only when every path does" {
     const marker: Span = .{ .start = 0, .end = 0 };
     const returned: ast.Statement = .{ .return_statement = .{ .values = &.{}, .span = marker } };
@@ -584,12 +630,12 @@ test "a block leaves only when every path does" {
     var condition: ast.Expression = .{ .bool_literal = .{ .value = true, .span = marker } };
 
     var one = [_]ast.Statement{returned};
-    try testing.expect(alwaysExits(.{ .statements = &one, .span = marker }));
+    try testing.expect(alwaysExits(plainFlow(), .{ .statements = &one, .span = marker }));
     var two = [_]ast.Statement{broke};
-    try testing.expect(alwaysExits(.{ .statements = &two, .span = marker }));
+    try testing.expect(alwaysExits(plainFlow(), .{ .statements = &two, .span = marker }));
     var three = [_]ast.Statement{continued};
-    try testing.expect(alwaysExits(.{ .statements = &three, .span = marker }));
-    try testing.expect(!alwaysExits(.{ .statements = &.{}, .span = marker }));
+    try testing.expect(alwaysExits(plainFlow(), .{ .statements = &three, .span = marker }));
+    try testing.expect(!alwaysExits(plainFlow(), .{ .statements = &.{}, .span = marker }));
 
     // Both arms leave, so the conditional does.
     var then_arm = [_]ast.Statement{returned};
@@ -600,7 +646,7 @@ test "a block leaves only when every path does" {
         .else_block = .{ .statements = &else_arm, .span = marker },
         .span = marker,
     } }};
-    try testing.expect(alwaysExits(.{ .statements = &both, .span = marker }));
+    try testing.expect(alwaysExits(plainFlow(), .{ .statements = &both, .span = marker }));
 
     // One arm is not both, and a finite loop may not execute at all.
     var only_then = [_]ast.Statement{.{ .conditional = .{
@@ -609,7 +655,7 @@ test "a block leaves only when every path does" {
         .else_block = null,
         .span = marker,
     } }};
-    try testing.expect(!alwaysExits(.{ .statements = &only_then, .span = marker }));
+    try testing.expect(!alwaysExits(plainFlow(), .{ .statements = &only_then, .span = marker }));
     var finite_condition: ast.Expression = .{ .bool_literal = .{ .value = false, .span = marker } };
     var body = [_]ast.Statement{returned};
     var loop = [_]ast.Statement{.{ .while_loop = .{
@@ -617,7 +663,7 @@ test "a block leaves only when every path does" {
         .body = .{ .statements = &body, .span = marker },
         .span = marker,
     } }};
-    try testing.expect(!alwaysExits(.{ .statements = &loop, .span = marker }));
+    try testing.expect(!alwaysExits(plainFlow(), .{ .statements = &loop, .span = marker }));
 
     // A literal infinite loop with no break cannot reach the block's
     // end, so it is a valid last statement of a value-returning
@@ -628,8 +674,8 @@ test "a block leaves only when every path does" {
         .body = .{ .statements = &forever_body, .span = marker },
         .span = marker,
     } }};
-    try testing.expect(returnsOnAllPaths(.{ .statements = &forever, .span = marker }));
-    try testing.expect(alwaysExits(.{ .statements = &forever, .span = marker }));
+    try testing.expect(returnsOnAllPaths(plainFlow(), .{ .statements = &forever, .span = marker }));
+    try testing.expect(alwaysExits(plainFlow(), .{ .statements = &forever, .span = marker }));
 
     var break_body = [_]ast.Statement{broke};
     var break_loop = [_]ast.Statement{.{ .while_loop = .{
@@ -637,7 +683,7 @@ test "a block leaves only when every path does" {
         .body = .{ .statements = &break_body, .span = marker },
         .span = marker,
     } }};
-    try testing.expect(!returnsOnAllPaths(.{ .statements = &break_loop, .span = marker }));
+    try testing.expect(!returnsOnAllPaths(plainFlow(), .{ .statements = &break_loop, .span = marker }));
 }
 
 test "a suggestion keeps the closest name, and stays quiet when nothing is close" {

@@ -112,8 +112,11 @@ range
 abs       min       max       clamp      sqrt
 floor     ceil      trunc     len        assert
 trap      error     parse_i64 parse_f64  parse_str
-print     exit
+print     exit      never
 ```
+
+`never` is the spec type of what does not return; it is reserved so no
+declaration may take the word (see [Errors and Traps](/guide/reference/failure/#never)).
 
 Receiver methods are not reserved. The receiver selects their namespace, so
 a user function may be named `append`, `remove`, `has`, `dim`, `byte_at`, or

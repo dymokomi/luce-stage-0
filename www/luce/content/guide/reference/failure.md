@@ -140,6 +140,47 @@ loom: error: negative: -5 [user_error]
 There is no `errdefer`. ARC already releases local references on `return` and
 `try`; an error path needs no second cleanup mechanism.
 
+## never
+
+`-> never` marks a function that does not return. Every path through its
+body must leave — a `trap`, an `exit`, a loop that does not stop, or (when
+the function is also fallible, `-> never!`) an `error`. A `return` inside a
+`-> never` function is refused, and so is a body that can reach its end.
+
+`never` is a return type only. It is the type of what does not return, so
+there is no value of that type to store: it is refused as a parameter, a
+field, a local, a container element, and as one answer of a return shape.
+
+A call to a `-> never` function does not come back, so it stands wherever
+`trap(...)` does. It ends a branch without a `return` after it, it is the
+assert-unwrap after `else`, and a `try` of a `-> never!` call leaves the
+statement below it.
+
+```luce run
+func unreachable_state(label: str) -> never:
+    trap("unreachable: " + label)
+
+func classify(n: i64) -> str:
+    if n > 0:
+        return "positive"
+    elif n < 0:
+        return "negative"
+    elif n == 0:
+        return "zero"
+    unreachable_state("i64 compared three ways")
+
+func main():
+    print(classify(3))
+    print(classify(-1))
+    print(classify(0))
+```
+
+```output
+positive
+negative
+zero
+```
+
 ## Absence
 
 `T?` means that a value may be absent. `none` is the only absent value.

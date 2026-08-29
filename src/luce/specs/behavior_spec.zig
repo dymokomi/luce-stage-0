@@ -6302,3 +6302,137 @@ test "match value: the scrutinee is evaluated exactly once, both engines" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// never (docs/FAILURE.md)
+// ---------------------------------------------------------------------------
+//
+// A `-> never` function does not return: every path traps, exits, loops
+// forever, or (when it is fallible) raises.  A call to one leaves the
+// statement after it, so flow analysis reads the function around it as
+// covered — a `return` after the diverging tail is not needed, and one
+// branch of an `if` may diverge while the other supplies the value.
+
+test "never: a call to a diverging function covers the missing return" {
+    try agree.prints(
+        \\func bail(message: str) -> never:
+        \\    trap(message)
+        \\
+        \\func pick(present: bool) -> i64:
+        \\    if present:
+        \\        return 7
+        \\    bail("absent")
+        \\
+        \\func main():
+        \\    print(str(pick(true)))
+        \\
+    ,
+        \\7
+        \\
+    );
+}
+
+test "never: the diverging branch actually leaves, and traps when taken" {
+    try agreeTrap(
+        \\func bail(message: str) -> never:
+        \\    trap(message)
+        \\
+        \\func pick(present: bool) -> i64:
+        \\    if present:
+        \\        return 7
+        \\    bail("absent")
+        \\
+        \\func main():
+        \\    var here = false
+        \\    print(str(pick(here)))
+        \\
+    , .explicit_trap);
+}
+
+test "never: an infinite loop is a valid diverging body, and an else may use it" {
+    try agree.prints(
+        \\func spin() -> never:
+        \\    while true:
+        \\        pass
+        \\
+        \\func choose(present: bool) -> str:
+        \\    if present:
+        \\        return "yes"
+        \\    else:
+        \\        spin()
+        \\
+        \\func main():
+        \\    print(choose(true))
+        \\
+    ,
+        \\yes
+        \\
+    );
+}
+
+test "never: a fallible -> never! method is diverging through try" {
+    try agree.prints(
+        \\class Reader:
+        \\    label: str
+        \\    init(label: str):
+        \\        self.label = label
+        \\    func fail(message: str) -> never!:
+        \\        error(self.label + ": " + message)
+        \\    func read(present: bool) -> i64!:
+        \\        if present:
+        \\            return 5
+        \\        try self.fail("missing")
+        \\
+        \\func main() -> !:
+        \\    let r = Reader("r")
+        \\    print(str(try r.read(true)))
+        \\
+    ,
+        \\5
+        \\
+    );
+}
+
+test "never: a diverging fallible method raises what it raises, caught above" {
+    try agree.prints(
+        \\class Reader:
+        \\    label: str
+        \\    init(label: str):
+        \\        self.label = label
+        \\    func fail(message: str) -> never!:
+        \\        error(self.label + ": " + message)
+        \\    func read(present: bool) -> i64!:
+        \\        if present:
+        \\            return 5
+        \\        try self.fail("missing")
+        \\
+        \\func main():
+        \\    var here = false
+        \\    let value = Reader("r").read(here) catch reason:
+        \\        print(reason)
+        \\        return
+        \\    print(str(value))
+        \\
+    ,
+        \\r: missing
+        \\
+    );
+}
+
+test "never: a user diverging call is the assert-unwrap in an else" {
+    try agree.prints(
+        \\func bail(message: str) -> never:
+        \\    trap(message)
+        \\
+        \\func lookup(table: map[str, i64], key: str) -> i64:
+        \\    return table.get(key) else bail("no " + key)
+        \\
+        \\func main():
+        \\    var table = {"a": 1, "b": 2}
+        \\    print(str(lookup(table, "b")))
+        \\
+    ,
+        \\2
+        \\
+    );
+}

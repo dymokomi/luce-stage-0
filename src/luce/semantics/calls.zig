@@ -1117,9 +1117,14 @@ fn lowerUserCall(
         info.return_type,
         span,
     );
-    if (info.fallible) return try self.openFallibleWith(info.return_type, info.error_type, node, span);
+    if (info.fallible) {
+        var opened = try self.openFallibleWith(info.return_type, info.error_type, node, span);
+        // A `try` of a `-> never!` call leaves; `lowerTry` reads this.
+        opened.diverges = info.diverges;
+        return opened;
+    }
     // A function's result is the caller's (S16): fresh storage.
-    return .{ .node = node, .value_type = info.return_type };
+    return .{ .node = node, .value_type = info.return_type, .diverges = info.diverges };
 }
 
 /// target.name(args): a namespaced call when the target chain is
@@ -2044,11 +2049,14 @@ fn lowerReceiverCall(
         info.return_type,
         method.span,
     );
-    const answered: Typed = if (info.fallible)
+    var answered: Typed = if (info.fallible)
         try self.openFallibleWith(info.return_type, info.error_type, node, method.span)
     else
         // A function's result is the caller's (S16): fresh storage.
         .{ .node = node, .value_type = info.return_type };
+    // A `x.m()` to a `-> never` method leaves; a `try x.m()` to a
+    // `-> never!` one leaves through the try.  `lowerTry` reads this.
+    answered.diverges = info.diverges;
     return answered;
 }
 
@@ -2689,9 +2697,14 @@ fn callUser(
         info.return_type,
         span,
     );
-    if (info.fallible) return try self.openFallibleWith(info.return_type, info.error_type, node, span);
+    if (info.fallible) {
+        var opened = try self.openFallibleWith(info.return_type, info.error_type, node, span);
+        // A `try` of a `-> never!` call leaves; `lowerTry` reads this.
+        opened.diverges = info.diverges;
+        return opened;
+    }
     // A function's result is the caller's (S16): fresh storage.
-    return .{ .node = node, .value_type = info.return_type };
+    return .{ .node = node, .value_type = info.return_type, .diverges = info.diverges };
 }
 
 // Method tables, by receiver shape ----------------------------------------

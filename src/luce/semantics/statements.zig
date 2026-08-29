@@ -67,7 +67,7 @@ pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
         // (nodes.Body.gaps).
         if (recorder.recordedStatementCount(self) == recorded_floor) self.recorded_gaps += 1;
     }
-    if (initializer_body and !helpers.alwaysExits(block)) {
+    if (initializer_body and !helpers.alwaysExits(self.divergeView(), block)) {
         try initializers.lowerReturn(self, block.span);
     }
     self.recorded_block = try recorder.closeStatementFrame(self, block.span);
@@ -94,7 +94,7 @@ pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
 fn refuseUnreachable(self: *FunctionBuilder, block: ast.Block) Error!void {
     for (block.statements, 0..) |statement, index| {
         if (index + 1 == block.statements.len) return;
-        const leaves = helpers.exitingStatement(statement) orelse continue;
+        const leaves = helpers.exitingStatement(self.divergeView(), statement) orelse continue;
         const stranded = block.statements[index + 1];
         const at = self.analyzer.diagnostics.sources.place(
             self.analyzer.diagnostics.scope,
@@ -1629,9 +1629,9 @@ fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!
         .span = conditional.span,
     } });
 
-    const then_leaves = helpers.alwaysExits(conditional.then_block);
+    const then_leaves = helpers.alwaysExits(self.divergeView(), conditional.then_block);
     const else_leaves = if (conditional.else_block) |else_block|
-        helpers.alwaysExits(else_block)
+        helpers.alwaysExits(self.divergeView(), else_block)
     else
         false;
     if (then_leaves and else_leaves) return; // nothing reaches here
@@ -1865,6 +1865,20 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
 }
 
 fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
+    // A `-> never` function does not return, so a `return` — with a
+    // value or bare — is the one statement it may not write
+    // (docs/FAILURE.md).  Lower any value first, so a mistake inside it
+    // is reported before this one.
+    if (self.diverges) {
+        for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
+        try self.fail(
+            "luce.sema.return",
+            returned.span,
+            "{s} answers never, so it does not return; leave by a trap, error, exit, or a loop that does not stop",
+            .{self.name},
+        );
+        return;
+    }
     if (self.lifecycle == .initializer) {
         // The lifecycle validator owns the diagnostic for a value-bearing
         // return. A bare return materializes the class whole here.
@@ -2090,14 +2104,6 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     };
     var hidden: ?context.LocalInfo = null;
     if (bound_name) |name| {
-        if (!helpers.alwaysExits(guarded.handler)) {
-            try self.fail(
-                "luce.sema.catch",
-                guarded.handler.span,
-                "this catch block can fall through, and {s} would have no value there: end every path with return or error, or write '… catch VALUE'",
-                .{name},
-            );
-        }
         const top = &self.scopes.items[self.scopes.items.len - 1];
         if (top.names.fetchRemove(name)) |removed| hidden = removed.value;
     }
@@ -2115,7 +2121,18 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
     } else {
         try lowerBlock(self, guarded.handler);
     }
+    // The fall-through check reads whether the handler leaves, which
+    // includes a call to a `-> never` function the walk just recorded
+    // — so it runs after the handler is lowered, not before.
     if (bound_name) |name| {
+        if (!helpers.alwaysExits(self.divergeView(), guarded.handler)) {
+            try self.fail(
+                "luce.sema.catch",
+                guarded.handler.span,
+                "this catch block can fall through, and {s} would have no value there: end every path with return or error, or write '… catch VALUE'",
+                .{name},
+            );
+        }
         if (hidden) |info| {
             const top = &self.scopes.items[self.scopes.items.len - 1];
             try top.names.put(self.temporary(), name, info);
@@ -2138,7 +2155,7 @@ fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
         } });
     }
 
-    if (helpers.alwaysExits(guarded.handler)) {
+    if (helpers.alwaysExits(self.divergeView(), guarded.handler)) {
         // Only the successful call reaches the merge.
         try flow.narrowRestore(self, succeeded);
     } else {

@@ -232,6 +232,10 @@ pub const reserved_names = [_][]const u8{
     "parse_str",
     "print",
     "exit",
+    // A spec type name (docs/FAILURE.md): the type of what does not
+    // return.  It is only ever a function's whole return type, so no
+    // declaration may take the word for a value.
+    "never",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -363,6 +367,13 @@ pub const FunctionDeclInfo = struct {
     /// `catch`, which is what makes a swallowed failure unwritable
     /// (docs/FAILURE.md).
     fallible: bool,
+    /// Written `-> never`: the function does not return normally — every
+    /// path traps, exits, loops forever, or (when it is also fallible)
+    /// raises.  Divergence is an attribute of the function exactly as
+    /// `fallible` is, never part of what it answers: a `-> never`
+    /// function answers nothing (`results` is empty), and a call to one
+    /// leaves the statement after it, which is what flow analysis reads.
+    diverges: bool = false,
     /// What it fails with (docs/ERRORS.md R2): a union, or `.str` for
     /// the bare `!`.  Meaningful only when `fallible`.
     error_type: Type = .str,

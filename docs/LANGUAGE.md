@@ -153,7 +153,10 @@ restricted; function slots use the storable optional form described in
 `func name(parameters) -> Result:` declares a function; omitting the arrow
 means no result. Parameters have names and types. Calls may begin positional
 and switch once to named arguments. Defaults are trailing and folded at the
-declaration. A fallible function writes `-> T!` or bare `-> !`.
+declaration. A fallible function writes `-> T!` or bare `-> !`. A function
+that does not return writes `-> never`: every path must trap, exit, loop
+forever, or (as `-> never!`) raise. `never` is a return type only; a call to
+one covers the branch it ends, and flow analysis reads it as leaving.
 
 A function may answer two or more values with `-> (A, B, ...)`. This is a
 return shape, not a tuple type. A destructuring `let`, `var`, or assignment
