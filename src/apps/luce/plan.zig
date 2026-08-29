@@ -422,6 +422,7 @@ fn compileStep(
         .output = target,
         .source_hash = source_hash,
         .links = links,
+        .release = step.release,
     })) {
         .written => {},
         .unsupported => |what| {

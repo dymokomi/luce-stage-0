@@ -53,18 +53,6 @@ pub fn build(b: *std.Build) void {
         .{source_commit},
     );
 
-    // A development-only build that codegens generated programs at -O1
-    // instead of the shipping -O3.  It trades the runtime speed of what
-    // `luce build`/`luce test` produce for far faster compiles, because
-    // -O1 skips the module inliner, dead-store elimination and alias
-    // analysis that dominate O3.  Off by default: the shipped `luce` is
-    // unaffected, and only a binary built with `-Dfast-codegen` is fast.
-    const fast_codegen = b.option(
-        bool,
-        "fast-codegen",
-        "Codegen at -O1 for fast compiles (dev/test tool; slower generated code)",
-    ) orelse false;
-
     const release_identity = b.addOptions();
     release_identity.addOption([]const u8, "version", project_version);
     release_identity.addOption([]const u8, "source_commit", source_commit);
@@ -1305,7 +1293,6 @@ pub fn build(b: *std.Build) void {
     const installed_libraries = b.addOptions();
     installed_libraries.addOptionPath("luce_rt_library", runtime_archive);
     installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
-    installed_libraries.addOption(bool, "fast_codegen", fast_codegen);
     compiler_module.addOptions("build_options", installed_libraries);
 
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });

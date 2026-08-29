@@ -108,7 +108,8 @@ described in [Testing](/tools/testing/).
 
 For a `.luc` source, `build` defaults to a standalone executable named after
 the source: `luce build hello.luc` writes `hello`. `-o` chooses a different
-output path. `--release` removes source locations from runtime traps.
+output path. `--release` optimizes the program and removes source locations
+from runtime traps.
 `--emit=library`, `--emit=object`, and `--emit=exe` choose the artifact shape;
 `exe` is the default. Each option may be given once — except `--link`, which
 repeats because a link has as many inputs as it has: each value reaches the
@@ -168,8 +169,16 @@ luce build program.luc
 luce build program.luc --release
 ```
 
-Debug is the default. It keeps instruction origins, so a runtime trap can
-show `file:line:column` and a call trace. `--release` strips those origins;
-function names, trap codes, checks, and ARC behavior remain. The two
-modes have the same observable semantics. Release is for artifacts whose
-users do not have the source; debug is usually easier during development.
+Debug is the default, and it is the mode that is quick to *build*: the
+optimizer runs its fast pipeline, so a debug build compiles about twice as
+fast and runs about twice as slow. It also keeps instruction origins, so a
+runtime trap can show `file:line:column` and a call trace.
+
+`--release` is the mode that is quick to *run*: full optimization, and the
+origins stripped. Function names, trap codes, checks, and ARC behavior
+remain. The two modes have the same observable semantics — every check and
+trap is in both — so a program cannot behave differently in one.
+
+Build debug while you are editing and testing; ship `--release`. `luce test`
+and `loom luce FILE.luc` always build debug, because an artifact that is run
+once and discarded is not worth optimizing.

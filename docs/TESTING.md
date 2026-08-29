@@ -62,10 +62,12 @@ luce test tests/geo tests/io     # directories, recursively
   name and delivers none is a mistake. Any other swept file without
   tests is a helper module, skipped, and counted in the summary
   ("2 files without tests") so a wrongly-silent file is one glance away.
-- `luce test` takes **no build options and always builds debug**,
-  because the report leans on trap origins and `--release` would strip
-  them. An unknown option is refused the way `luce build` refuses a
-  repeated `-o`.
+- `luce test` takes **no build options and always builds debug**, for
+  both of the reasons a mode exists: the report leans on trap origins,
+  which `--release` would strip, and a test artifact is built to be run
+  once and discarded, so the quick pipeline is the only one worth
+  paying for (docs/MODES.md). An unknown option is refused the way
+  `luce build` refuses a repeated `-o`.
 
 ## Execution: the CLI drives, one runtime per test
 

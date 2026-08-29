@@ -1214,13 +1214,15 @@ const stumbles =
 ;
 
 test "a debug artifact says where it trapped; a release one says what trapped" {
-    // The CLI half of docs/MODES.md.  `--release` has exactly one
-    // meaning — the artifact carries no origins — and the way to see
-    // it is a program that stops: debug names `file:line:column` for
-    // every frame, release names the functions and no positions.  Both
-    // print the same output, trap at the same call, and exit with the
-    // same number, because the mode is not allowed to change the
-    // program.
+    // The CLI half of docs/MODES.md.  `--release` means two things —
+    // the artifact carries no origins, and LLVM worked as hard as it
+    // can — and only the first is allowed to be *visible*.  The way to
+    // see both halves at once is a program that stops: debug names
+    // `file:line:column` for every frame, release names the functions
+    // and no positions, and everything else about the run is the same
+    // through two different pass pipelines and two different
+    // instruction selectors.  That sameness is the claim worth a test:
+    // same output, same trap code, same frames, same status.
     const gpa = testing.allocator;
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
@@ -1262,22 +1264,22 @@ test "a debug artifact says where it trapped; a release one says what trapped" {
         try testing.expect(ran.saysErr("at main"));
     }
 
-    // The difference, and the only one: debug carries positions.
+    // The visible difference, and the only one: debug carries positions.
     try testing.expect(debug_ran.saysErr("stumble.luc:2:5"));
     try testing.expect(debug_ran.saysErr("stumble.luc:7:5"));
     // Release carries none — no source name, no line, not one.
     try testing.expect(!release_ran.saysErr("stumble.luc"));
     try testing.expect(!release_ran.saysErr("("));
 
-    // What is deliberately *not* asserted here: that the release file
-    // is smaller.  It is not, at this level — the two executables come
-    // out byte-for-byte the same length, because an origin table this
-    // small disappears into the segment alignment a linker rounds
-    // every Mach-O and ELF section up to, and what is left is mostly
-    // libluce_rt either way.  Whether the tables actually left the
-    // *artifact* is a question about the artifact, and belongs to a
-    // test that reads one; from out here the trap report is the whole
-    // of the observable difference, which is exactly the promise
+    // What is deliberately *not* asserted here: anything about the two
+    // files' sizes.  A different optimizer and a different instruction
+    // selector make a different amount of machine code, in whichever
+    // direction the program happens to fall, and an origin table this
+    // small disappears into the segment alignment a linker rounds every
+    // Mach-O and ELF section up to anyway.  Whether the tables actually
+    // left the *artifact* is a question about the artifact and belongs
+    // to a test that reads one; from out here the trap report is the
+    // whole of the observable difference, which is exactly the promise
     // docs/MODES.md makes.
 }
 

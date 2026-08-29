@@ -1,12 +1,19 @@
 # Debug and release — the two build modes
 
-Luce has exactly two build modes, and they differ in one thing only:
-**what a trap can tell you**.
+Luce has exactly two build modes.  They differ in **which side of the
+loop they are fast on**, and in **what a trap can tell you**.  They do
+not differ in what a program means.
 
 ```sh
-luce build dice.luc              # debug (the default)
-luce build dice.luc --release    # stripped
+luce build dice.luc              # debug (the default): quick to build
+luce build dice.luc --release    # optimized, stripped
 ```
+
+A debug build is compiled to be *compiled*: LLVM runs its quick
+pipeline, and the artifact keeps its source locations.  A release
+build is compiled to be *run*: LLVM works as hard as it can, and the
+locations are stripped.  Build debug while you are editing and
+testing, and ship `--release`.
 
 Every shape means the same thing by it.  The origins travel as
 constant data beside the code rather than as LLVM debug metadata, and
@@ -39,9 +46,13 @@ loom: trap: division by zero [divide_by_zero]
     at main
 ```
 
-`loom luce FILE.luc` (compile-and-run) is always a debug build —
-when the source is sitting right there, there is no reason not to
-know the line.  Bundled programs install as debug builds too.
+`loom luce FILE.luc` (compile-and-run) is always a debug build — when
+the source is sitting right there, there is no reason not to know the
+line, and the compile is the part the person is waiting on.  `luce
+test` builds debug for the same reason twice over: a test artifact is
+run once and thrown away, so every second spent optimizing it is
+spent optimizing something nobody will run again.  Bundled programs
+are the other case and are built `--release`.
 
 ## Semantics never change between modes
 
@@ -54,9 +65,41 @@ the *language*, not a mode.  A program traps on
 the same instruction with the same stable code in both modes, so
 there is no "works in debug, corrupts in release" class of bug, and
 release needs no separate testing story.  In Zig's terms, Luce is
-always `ReleaseSafe`; `--release` is closer to `-fstrip`.
+always `ReleaseSafe`; `--release` is `-O3 -fstrip`.
 
-## Release is hyper fast because debug was already free
+This is exactly what makes the *speed* difference safe to have.  Every
+check, trap, and ARC operation is in the IR before LLVM is handed it,
+so no pipeline can decide to leave one out; the optimizer's whole job
+is to make the same decisions cheaper.  Turning it down is therefore a
+question about how long the compile takes, never a question about what
+the program does — which is why the mode a program was built in is not
+something its author has to reason about, only something they choose
+by whether they are waiting on the build or on the run.
+
+## What the modes cost each other
+
+The trade is close to symmetric, which is what makes the default
+defensible.  Measured on this tree, Apple M4 Max:
+
+| | compile | run |
+|---|---:|---:|
+| debug | **2.3× faster** (the editor, ~3,000 lines: 1.0 s vs 2.3 s) | ~2× slower (`bench/matmul`, `bench/loops`) |
+
+A debug build runs LLVM's `default<O1>` pipeline and selects
+instructions with FastISel instead of the SelectionDAG; `--release`
+runs `default<O3>` and the full selector (`src/apps/luce/object.zig`,
+`docs/CODEGEN.md`).  O1 is what drops the module inliner, dead-store
+elimination, and the alias analysis that dominate an O3 compile, while
+keeping `mem2reg`, which makes the IR *smaller* and so pays for
+itself.
+
+The number that matters is not either column alone but how often each
+is paid.  An edit/test loop compiles on every keystroke-to-keystroke
+cycle and runs a test suite whose cost is the compile; a shipped
+artifact is compiled once and run forever.  Each mode is the right
+answer to one of those and the wrong answer to the other.
+
+## Debug information is free in both modes
 
 The lesson taken from Zig is *where* the cost of debug info lives.
 A Zig binary's panic handler parses its own DWARF lazily, at panic
@@ -84,15 +127,21 @@ line tables are inert bytes.  Luce works the same way:
   `call_depth_exceeded` report is readable and cheap.  Both arms
   cap at the same number, so the same trap reports the same frames.
 
-So the honest statement is: **debug and release run at identical
-speed**; release gives up trap locations and buys very little back.
-It takes roughly a third off the serialized module, and an artifact is
-mostly the runtime library it carries, so on the `.lc` itself it is
-**about 2%** (`editor.lc`, the largest bundled program: 805 KB → 789 KB)
-and nothing measurable on a small program.  Ship `--release` when source lines would mean nothing
-to the recipient; ship debug everywhere else.  When a release artifact
-misbehaves, recompile from source and reproduce — the language is
-deterministic, so that is reliable.
+So the honest statement is: **carrying origins costs a running program
+nothing**.  Stripping them is not why release is faster — the
+optimizer is — and it buys very little on its own.  It takes roughly a
+third off the serialized module, and an artifact is mostly the runtime
+library it carries, so on the `.lc` itself it is **about 2%**
+(`editor.lc`, the largest bundled program: 805 KB → 789 KB) and
+nothing measurable on a small program.
+
+That is why the two halves of `--release` travel together rather than
+as two flags.  If stripping were the expensive half there would be a
+reason to ask for it alone; it is not, so there is one question — am I
+waiting on this build, or on this program? — and one word that answers
+it.  When a release artifact misbehaves, recompile from source and
+reproduce: the language is deterministic and the modes agree, so that
+is reliable.
 
 ## What's in the tables
 
@@ -141,6 +190,11 @@ byte spans and stable codes in both modes, and render as
   who started it.
 - `src/apps/luce/main.zig` — the `--release` flag: it strips the
   module, and everything downstream follows from that.
+- `src/apps/luce/object.zig` — the other half of the same flag: which
+  LLVM pass pipeline and instruction selector the mode asks for.  It
+  defaults to debug, so the callers that pass no mode — `luce test`,
+  the `build.luc` runner — build the quick way, which is what a
+  throwaway artifact wants.
 - `src/luce/interpreter/machine.zig` — `traceback()`: where the oracle
   reads origins, after a trap, never during execution; and
   `src/luce/interpreter.zig` — `Trap.trace` (`TraceFrame` = function,

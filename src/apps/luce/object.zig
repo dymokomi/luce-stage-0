@@ -65,6 +65,11 @@ pub fn build(
         source_hash: u64 = 0,
         /// Extra link inputs, handed to the driver as written.
         links: []const []const u8 = &.{},
+        /// Which of the two build modes wrote this (docs/MODES.md).
+        /// The default is debug, because the callers that pass nothing
+        /// — `luce test`, the `build.luc` runner — build an artifact
+        /// they run once and throw away.
+        release: bool = false,
     },
 ) Error!Result {
     const triple = try emit.hostTriple(gpa);
@@ -79,17 +84,22 @@ pub fn build(
     };
     defer gpa.free(bitcode);
 
-    // A fast-codegen build trades the runtime speed of the emitted
-    // program for a much faster compile — it is the dev/test tool, not
-    // the shipping compiler (see build.zig's `fast-codegen`).  The `O1`
-    // pipeline drops the module inliner, DSE and alias analysis that
-    // dominate O3 (keeping mem2reg, which shrinks the IR), and the
-    // `none` machine level selects FastISel over the SelectionDAG
-    // instruction selector — the two together are what make it fast.
-    const emit_options: emit.Options = if (build_options.fast_codegen)
-        .{ .triple = triple, .passes = "default<O1>", .codegen = .none }
+    // How hard LLVM works is the build mode's second half.  A debug
+    // build is compiled to be *compiled*: the `O1` pipeline drops the
+    // module inliner, DSE and alias analysis that dominate O3 (keeping
+    // mem2reg, which shrinks the IR), and the `none` machine level
+    // selects FastISel over the SelectionDAG instruction selector — the
+    // two together are what make it fast.  A release build is compiled
+    // to be *run* and pays full price.
+    //
+    // Both are the same language.  Every check, trap, and ARC operation
+    // is in the IR before LLVM sees it, so neither pipeline can remove
+    // one; the modes differ in speed and in what a trap can say, never
+    // in what a program means (docs/MODES.md).
+    const emit_options: emit.Options = if (options.release)
+        .{ .triple = triple }
     else
-        .{ .triple = triple };
+        .{ .triple = triple, .passes = "default<O1>", .codegen = .none };
     const object = switch (try emit.compile(gpa, bitcode, emit_options)) {
         .object => |bytes| bytes,
         .failed => |why| return .{ .failed = why },

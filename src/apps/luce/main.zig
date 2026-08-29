@@ -389,10 +389,14 @@ fn usage(err: *std.Io.Writer) !u8 {
             "imports then resolve beside the current directory, and\n" ++
             "build needs -o to say where to write.\n" ++
             "\n" ++
-            "build is a debug build unless --release: the artifact\n" ++
-            "carries source locations, so traps report file:line\n" ++
-            "and a call trace.  --release strips them for smaller\n" ++
-            "artifacts; the program itself behaves identically.\n" ++
+            "build is a debug build unless --release.  A debug build\n" ++
+            "is compiled to be compiled: LLVM runs its quick pipeline,\n" ++
+            "and the artifact carries source locations, so traps\n" ++
+            "report file:line and a call trace.  --release optimizes\n" ++
+            "for the program's own speed and strips the locations.\n" ++
+            "Build debug while you are editing and testing; ship\n" ++
+            "--release.  The two mean the same program: every check,\n" ++
+            "trap and ARC operation is in both.\n" ++
             "\n" ++
             "Each option may be given once.  Writing one twice is\n" ++
             "refused rather than resolved: taking the last -o or the\n" ++
@@ -463,6 +467,7 @@ fn buildNative(
         .output = target,
         .source_hash = source_hash,
         .links = request.links,
+        .release = request.release,
     })) {
         .written => {},
         .unsupported => |what| {

@@ -113,8 +113,11 @@ the question is parser speed, read the input before the timed region. If the
 question is end-to-end latency, include the I/O and say so. Both measurements
 are useful when they answer different named questions.
 
-Use `--release` when measuring a shipped artifact. Debug and release have the
-same semantics; release removes source locations from runtime traps. Warm up
+Always use `--release` when measuring. Debug and release have the same
+semantics, but a debug build is the one optimized for compiling rather than
+running: it trades roughly a factor of two of run speed for roughly a factor
+of two of compile speed, so a debug measurement is a measurement of the wrong
+mode, not a slightly noisier one. Warm up
 or discard startup consistently, run enough repetitions to see the noise
 floor, and keep comparison implementations identical. A faster result that
 changes the input or omits error checking is not a comparison.

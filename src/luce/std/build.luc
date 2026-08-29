@@ -118,8 +118,9 @@ pub class Plan:
     # A Luce source compiled to a standalone executable — `luce build
     # SOURCE`, as a step.  `output` chooses the artifact's path;
     # empty means the tool's default, the executable named after the
-    # source.  `release` strips source locations exactly as
-    # `--release` does.
+    # source.  `release` means exactly what `--release` means: the
+    # program is optimized for its own speed and carries no source
+    # locations.  Left false, the step builds the quick way.
     pub func program(name: str, source: str, output: str = "", release: bool = false) -> Step:
         var step = self.claim(name, "luce")
         step.fill(source, "exe", output, release)

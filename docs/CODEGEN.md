@@ -26,7 +26,7 @@ FILE.luc → lex → parse → semantics → typed MIR → optimize
                                              ↓
                                         LLVM bitcode
                                              ↓
-                     libLLVM: parse, default<O3>, emit  (codegen/emit.zig)
+              libLLVM: parse, default<O1|O3>, emit  (codegen/emit.zig)
                                              ↓
                                   FILE.o  (relocatable object)
                                              ↓
@@ -278,7 +278,8 @@ cold, and cold is paid once per change to the program.
 
 Warm startup is process start and `dlopen`, and nothing else.  A cold
 run — a source file loom has not compiled before — pays one `luce`
-process, LLVM at `-O3`, one link, and the first `dlopen` of a binary
+process, LLVM's quick pipeline (compile-and-run is a debug build,
+docs/MODES.md), one link, and the first `dlopen` of a binary
 the OS has never seen, which on macOS is the largest single term of
 the four (89 ms of `sort.luc`'s 155).  It is
 paid once per change to the program.
@@ -367,19 +368,25 @@ has broken repeatedly across releases, stays in-tree.  Being one file
 is also what makes it one *module*, which is what keeps libLLVM out of
 loom.
 
-**Both optimizer knobs say O3**, and the interesting thing is that
-they used not to.  The pass pipeline is `default<O3>` for one argued
-reason — nontrivial loop unswitching, which O2 disables and which is
-what lifts a bounds check out of a loop so the vectorizer can have it
-(`Options.passes`) — while the target machine was left at
-`LLVMCodeGenOptLevel` 2, never argued and simply unnoticed, so
-instruction selection and register allocation worked less hard than
-the pipeline that fed them.  Raising it was A/B'd on every `bench/`
-row (`bench/compare.sh`, twice): every row inside the round-to-round
-spread, with the signs flipping between runs.  It is kept anyway, and
-not for the speed — two knobs that both mean "how hard to optimize"
-pointing at two numbers is a question a reader has to answer twice,
-and the honest answer to "why O2 here" was that nobody had chosen it.
+**Both optimizer knobs move together**, and the interesting thing is
+that they used not to.  A release build's pass pipeline is
+`default<O3>` for one argued reason — nontrivial loop unswitching,
+which O2 disables and which is what lifts a bounds check out of a loop
+so the vectorizer can have it (`Options.passes`) — while the target
+machine was left at `LLVMCodeGenOptLevel` 2, never argued and simply
+unnoticed, so instruction selection and register allocation worked
+less hard than the pipeline that fed them.  Raising it was A/B'd on
+every `bench/` row (`bench/compare.sh`, twice): every row inside the
+round-to-round spread, with the signs flipping between runs.  It is
+kept anyway, and not for the speed — two knobs that both mean "how
+hard to optimize" pointing at two numbers is a question a reader has
+to answer twice, and the honest answer to "why O2 here" was that
+nobody had chosen it.
+
+The same rule decides the debug pair: `default<O1>` with the machine
+level at `none`, which is what selects FastISel over the SelectionDAG.
+One question — how hard is this build working? — asked once and
+answered on both knobs (`src/apps/luce/object.zig`).
 
 **The stage directory is `codegen/`, not `llvm/`.** Zig derives symbol
 names from source paths, and LLVM reserves every symbol beginning
