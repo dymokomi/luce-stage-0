@@ -125,34 +125,6 @@ pub fn namespaceName(self: *Analyzer, target: Type) ?[]const u8 {
     };
 }
 
-/// The `?` that a container element may not carry.  Refused in v1
-/// (docs/FAILURE.md): `[1, none, none, 2]` would need a
-/// representation for an absent element that the containers do not
-/// have, and PEP 505's objection to that gap is the one that
-/// transfers.
-///
-/// **A function payload is the one exception, and it is not one**:
-/// `(func() -> i64)?` is the *only* form a function value takes in a
-/// slot (docs/BINDING.md D7), because a function value has no zero and
-/// a slot exists before anything fills it.  So the absence is not a
-/// second way to spell an element type here; it is the element type,
-/// and the objection above — that an absent element has no
-/// representation — is answered by the absence `T?` already is.
-pub fn refuseOptionalPart(
-    self: *Analyzer,
-    part: Type,
-    written: ast.TypeName,
-    role: []const u8,
-) Error!bool {
-    if (part != .optional) return false;
-    if (part.optional == .function) return false;
-    try self.fail("luce.sema.type", written.span, "a {s} cannot be optional: write {s} and keep the absence in a name of its own", .{
-        role,
-        try self.typeName(part.held().?),
-    });
-    return true;
-}
-
 fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
     // `cfunc(T, ...) -> R` — the C function pointer type
     // (docs/FFI.md).  The flag comes only from the parser's
@@ -217,7 +189,10 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 return null;
             }
             const element = (try resolveType(self, module, written.arguments[0])) orelse return null;
-            if (try refuseOptionalPart(self, element, written.arguments[0], "list element")) return null;
+            // An optional element is stored in the none-bearing 24-byte
+            // cell an optional function value already uses (docs/FAILURE.md):
+            // `list[i64?]` holds a value or the absence, indexed and
+            // appended like any other element.
             if (try refuseFunctionPart(self, element, written.arguments[0].span, "list element")) return null;
             return try internHeapType(self, .{ .list = element });
         },
@@ -227,7 +202,9 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 return null;
             }
             const element = (try resolveType(self, module, written.arguments[0])) orelse return null;
-            if (try refuseOptionalPart(self, element, written.arguments[0], "channel element")) return null;
+            // An optional element rides the none-bearing cell; unsendable
+            // parts are still refused below, so `channel[i64?]` is allowed
+            // and `channel[Class?]` is not.
             if (try refuseFunctionPart(self, element, written.arguments[0].span, "channel element")) return null;
             // The element must be sendable *by type*: a channel exists
             // to cross workers, and a value that cannot cross must be
@@ -279,7 +256,11 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             // written bare, and there is no `refuseFunctionPart` here.
             // Writing the `?` as well would make `get` answer a `V??`,
             // which has no representation to answer with.
-            if (value == .optional and value.optional == .function) {
+            // A map value alone stays non-optional (unlike a list, array,
+            // or channel element, which now may be): `get` already answers
+            // `V?`, so a `V?` value would make it `V??`, which has no
+            // representation to answer with.
+            if (value == .optional) {
                 try self.fail(
                     "luce.sema.type",
                     written.arguments[1].span,
@@ -288,7 +269,6 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 );
                 return null;
             }
-            if (try refuseOptionalPart(self, value, written.arguments[1], "map value")) return null;
             return try internHeapType(self, .{ .map = .{ .key = key, .value = value } });
         },
         .array => {
@@ -302,7 +282,9 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 return null;
             }
             const element = (try resolveType(self, module, written.arguments[0])) orelse return null;
-            if (try refuseOptionalPart(self, element, written.arguments[0], "array element")) return null;
+            // An optional element rides the none-bearing 24-byte cell, the
+            // same one `array[str, _]` uses; a narrow numeric array keeps
+            // its packed cell, an optional one does not.
             if (try refuseFunctionPart(self, element, written.arguments[0].span, "array element")) return null;
             return try internHeapType(self, .{ .array = .{ .element = element, .rank = written.wildcards } });
         },

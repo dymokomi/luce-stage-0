@@ -84,10 +84,11 @@ func main():
     print(f"{n}")
 ```
 
-The following are not part of the language: `T??` (an optional of an
-optional), `T?` as a container element or a `map` value, an
-optional-chaining operator, and a force-unwrap sigil. Absence is reached
-through narrowing and `else`.
+A list, array, or channel element may be optional (`list[i64?]`); a `map`
+value may not, because a lookup already answers `V?` and a `V?` value would
+make that `V??`. The following are not part of the language: `T??` (an
+optional of an optional), an optional-chaining operator, and a force-unwrap
+sigil. Absence is reached through narrowing and `else`.
 
 ## Errors
 

@@ -239,9 +239,8 @@ pub fn lowerNew(
             return null;
         }
         const element = (try resolve.resolveType(self.analyzer, self.module, new.type_name.arguments[0])) orelse return null;
-        if (try resolve.refuseOptionalPart(self.analyzer, element, new.type_name.arguments[0], "array element")) {
-            return null;
-        }
+        // An optional element zero-fills to `none`, a well-defined zero;
+        // `array[i64?](3)` is three absences.
         const dims = (try arrayDimensions(self, new)) orelse return null;
         recorded_dims = (try lowerArrayDimensions(self, new, dims, null)) orelse return null;
         object_type = try resolve.internHeapType(self.analyzer, .{

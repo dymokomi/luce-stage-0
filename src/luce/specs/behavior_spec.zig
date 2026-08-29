@@ -6489,3 +6489,94 @@ test "fields: a struct let field rides its copies and stays readable" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// optional container elements (docs/FAILURE.md)
+// ---------------------------------------------------------------------------
+//
+// A list, array, or channel element may be optional: it rides the
+// none-bearing 24-byte cell an optional function value already uses. A map
+// value stays non-optional, because get already answers V?.
+
+test "optional elements: a list holds present values and absences" {
+    try agree.prints(
+        \\func main():
+        \\    var xs: list[i64?] = [1, none, 3]
+        \\    xs.append(none)
+        \\    xs.append(5)
+        \\    var total = 0
+        \\    var gaps = 0
+        \\    for x in xs:
+        \\        if x == none:
+        \\            gaps += 1
+        \\        else:
+        \\            total += x
+        \\    print(str(len(xs)) + " " + str(total) + " " + str(gaps))
+        \\    print(str(xs[0] else -1) + " " + str(xs[1] else -1))
+        \\
+    ,
+        \\5 9 2
+        \\1 -1
+        \\
+    );
+}
+
+test "optional elements: a list of strings carries the absence" {
+    try agree.prints(
+        \\func main():
+        \\    var names: list[str?] = [none, "ada"]
+        \\    names.append("alan")
+        \\    for n in names:
+        \\        print(n else "(none)")
+        \\
+    ,
+        \\(none)
+        \\ada
+        \\alan
+        \\
+    );
+}
+
+test "optional elements: a list of class optionals retains and releases cleanly" {
+    // The run ends with a zero census, which is what proves the class
+    // references stored behind the absence were released — the ARC point
+    // of an optional reference element.
+    try agreeOk(
+        \\class Node:
+        \\    var v: i64
+        \\    init(v: i64):
+        \\        self.v = v
+        \\
+        \\func main():
+        \\    var ns: list[Node?] = [none]
+        \\    ns.append(Node(7))
+        \\    ns.append(none)
+        \\    ns.append(Node(3))
+        \\    var sum = 0
+        \\    for n in ns:
+        \\        if n == none:
+        \\            sum += 0
+        \\        else:
+        \\            sum += n.v
+        \\    assert(sum == 10)
+        \\    assert(len(ns) == 4)
+        \\
+    );
+}
+
+test "optional elements: an array zero-fills to absence and takes values" {
+    try agree.prints(
+        \\func main():
+        \\    var grid = array[i64?](3)
+        \\    grid[1] = 5
+        \\    var present = 0
+        \\    for cell in grid:
+        \\        if cell != none:
+        \\            present += 1
+        \\    print(str(grid.dim(0)) + " " + str(present) + " " + str(grid[1] else -1))
+        \\
+    ,
+        \\3 1 5
+        \\
+    );
+}

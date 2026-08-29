@@ -159,13 +159,13 @@ func(str) -> i64?       # the function is present; its result may be absent
 (func(str) -> i64)?     # the function value itself may be absent
 ```
 
-Ordinary optional scalar or object elements are not stored directly in
-lists, maps, or arrays. A map lookup already answers `V?`, and a nested
-optional would be required to distinguish “missing key” from “present key
-whose value is absent.” Model a meaningful third state with a union, or put
-the optional in a small structure whose surrounding value gives it context.
-Optional function values are the deliberate storage exception for fields and
-sequence slots because function values have no zero value of their own; the
+A list, array, or channel element may be optional: `list[i64?]`,
+`array[str?, _]`, and `channel[i64?]` each store a present value or the
+absence in one cell, and an array of optionals zero-fills to all absent. A
+**map value** stays non-optional, because a lookup already answers `V?` and a
+`V?` value would make that `V??` — model a meaningful third state with a
+union, or key by what identifies the value. Optional function values store in
+every one of these slots for the same reason a plain value does; the
 [function-value reference](/guide/reference/types/#function) gives the exact
 slot rules.
 

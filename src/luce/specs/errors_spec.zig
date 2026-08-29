@@ -4707,22 +4707,15 @@ test "luce.parse.type: T?? is refused where it is written" {
     , "luce.parse.type");
 }
 
-test "luce.sema.type: a container element may not be optional" {
-    try expectMessage(
-        \\func main():
-        \\    var xs = list[i64?]()
-        \\
-    , "a list element cannot be optional");
-    try expectRejected(
+test "luce.sema.type: a map value may not be optional" {
+    // A list, array, and channel element may be optional (it rides the
+    // none-bearing cell), but a map value may not: `get` already answers
+    // `V?`, and a `V?` value would make it `V??`.
+    try expectSaying(
         \\func main():
         \\    var m = map[str, i64?]()
         \\
-    , "luce.sema.type");
-    try expectRejected(
-        \\func main():
-        \\    var grid = array[i64?](2)
-        \\
-    , "luce.sema.type");
+    , "luce.sema.type", "V??");
 }
 
 test "none is a keyword, so nothing can be named it" {

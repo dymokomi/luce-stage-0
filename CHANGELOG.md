@@ -34,6 +34,11 @@ release is a complete toolchain rather than a compatibility promise.
   `var` field may be. A bare `x: T` field is accepted for this one release
   and read as `var`, so the tree migrates in steps.
 
+- **A list, array, or channel element may be optional.** `list[i64?]`,
+  `array[str?, _]`, and `channel[i64?]` store a present value or the absence
+  in one cell; an array of optionals zero-fills to all absent. A `map` value
+  stays non-optional, since a lookup already answers `V?`.
+
 ## 0.23 — room to recurse
 
 - **A struct literal keeps the lists a copied field shares.** When a
