@@ -56,7 +56,7 @@ zig build test     # the complete owner-grouped release gate; long targets
                    # print bounded progress and a 15-second heartbeat
 ```
 
-`VERSION` is the shared public release label, currently `0.23`. During the
+`VERSION` is the shared public release label, currently `0.25`. During the
 0.x series it intentionally has two numeric components: increment the second
 component for each release, and reserve `1.0` for the point where the public
 interface is considered stable. `luce --version` and `loom --version` report
