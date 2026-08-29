@@ -375,14 +375,23 @@ test "const is file-scope, while let and var are function-scope" {
     try testing.expectEqualStrings("str", parsed.program.constants[1].annotation.?.name);
     try testing.expect(parsed.program.constants[1].value.* == .binary);
 
-    try expectDiagnostics("let width = 80\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "file scope declares with const" },
-    });
+    // A file-scope `let` is the spec spelling of a constant, and `pub
+    // let` exports it — both parse to the same ConstDecl `const` does.
+    {
+        var let_parsed = try expectClean("let width = 80\n");
+        defer let_parsed.deinit();
+        try testing.expectEqual(@as(usize, 1), let_parsed.program.constants.len);
+        try testing.expectEqualStrings("width", let_parsed.program.constants[0].name);
+    }
+    {
+        var pub_parsed = try expectClean("pub let width = 80\n");
+        defer pub_parsed.deinit();
+        try testing.expectEqual(@as(usize, 1), pub_parsed.program.constants.len);
+        try testing.expect(pub_parsed.program.constants[0].visibility == .public);
+    }
+    // A module has no mutable globals: `var` at file scope is refused.
     try expectDiagnostics("var counter = 0\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "file scope declares with const" },
-    });
-    try expectDiagnostics("pub let width = 80\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 5, .contains = "file scope declares with const" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no mutable globals" },
     });
     try expectDiagnostics("func main():\n    const width = 80\n    let okay = 1\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "use let or var inside a function" },

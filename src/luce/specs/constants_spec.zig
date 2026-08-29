@@ -426,12 +426,25 @@ test "constants: a worker materializes its own constants and defaults" {
 // Static front line
 // ---------------------------------------------------------------------------
 
-test "constants: file scope is const, and constant maps reject duplicate keys" {
+test "constants: file scope takes let or const, and constant maps reject duplicate keys" {
+    // A file-scope binding is a compile-time constant whether it is
+    // written `let` (the spec spelling) or `const`; both run the same
+    // on both engines.
+    try agree.ok(
+        \\let LET_ONE = 1
+        \\const CONST_TWO = 2
+        \\
+        \\func main():
+        \\    assert(LET_ONE == 1)
+        \\    assert(CONST_TWO == 2)
+        \\
+    );
+    // A module has no mutable globals: `var` at file scope is refused.
     try expectRefusedAt(
-        "let OLD = 1\n\nfunc main():\n    assert(OLD == 1)\n",
+        "var counter = 0\n\nfunc main():\n    assert(counter == 0)\n",
         "luce.parse.top",
-        "file scope declares with const; let lives inside functions",
-        "let OLD",
+        "a module has no mutable globals; a file-scope binding is a constant — write let or const",
+        "var counter",
     );
     try expectRefusedAt(
         \\const BAD = {

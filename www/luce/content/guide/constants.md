@@ -1,14 +1,17 @@
 # Global Constants
 
-`const` is the file-scope declaration. Luce evaluates a constant when it
-compiles the program. A flat list, map, or rank-one array is materialized
-once in the program root and is read-only.
+A file-scope binding is a compile-time constant. Write it `let` — the spec
+spelling — or `const`; both mean the same thing at file scope, and `const` is
+being migrated to `let`. Luce evaluates it when it compiles the program. A flat
+list, map, or rank-one array is materialized once in the program root and is
+read-only. A module has no mutable globals, so `var` is not a file-scope
+declaration.
 
-Use a constant for a value that is part of the program definition: a numeric
-limit, an enum choice, a lookup table, or immutable seed data. Use a local
-`let` for a value computed while the program runs. Constants are conventionally
-written in `UPPER_SNAKE_CASE`, which makes the file-scope, compile-time choice
-visible at a use site.
+Use a file-scope constant for a value that is part of the program definition: a
+numeric limit, an enum choice, a lookup table, or immutable seed data. A
+function-scope `let` differs — it is a value computed while the program runs.
+Constants are conventionally written in `UPPER_SNAKE_CASE`, which makes the
+file-scope, compile-time choice visible at a use site.
 
 ```luce run
 struct Entry:

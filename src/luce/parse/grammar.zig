@@ -659,27 +659,23 @@ pub const Parser = struct {
                     );
                     self.recover();
                 },
-                .keyword_const => {
+                // A file-scope binding is a compile-time constant
+                // (docs/CONSTANTS.md, LANGUAGE §20.4): `let` is the
+                // spec spelling and `const` the older one, both accepted
+                // while the tree migrates.  `var` is refused because a
+                // module has no mutable globals.
+                .keyword_const, .keyword_let => {
                     if (try self.constDecl()) |declaration| {
                         try constants.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
                 },
-                .keyword_let => {
-                    try self.report(
-                        "luce.parse.top",
-                        self.peek().span,
-                        "file scope declares with const; let lives inside functions",
-                        .{},
-                    );
-                    self.recover();
-                },
                 .keyword_var => {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "file scope declares with const; var lives inside functions",
+                        "a module has no mutable globals; a file-scope binding is a constant — write let or const",
                         .{},
                     );
                     self.recover();
@@ -813,7 +809,10 @@ pub const Parser = struct {
                 );
                 self.recover();
             },
-            .keyword_const => {
+            // `pub let` / `pub const` — an exported file-scope constant
+            // (docs/CONSTANTS.md, LANGUAGE §20.4); both spellings while
+            // the tree migrates.
+            .keyword_const, .keyword_let => {
                 if (try self.constDecl()) |declaration| {
                     var marked = declaration;
                     marked.visibility = visibility;
@@ -831,12 +830,12 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
-            .keyword_let, .keyword_var => {
+            .keyword_var => {
                 try self.report(
                     "luce.parse.top",
                     self.peek().span,
-                    "file scope declares with const; {s} lives inside functions",
-                    .{keywordWord(self.peekKind()).?},
+                    "a module has no mutable globals; a file-scope binding is a constant — write let or const",
+                    .{},
                 );
                 self.recover();
             },
