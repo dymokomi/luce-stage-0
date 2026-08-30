@@ -169,6 +169,7 @@ func main():
 | `delete(path)` | `-> !` | removes the file |
 | `rename(from, to)` | `-> !` | moves the file, replacing an existing `to` |
 | `make_directory(path)` | `-> !` | ensures a directory exists at the path, making parents |
+| `make_temporary_directory(parent, prefix)` | `-> str!` | creates a directory inside `parent` that nobody else has, and answers its path |
 | `size(path)` | `-> i64!` | the file's byte count; a directory has no honest one and is an error |
 | `modified(path)` | `-> i64!` | when the file or directory last changed, in epoch milliseconds |
 | `copy(from, to)` | `-> !` | one file's bytes to a new name, replacing the target; streaming, constant space |

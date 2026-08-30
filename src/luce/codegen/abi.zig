@@ -85,8 +85,8 @@ const trace = @import("../runtime/trace.zig");
 /// "is this artifact mine?" without libLLVM in the process.
 ///
 /// 6 — short text lives inside a `LuceValue`.  The tag is one byte
-/// where it was eight, and the twenty-two bytes that frees are where a
-/// `str` text goes when it fits (docs/STRINGS.md). No field moved
+/// where it was eight, and the bytes that frees are where a `str`'s
+/// text goes when it fits (docs/STRINGS.md). No field moved
 /// and nothing was reordered — `bits` and `length` are still at 8 and
 /// 16 — but generated code reads a `Value` differently, so an artifact
 /// built against the old reading has to be rebuilt.
@@ -265,7 +265,7 @@ const trace = @import("../runtime/trace.zig");
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for version 25.
-pub const version: u32 = 30;
+pub const version: u32 = 32;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
 // terminal owns what "the system clipboard" means over SSH and mux.
@@ -740,6 +740,40 @@ pub const DirCreateFn = *const fn (
     path_length: i64,
 ) callconv(.c) Answer;
 
+/// Create a directory nobody else has, inside `parent`, and answer
+/// where it is.
+///
+/// **This is the operation `dir_create` deliberately is not.**  That
+/// one means "there is a directory at this path when I return", and
+/// succeeding on a directory already there is what saves every caller
+/// from writing a check in front of it.  The price is that it can
+/// never tell you the directory is *yours*: between asking whether a
+/// name is free and taking it, somebody else takes it, and idempotence
+/// turns that race into silent sharing — two builds writing into one
+/// scratch directory, one of them deleting the other's work.
+///
+/// So the claim has to be the same act as the creation.  The host
+/// picks the unused name itself, retries its own collisions, and
+/// answers a path that exists and was made by this call.  On POSIX the
+/// directory is owner-only, because a scratch directory in a shared
+/// `/tmp` is otherwise readable by everyone on the machine.
+///
+/// `prefix` is a hint for the leading characters, so a person reading
+/// `ls` can tell whose directory it is; the host appends whatever it
+/// needs to make the name unique and is free to ignore anything it
+/// cannot use. `no` is failure — the parent does not exist, is not a
+/// directory, or is not writable — and the caller is told nothing was
+/// created.  Nothing existing is ever replaced or removed.
+pub const TemporaryDirectoryFn = *const fn (
+    context: ?*anyopaque,
+    parent: [*]const u8,
+    parent_length: i64,
+    prefix: [*]const u8,
+    prefix_length: i64,
+    path: *[*]const u8,
+    path_length: *i64,
+) callconv(.c) Answer;
+
 /// Milliseconds since the Unix epoch — what time it is, as distinct
 /// from `clock_ms`'s "how much time has passed".
 ///
@@ -1178,6 +1212,7 @@ pub const Host = extern struct {
     path_modified: ?PathFactFn = null,
     dir_remove: ?DirRemoveFn = null,
     tree_remove: ?TreeRemoveFn = null,
+    temporary_directory: ?TemporaryDirectoryFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -1247,6 +1282,7 @@ pub const Slot = enum(u32) {
     path_modified = 60,
     dir_remove = 61,
     tree_remove = 62,
+    temporary_directory = 63,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };
@@ -1271,3 +1307,17 @@ test "the host's trap callback is the runtime's reporter, not a copy of it" {
     try std.testing.expect(RaisedFn == runtime.trace.ErrorReportFn);
     try std.testing.expect(TraceFrame == runtime.trace.Frame);
 }
+// 31 — a `LuceValue` says what its text costs to index: one byte,
+// `encoding`, at offset 2, and the inline run starts at 3 and holds
+// twenty-one instead of twenty-two (docs/STRINGS.md).  A `str` whose
+// scalars are all one byte is indexed rather than walked, and the
+// answer has to travel with the value because generated code and the
+// runtime are the two halves that share it.  Nothing was appended and
+// no slot moved; the shape of the value both sides read did, so an
+// artifact built against the old shape has to be rebuilt.
+// 32 — a scratch directory you can prove is yours: one slot,
+// `temporary_directory`, at the end of the table.  `dir_create` says
+// "there is a directory here" and cannot say "I made it", so nothing
+// built on it can own a scratch area safely; this one creates and
+// claims in the same act, names itself, and is owner-only on POSIX
+// (docs/FILESYSTEM.md).

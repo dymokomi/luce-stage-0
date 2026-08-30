@@ -9,7 +9,8 @@
 //! struct LuceValue {
 //!     uint8_t  tag;
 //!     uint8_t  inline_length;
-//!     uint8_t  inline_head[6];
+//!     uint8_t  encoding;
+//!     uint8_t  inline_head[5];
 //!     uint64_t bits;
 //!     uint64_t length;
 //! };
@@ -20,13 +21,20 @@
 //! `length` is the slice length and is zero for everything else.
 //!
 //! **Short text lives in the value.**  The tag needs one byte, not
-//! eight, and the seven that frees plus `bits` and `length` are
-//! twenty-two contiguous bytes at offset 2 — enough for the strings
-//! this language actually moves around (`str(i64)` is at most twenty,
-//! a split piece averages twelve), and the same twenty-two libc++
-//! reaches in the same twenty-four.  `inline_length` says which form
-//! the text is in: a count from 0 to `inline_capacity` when the bytes
-//! are here, `text_outside` when `bits` and `length` address them.
+//! eight, and what that frees plus `bits` and `length` are twenty-one
+//! contiguous bytes at offset 3 — enough for the strings this language
+//! actually moves around (`str(i64)` is at most twenty, a split piece
+//! averages twelve), and within a byte of the twenty-two libc++ reaches
+//! in the same twenty-four.  `inline_length` says which form the text
+//! is in: a count from 0 to `inline_capacity` when the bytes are here,
+//! `text_outside` when `bits` and `length` address them.
+//!
+//! **`encoding` is a field and not a corner of the inline run**, though
+//! it would have fit in one.  A `str` answers what its scalars cost to
+//! reach whichever form it is in, so overlapping the answer with the
+//! text would have meant two readings of one byte and a branch at every
+//! site that wanted it.  One declared byte, one meaning, at the price of
+//! one byte of inline text.
 //! Reading either form goes through `asStr`, which is why it takes
 //! a pointer — the slice it answers for inline text points *into the
 //! value*, so the value must be somewhere, not a temporary
@@ -121,19 +129,18 @@ pub const null_index: u32 = std.math.maxInt(u32);
 pub const generation_shift = 32;
 
 /// Where inline text starts inside a `Value`, and how much of it there
-/// is: everything from the byte after `inline_length` to the end of the
-/// slot.  Published because generated code reads inline text with a
-/// `getelementptr` of exactly this offset.
-pub const inline_at: usize = 2;
-pub const inline_capacity: u8 = 22;
+/// is: everything after `encoding` to the end of the slot.  Published
+/// because generated code reads inline text with a `getelementptr` of
+/// exactly this offset.
+pub const inline_at: usize = 3;
+pub const inline_capacity: u8 = 21;
 
 /// The `inline_length` of text that is *not* in the value: `bits`
 /// addresses it and `length` measures it.  Any other value from 0 to
 /// `inline_capacity` is a count of bytes living in the slot itself.
 pub const text_outside: u8 = 0xff;
 
-/// What is known about a `str`'s encoding, for text that lives outside
-/// the value.
+/// What a `str` knows about its own encoding.
 ///
 /// **A `str` is indexed by scalar and stored as UTF-8, and those two
 /// only agree when every scalar is one byte.**  When they do agree the
@@ -148,23 +155,19 @@ pub const text_outside: u8 = 0xff;
 /// classify is slow and right rather than fast and wrong.  Nothing may
 /// read this as "not ASCII" — only `multi_byte` says that.
 ///
-/// It costs no space: the six bytes of `inline_head` are the first of
-/// the inline run, and text living outside the value has no inline run
-/// to read.  Nothing compares or hashes the slot itself — `keyEquals`,
-/// `hashOf` and `compare` all work on the bytes — so the byte is
-/// invisible to equality, ordering and map lookup.
+/// Nothing compares or hashes the slot itself — `keyEquals`, `hashOf`
+/// and `compare` all work on the bytes — so this is invisible to
+/// equality, ordering and map lookup.
 pub const Encoding = enum(u8) {
+    /// Nobody has looked.  Every reader walks, so a value that arrives
+    /// without an answer is slow and right.
     unknown = 0,
+    /// Every scalar is one byte, so a scalar index *is* a byte offset.
     ascii = 1,
+    /// At least one scalar is wider than a byte, so positions have to
+    /// be walked to.
     multi_byte = 2,
 };
-
-/// Where `Encoding` sits in a value whose text is outside it.
-///
-/// Published because generated code writes and reads the same byte: a
-/// str travels through compiled code as `{ptr, i64, i8}` and boxes the
-/// third word here (`codegen/lower.zig`).
-pub const encoding_at: usize = inline_at;
 
 /// What `text` is, answered rather than remembered.  The classification
 /// itself, for the callers that have the bytes in hand — a literal at
@@ -205,14 +208,18 @@ pub const Handle = struct {
 pub const Value = extern struct {
     tag: Tag = .none,
     /// How many bytes of text live in this value, or `text_outside`
-    /// when `bits` addresses them.  Read only for `str`; every
-    /// other tag leaves it zero.
+    /// when `bits` addresses them.  Read only for `str` and `bytes`;
+    /// every other tag leaves it zero.
     inline_length: u8 = 0,
-    /// The first six bytes of inline text.  The other sixteen are
-    /// `bits` and `length` — offsets 2 through 23 are one run, and
+    /// What reaching a scalar position costs.  A fact about `str`
+    /// alone; every other tag leaves it `unknown`, and so does a `str`
+    /// nobody has classified.
+    encoding: Encoding = .unknown,
+    /// The first five bytes of inline text.  The other sixteen are
+    /// `bits` and `length` — offsets 3 through 23 are one run, and
     /// `inlineText` reads it whole.  Named as a field because an
     /// `extern struct` cannot overlap two, and never read directly.
-    inline_head: [6]u8 = @splat(0),
+    inline_head: [5]u8 = @splat(0),
     /// Scalar payload, or the address of the slice `length` measures.
     /// Inline text lives here too, from its seventh byte on.
     bits: u64 = 0,
@@ -287,8 +294,13 @@ pub const Value = extern struct {
     /// Text that lives somewhere else — a program constant, an owned
     /// allocation, a borrow of either.  This is the form every *view*
     /// takes, because a view must not copy.
+    /// Text that lives outside the value, classified.  The scan is one
+    /// pass over bytes the caller is already holding, and it is what
+    /// makes the correct constructor also the fast one: a caller that
+    /// simply says `ofStr` gets a string that indexes well, and a
+    /// caller that already knows says so with `knowing` instead.
     pub fn ofStr(held: []const u8) Value {
-        return ofOutside(.str, held);
+        return ofOutside(.str, held).knowing(encodingOf(held));
     }
 
     pub fn ofBytes(held: []const u8) Value {
@@ -309,23 +321,12 @@ pub const Value = extern struct {
     }
 
     /// The same value, carrying what its maker knows about its
-    /// encoding.  A no-op for text that lives inline: the walk there is
-    /// bounded by `inline_capacity` and never worth a branch.
+    /// encoding.  The same for both storage forms, because the answer
+    /// is a field rather than a corner of one of them.
     pub fn knowing(self: Value, known: Encoding) Value {
-        if (self.inline_length != text_outside) return self;
         var told = self;
-        std.mem.asBytes(&told)[encoding_at] = @intFromEnum(known);
+        told.encoding = known;
         return told;
-    }
-
-    /// What this value's maker knew.  Inline text answers `ascii` only
-    /// when it really is: the bytes are right here, so the question is
-    /// answered rather than remembered.
-    pub fn encoding(self: *const Value) Encoding {
-        if (self.inline_length != text_outside) {
-            return if (isAscii(self.textOf())) .ascii else .multi_byte;
-        }
-        return std.enums.fromInt(Encoding, std.mem.asBytes(self)[encoding_at]) orelse .unknown;
     }
 
     /// Whether every byte is a one-byte scalar, which is what makes a
@@ -342,7 +343,13 @@ pub const Value = extern struct {
     /// borrows nothing and owns nothing.
     pub fn ofInlineText(tag: Tag, held: []const u8) Value {
         std.debug.assert(held.len <= inline_capacity);
-        var made: Value = .{ .tag = tag, .inline_length = @intCast(held.len) };
+        var made: Value = .{
+            .tag = tag,
+            .inline_length = @intCast(held.len),
+            // At most `inline_capacity` bytes, so the answer is cheaper
+            // to have than to reason about not having.
+            .encoding = if (tag == .str) encodingOf(held) else .unknown,
+        };
         @memcpy(made.inlineStorage()[0..held.len], held);
         return made;
     }

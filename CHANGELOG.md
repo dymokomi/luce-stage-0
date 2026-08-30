@@ -4,6 +4,48 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.28 — a scratch directory you can prove is yours
+
+- **`files.make_temporary_directory(parent, prefix) -> str!`.** The one
+  directory call that proves the directory is yours. `make_directory` means
+  "there is a directory at this path when I return" and succeeds on one
+  somebody else made — which is what saves ordinary callers from writing a
+  guard, and exactly what makes it useless for a scratch area. Checking
+  `exists` first and creating after is the race, not the fix: between the
+  question and the answer another program takes the name, and idempotence
+  turns that into two programs sharing one directory, each free to delete the
+  other's files.
+
+  So the name is chosen and taken in the same act. What comes back exists and
+  was made by this call; nothing already there is ever replaced or removed,
+  and on POSIX the directory is owner-only — a scratch directory in a shared
+  `/tmp` is otherwise every account's reading. `prefix` shapes only the
+  leading characters, so a listing says whose it is.
+
+  This is what a build needs to write beside its output and rename the
+  finished artifact into place: concurrent builds cannot collide, and a
+  failed one leaves the previous artifact untouched.
+
+- **`str` carries what it knows about its own encoding in a declared field**
+  rather than in borrowed space. 0.27 hid it in the inline run's first byte,
+  which cost a reader two meanings for one byte and cost both the runtime and
+  the code generator a branch. It is now `encoding`, beside the length that
+  says which form the text is in, so it reads the same whichever form that is.
+  The inline run gives up one byte for it.
+
+  The claim is checked against a decoder that shares none of its code: a
+  specification decodes UTF-8 from `bytes` in Luce, by hand, and holds `len`,
+  every index, the iteration and a stride of slices to what that decoder
+  says — across the boundary where a string stops being ASCII, through slices
+  that inherit and joins that cannot, on both engines.
+
+- **A program's callback context is one thread-local, not three.** The host,
+  the runtime and the depth a C callback needs are written together and read
+  together; three variables let a reader imagine a state where one is current
+  and another is not. Being one also costs a third as much of a resource that
+  turns out to be scarce: every thread-local in a dynamically loaded image
+  takes a loader slot that closing the image does not give back.
+
 ## 0.27 — a string remembers what it is
 
 - **Indexing a `str` no longer walks it.** A scalar position and a byte

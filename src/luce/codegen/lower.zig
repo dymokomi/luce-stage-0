@@ -398,10 +398,28 @@ const Module = struct {
         methods: Builder.Variable.Index,
     };
 
+    /// This thread's callback context, as one thread-local rather than
+    /// three.
+    ///
+    /// **They are one thing.**  A callback arriving from C has nothing
+    /// but the calling thread to find its runtime by, and the host, the
+    /// runtime and the depth it needs are written together on the way
+    /// in and read together on the way back — no state exists where one
+    /// is current and another is not.  Three variables let a reader
+    /// imagine one.
+    ///
+    /// Being one also costs a third of what three cost, and the cost is
+    /// not the bytes: every thread-local in a dynamically loaded image
+    /// takes a slot from the loader that closing the image does not
+    /// give back (`_tlv_bootstrap_error`), so an artifact's appetite for
+    /// them is a limit on how many artifacts one process can ever load.
     const CfuncContext = struct {
-        host: Builder.Variable.Index,
-        rt: Builder.Variable.Index,
-        depth: Builder.Variable.Index,
+        /// The single variable, of `layout` below.
+        variable: Builder.Variable.Index,
+        /// Which field is which, in the order they are stored.
+        const host_at = 0;
+        const rt_at = 1;
+        const depth_at = 2;
     };
 
     fn deinit(self: *Module) void {
@@ -655,6 +673,12 @@ const Module = struct {
             ),
             .worker_join => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
             .shell_run => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .ptr, .i64, .ptr, .ptr },
+                .normal,
+            ),
+            // Two texts in, one text out — `shell_run`'s shape exactly.
+            .temporary_directory => builder.fnType(
                 .i32,
                 &.{ .ptr, .ptr, .i64, .ptr, .i64, .ptr, .ptr },
                 .normal,
@@ -1254,6 +1278,7 @@ const Module = struct {
         return self.builder.structConst(self.value_type, &.{
             try self.builder.intConst(.i8, @intFromEnum(tag)),
             try self.builder.intConst(.i8, form),
+            try self.builder.intConst(.i8, @intFromEnum(runtime.Encoding.unknown)),
             try self.builder.zeroInitConst(head),
             bits,
             try self.builder.intConst(.i64, length),
@@ -1400,6 +1425,7 @@ const Module = struct {
         return self.builder.structConst(self.value_type, &.{
             try self.builder.intConst(.i8, @intFromEnum(tag)),
             try self.builder.intConst(.i8, form),
+            try self.builder.intConst(.i8, @intFromEnum(runtime.Encoding.unknown)),
             try self.builder.zeroInitConst(head),
             bits,
             try self.builder.intConst(.i64, @as(i64, @bitCast(length))),
@@ -1419,9 +1445,10 @@ const Module = struct {
         self.value_type = try self.builder.structType(.normal, &.{
             .i8, // tag
             .i8, // inline_length
+            .i8, // encoding
             // `inline_head`: the inline run's first bytes, up to where
             // `bits` begins.  The rest of the run *is* `bits` and
-            // `length`, which is what makes twenty-two of them fit.
+            // `length`, which is what makes twenty-one of them fit.
             try self.builder.arrayType(8 - runtime.inline_at, .i8),
             .i64, // bits
             .i64, // length
@@ -2002,28 +2029,38 @@ const Module = struct {
 
     fn makeCfuncContext(self: *Module) Error!void {
         if (self.cfunc_context != null) return;
-        self.cfunc_context = .{
-            .host = try self.cfuncContextGlobal("luce.cfunc.host", .ptr, try self.builder.nullConst(.ptr)),
-            .rt = try self.cfuncContextGlobal("luce.cfunc.rt", .ptr, try self.builder.nullConst(.ptr)),
-            .depth = try self.cfuncContextGlobal("luce.cfunc.depth", .i64, try self.builder.intConst(.i64, 0)),
-        };
-    }
-
-    fn cfuncContextGlobal(
-        self: *Module,
-        name: []const u8,
-        of: Builder.Type,
-        zero: Builder.Constant,
-    ) Error!Builder.Variable.Index {
+        const layout = try self.cfuncContextType();
         const variable = try self.builder.addVariable(
-            try self.builder.strtabString(name),
-            of,
+            try self.builder.strtabString("luce.cfunc.context"),
+            layout,
             .default,
         );
-        try variable.setInitializer(zero, self.builder);
+        try variable.setInitializer(try self.builder.zeroInitConst(layout), self.builder);
         variable.setThreadLocal(.generaldynamic, self.builder);
         variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
-        return variable;
+        self.cfunc_context = .{ .variable = variable };
+    }
+
+    /// `{ host, rt, depth }` — the shape `CfuncContext` names the
+    /// fields of.
+    fn cfuncContextType(self: *Module) Error!Builder.Type {
+        return self.builder.structType(.normal, &.{ .ptr, .ptr, .i64 });
+    }
+
+    /// The address of one field of this thread's context.
+    fn cfuncContextField(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        field: u32,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const context = self.cfunc_context.?;
+        return wip.gepStruct(
+            try self.cfuncContextType(),
+            context.variable.toValue(self.builder),
+            field,
+            name,
+        );
     }
 
     /// Publish this thread's runtime context for callbacks, on the way
@@ -2036,11 +2073,11 @@ const Module = struct {
         rt: Builder.Value,
         depth: Builder.Value,
     ) Error!void {
-        const context = self.cfunc_context orelse return;
+        if (self.cfunc_context == null) return;
         const word = Builder.Alignment.fromByteUnits(8);
-        _ = try wip.store(.normal, host, context.host.toValue(self.builder), word);
-        _ = try wip.store(.normal, rt, context.rt.toValue(self.builder), word);
-        _ = try wip.store(.normal, depth, context.depth.toValue(self.builder), word);
+        _ = try wip.store(.normal, host, try self.cfuncContextField(wip, CfuncContext.host_at, "cfunc.host"), word);
+        _ = try wip.store(.normal, rt, try self.cfuncContextField(wip, CfuncContext.rt_at, "cfunc.rt"), word);
+        _ = try wip.store(.normal, depth, try self.cfuncContextField(wip, CfuncContext.depth_at, "cfunc.depth"), word);
     }
 
     fn libcAbort(self: *Module) Error!Builder.Function.Index {
@@ -2151,8 +2188,13 @@ const Module = struct {
         // context is the runtime it runs against.  A thread Luce never
         // entered has no runtime to trap through, and stopping the
         // process is the only honest answer left (docs/FFI.md).
-        const context = self.cfunc_context.?;
-        const rt = try wip.load(.normal, .ptr, context.rt.toValue(builder), word, "rt");
+        const rt = try wip.load(
+            .normal,
+            .ptr,
+            try self.cfuncContextField(&wip, CfuncContext.rt_at, "cfunc.rt"),
+            word,
+            "rt",
+        );
         const orphan = try wip.block(1, "no.context");
         const live = try wip.block(1, "live");
         _ = try wip.brCond(
@@ -2174,8 +2216,20 @@ const Module = struct {
         _ = try wip.@"unreachable"();
 
         wip.cursor = .{ .block = live };
-        const host = try wip.load(.normal, .ptr, context.host.toValue(builder), word, "host");
-        const depth = try wip.load(.normal, .i64, context.depth.toValue(builder), word, "depth");
+        const host = try wip.load(
+            .normal,
+            .ptr,
+            try self.cfuncContextField(&wip, CfuncContext.host_at, "cfunc.host"),
+            word,
+            "host",
+        );
+        const depth = try wip.load(
+            .normal,
+            .i64,
+            try self.cfuncContextField(&wip, CfuncContext.depth_at, "cfunc.depth"),
+            word,
+            "depth",
+        );
         const zero = try builder.intValue(.i64, 0);
 
         var arguments: std.ArrayList(Builder.Value) = .empty;
@@ -4034,9 +4088,10 @@ const Body = struct {
     /// run from `box_inline`, not field by field.
     const box_tag = 0;
     const box_inline_length = 1;
-    const box_inline = 2;
-    const box_bits = 3;
-    const box_length = 4;
+    const box_encoding = 2;
+    const box_inline = 3;
+    const box_bits = 4;
+    const box_length = 5;
 
     /// A pointer to a scratch `runtime.Value` holding `held`, whose
     /// Luce type is `of`.
@@ -4306,19 +4361,17 @@ const Body = struct {
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
-        // Every text box starts by claiming nothing.  `fillBoxValue`
-        // overwrites this for a str with what the register knew, but
-        // the two are written at different places — the type's facts in
-        // the entry block, the value's where it is produced — and a box
-        // that only ever got the first would otherwise carry whatever
-        // the scratch held as a claim about its own bytes.  `bytes` has
-        // no encoding to claim at all and stops here.
-        if (of == .str or of == .bytes) {
-            try self.storeBoxByte(slot, box_inline, try builder.intValue(
-                .i8,
-                @intFromEnum(runtime.Encoding.unknown),
-            ));
-        }
+        // Every box starts by claiming nothing about its encoding.
+        // `fillBoxValue` overwrites this for a str with what the
+        // register knew, but the two are written at different places —
+        // the type's facts in the entry block, the value's where it is
+        // produced — and a box that only ever got the first would
+        // otherwise carry whatever the scratch held as a claim about
+        // its own bytes.  Nothing else has an encoding to claim.
+        try self.storeBoxByte(slot, box_encoding, try builder.intValue(
+            .i8,
+            @intFromEnum(runtime.Encoding.unknown),
+        ));
         if (boxLengthIsFixed(of)) {
             try self.storeBoxField(slot, box_length, try self.boxLength(of, .none));
         }
@@ -4337,15 +4390,9 @@ const Body = struct {
         if (!boxLengthIsFixed(of)) {
             try self.storeBoxField(slot, box_length, try self.boxLength(of, held));
         }
-        // **A str box says what the register knew.**  It goes where the
-        // inline run would start, which is where the runtime reads it
-        // from (`runtime.encoding_at`) and is dead space in a box the
-        // form byte has already called outside.  Writing it is not only
-        // the optimisation: an unwritten byte there is whatever the
-        // scratch held, and the runtime would read someone else's
-        // rubbish as a claim about this text.
+        // A str box says what the register knew.
         if (of == .str) {
-            try self.storeBoxByte(slot, box_inline, try self.wip.extractValue(held, &.{2}, "box.encoding"));
+            try self.storeBoxByte(slot, box_encoding, try self.wip.extractValue(held, &.{2}, "box.encoding"));
         }
     }
 
@@ -4382,19 +4429,17 @@ const Body = struct {
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
-        // Every text box starts by claiming nothing.  `fillBoxValue`
-        // overwrites this for a str with what the register knew, but
-        // the two are written at different places — the type's facts in
-        // the entry block, the value's where it is produced — and a box
-        // that only ever got the first would otherwise carry whatever
-        // the scratch held as a claim about its own bytes.  `bytes` has
-        // no encoding to claim at all and stops here.
-        if (of == .str or of == .bytes) {
-            try self.storeBoxByte(slot, box_inline, try builder.intValue(
-                .i8,
-                @intFromEnum(runtime.Encoding.unknown),
-            ));
-        }
+        // Every box starts by claiming nothing about its encoding.
+        // `fillBoxValue` overwrites this for a str with what the
+        // register knew, but the two are written at different places —
+        // the type's facts in the entry block, the value's where it is
+        // produced — and a box that only ever got the first would
+        // otherwise carry whatever the scratch held as a claim about
+        // its own bytes.  Nothing else has an encoding to claim.
+        try self.storeBoxByte(slot, box_encoding, try builder.intValue(
+            .i8,
+            @intFromEnum(runtime.Encoding.unknown),
+        ));
         try self.storeBoxField(slot, box_bits, try self.wip.select(
             .normal,
             present,
@@ -4504,17 +4549,10 @@ const Body = struct {
             try self.wip.cast(.zext, form, .i64, "inline.length"),
             "text.length",
         );
-        // Inline text answers `unknown` rather than reading byte zero of
-        // itself, which is a character.  Nothing is lost: inline text is
-        // at most `inline_capacity` bytes, so its walk is bounded and a
-        // classification would buy nothing.
-        const known = try self.wip.select(
-            .normal,
-            outside,
-            try self.loadBoxByte(slot, box_inline, "unbox.encoding"),
-            try self.module.builder.intValue(.i8, @intFromEnum(runtime.Encoding.unknown)),
-            "text.encoding",
-        );
+        // The encoding is a field, so it reads the same whichever form
+        // the text is in — no branch, and nothing to get wrong about
+        // which bytes mean what.
+        const known = try self.loadBoxByte(slot, box_encoding, "unbox.encoding");
         return self.wip.buildAggregate(self.module.string_type, &.{ address, length, known }, name);
     }
 
@@ -6056,6 +6094,77 @@ const Body = struct {
             bytes,
             size,
         });
+    }
+
+    /// `temporary_directory(parent, prefix)` — the host makes a
+    /// directory nobody else has and answers where it put it.
+    ///
+    /// `emitShellRun`'s shape: a host call that answers text through an
+    /// out-parameter and can fail.  The failure is `make`'s, reported
+    /// against `parent`, because that is the path the caller named and
+    /// the one they can do something about — the name of the directory
+    /// that was not created would be a name that never existed.
+    fn emitTemporaryDirectory(
+        self: *Body,
+        register: mir.Register,
+        parent_register: mir.Register,
+        prefix_register: mir.Register,
+    ) Error!void {
+        const parent, const parent_length = try self.textParts(parent_register, "parent");
+        const prefix, const prefix_length = try self.textParts(prefix_register, "prefix");
+        const made = try self.hostText("scratch.path");
+        try made.clear(self);
+        const answer = try self.callHost(
+            .temporary_directory,
+            &.{ parent, parent_length, prefix, prefix_length, made.text, made.length },
+            "scratch",
+        );
+
+        const box = try self.scratch(self.module.value_type, value_alignment, "scratch.box");
+        const outcome_slot = try self.scratch(.i32, Builder.Alignment.fromByteUnits(4), "scratch.outcome");
+        const failing = try self.wip.block(1, "scratch.failed");
+        const created = try self.wip.block(1, "scratch.ok");
+        const done = try self.wip.block(2, "scratch.done");
+        _ = try self.wip.brCond(try self.saidNo(answer), failing, created, .else_likely);
+
+        self.seek(failing);
+        try self.emitRaiseIo(.make, parent, parent_length);
+        _ = try self.wip.store(
+            .normal,
+            try self.module.builder.intValue(.i32, outcome_errored),
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+        );
+        try self.fillBoxShape(box, .str);
+        try self.fillBoxValue(box, .str, (try self.module.textConstant("")).toValue());
+        _ = try self.wip.br(done);
+
+        self.seek(created);
+        const bytes, const size = try made.load(self);
+        try self.callChecked(.luce_rt_intern_text, &.{
+            self.runtime,
+            bytes,
+            size,
+            box,
+        });
+        _ = try self.wip.store(
+            .normal,
+            try self.module.builder.intValue(.i32, outcome_ok),
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+        );
+        _ = try self.wip.br(done);
+
+        self.seek(done);
+        self.produced[register].value = try self.unboxed(.str, box, "scratch.text");
+        self.produced[register].box = box;
+        self.produced[register].outcome = try self.wip.load(
+            .normal,
+            .i32,
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+            "scratch.answered",
+        );
     }
 
     /// `shell_run(command, input)` — the host feeds `input` to the
@@ -9432,6 +9541,7 @@ const Body = struct {
                 );
                 self.produced[register].outcome = try self.raiseIo(.remove_tree, answer, path, path_length);
             },
+            .temporary_directory => try self.emitTemporaryDirectory(register, of[0], of[1]),
 
             // -- backend-neutral window/GPU channel ------------------
             //

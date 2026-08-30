@@ -394,6 +394,24 @@ pub const Intrinsic = enum {
     path_modified,
     dir_remove,
     tree_remove,
+    /// `temporary_directory(parent, prefix)` — a directory inside
+    /// `parent` that nobody else has, answered by its path.
+    ///
+    /// **Creating it and claiming it are one act**, which is the whole
+    /// point and the one thing `dir_create` cannot do.  That call is
+    /// idempotent on purpose, so it succeeds on a directory somebody
+    /// else made and can never tell a caller the directory is theirs;
+    /// asking `path_kind` first and creating after is the race, not the
+    /// guard.  Here the host chooses the unused name, retries its own
+    /// collisions, and answers a path that exists because this call
+    /// made it — so two builds running at once cannot land in one
+    /// scratch directory and delete each other's work.
+    ///
+    /// Owner-only on POSIX: a scratch directory in a shared `/tmp` is
+    /// otherwise every account's reading.  `prefix` only shapes the
+    /// leading characters, so a person can tell from `ls` whose it is.
+    /// Nothing that already exists is replaced or removed.
+    temporary_directory,
     /// `xs.extend(ys)` — every element of one list appended to
     /// another in order (Zig's appendSlice, ruled in #24).  The
     /// source's length is read before the first append, so a list
@@ -538,6 +556,7 @@ pub const Intrinsic = enum {
             .path_modified,
             .dir_remove,
             .tree_remove,
+            .temporary_directory,
             .epoch_ms,
             .term_rows,
             .term_cols,
@@ -701,6 +720,7 @@ pub const Intrinsic = enum {
             .path_modified,
             .dir_remove,
             .tree_remove,
+            .temporary_directory,
             // The byte channel, on the same grounds.
             .file_open,
             .socket_connect,
@@ -954,6 +974,7 @@ pub const Intrinsic = enum {
             .path_modified,
             .dir_remove,
             .tree_remove,
+            .temporary_directory,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,
@@ -1076,6 +1097,7 @@ pub const Intrinsic = enum {
             .path_modified,
             .dir_remove,
             .tree_remove,
+            .temporary_directory,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,

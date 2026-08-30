@@ -132,6 +132,9 @@ pub const Host = struct {
     /// Captured stdout/stderr from the last `std.os.run` call.
     /// Borrowed by the generated program until the next command.
     shell_output: std.ArrayList(u8) = .empty,
+    /// Where the last `temporary_directory` put things, held because
+    /// the answer is borrowed for the duration of the call.
+    scratch_path: std.ArrayList(u8) = .empty,
     /// Every file the byte channel has open (docs/BYTES.md R5).  A
     /// handle is this table's index plus one, so zero is never a
     /// handle; a closed row stays in place and is reused, which is what
@@ -257,6 +260,7 @@ pub const Host = struct {
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
         self.shell_output.deinit(self.gpa);
+        self.scratch_path.deinit(self.gpa);
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
         self.closeOpenSockets();
@@ -380,6 +384,7 @@ pub const Host = struct {
             .path_modified = cPathModified,
             .dir_remove = cDirRemove,
             .tree_remove = cTreeRemove,
+            .temporary_directory = cTemporaryDirectory,
         };
     }
 
@@ -687,6 +692,52 @@ pub const Host = struct {
     /// than followed.
     fn removeTree(self: *Host, path: []const u8) bool {
         std.Io.Dir.cwd().deleteTree(self.io, path) catch return false;
+        return true;
+    }
+
+    /// POSIX, and not in Zig's libc bindings: the one call that
+    /// creates a uniquely named directory and tells you it is yours.
+    extern "c" fn mkdtemp(template: [*:0]u8) ?[*:0]u8;
+
+    /// Create a directory inside `parent` that nobody else has, and
+    /// leave its path in `scratch_path`.
+    ///
+    /// **`mkdtemp` is this operation**, and is used rather than
+    /// reimplemented: it picks the name, retries its own collisions,
+    /// creates with mode 0700, and fails rather than ever handing back
+    /// a directory it did not create.  A loop of "is this name free?
+    /// then take it" written here would be the race the whole slot
+    /// exists to avoid, and would get the permissions wrong besides.
+    ///
+    /// The template must end in exactly six `X`s, which `mkdtemp`
+    /// replaces in place.  Anything in `prefix` that cannot sit in a
+    /// path component is dropped rather than refused: it only exists so
+    /// a person reading `ls` can tell whose directory this is.
+    fn makeTemporaryDirectory(
+        self: *Host,
+        parent: []const u8,
+        prefix: []const u8,
+    ) error{OutOfMemory}!bool {
+        self.scratch_path.clearRetainingCapacity();
+        try self.scratch_path.appendSlice(self.gpa, parent);
+        if (parent.len != 0 and parent[parent.len - 1] != std.fs.path.sep) {
+            try self.scratch_path.append(self.gpa, std.fs.path.sep);
+        }
+        for (prefix) |byte| {
+            const usable = switch (byte) {
+                'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => true,
+                else => false,
+            };
+            if (usable) try self.scratch_path.append(self.gpa, byte);
+        }
+        try self.scratch_path.appendSlice(self.gpa, "XXXXXX");
+        try self.scratch_path.append(self.gpa, 0);
+
+        const template: [*:0]u8 = @ptrCast(self.scratch_path.items.ptr);
+        if (mkdtemp(template) == null) return false;
+        // `mkdtemp` wrote the name in place; the path is what is there
+        // now, without the terminator the C call needed.
+        self.scratch_path.items.len -= 1;
         return true;
     }
 
@@ -2342,6 +2393,26 @@ pub const Host = struct {
         path_length: i64,
     ) callconv(.c) abi.Answer {
         return if (of(context).removeTree(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn cTemporaryDirectory(
+        context: ?*anyopaque,
+        parent: [*]const u8,
+        parent_length: i64,
+        prefix: [*]const u8,
+        prefix_length: i64,
+        path: *[*]const u8,
+        path_length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const made = self.makeTemporaryDirectory(
+            parent[0..@intCast(parent_length)],
+            prefix[0..@intCast(prefix_length)],
+        ) catch return .exhausted;
+        if (!made) return .no;
+        path.* = self.scratch_path.items.ptr;
+        path_length.* = @intCast(self.scratch_path.items.len);
+        return .yes;
     }
 
     fn cEpoch(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {

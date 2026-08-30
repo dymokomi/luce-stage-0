@@ -1056,16 +1056,20 @@ so a host can tell "the program failed" from "the machine ran out".
 
 A Luce value crosses the boundary as a pointer to a 24-byte
 `runtime.Value` in an entry-block `alloca`.  The layout is asserted
-against the Zig struct, so the two cannot drift.  Its tag is one byte
-and the twenty-two after it are where a string's text lives when it
-fits; generated code only ever *writes* the other form, and reads both
-(docs/STRINGS.md).
+against the Zig struct, so the two cannot drift.  Its tag is one byte,
+and the run after the fields that describe the text is where a string's
+text lives when it fits; generated code only ever *writes* the other
+form, and reads both.  How much fits, and where the run starts, are
+`runtime.inline_capacity` and `runtime.inline_at` — stated there and
+nowhere else, because a count repeated in prose is a count that goes
+stale (docs/STRINGS.md).
 
 ## The published host ABI
 
 `src/luce/codegen/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **24**. A compiled artifact
-exports one symbol:
+it; `abi.version` is the number a loader checks, and this page does not
+repeat it — the copy that stood here had been wrong through six bumps.
+A compiled artifact exports one symbol:
 
 ```c
 int32_t luce_main(const LuceHost *host);   /* 0 ok, 1 trapped, 2 exhausted, 3 errored, 4 exited */

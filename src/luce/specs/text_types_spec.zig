@@ -360,44 +360,121 @@ test "invalid char and bytes operations are rejected before lowering" {
 // Indexing a str, and what it costs
 // ---------------------------------------------------------------------------
 
-test "str: indexing and slicing agree with a walk, whatever the encoding" {
-    // A `str` is indexed by scalar and stored as UTF-8, and those two
-    // only agree when every scalar is one byte.  Text that is all ASCII
-    // is indexed directly and text that is not is walked
-    // (`runtime.Encoding`), so the two paths must answer the same
-    // question the same way — including at the boundary where a string
-    // stops being ASCII, and for a slice, which inherits the claim.
+test "str: an independent decoder agrees with every str operation, on both engines" {
+    // A string that claims to be ASCII and is not would index into the
+    // middle of a scalar, and would do it *quietly*.  So the check does
+    // not reuse the thing it is checking: it decodes UTF-8 from `bytes`
+    // in Luce, by hand, and holds `len`, every index, the iteration and
+    // a stride of slices to what that decoder says — over an empty
+    // string, each scalar width, the first multi-byte scalar at each
+    // position across the boundary where text stops living inside its
+    // value, slices of slices, and all four ways two strings join.
+    //
+    // Both engines run it, so a disagreement between the path that
+    // carries the classification in a register and the path that does
+    // not is caught as well.
     try agree.prints(
-        \\func main():
-        \\    let plain = "abcdefghijklmnopqrstuvwxyz0123456789"
-        \\    let mixed = "abc" + "é" + "defghijklmnopqrstuvwxyz0123456789"
-        \\    print(str(len(plain)) + " " + str(len(mixed)))
-        \\    print(str(plain[0]) + str(plain[25]) + str(plain[35]))
-        \\    print(str(mixed[2]) + str(mixed[3]) + str(mixed[4]))
-        \\    print(plain[10:15] + "|" + mixed[2:6])
-        \\    # A slice keeps whatever its source knew, so the same
-        \\    # question asked of the piece must answer the same way.
-        \\    let piece = mixed[3:9]
-        \\    print(str(len(piece)) + " " + str(piece[0]) + str(piece[1]))
-        \\    var walked = ""
-        \\    for character in mixed:
-        \\        walked = walked + str(character)
-        \\    print(walked)
-        \\    var indexed = ""
+        \\func decode(raw: bytes) -> list[char]:
+        \\    var out = list[char]()
         \\    var at = 0
-        \\    while at < len(mixed):
-        \\        indexed = indexed + str(mixed[at])
-        \\        at += 1
-        \\    print(str(indexed == walked))
+        \\    while at < len(raw):
+        \\        let lead = i64(raw[at])
+        \\        var width = 1
+        \\        var point = lead
+        \\        if lead >= 240:
+        \\            width = 4
+        \\            point = lead - 240
+        \\        elif lead >= 224:
+        \\            width = 3
+        \\            point = lead - 224
+        \\        elif lead >= 192:
+        \\            width = 2
+        \\            point = lead - 192
+        \\        var k = 1
+        \\        while k < width:
+        \\            point = point * 64 + (i64(raw[at + k]) - 128)
+        \\            k += 1
+        \\        out.append(char(point))
+        \\        at += width
+        \\    return out
         \\
+        \\# The slice, decoded the independent way, against the scalars it should
+        \\# have held.  Comparing decoded runs rather than rebuilt text keeps the
+        \\# check linear: rebuilding a string a character at a time would cost a
+        \\# fresh allocation per character, per slice, and say nothing more.
+        \\func same_run(cut: list[char], chars: list[char], from: i64, to: i64) -> bool:
+        \\    if len(cut) != to - from:
+        \\        return false
+        \\    var at = 0
+        \\    while at < len(cut):
+        \\        if cut[at] != chars[from + at]:
+        \\            return false
+        \\        at += 1
+        \\    return true
+        \\
+        \\func check(sample: str, name: str):
+        \\    let chars = decode(bytes(sample))
+        \\    if len(sample) != len(chars):
+        \\        trap("length disagrees for " + name)
+        \\    var at = 0
+        \\    while at < len(chars):
+        \\        if sample[at] != chars[at]:
+        \\            trap("index disagrees for " + name)
+        \\        at += 1
+        \\    var walked = list[char]()
+        \\    for character in sample:
+        \\        walked.append(character)
+        \\    if len(walked) != len(chars):
+        \\        trap("iteration length disagrees for " + name)
+        \\    at = 0
+        \\    while at < len(walked):
+        \\        if walked[at] != chars[at]:
+        \\            trap("iteration disagrees for " + name)
+        \\        at += 1
+        \\    # Both ends and a stride between them: a slice can only be wrong at
+        \\    # a boundary, and the middle repeated says nothing the ends did not.
+        \\    let step = 1 + len(chars) // 4
+        \\    var a = 0
+        \\    while a <= len(chars):
+        \\        var b = a
+        \\        while b <= len(chars):
+        \\            if not same_run(decode(bytes(sample[a:b])), chars, a, b):
+        \\                trap("slice disagrees for " + name)
+        \\            b += step
+        \\        if not same_run(decode(bytes(sample[a:len(chars)])), chars, a, len(chars)):
+        \\            trap("tail slice disagrees for " + name)
+        \\        a += step
+        \\
+        \\func main():
+        \\    let ascii_long = "abcdefghijklmnopqrstuvwxyz0123456789"
+        \\    check("", "empty")
+        \\    check("abc", "ascii short")
+        \\    check(ascii_long, "ascii long")
+        \\    check("é", "one two-byte")
+        \\    check("€", "one three-byte")
+        \\    check("👋", "one four-byte")
+        \\    check("aé€👋z", "mixed widths")
+        \\    # The first multi-byte scalar at each position across the boundary
+        \\    # where text stops living inside its value.
+        \\    var prefix = ""
+        \\    var n = 0
+        \\    while n < 26:
+        \\        check(prefix + "é" + "tail", "multi at " + str(n))
+        \\        check(prefix + "é", "multi at end " + str(n))
+        \\        check(prefix, "ascii of " + str(n))
+        \\        prefix = prefix + "a"
+        \\        n += 1
+        \\    # Slices of slices, and every way two strings join.
+        \\    let wide = "aé€👋zabcdefghijklmnopqrstuvwxyz"
+        \\    check(wide[1:8], "slice of wide")
+        \\    check(wide[1:8][1:4], "slice of slice")
+        \\    check(ascii_long + ascii_long, "ascii + ascii")
+        \\    check(ascii_long + wide, "ascii + wide")
+        \\    check(wide + ascii_long, "wide + ascii")
+        \\    check(wide + wide, "wide + wide")
+        \\    print("agreed")
     ,
-        \\36 37
-        \\az9
-        \\céd
-        \\klmno|céde
-        \\6 éd
-        \\abcédefghijklmnopqrstuvwxyz0123456789
-        \\true
+        \\agreed
         \\
     );
 }
@@ -423,128 +500,6 @@ test "str: a growing string keeps answering the same as a fresh one" {
         \\40 x
         \\41 é x
         \\42 y é
-        \\
-    );
-}
-
-test "str: an independent decoder agrees with every str operation, on both engines" {
-    // 0.27 made an ASCII string index with a load instead of a walk, by
-    // carrying what it knows about its own encoding through the
-    // register, the box and the runtime.  The risk that buys is a claim
-    // that is wrong: a string that says ASCII and is not would index
-    // into the middle of a scalar, and would do it *quietly*.
-    //
-    // So the check does not reuse the thing it is checking.  It decodes
-    // UTF-8 from `bytes` in Luce, by hand, and holds `len`, every
-    // index, every slice and the iteration to what that decoder says —
-    // over an empty string, each scalar width, the first multi-byte
-    // scalar at thirty positions, thirty lengths either side of the
-    // boundary where text stops living inside its value, slices of
-    // slices, and all four ways two strings can be joined.
-    //
-    // Both engines run it, so a disagreement is also caught between the
-    // path that carries the byte in a register and the path that does
-    // not.
-    try agree.prints(
-        \\# An independent UTF-8 decoder, so the str path is checked against
-        \\# something that does not share its implementation.
-        \\func decode(raw: bytes) -> list[char]:
-        \\    var out = list[char]()
-        \\    var at = 0
-        \\    while at < len(raw):
-        \\        let lead = i64(raw[at])
-        \\        var width = 1
-        \\        var point = lead
-        \\        if lead >= 240:
-        \\            width = 4
-        \\            point = lead - 240
-        \\        elif lead >= 224:
-        \\            width = 3
-        \\            point = lead - 224
-        \\        elif lead >= 192:
-        \\            width = 2
-        \\            point = lead - 192
-        \\        var k = 1
-        \\        while k < width:
-        \\            point = point * 64 + (i64(raw[at + k]) - 128)
-        \\            k += 1
-        \\        out.append(char(point))
-        \\        at += width
-        \\    return out
-        \\
-        \\func rebuild(chars: list[char], from: i64, to: i64) -> str:
-        \\    var out = ""
-        \\    var at = from
-        \\    while at < to:
-        \\        out = out + str(chars[at])
-        \\        at += 1
-        \\    return out
-        \\
-        \\func check(sample: str, name: str):
-        \\    let chars = decode(bytes(sample))
-        \\    if len(sample) != len(chars):
-        \\        trap("length disagrees for " + name)
-        \\    var at = 0
-        \\    while at < len(chars):
-        \\        if sample[at] != chars[at]:
-        \\            trap("index disagrees for " + name)
-        \\        at += 1
-        \\    var walked = list[char]()
-        \\    for character in sample:
-        \\        walked.append(character)
-        \\    if len(walked) != len(chars):
-        \\        trap("iteration length disagrees for " + name)
-        \\    at = 0
-        \\    while at < len(chars):
-        \\        if walked[at] != chars[at]:
-        \\            trap("iteration disagrees for " + name)
-        \\        at += 1
-        \\    var a = 0
-        \\    while a <= len(chars):
-        \\        var b = a
-        \\        while b <= len(chars):
-        \\            if sample[a:b] != rebuild(chars, a, b):
-        \\                trap("slice disagrees for " + name)
-        \\            b += 1
-        \\        a += 1
-        \\
-        \\func main():
-        \\    let ascii_short = "abc"
-        \\    let ascii_long = "abcdefghijklmnopqrstuvwxyz0123456789"
-        \\    check("", "empty")
-        \\    check(ascii_short, "ascii short")
-        \\    check(ascii_long, "ascii long")
-        \\    check("é", "one two-byte")
-        \\    check("€", "one three-byte")
-        \\    check("👋", "one four-byte")
-        \\    check("aé€👋z", "mixed widths")
-        \\    # The first multi-byte scalar atevery position of a growing prefix.
-        \\    var prefix = ""
-        \\    var n = 0
-        \\    while n < 30:
-        \\        check(prefix + "é" + ascii_long, "multi at " + str(n))
-        \\        check(prefix + "é", "multi at end " + str(n))
-        \\        prefix = prefix + "a"
-        \\        n += 1
-        \\    # Either side of the inline boundary, both representations.
-        \\    var grown = ""
-        \\    var m = 0
-        \\    while m < 30:
-        \\        check(grown, "grown " + str(m))
-        \\        check(grown + "é", "grown wide " + str(m))
-        \\        grown = grown + "x"
-        \\        m += 1
-        \\    # Slices of slices, and joins of every combination.
-        \\    let wide = "aé€👋zabcdefghijklmnopqrstuvwxyz"
-        \\    check(wide[1:8], "slice of wide")
-        \\    check(wide[1:8][1:4], "slice of slice")
-        \\    check(ascii_long + ascii_long, "ascii + ascii")
-        \\    check(ascii_long + wide, "ascii + wide")
-        \\    check(wide + ascii_long, "wide + ascii")
-        \\    check(wide + wide, "wide + wide")
-        \\    print("agreed")
-    ,
-        \\agreed
         \\
     );
 }

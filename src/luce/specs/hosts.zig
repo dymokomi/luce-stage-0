@@ -131,6 +131,10 @@ pub const World = struct {
     /// answer.
     made: [max_made_directories][64]u8 = undefined,
     made_lengths: [max_made_directories]usize = @splat(0),
+    /// Where `makeTemporaryDirectory` builds a candidate, and the
+    /// number that makes each one new.
+    scratch_path: [64]u8 = undefined,
+    scratch_counter: usize = 0,
     made_count: usize = 0,
     /// The machine this world claims to be, for the same reason the
     /// clock is not a real one: two engines cannot agree on what the
@@ -385,6 +389,44 @@ pub const World = struct {
             at = stop + 1;
         }
         return true;
+    }
+
+    /// Create a directory inside `parent` that this world does not
+    /// already hold, and answer its path (`abi.TemporaryDirectoryFn`).
+    ///
+    /// **The name is a counter, not a random draw.**  A real host asks
+    /// the operating system for a name nobody has; a world that did the
+    /// same would answer differently on each engine, and the two
+    /// engines are compared by what they print.  Counting gives the
+    /// same guarantee the service actually promises — the answer names
+    /// a directory that did not exist and does now — while staying
+    /// something a specification can state.
+    ///
+    /// The suffix keeps rising for the life of the world, so a name is
+    /// never reused even after the directory it named is removed.
+    fn makeTemporaryDirectory(
+        self: *World,
+        parent: []const u8,
+        prefix: []const u8,
+    ) ?[]const u8 {
+        if (self.refuse_writes) return null;
+        const root = trimmedPath(parent);
+        while (self.scratch_counter < 1000) {
+            const candidate = std.fmt.bufPrint(
+                &self.scratch_path,
+                "{s}{s}{s}{d}",
+                .{ root, if (root.len == 0) "" else "/", prefix, self.scratch_counter },
+            ) catch return null;
+            self.scratch_counter += 1;
+            if (self.exists(candidate) or self.hasDirectory(candidate)) continue;
+            if (self.made_count == max_made_directories) return null;
+            if (candidate.len > self.made[0].len) return null;
+            @memcpy(self.made[self.made_count][0..candidate.len], candidate);
+            self.made_lengths[self.made_count] = candidate.len;
+            self.made_count += 1;
+            return self.made[self.made_count - 1][0..candidate.len];
+        }
+        return null;
     }
 
     /// Whether this world holds a directory of that name.
@@ -1760,6 +1802,7 @@ pub const Capture = struct {
             .path_modified = if (provided.files) pathModified else null,
             .dir_remove = if (provided.files) dirRemove else null,
             .tree_remove = if (provided.files) treeRemove else null,
+            .temporary_directory = if (provided.files) temporaryDirectory else null,
         };
     }
 
@@ -1998,6 +2041,24 @@ pub const Capture = struct {
         return if (of(context).world.removeTree(path[0..@intCast(path_length)])) .yes else .no;
     }
 
+    fn temporaryDirectory(
+        context: ?*anyopaque,
+        parent: [*]const u8,
+        parent_length: i64,
+        prefix: [*]const u8,
+        prefix_length: i64,
+        path: *[*]const u8,
+        path_length: *i64,
+    ) callconv(.c) abi.Answer {
+        const made = of(context).world.makeTemporaryDirectory(
+            parent[0..@intCast(parent_length)],
+            prefix[0..@intCast(prefix_length)],
+        ) orelse return .no;
+        path.* = made.ptr;
+        path_length.* = @intCast(made.len);
+        return .yes;
+    }
+
     fn fileRename(
         context: ?*anyopaque,
         from: [*]const u8,
@@ -2194,6 +2255,7 @@ pub const Reference = struct {
             .path_modified = if (self.provided.files) modifiedAt else null,
             .dir_remove = if (self.provided.files) removeDirectory else null,
             .tree_remove = if (self.provided.files) removeTree else null,
+            .temporary_directory = if (self.provided.files) temporaryDirectory else null,
             .read_line = if (self.provided.input) readLine else null,
             .print_error = if (self.provided.diagnostics) printError else null,
             .clock_ms = if (self.provided.clock) clockMilliseconds else null,
@@ -2402,6 +2464,16 @@ pub const Reference = struct {
     ) error{OutOfMemory}!?[]const u8 {
         const output = of(context).world.shellRun(command, input) orelse return null;
         return try arena.dupe(u8, output);
+    }
+
+    fn temporaryDirectory(
+        context: *anyopaque,
+        arena: Allocator,
+        parent: []const u8,
+        prefix: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        const made = of(context).world.makeTemporaryDirectory(parent, prefix) orelse return null;
+        return try arena.dupe(u8, made);
     }
 
     pub fn run(self: *Reference, compiled: *const mir.Program) !void {

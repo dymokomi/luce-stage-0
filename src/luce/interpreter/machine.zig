@@ -2985,6 +2985,18 @@ pub const Machine = struct {
                 };
                 return text.ownHost(&self.runtime, output);
             },
+            .temporary_directory => {
+                const host = try self.service();
+                const callback = host.temporary_directory orelse
+                    return self.runtime.fail(.host_unavailable);
+                const parent = registers[arguments[0]].asStr();
+                const prefix = registers[arguments[1]].asStr();
+                const made = (try callback(host.context, self.arena, parent, prefix)) orelse {
+                    self.runtime.raiseIo(.make, parent, self.placeOf(site));
+                    return .ofStr("");
+                };
+                return text.ownHost(&self.runtime, made);
+            },
             .term_event_data => {
                 const screen = try self.terminal();
                 return .ofI64(screen.event_data(

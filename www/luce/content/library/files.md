@@ -31,6 +31,7 @@ a `File`, an ordinary class this module declares, and there is no source
 | `files.delete(path: str) -> !` | removes a file; absence is an `io_failed` error |
 | `files.rename(from: str, to: str) -> !` | moves a path and replaces an existing target |
 | `files.make_directory(path: str) -> !` | creates the directory and missing parents; an existing directory is success |
+| `files.make_temporary_directory(parent: str, prefix: str) -> str!` | creates a directory inside `parent` that nobody else has, and answers its path |
 | `files.list(path: str) -> list[str]!` | sorted names in the directory |
 | `files.entries(path: str) -> list[Entry]!` | sorted entries with their names, paths, and kinds |
 
@@ -51,6 +52,27 @@ each other, never to a deadline. `copy` moves bytes only: permissions and
 ownership are an operating-system surface Luce has not taken up. `move`
 handles the destination on another filesystem the way `shutil.move` does,
 by copying and deleting; directories move only by rename.
+
+`make_temporary_directory` is the one directory call that proves the
+directory is yours. `make_directory` succeeds on a directory somebody else
+made — that is what saves ordinary callers from a guard, and exactly what
+makes it useless for a scratch area. Asking `exists` first and creating after
+is the race, not the fix: between the question and the answer another program
+takes the name, and idempotence turns that into two programs sharing one
+directory, each free to delete the other's files.
+
+So the name is chosen and taken in the same act. What comes back exists and
+was made by this call; nothing already there is ever replaced or removed, and
+on POSIX the directory is owner-only. `prefix` shapes only the leading
+characters, so a listing says whose it is — the host supplies the rest and
+drops anything it cannot use. Removing it is `remove_all`; nothing removes it
+for you.
+
+```text
+let scratch = try files.make_temporary_directory(".", "build-")
+# … write inside scratch, rename the finished artifact out …
+try files.remove_all(scratch)
+```
 
 `remove_all` mirrors `make_directory`: the call means "there is nothing at
 this path when I return", so a path already empty is success and cleaning a

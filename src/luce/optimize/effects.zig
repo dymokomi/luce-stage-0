@@ -347,6 +347,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .path_modified,
         .dir_remove,
         .tree_remove,
+        .temporary_directory,
         // The byte channel: `file_open` takes a table row and every
         // other one reaches the world through a handle.
         .file_open,
@@ -604,6 +605,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .dir_create,
             .dir_remove,
             .tree_remove,
+            .temporary_directory,
             .path_size,
             .path_modified,
             // Reading and writing through a handle resolves that

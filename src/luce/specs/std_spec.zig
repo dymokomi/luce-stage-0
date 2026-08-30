@@ -963,6 +963,14 @@ test "io: a source that stops writing is an error, not a spin" {
 // what they left in it as well as on what they printed
 // (`specs/agree.zig`).
 
+/// A world that will take no write at all, which is how a fallible
+/// effect's refusal is reached without a real filesystem.
+const write_refused: agree.Provided = refusal: {
+    var provided = budget;
+    provided.world = .{ .refuse_writes = true };
+    break :refusal provided;
+};
+
 /// A world that already holds `notes.txt`, at this suite's depth.
 fn withNotes(content: []const u8) agree.Provided {
     var provided = budget;
@@ -1205,6 +1213,64 @@ test "files: size and modified are the two stat facts, and a directory has no si
         \\
     , withNotes("abcdef"),
         \\measured
+        \\
+    );
+}
+
+test "files: a temporary directory is created and claimed in one act" {
+    // The difference between this and `make_directory` is the whole
+    // reason it exists: that one says "there is a directory here" and
+    // succeeds on somebody else's, so nothing built on it can own a
+    // scratch area.  This one answers a path that did not exist before
+    // the call and does after — which is what lets two builds run at
+    // once without landing in the same directory.
+    try agree.printsGiven(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    let first = try files.make_temporary_directory("work", "build-")
+        \\    let second = try files.make_temporary_directory("work", "build-")
+        \\    # Two claims, two directories — never the same one twice.
+        \\    assert(first != second)
+        \\    assert(try files.exists(first))
+        \\    assert(try files.exists(second))
+        \\    let what = try files.kind(first)
+        \\    assert(what != none)
+        \\    # The prefix is the caller's, so a listing says whose it is.
+        \\    assert(strings.starts_with(first, "work/build-"))
+        \\    # Ordinary work happens inside, and cleanup is the caller's.
+        \\    try files.write(first + "/note.txt", "inside")
+        \\    assert(try files.read(first + "/note.txt") == "inside")
+        \\    try files.remove_all(first)
+        \\    assert(not (try files.exists(first)))
+        \\    # A name is never handed out twice, even after removal.
+        \\    let third = try files.make_temporary_directory("work", "build-")
+        \\    assert(third != first)
+        \\    print("claimed")
+        \\
+    , budget,
+        \\claimed
+        \\
+    );
+}
+
+test "files: a temporary directory refuses rather than inventing one" {
+    // A world that will not be written to cannot answer this call, and
+    // the failure has to say so instead of handing back a path to
+    // nothing — the whole value of the operation is that what comes
+    // back is real.
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main():
+        \\    let made = files.make_temporary_directory("work", "build-") catch reason:
+        \\        print(reason)
+        \\        return
+        \\    print("unexpectedly made " + made)
+        \\
+    , write_refused,
+        \\cannot make directory work
         \\
     );
 }

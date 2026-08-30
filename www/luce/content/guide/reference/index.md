@@ -62,7 +62,7 @@ contain references, in which case copying the outer value retains those
 fields. “Host” means the service table supplied by the executable or runner,
 not the operating system reached directly from language semantics.
 
-The reference describes release 0.27 and does not preserve retired syntax.
+The reference describes release 0.28 and does not preserve retired syntax.
 Luce is pre-1.0, so an older release may have accepted a form this reference
 does not mention. [Version Compatibility](/guide/compatibility/) explains
 that policy, while [Status](/status/) keeps planned features separate from

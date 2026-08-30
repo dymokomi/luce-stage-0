@@ -232,7 +232,7 @@ pub const magic = "LUCE";
 /// must change together so concurrent format changes meet as a merge
 /// conflict here instead of silently sharing one version number.
 /// This comment last moved for format 58.
-pub const format_version: u32 = 72;
+pub const format_version: u32 = 73;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -2444,9 +2444,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // a borrowed `list[H]` heap type (an encoding the wire could
     // already spell but no earlier decoder accepted), and
     // `const_cfunc_extern` appends to `Instruction` (the hash moves
-    // again) — caught by the same bump.
-    try testing.expectEqual(@as(u32, 72), format_version);
-    try testing.expectEqual(@as(u64, 4664683626749479671), hasher.final());
+    // again) — caught by the same bump.  And 73: `temporary_directory`
+    // appends to `Intrinsic` (the hash moves again) — an instruction no
+    // earlier decoder has a name for, caught the same way.
+    try testing.expectEqual(@as(u32, 73), format_version);
+    try testing.expectEqual(@as(u64, 13665826541772016018), hasher.final());
 }
 
 test "a cfunc program round-trips the wire, conversion and call included" {

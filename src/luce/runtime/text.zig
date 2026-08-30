@@ -95,7 +95,7 @@ pub fn concat(runtime: *Runtime, left: Value, right: Value) Error!Value {
     const joined: Value = .ofOutside(tag, try std.mem.concat(runtime.objects, u8, &.{ left_bytes, right_bytes }));
     // Two ASCII strings join into one, and the join is where that is
     // cheapest to notice — both halves have already answered.
-    if (tag == .str and left.encoding() == .ascii and right.encoding() == .ascii) {
+    if (tag == .str and left.encoding == .ascii and right.encoding == .ascii) {
         return joined.knowing(.ascii);
     }
     return joined;
@@ -135,7 +135,7 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     // what the whole one knew.  Nothing is claimed the other way: a
     // piece of text that has multi-byte scalars somewhere may have none
     // in this range, and `unknown` costs only the walk it already had.
-    if (held.tag == .str and held.encoding() == .ascii) return cut.knowing(.ascii);
+    if (held.tag == .str and held.encoding == .ascii) return cut.knowing(.ascii);
     return cut;
 }
 
@@ -182,7 +182,7 @@ pub fn at(runtime: *Runtime, held: Value, index: i64) Error!Value {
 /// (`Value.Encoding`).
 fn scalarLength(held: Value) usize {
     const text = held.asStr();
-    if (held.encoding() == .ascii) return text.len;
+    if (held.encoding == .ascii) return text.len;
     return scalarCount(text);
 }
 
@@ -205,7 +205,7 @@ fn scalarCount(text: []const u8) usize {
 /// offset, and the only question left is whether it is in range.
 fn scalarOffsetOf(held: Value, wanted: usize) ?usize {
     const text = held.asStr();
-    if (held.encoding() == .ascii) {
+    if (held.encoding == .ascii) {
         return if (wanted <= text.len) wanted else null;
     }
     return scalarOffset(text, wanted);

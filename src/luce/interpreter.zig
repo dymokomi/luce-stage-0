@@ -252,6 +252,17 @@ pub const Host = struct {
         command: []const u8,
         input: []const u8,
     ) error{OutOfMemory}!?[]const u8 = null,
+    /// Create a directory nobody else has inside `parent` and answer
+    /// where it is, borrowed from `arena`.  Null is failure, and
+    /// nothing was created; the host picks the name, retries its own
+    /// collisions, and makes it owner-only on POSIX
+    /// (`abi.TemporaryDirectoryFn`).
+    temporary_directory: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        parent: []const u8,
+        prefix: []const u8,
+    ) error{OutOfMemory}!?[]const u8 = null,
     /// The program said `exit(status)`.  Called at the site, before
     /// the unwind, so the host holds the number while the program is
     /// still leaving — the same moment `abi.Host.exited` is called on

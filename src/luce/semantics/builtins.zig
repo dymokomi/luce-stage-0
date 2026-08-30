@@ -144,6 +144,7 @@ pub const standard_intrinsics = [_]Builtin{
     .{ .name = "path_modified", .kind = .path_modified, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "dir_remove", .kind = .dir_remove, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "tree_remove", .kind = .tree_remove, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "temporary_directory", .kind = .temporary_directory, .parameters = &.{ .{ .name = "parent" }, .{ .name = "prefix" } }, .host = true },
     .{ .name = "gpu_backend", .kind = .gpu_backend, .host = true },
     .{ .name = "ui_window_open", .kind = .ui_window_open, .parameters = &.{
         .{ .name = "title" },

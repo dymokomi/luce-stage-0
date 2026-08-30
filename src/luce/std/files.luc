@@ -268,6 +268,37 @@ pub func remove_all(path: str) -> !:
 pub func make_directory(path: str) -> !:
     try Builtin.dir_create(path)
 
+# Make a directory inside `parent` that nobody else has, and answer
+# where it is.
+#
+# **This is the one directory call that proves the directory is
+# yours.**  `make_directory` says "there is a directory at this path
+# when I return" and succeeds on one somebody else made — which is
+# what saves ordinary callers from a guard, and exactly what makes it
+# useless for a scratch area.  Asking `exists` first and creating
+# after is the race, not the fix: between the question and the answer
+# another program takes the name, and idempotence turns that into two
+# programs sharing one directory, each free to delete the other's
+# files.
+#
+# So the name is chosen and taken in the same act.  What comes back
+# exists and was made by this call; nothing that was already there is
+# ever replaced or removed.  On POSIX it is owner-only, because a
+# scratch directory in a shared `/tmp` is otherwise everyone's
+# reading.
+#
+# `prefix` only shapes the leading characters, so a person reading a
+# directory listing can tell whose it is — the rest of the name is the
+# host's, and characters it cannot use are dropped rather than
+# refused.  Removing it when you are done is `remove_all`; nothing
+# removes it for you.
+#
+#     let scratch = try files.make_temporary_directory(".", "build-")
+#     # … write inside scratch, rename the finished artifact out …
+#     try files.remove_all(scratch)
+pub func make_temporary_directory(parent: str, prefix: str) -> str!:
+    return try Builtin.temporary_directory(parent, prefix)
+
 # -- the u8 channel (docs/BYTES.md) ---------------------------------
 #
 # A file is bytes reached through an open handle, and text is a

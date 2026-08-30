@@ -1421,6 +1421,11 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "dir_remove takes a str path");
             result = .none;
         },
+        .temporary_directory => {
+            if (arguments[0].value_type != .str or arguments[1].value_type != .str)
+                return failIntrinsic(self, call, "temporary_directory takes a str parent and a str prefix");
+            result = .str;
+        },
         .tree_remove => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "tree_remove takes a str path");

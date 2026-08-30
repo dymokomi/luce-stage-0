@@ -2535,6 +2535,14 @@ fn verifyIntrinsic(
             // error channel, like every other file service.
             try expectType(result, .none);
         },
+        .temporary_directory => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .str);
+            try expectType(arguments[1], .str);
+            // Answers where it put the directory; whether it could is
+            // in the error channel with every other file service.
+            try expectType(result, .str);
+        },
         .file_delete, .dir_create, .dir_remove, .tree_remove => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);

@@ -71,10 +71,12 @@ is in**, and the answer decides what an index costs:
 
 A string is classified once, where its bytes are already being handled: a
 literal at compile time, an allocation as it is filled, a join from its two
-halves, a slice from the whole it came out of. The classification travels
-with the value — through a register, through a box, across the runtime
-boundary — so nothing rediscovers it, and a value that never learned keeps
-the walk rather than guessing (`runtime.Encoding`, `codegen/lower.zig`).
+halves, a slice from the whole it came out of. The answer is a declared field
+of the value — `encoding`, beside the length that says which form the text is
+in — so it reads the same whether the text lives inside the value or outside
+it, and generated code carries the same answer in the register a `str` travels
+through. Nothing rediscovers it, and a value that never learned keeps the walk
+rather than guessing (`runtime.Encoding`, `codegen/lower.zig`).
 
 This is why a pass over a large ASCII string is a pass and not a quadratic
 one, which is the difference between a program that can read a source file

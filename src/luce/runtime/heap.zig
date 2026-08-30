@@ -1947,7 +1947,7 @@ pub const Runtime = struct {
                 // The scan is a second pass over bytes already being
                 // copied, and it is skipped entirely when the source
                 // knew — a copy of a classified string inherits.
-                return made.knowing(switch (held.encoding()) {
+                return made.knowing(switch (held.encoding) {
                     .unknown => if (Value.isAscii(copied)) .ascii else .multi_byte,
                     else => |already| already,
                 });
