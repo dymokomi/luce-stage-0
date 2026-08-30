@@ -4,6 +4,13 @@
 # The release tree is disposable.  Normalize the facts that otherwise come
 # from the builder (permissions, timestamps, ownership, traversal order, and
 # gzip's header) so rebuilding one source commit produces identical bytes.
+#
+# The tree this packages has to hold up its own end.  Two things inside a
+# macOS product would otherwise vary per assembly and neither is normalized
+# here, because by the time a file reaches this script it is already written:
+# the linker's LC_UUID, and the ad-hoc code signature's identifier, which is
+# taken from the name the link wrote through.  `src/apps/native.zig` settles
+# both at link time (`-no_uuid`, `-final_output`).
 set -eu
 
 if [ "$#" -ne 3 ]; then

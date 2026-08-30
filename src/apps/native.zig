@@ -488,6 +488,15 @@ pub fn link(
     };
     defer scratch.release(io);
 
+    // Owned for the length of the link, because the list borrows every
+    // other word it holds.
+    const final_output = try std.fmt.allocPrint(
+        gpa,
+        "-Wl,-final_output,{s}",
+        .{std.fs.path.basename(output)},
+    );
+    defer gpa.free(final_output);
+
     var arguments: std.ArrayList([]const u8) = .empty;
     defer arguments.deinit(gpa);
     try arguments.append(gpa, tools.driver);
@@ -519,6 +528,24 @@ pub fn link(
     // already deterministic, so this closes the remaining product path.
     if (kind == .executable and @import("builtin").os.tag == .macos) {
         try arguments.append(gpa, "-Wl,-no_uuid");
+    }
+    // **The link is told the name the artifact will have, not the name it
+    // is being written under.**  Every Apple Silicon binary carries an
+    // ad-hoc code signature, and the signature's identifier defaults to
+    // the base name of `-o` — which here is the scratch file the atomic
+    // publish writes through, complete with a process id.  That put a
+    // different string inside the signed bytes of every build, so two
+    // assemblies of one source commit differed and the artifact claimed
+    // an identity naming a process that had already exited.
+    //
+    // `-final_output` is what the linker offers for exactly this: the
+    // eventual name, for the purposes of anything that records one.  The
+    // rename stays, because the rename is what makes publishing atomic
+    // (`Scratch`); only the recorded name changes.  Darwin-only — no
+    // other platform embeds the output name, and `.pending` appears
+    // nowhere in a Linux artifact.
+    if (@import("builtin").os.tag.isDarwin()) {
+        try arguments.append(gpa, final_output);
     }
     // The main thread's stack must hold `abi.default_call_depth` Luce
     // frames, and on macOS the program runs on the main thread (the

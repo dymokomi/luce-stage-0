@@ -436,6 +436,54 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
     try testing.expect(std.mem.indexOf(u8, trapped.stderr, "at main (product.luc:7:9)") != null);
 }
 
+test "two builds of one program are the same bytes, whatever they were written through" {
+    // The artifact is published by renaming a scratch file into place, so
+    // the name the linker is given is not the name the artifact ends up
+    // with.  On Apple Silicon that mattered: an ad-hoc code signature
+    // takes its identifier from the output name, so the scratch name — a
+    // process id and a counter — was signed into every build, and two
+    // assemblies of one source differed.  A release archive is supposed
+    // to be a function of its source commit; this is the part of that
+    // promise the packaging script cannot keep for itself
+    // (`www/luce/archive.sh`).
+    const gpa = testing.allocator;
+    var tools = try installedTools(gpa);
+    defer tools.deinit(gpa);
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+
+    var program = try compileScript(gpa,
+        \\func main():
+        \\    print("same")
+        \\
+    );
+    defer program.deinit();
+
+    // Same name, two directories: one build cannot see the other, and
+    // each writes through a scratch name of its own.
+    var written: [2][]u8 = undefined;
+    for (&written, [_][]const u8{ "first", "second" }) |*bytes, where| {
+        const home = try std.fs.path.join(gpa, &.{ directory, where });
+        defer gpa.free(home);
+        try std.Io.Dir.cwd().createDirPath(testing.io, home);
+        const binary = try std.fs.path.join(gpa, &.{ home, "program" });
+        defer gpa.free(binary);
+        try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
+            .kind = .executable,
+            .output = binary,
+        }));
+        bytes.* = try std.Io.Dir.cwd().readFileAlloc(testing.io, binary, gpa, .limited(64 << 20));
+    }
+    defer for (written) |bytes| gpa.free(bytes);
+
+    try testing.expectEqualSlices(u8, written[0], written[1]);
+    // And nothing in the artifact names the file it was written through.
+    try testing.expect(std.mem.indexOf(u8, written[0], ".pending") == null);
+}
+
 test "a release executable keeps the function names and drops the lines" {
     const gpa = testing.allocator;
     var tools = try installedTools(gpa);

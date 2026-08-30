@@ -272,6 +272,16 @@ if [ ! -d "$release" ]; then
     echo "luce: release archive has no luce-$version directory" >&2
     exit 1
 fi
+# A tar downloaded by a browser carries com.apple.quarantine, and every
+# binary unpacked from it inherits the flag: Gatekeeper then kills the
+# first run with a bare "Killed: 9" and no reason.  This installer fetches
+# with curl, which sets no such flag, so the attribute is normally absent
+# — but an archive handed over some other way is the same archive, and
+# clearing what is not there costs nothing.  Best effort: an installation
+# is not worth failing over a missing xattr tool.
+if [ "$system" = Darwin ] && command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$release" 2>/dev/null || true
+fi
 if [ "$(tr -d '[:space:]' <"$release/VERSION")" != "$version" ]; then
     echo "luce: release archive has the wrong VERSION" >&2
     exit 1

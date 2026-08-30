@@ -42,6 +42,18 @@ No released machine needs LLVM installed: it is linked into the compiler. A
 machine that only runs `.lc` files does not invoke either LLVM or `cc`; native
 linking happens when a source program is built.
 
+If you download an archive **by hand** on macOS rather than using the
+installer above, a browser marks it `com.apple.quarantine` and every binary
+unpacked from it inherits the flag; the first run is then killed with a bare
+`Killed: 9` and no reason given. Clear it once on the unpacked directory:
+
+```sh
+xattr -dr com.apple.quarantine luce-0.26
+```
+
+The installer does this for you, and `curl` sets no such flag in the first
+place, so the one-command install above never meets it.
+
 The editor's Ctrl-B action uses the installed `luce` compiler beside it. The
 host adds that tool directory when it starts a shell command, so the action
 also works when the editor was opened from Finder or another launcher that did
