@@ -426,3 +426,125 @@ test "str: a growing string keeps answering the same as a fresh one" {
         \\
     );
 }
+
+test "str: an independent decoder agrees with every str operation, on both engines" {
+    // 0.27 made an ASCII string index with a load instead of a walk, by
+    // carrying what it knows about its own encoding through the
+    // register, the box and the runtime.  The risk that buys is a claim
+    // that is wrong: a string that says ASCII and is not would index
+    // into the middle of a scalar, and would do it *quietly*.
+    //
+    // So the check does not reuse the thing it is checking.  It decodes
+    // UTF-8 from `bytes` in Luce, by hand, and holds `len`, every
+    // index, every slice and the iteration to what that decoder says —
+    // over an empty string, each scalar width, the first multi-byte
+    // scalar at thirty positions, thirty lengths either side of the
+    // boundary where text stops living inside its value, slices of
+    // slices, and all four ways two strings can be joined.
+    //
+    // Both engines run it, so a disagreement is also caught between the
+    // path that carries the byte in a register and the path that does
+    // not.
+    try agree.prints(
+        \\# An independent UTF-8 decoder, so the str path is checked against
+        \\# something that does not share its implementation.
+        \\func decode(raw: bytes) -> list[char]:
+        \\    var out = list[char]()
+        \\    var at = 0
+        \\    while at < len(raw):
+        \\        let lead = i64(raw[at])
+        \\        var width = 1
+        \\        var point = lead
+        \\        if lead >= 240:
+        \\            width = 4
+        \\            point = lead - 240
+        \\        elif lead >= 224:
+        \\            width = 3
+        \\            point = lead - 224
+        \\        elif lead >= 192:
+        \\            width = 2
+        \\            point = lead - 192
+        \\        var k = 1
+        \\        while k < width:
+        \\            point = point * 64 + (i64(raw[at + k]) - 128)
+        \\            k += 1
+        \\        out.append(char(point))
+        \\        at += width
+        \\    return out
+        \\
+        \\func rebuild(chars: list[char], from: i64, to: i64) -> str:
+        \\    var out = ""
+        \\    var at = from
+        \\    while at < to:
+        \\        out = out + str(chars[at])
+        \\        at += 1
+        \\    return out
+        \\
+        \\func check(sample: str, name: str):
+        \\    let chars = decode(bytes(sample))
+        \\    if len(sample) != len(chars):
+        \\        trap("length disagrees for " + name)
+        \\    var at = 0
+        \\    while at < len(chars):
+        \\        if sample[at] != chars[at]:
+        \\            trap("index disagrees for " + name)
+        \\        at += 1
+        \\    var walked = list[char]()
+        \\    for character in sample:
+        \\        walked.append(character)
+        \\    if len(walked) != len(chars):
+        \\        trap("iteration length disagrees for " + name)
+        \\    at = 0
+        \\    while at < len(chars):
+        \\        if walked[at] != chars[at]:
+        \\            trap("iteration disagrees for " + name)
+        \\        at += 1
+        \\    var a = 0
+        \\    while a <= len(chars):
+        \\        var b = a
+        \\        while b <= len(chars):
+        \\            if sample[a:b] != rebuild(chars, a, b):
+        \\                trap("slice disagrees for " + name)
+        \\            b += 1
+        \\        a += 1
+        \\
+        \\func main():
+        \\    let ascii_short = "abc"
+        \\    let ascii_long = "abcdefghijklmnopqrstuvwxyz0123456789"
+        \\    check("", "empty")
+        \\    check(ascii_short, "ascii short")
+        \\    check(ascii_long, "ascii long")
+        \\    check("é", "one two-byte")
+        \\    check("€", "one three-byte")
+        \\    check("👋", "one four-byte")
+        \\    check("aé€👋z", "mixed widths")
+        \\    # The first multi-byte scalar atevery position of a growing prefix.
+        \\    var prefix = ""
+        \\    var n = 0
+        \\    while n < 30:
+        \\        check(prefix + "é" + ascii_long, "multi at " + str(n))
+        \\        check(prefix + "é", "multi at end " + str(n))
+        \\        prefix = prefix + "a"
+        \\        n += 1
+        \\    # Either side of the inline boundary, both representations.
+        \\    var grown = ""
+        \\    var m = 0
+        \\    while m < 30:
+        \\        check(grown, "grown " + str(m))
+        \\        check(grown + "é", "grown wide " + str(m))
+        \\        grown = grown + "x"
+        \\        m += 1
+        \\    # Slices of slices, and joins of every combination.
+        \\    let wide = "aé€👋zabcdefghijklmnopqrstuvwxyz"
+        \\    check(wide[1:8], "slice of wide")
+        \\    check(wide[1:8][1:4], "slice of slice")
+        \\    check(ascii_long + ascii_long, "ascii + ascii")
+        \\    check(ascii_long + wide, "ascii + wide")
+        \\    check(wide + ascii_long, "wide + ascii")
+        \\    check(wide + wide, "wide + wide")
+        \\    print("agreed")
+    ,
+        \\agreed
+        \\
+    );
+}
