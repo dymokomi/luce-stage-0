@@ -4,6 +4,53 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.26 — one word for a binding, one word for a drop
+
+- **A field says whether it changes.** `let` or `var` in front of a stored
+  field is now required; the bare `name: T` spelling that 0.25 accepted "for
+  one release" and read as `var` is refused. Reading a missing word as `var`
+  made the least considered declaration the most permissive one, and left a
+  reader unable to tell an intended mutable field from an unfinished one. The
+  refusal names both words rather than choosing: which one is right is a fact
+  about the design, not one the compiler knows. 1,141 fields migrated in this
+  tree, 728 of them immutable.
+
+- **One word declares a binding, at either scope.** `const` is retired. A
+  file-scope binding is a constant already — there are no mutable globals for
+  it to be distinguished from — so a second word for it was never saying
+  anything. `let` now declares at both scopes and means the same at each. The
+  keyword is kept with nothing behind it, so a reader who writes `const` is
+  told the Luce word instead of meeting a parse error.
+
+- **A result nothing receives is a mistake, and `discard` is how you mean
+  it.** An expression that produces a value and gives it to no one is
+  `luce.sema.unused` — the shape of a forgotten `let`, of a method mistaken
+  for the mutating one beside it, and of a result whose failure the caller
+  meant to check. `discard(EXPRESSION)` drops one on purpose, takes any type
+  including a multi-value answer, and refuses a call that answers nothing.
+  The two ship together because either alone is worse than neither.
+
+- **A position is any integer.** Lists, arrays, `str`, and `bytes` index with
+  any integer width, reads and writes alike, so `nodes[id.value]` with a
+  `u32` no longer needs `i64(...)` around it. A `u64` takes the same checked
+  conversion, so an out-of-range index is `conversion_range` at the index
+  rather than a silently negative position. Map keys deliberately do not
+  widen: a key is not a position.
+
+- **A diverging callee stands wherever a value belongs.** `value else
+  self.bail(...)` and `value else try bail(...)` compile, matching what a
+  `match` arm already accepted. A `-> never` callee was being asked what it
+  returns by a rule that should never have been asking.
+
+- **A debug build is the one that is quick to build.** `--release` now
+  selects the optimizer as well as stripping trap origins: debug compiles at
+  `default<O1>` with FastISel, release at `default<O3>` with the full
+  instruction selector. Measured on this tree, debug builds about twice as
+  fast and runs about twice as slow. `luce test` and the `build.luc` runner
+  build debug, because an artifact run once and discarded is not worth
+  optimizing. The two modes still mean the same program: every check, trap,
+  and ARC operation is in both.
+
 ## 0.25 — the boring limits and the honest bottom
 
 - **The call budget and the stack grow to boring numbers.** The shared
