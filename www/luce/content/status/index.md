@@ -1,6 +1,6 @@
 # Where Luce stands
 
-Updated for release 0.26. This page separates the language implemented today
+Updated for release 0.27. This page separates the language implemented today
 from work that is still design. The [Tour](/tour/), [Guide](/guide/), and
 [Library](/library/) describe current behavior only.
 

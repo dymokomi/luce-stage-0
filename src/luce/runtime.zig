@@ -94,6 +94,12 @@ pub const generation_shift = @import("runtime/value.zig").generation_shift;
 pub const inline_at = @import("runtime/value.zig").inline_at;
 pub const inline_capacity = @import("runtime/value.zig").inline_capacity;
 pub const text_outside = @import("runtime/value.zig").text_outside;
+/// What a `str` knows about its own encoding, and where it keeps it.
+/// Generated code carries the same byte in the register a str travels
+/// in and writes it into every box it builds (`codegen/lower.zig`).
+pub const Encoding = @import("runtime/value.zig").Encoding;
+pub const encoding_at = @import("runtime/value.zig").encoding_at;
+pub const encodingOf = @import("runtime/value.zig").encodingOf;
 pub const keyEquals = @import("runtime/value.zig").keyEquals;
 
 pub const containers = @import("runtime/containers.zig");

@@ -867,13 +867,18 @@ const Module = struct {
         return made;
     }
 
-    /// A `{ ptr, i64 }` constant for `text` — how a Luce `str` travels
-    /// through generated code.  The builder interns constants, so
-    /// asking twice costs nothing twice.
+    /// A `{ ptr, i64, i8 }` constant for `text` — how a Luce `str`
+    /// travels through generated code.  The builder interns constants,
+    /// so asking twice costs nothing twice.
+    ///
+    /// A literal is the one text whose encoding is free: the bytes are
+    /// here at compile time, so the classification is a fact about the
+    /// constant rather than work the program does.
     fn textConstant(self: *Module, text: []const u8) Error!Builder.Constant {
         return self.builder.structConst(self.string_type, &.{
             try self.textBytes(text),
             try self.builder.intConst(.i64, text.len),
+            try self.builder.intConst(.i8, @intFromEnum(runtime.encodingOf(text))),
         });
     }
 
@@ -1404,7 +1409,13 @@ const Module = struct {
     // -- construction --------------------------------------------------
 
     fn build(self: *Module) Error!void {
-        self.string_type = try self.builder.structType(.normal, &.{ .ptr, .i64 });
+        // `{ptr, i64, i8}`: the bytes, how many, and what is known
+        // about their encoding.  The third word is why indexing a str
+        // is a load rather than a walk — see `runtime.Encoding`.  It is
+        // carried in the register because a str reaches the runtime as
+        // a box built from one, and a box that forgot would have to
+        // rediscover it on every index.
+        self.string_type = try self.builder.structType(.normal, &.{ .ptr, .i64, .i8 });
         self.value_type = try self.builder.structType(.normal, &.{
             .i8, // tag
             .i8, // inline_length
@@ -4295,6 +4306,19 @@ const Body = struct {
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
+        // Every text box starts by claiming nothing.  `fillBoxValue`
+        // overwrites this for a str with what the register knew, but
+        // the two are written at different places — the type's facts in
+        // the entry block, the value's where it is produced — and a box
+        // that only ever got the first would otherwise carry whatever
+        // the scratch held as a claim about its own bytes.  `bytes` has
+        // no encoding to claim at all and stops here.
+        if (of == .str or of == .bytes) {
+            try self.storeBoxByte(slot, box_inline, try builder.intValue(
+                .i8,
+                @intFromEnum(runtime.Encoding.unknown),
+            ));
+        }
         if (boxLengthIsFixed(of)) {
             try self.storeBoxField(slot, box_length, try self.boxLength(of, .none));
         }
@@ -4312,6 +4336,16 @@ const Body = struct {
         try self.storeBoxField(slot, box_bits, try self.boxBits(of, held));
         if (!boxLengthIsFixed(of)) {
             try self.storeBoxField(slot, box_length, try self.boxLength(of, held));
+        }
+        // **A str box says what the register knew.**  It goes where the
+        // inline run would start, which is where the runtime reads it
+        // from (`runtime.encoding_at`) and is dead space in a box the
+        // form byte has already called outside.  Writing it is not only
+        // the optimisation: an unwritten byte there is whatever the
+        // scratch held, and the runtime would read someone else's
+        // rubbish as a claim about this text.
+        if (of == .str) {
+            try self.storeBoxByte(slot, box_inline, try self.wip.extractValue(held, &.{2}, "box.encoding"));
         }
     }
 
@@ -4347,6 +4381,19 @@ const Body = struct {
         // serves for both.
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
+        }
+        // Every text box starts by claiming nothing.  `fillBoxValue`
+        // overwrites this for a str with what the register knew, but
+        // the two are written at different places — the type's facts in
+        // the entry block, the value's where it is produced — and a box
+        // that only ever got the first would otherwise carry whatever
+        // the scratch held as a claim about its own bytes.  `bytes` has
+        // no encoding to claim at all and stops here.
+        if (of == .str or of == .bytes) {
+            try self.storeBoxByte(slot, box_inline, try builder.intValue(
+                .i8,
+                @intFromEnum(runtime.Encoding.unknown),
+            ));
         }
         try self.storeBoxField(slot, box_bits, try self.wip.select(
             .normal,
@@ -4457,7 +4504,18 @@ const Body = struct {
             try self.wip.cast(.zext, form, .i64, "inline.length"),
             "text.length",
         );
-        return self.wip.buildAggregate(self.module.string_type, &.{ address, length }, name);
+        // Inline text answers `unknown` rather than reading byte zero of
+        // itself, which is a character.  Nothing is lost: inline text is
+        // at most `inline_capacity` bytes, so its walk is bounded and a
+        // classification would buy nothing.
+        const known = try self.wip.select(
+            .normal,
+            outside,
+            try self.loadBoxByte(slot, box_inline, "unbox.encoding"),
+            try self.module.builder.intValue(.i8, @intFromEnum(runtime.Encoding.unknown)),
+            "text.encoding",
+        );
+        return self.wip.buildAggregate(self.module.string_type, &.{ address, length, known }, name);
     }
 
     /// A `T?` read back out of a box: present when the tag is anything
@@ -5595,9 +5653,14 @@ const Body = struct {
         ), .str_bounds);
         try self.checkBoundary(text, length, first);
         try self.checkBoundary(text, length, end);
+        // Part of an ASCII string is an ASCII string, so the slice
+        // inherits.  Passing the source's answer through unchanged is
+        // safe for the other two as well: only `ascii` enables the fast
+        // path, and everything else means "walk it".
         self.produced[register].value = try self.wip.buildAggregate(self.module.string_type, &.{
             try self.wip.gep(.inbounds, .i8, text, &.{first}, "slice.at"),
             try self.wip.bin(.@"sub nsw", end, first, "slice.length"),
+            try self.wip.extractValue(self.produced[text_register].value, &.{2}, "slice.encoding"),
         }, "slice");
     }
 

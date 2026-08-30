@@ -132,6 +132,47 @@ pub const inline_capacity: u8 = 22;
 /// `inline_capacity` is a count of bytes living in the slot itself.
 pub const text_outside: u8 = 0xff;
 
+/// What is known about a `str`'s encoding, for text that lives outside
+/// the value.
+///
+/// **A `str` is indexed by scalar and stored as UTF-8, and those two
+/// only agree when every scalar is one byte.**  When they do agree the
+/// index *is* the offset, and reaching a position costs a load instead
+/// of a walk from the beginning — which is the difference between a
+/// pass over a string and a quadratic one.  Text is overwhelmingly
+/// ASCII in practice, and a compiler reading its own source is the case
+/// that pays for it (docs/STRINGS.md).
+///
+/// **`unknown` is the answer that is always correct.**  A value that
+/// never learned keeps the walk, so a construction path that forgets to
+/// classify is slow and right rather than fast and wrong.  Nothing may
+/// read this as "not ASCII" — only `multi_byte` says that.
+///
+/// It costs no space: the six bytes of `inline_head` are the first of
+/// the inline run, and text living outside the value has no inline run
+/// to read.  Nothing compares or hashes the slot itself — `keyEquals`,
+/// `hashOf` and `compare` all work on the bytes — so the byte is
+/// invisible to equality, ordering and map lookup.
+pub const Encoding = enum(u8) {
+    unknown = 0,
+    ascii = 1,
+    multi_byte = 2,
+};
+
+/// Where `Encoding` sits in a value whose text is outside it.
+///
+/// Published because generated code writes and reads the same byte: a
+/// str travels through compiled code as `{ptr, i64, i8}` and boxes the
+/// third word here (`codegen/lower.zig`).
+pub const encoding_at: usize = inline_at;
+
+/// What `text` is, answered rather than remembered.  The classification
+/// itself, for the callers that have the bytes in hand — a literal at
+/// compile time, an allocation being filled.
+pub fn encodingOf(text: []const u8) Encoding {
+    return if (Value.isAscii(text)) .ascii else .multi_byte;
+}
+
 /// Which object: the row of the runtime's object table it lives in,
 /// and which occupant of that row it is.
 ///
@@ -255,6 +296,9 @@ pub const Value = extern struct {
     }
 
     /// The same, for a caller that already has the tag in hand.
+    ///
+    /// The encoding is left `unknown`, which every reader treats as
+    /// "walk it".  A caller that knows says so with `knowing`.
     pub fn ofOutside(tag: Tag, held: []const u8) Value {
         return .{
             .tag = tag,
@@ -262,6 +306,35 @@ pub const Value = extern struct {
             .bits = @intFromPtr(held.ptr),
             .length = held.len,
         };
+    }
+
+    /// The same value, carrying what its maker knows about its
+    /// encoding.  A no-op for text that lives inline: the walk there is
+    /// bounded by `inline_capacity` and never worth a branch.
+    pub fn knowing(self: Value, known: Encoding) Value {
+        if (self.inline_length != text_outside) return self;
+        var told = self;
+        std.mem.asBytes(&told)[encoding_at] = @intFromEnum(known);
+        return told;
+    }
+
+    /// What this value's maker knew.  Inline text answers `ascii` only
+    /// when it really is: the bytes are right here, so the question is
+    /// answered rather than remembered.
+    pub fn encoding(self: *const Value) Encoding {
+        if (self.inline_length != text_outside) {
+            return if (isAscii(self.textOf())) .ascii else .multi_byte;
+        }
+        return std.enums.fromInt(Encoding, std.mem.asBytes(self)[encoding_at]) orelse .unknown;
+    }
+
+    /// Whether every byte is a one-byte scalar, which is what makes a
+    /// scalar index and a byte offset the same number.
+    pub fn isAscii(text: []const u8) bool {
+        for (text) |byte| {
+            if (byte >= 0x80) return false;
+        }
+        return true;
     }
 
     /// Text that lives in the value.  `held` must fit — callers ask

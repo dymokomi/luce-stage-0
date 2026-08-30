@@ -1938,7 +1938,19 @@ pub const Runtime = struct {
                 // bought goes away again (docs/STRINGS.md).
                 if (Value.fitsInline(text.len)) return .ofInlineText(held.tag, text);
                 const copied = try self.objects.dupe(u8, text);
-                return .ofOutside(held.tag, copied);
+                const made: Value = .ofOutside(held.tag, copied);
+                if (held.tag != .str) return made;
+                // The one place owned text comes into being, and so the
+                // one place worth asking whether it is ASCII: the answer
+                // rides with the value from here on, and a `str` that
+                // knows is indexed rather than walked (`Value.Encoding`).
+                // The scan is a second pass over bytes already being
+                // copied, and it is skipped entirely when the source
+                // knew — a copy of a classified string inherits.
+                return made.knowing(switch (held.encoding()) {
+                    .unknown => if (Value.isAscii(copied)) .ascii else .multi_byte,
+                    else => |already| already,
+                });
             },
             // A function value's run is storage exactly as a struct's
             // is, and is duplicated the same way — the tag differs only

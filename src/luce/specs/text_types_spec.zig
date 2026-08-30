@@ -355,3 +355,74 @@ test "invalid char and bytes operations are rejected before lowering" {
         "luce.sema.assign",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Indexing a str, and what it costs
+// ---------------------------------------------------------------------------
+
+test "str: indexing and slicing agree with a walk, whatever the encoding" {
+    // A `str` is indexed by scalar and stored as UTF-8, and those two
+    // only agree when every scalar is one byte.  Text that is all ASCII
+    // is indexed directly and text that is not is walked
+    // (`runtime.Encoding`), so the two paths must answer the same
+    // question the same way — including at the boundary where a string
+    // stops being ASCII, and for a slice, which inherits the claim.
+    try agree.prints(
+        \\func main():
+        \\    let plain = "abcdefghijklmnopqrstuvwxyz0123456789"
+        \\    let mixed = "abc" + "é" + "defghijklmnopqrstuvwxyz0123456789"
+        \\    print(str(len(plain)) + " " + str(len(mixed)))
+        \\    print(str(plain[0]) + str(plain[25]) + str(plain[35]))
+        \\    print(str(mixed[2]) + str(mixed[3]) + str(mixed[4]))
+        \\    print(plain[10:15] + "|" + mixed[2:6])
+        \\    # A slice keeps whatever its source knew, so the same
+        \\    # question asked of the piece must answer the same way.
+        \\    let piece = mixed[3:9]
+        \\    print(str(len(piece)) + " " + str(piece[0]) + str(piece[1]))
+        \\    var walked = ""
+        \\    for character in mixed:
+        \\        walked = walked + str(character)
+        \\    print(walked)
+        \\    var indexed = ""
+        \\    var at = 0
+        \\    while at < len(mixed):
+        \\        indexed = indexed + str(mixed[at])
+        \\        at += 1
+        \\    print(str(indexed == walked))
+        \\
+    ,
+        \\36 37
+        \\az9
+        \\céd
+        \\klmno|céde
+        \\6 éd
+        \\abcédefghijklmnopqrstuvwxyz0123456789
+        \\true
+        \\
+    );
+}
+
+test "str: a growing string keeps answering the same as a fresh one" {
+    // Concatenation is where a classification is cheapest to keep and
+    // easiest to get wrong: two ASCII halves make an ASCII whole, and
+    // anything else has to fall back rather than inherit the left side.
+    try agree.prints(
+        \\func main():
+        \\    var built = ""
+        \\    var n = 0
+        \\    while n < 40:
+        \\        built = built + "x"
+        \\        n += 1
+        \\    print(str(len(built)) + " " + str(built[39]))
+        \\    let widened = built + "é"
+        \\    print(str(len(widened)) + " " + str(widened[40]) + " " + str(widened[39]))
+        \\    let narrowed = widened[0:41] + "y"
+        \\    print(str(len(narrowed)) + " " + str(narrowed[41]) + " " + str(narrowed[40]))
+        \\
+    ,
+        \\40 x
+        \\41 é x
+        \\42 y é
+        \\
+    );
+}

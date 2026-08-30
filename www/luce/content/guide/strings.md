@@ -16,6 +16,24 @@ The important distinction is between **bytes** and **characters**:
 Slices are always at scalar boundaries. A slice is still an independent
 `str` value, not a view into another value's storage.
 
+### What indexing costs
+
+A scalar position and a byte offset are the same number only when every
+scalar in the string is one byte. A `str` remembers which case it is in, so
+an all-ASCII string indexes with a load and everything else walks from the
+start:
+
+| the text | `len(s)`, `s[i]`, `s[a:b]` |
+|---|---|
+| all ASCII | a load — the index *is* the offset |
+| anything else | O(i), a walk from the beginning |
+
+The classification happens once, where the bytes are already being handled —
+a literal at compile time, a join from its halves, a slice from the whole it
+came from — and travels with the value. So a pass over a large ASCII string
+is a pass, not a quadratic one. A hot loop over text that really does carry
+multi-byte scalars is better written over `bytes`.
+
 ## `str` values
 
 Assigning or returning a `str` gives the receiver its own value. Storing one

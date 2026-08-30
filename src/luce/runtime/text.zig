@@ -92,7 +92,13 @@ pub fn concat(runtime: *Runtime, left: Value, right: Value) Error!Value {
         @memcpy(joined[left_bytes.len..joined_length], right_bytes);
         return Value.ofInlineText(tag, joined[0..joined_length]);
     }
-    return Value.ofOutside(tag, try std.mem.concat(runtime.objects, u8, &.{ left_bytes, right_bytes }));
+    const joined: Value = .ofOutside(tag, try std.mem.concat(runtime.objects, u8, &.{ left_bytes, right_bytes }));
+    // Two ASCII strings join into one, and the join is where that is
+    // cheapest to notice — both halves have already answered.
+    if (tag == .str and left.encoding() == .ascii and right.encoding() == .ascii) {
+        return joined.knowing(.ascii);
+    }
+    return joined;
 }
 
 /// `s[start:end]` — a borrow of the original bytes, checked twice: in
@@ -110,8 +116,8 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
         .str => blk: {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             const text = held.asStr();
-            const first = scalarOffset(text, @intCast(start)) orelse return runtime.fail(.str_bounds);
-            const last = scalarOffset(text, @intCast(end)) orelse return runtime.fail(.str_bounds);
+            const first = scalarOffsetOf(held, @intCast(start)) orelse return runtime.fail(.str_bounds);
+            const last = scalarOffsetOf(held, @intCast(end)) orelse return runtime.fail(.str_bounds);
             break :blk .{ text, first, last };
         },
         .bytes => blk: {
@@ -124,14 +130,20 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     };
     const wanted = source_bytes[start_index..end_index];
     if (held.textIsInline()) return Value.ofInlineText(held.tag, wanted);
-    return Value.ofOutside(held.tag, wanted);
+    const cut: Value = .ofOutside(held.tag, wanted);
+    // Part of an ASCII string is an ASCII string, so the borrow keeps
+    // what the whole one knew.  Nothing is claimed the other way: a
+    // piece of text that has multi-byte scalars somewhere may have none
+    // in this range, and `unknown` costs only the walk it already had.
+    if (held.tag == .str and held.encoding() == .ascii) return cut.knowing(.ascii);
+    return cut;
 }
 
 pub fn length(runtime: *Runtime, held: Value) Error!Value {
     return switch (held.tag) {
         .str => blk: {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
-            break :blk Value.ofI64(@intCast(scalarCount(held.asStr())));
+            break :blk Value.ofI64(@intCast(scalarLength(held)));
         },
         .bytes => blk: {
             if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
@@ -147,7 +159,7 @@ pub fn at(runtime: *Runtime, held: Value, index: i64) Error!Value {
         .str => blk: {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             const text = held.asStr();
-            const first = scalarOffset(text, @intCast(index)) orelse return runtime.fail(.str_bounds);
+            const first = scalarOffsetOf(held, @intCast(index)) orelse return runtime.fail(.str_bounds);
             if (first == text.len) return runtime.fail(.str_bounds);
             const scalar_length = std.unicode.utf8ByteSequenceLength(text[first]) catch unreachable;
             break :blk Value.ofChar(std.unicode.utf8Decode(text[first..][0..scalar_length]) catch unreachable);
@@ -162,6 +174,18 @@ pub fn at(runtime: *Runtime, held: Value, index: i64) Error!Value {
     };
 }
 
+/// How many scalars `held` holds.
+///
+/// **A `str` knows its own length in O(1) when it is ASCII**, because
+/// then the count of scalars is the count of bytes.  Otherwise the
+/// scalars have to be counted, which is what the walk below does
+/// (`Value.Encoding`).
+fn scalarLength(held: Value) usize {
+    const text = held.asStr();
+    if (held.encoding() == .ascii) return text.len;
+    return scalarCount(text);
+}
+
 fn scalarCount(text: []const u8) usize {
     var count: usize = 0;
     var offset: usize = 0;
@@ -169,6 +193,22 @@ fn scalarCount(text: []const u8) usize {
         offset += std.unicode.utf8ByteSequenceLength(text[offset]) catch unreachable;
     }
     return count;
+}
+
+/// The byte offset of scalar `wanted`, or null when the text is shorter
+/// than that.
+///
+/// **This is the operation a string's cost is made of.**  Every index,
+/// every slice bound and every step of a `for` over a `str` asks it, so
+/// walking here is what makes a single pass over a string quadratic.
+/// ASCII text answers without walking: the scalar index is the byte
+/// offset, and the only question left is whether it is in range.
+fn scalarOffsetOf(held: Value, wanted: usize) ?usize {
+    const text = held.asStr();
+    if (held.encoding() == .ascii) {
+        return if (wanted <= text.len) wanted else null;
+    }
+    return scalarOffset(text, wanted);
 }
 
 fn scalarOffset(text: []const u8, wanted: usize) ?usize {

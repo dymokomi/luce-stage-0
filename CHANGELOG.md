@@ -4,6 +4,29 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.27 — a string remembers what it is
+
+- **Indexing a `str` no longer walks it.** A scalar position and a byte
+  offset are the same number exactly when every scalar is one byte, so a
+  string now remembers which case it is in and an all-ASCII one indexes with
+  a load. `len`, `text[i]`, `text[a:b]` and `for c in text` were each linear
+  in the position they reached, which made a single pass over a string
+  quadratic — a tokenizer reading 160 KB of its own source spent 24 seconds
+  where it now spends a fraction of one, and the time is linear in the input
+  rather than in its square.
+
+  The classification is made once, where the bytes are already in hand: a
+  literal at compile time, an allocation as it is filled, a join from its two
+  halves, a slice from the whole it came out of. It travels with the value —
+  in the register a str moves through compiled code, in the box that crosses
+  to the runtime — so nothing rediscovers it. A value that never learned
+  keeps the walk instead of guessing, which is what makes a missed
+  construction path slow rather than wrong.
+
+  Text that really does carry multi-byte scalars still walks, and
+  `docs/STRINGS.md` now says so plainly rather than leaving it to be
+  discovered.
+
 ## 0.26 — one word for a binding, one word for a drop
 
 - **A field says whether it changes.** `let` or `var` in front of a stored

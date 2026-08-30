@@ -18,7 +18,7 @@ On macOS 15 or newer with Apple Silicon, or glibc Linux 2.28+ on x86-64 or
 ARM64, install the current release with one command:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.26/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.27/install.sh | bash
 ```
 
 The release installs the stage-0 toolchain as `luce-0`, beside `loom`,
@@ -48,7 +48,7 @@ unpacked from it inherits the flag; the first run is then killed with a bare
 `Killed: 9` and no reason given. Clear it once on the unpacked directory:
 
 ```sh
-xattr -dr com.apple.quarantine luce-0.26
+xattr -dr com.apple.quarantine luce-0.27
 ```
 
 The installer does this for you, and `curl` sets no such flag in the first
@@ -148,7 +148,7 @@ incompatible ABI instead of running it with the wrong assumptions.
 The current `.lcm` format is **72** (`format_version = 72`) and the
 published host ABI is **30** (`abi.version = 30`).
 They describe compatibility of intermediate modules and host services, not
-the user-facing release number. Current release label: **0.26**.
+the user-facing release number. Current release label: **0.27**.
 
 ## `loom` commands
 

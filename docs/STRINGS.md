@@ -56,9 +56,30 @@ func main():
 ```
 
 Indexes are non-negative `i64` values. An out-of-range index or slice traps
-`str_bounds`. UTF-8 is variable-width, so scalar length and random access
-are linear unless the optimizer can prove a cheaper path; the API does not
-pretend byte offsets are characters.
+`str_bounds`. The API does not pretend byte offsets are characters.
+
+### What an index costs
+
+UTF-8 is variable-width, so a scalar position and a byte offset are the same
+number only when every scalar is one byte. **A `str` remembers which case it
+is in**, and the answer decides what an index costs:
+
+| the text | `len`, `text[i]`, `text[a:b]` |
+|---|---|
+| all ASCII | a load — the index *is* the offset |
+| anything else | a walk from the start, so O(i) |
+
+A string is classified once, where its bytes are already being handled: a
+literal at compile time, an allocation as it is filled, a join from its two
+halves, a slice from the whole it came out of. The classification travels
+with the value — through a register, through a box, across the runtime
+boundary — so nothing rediscovers it, and a value that never learned keeps
+the walk rather than guessing (`runtime.Encoding`, `codegen/lower.zig`).
+
+This is why a pass over a large ASCII string is a pass and not a quadratic
+one, which is the difference between a program that can read a source file
+and one that cannot. Text with multi-byte scalars still walks, so a hot loop
+over one is better written over `bytes`.
 
 ## Raw UTF-8 access
 
