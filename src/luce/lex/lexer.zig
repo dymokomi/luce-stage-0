@@ -1973,12 +1973,12 @@ test "indentation inside brackets is plain spacing" {
 
 test "map braces suspend layout and remain separate from f-string braces" {
     try lexKinds(testing.allocator,
-        \\const names = {
+        \\let names = {
         \\        "one": 1,
         \\  "two": f"{2}",
         \\}
     , &.{
-        .keyword_const,  .identifier, .assign,      .left_brace,
+        .keyword_let,    .identifier, .assign,      .left_brace,
         .string_literal, .colon,      .int_literal, .comma,
         .string_literal, .colon,      .fstring,     .comma,
         .right_brace,    .newline,    .end_of_file,

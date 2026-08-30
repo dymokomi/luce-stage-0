@@ -190,7 +190,7 @@ test "arms are statements: they assign outer locals and leave early" {
 
 test "a folded constant is a literal the compiler can read" {
     try agree.ok(
-        \\const limit = 10
+        \\let limit = 10
         \\
         \\func banded(value: i64) -> str:
         \\    match value:
@@ -208,10 +208,10 @@ test "a folded constant is a literal the compiler can read" {
 
 test "constants stand as patterns: exact, listed, and as range endpoints" {
     try agree.ok(
-        \\const zero: char = '0'
-        \\const nine: char = '9'
-        \\const comma: char = ','
-        \\const colon: char = ':'
+        \\let zero: char = '0'
+        \\let nine: char = '9'
+        \\let comma: char = ','
+        \\let colon: char = ':'
         \\
         \\func kind(c: char) -> str:
         \\    match c:

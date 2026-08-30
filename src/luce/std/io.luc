@@ -30,7 +30,7 @@ pub interface Writer:
 # How much one round of the loops moves.  Large enough that an
 # ordinary stream is a handful of calls; small enough that the buffer
 # is not itself the memory question.
-const chunk = 65536
+let chunk = 65536
 
 # Read the source to its end.
 pub func drain(source: Reader) -> list[u8]!:

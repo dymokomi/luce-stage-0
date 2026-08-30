@@ -15,11 +15,11 @@
 
 import world
 
-const gate_room = "Gate"
-const dome_room = "Dome"
-const eyepiece = "glass lens"
-const brass_key = "brass key"
-const iron_crank = "iron crank"
+let gate_room = "Gate"
+let dome_room = "Dome"
+let eyepiece = "glass lens"
+let brass_key = "brass key"
+let iron_crank = "iron crank"
 
 # Build the whole realm; the caller owns it (OWNERSHIP.md S28).
 pub func build() -> world.Realm:

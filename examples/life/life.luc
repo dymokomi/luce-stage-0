@@ -13,7 +13,7 @@
 import std.os
 import std.term
 
-pub const frame_ms = 80
+pub let frame_ms = 80
 
 pub struct World:
     pub static func rows() -> i64:

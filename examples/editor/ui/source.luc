@@ -13,7 +13,7 @@ from ui.theme import palette, style_for, in_selection
 
 # Luce's lexer steps four columns; the gutter holds a line number and
 # one space inside five cells.
-const gutter_width: i64 = 5
+let gutter_width: i64 = 5
 
 pub class Editor: View:
     # The narrowest useful pane: the gutter plus one text column.  The

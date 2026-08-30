@@ -660,22 +660,20 @@ pub const Parser = struct {
                     self.recover();
                 },
                 // A file-scope binding is a compile-time constant
-                // (docs/CONSTANTS.md, LANGUAGE §20.4): `let` is the
-                // spec spelling and `const` the older one, both accepted
-                // while the tree migrates.  `var` is refused because a
-                // module has no mutable globals.
-                .keyword_const, .keyword_let => {
+                // (docs/CONSTANTS.md), and `let` is how one is written.
+                .keyword_let => {
                     if (try self.constDecl()) |declaration| {
                         try constants.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
                 },
+                .keyword_const => try self.refuseConst(),
                 .keyword_var => {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "a module has no mutable globals; a file-scope binding is a constant — write let or const",
+                        "a module has no mutable globals; a file-scope binding is a constant — write let",
                         .{},
                     );
                     self.recover();
@@ -809,10 +807,9 @@ pub const Parser = struct {
                 );
                 self.recover();
             },
-            // `pub let` / `pub const` — an exported file-scope constant
-            // (docs/CONSTANTS.md, LANGUAGE §20.4); both spellings while
-            // the tree migrates.
-            .keyword_const, .keyword_let => {
+            // `pub let` — an exported file-scope constant
+            // (docs/CONSTANTS.md).
+            .keyword_let => {
                 if (try self.constDecl()) |declaration| {
                     var marked = declaration;
                     marked.visibility = visibility;
@@ -821,6 +818,7 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
+            .keyword_const => try self.refuseConst(),
             .keyword_alias => {
                 if (try self.aliasDecl()) |declaration| {
                     var marked = declaration;
@@ -1134,8 +1132,23 @@ pub const Parser = struct {
     }
 
     /// const name = value at file scope — a constant declaration.
+    /// `const` is not a spelling of anything.  It was the older word
+    /// for a file-scope constant and is kept as a keyword only so this
+    /// sentence can be said: a reader who writes it has a habit from
+    /// another language, and telling them the Luce word is worth more
+    /// than the parse error a plain identifier would give.
+    fn refuseConst(self: *Parser) Error!void {
+        try self.report(
+            "luce.parse.top",
+            self.peek().span,
+            "there is no const in Luce: a file-scope binding is already a constant — write let",
+            .{},
+        );
+        self.recover();
+    }
+
     fn constDecl(self: *Parser) Error!?ast.ConstDecl {
-        const start = self.advance(); // const
+        const start = self.advance(); // let
         const name = (try self.expect(.identifier, "a constant name")) orelse return null;
         try self.refuseWildcardName(name);
         var annotation: ?ast.TypeName = null;
@@ -2866,7 +2879,7 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.expected",
                     self.peek().span,
-                    "const declares at file scope; use let or var inside a function",
+                    "there is no const in Luce: write let for a binding that does not change, var for one that does",
                     .{},
                 );
                 return null;

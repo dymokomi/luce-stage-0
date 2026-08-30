@@ -136,7 +136,7 @@ struct Strokes:
             left = self.left or other.left,
         )
 
-const STROKES = {
+let STROKES = {
     "┼": Strokes(up = true, right = true, down = true, left = true),
     "├": Strokes(up = true, right = true, down = true),
     "┤": Strokes(up = true, down = true, left = true),

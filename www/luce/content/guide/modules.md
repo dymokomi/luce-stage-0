@@ -25,7 +25,7 @@ pub struct Point:
     pub let x: f64
     pub let y: f64
 
-pub const unit = 1.0
+pub let unit = 1.0
 
 pub func distance(a: Point, b: Point) -> f64:
     let dx = a.x - b.x

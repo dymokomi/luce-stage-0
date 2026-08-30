@@ -33,7 +33,7 @@ import std.strings
 import std.os
 
 # Where `save` and `load` with no name of their own go.
-pub const save_file = "adventure.sav"
+pub let save_file = "adventure.sav"
 
 # The player: where they are, how i64 they have been at it, and
 # whether the story is over.  A turn writes those value fields through

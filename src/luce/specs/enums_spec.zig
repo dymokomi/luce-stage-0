@@ -59,7 +59,7 @@ test "members: sequential from zero, explicit where written, and both at once" {
 
 test "members: a value folds like any constant expression" {
     try agree.ok(
-        \\const base = 4
+        \\let base = 4
         \\
         \\enum Flag:
         \\    none_set = 0
@@ -517,10 +517,10 @@ test "folding: a member is a top-level constant, and reads as one" {
         \\    stored = 0
         \\    deflated = 8
         \\
-        \\const default_method = Method.deflated
-        \\const default_number = i32(Method.deflated)
-        \\const default_name = str(Method.deflated)
-        \\const is_stored = Method.deflated == Method.stored
+        \\let default_method = Method.deflated
+        \\let default_number = i32(Method.deflated)
+        \\let default_name = str(Method.deflated)
+        \\let is_stored = Method.deflated == Method.stored
         \\
         \\func main():
         \\    assert(default_method == Method.deflated)
@@ -783,7 +783,7 @@ test "a const keymap lives in the program root, keyed by the enum" {
         \\    move_right
         \\    nothing
         \\
-        \\const bindings = {Key.left: Intent.move_left, Key.right: Intent.move_right}
+        \\let bindings = {Key.left: Intent.move_left, Key.right: Intent.move_right}
         \\
         \\func intent(k: Key) -> Intent:
         \\    return bindings.get(k) else Intent.nothing
@@ -823,14 +823,14 @@ test "constant enum maps preserve all eight backing-width tags" {
         \\enum I64Key(i64):
         \\    value = -9223372036854775808
         \\
-        \\const U8_MAP = {U8Key.value: "u8"}
-        \\const U16_MAP = {U16Key.value: "u16"}
-        \\const U32_MAP = {U32Key.value: "u32"}
-        \\const U64_MAP = {U64Key.value: "u64"}
-        \\const I8_MAP = {I8Key.value: "i8"}
-        \\const I16_MAP = {I16Key.value: "i16"}
-        \\const I32_MAP = {I32Key.value: "i32"}
-        \\const I64_MAP = {I64Key.value: "i64"}
+        \\let U8_MAP = {U8Key.value: "u8"}
+        \\let U16_MAP = {U16Key.value: "u16"}
+        \\let U32_MAP = {U32Key.value: "u32"}
+        \\let U64_MAP = {U64Key.value: "u64"}
+        \\let I8_MAP = {I8Key.value: "i8"}
+        \\let I16_MAP = {I16Key.value: "i16"}
+        \\let I32_MAP = {I32Key.value: "i32"}
+        \\let I64_MAP = {I64Key.value: "i64"}
         \\
         \\func main():
         \\    assert(U8_MAP[U8Key.value] == "u8" and U8_MAP.has(U8Key.value))

@@ -121,22 +121,22 @@ test "constants: values and every flat container shape materialize once" {
         \\    var value: i64
         \\    var fallback: i64?
         \\
-        \\const TITLE = "constant text whose bytes live beyond an inline value"
-        \\const ANSWER: i64 = 40 + 2
-        \\const CHOSEN = Kind.special
-        \\const CELL = Cell(label = "row", value = ANSWER, fallback = none)
-        \\const NUMBERS: list[i64] = [3, 1, 2]
-        \\const NUMBERS_ALIAS = NUMBERS
-        \\const NUMBERS_EQUAL: list[i64] = [3, 1, 2]
-        \\const AGES = {"ada": 36, "alan": 41}
-        \\const AGES_ALIAS = AGES
-        \\const AGES_EQUAL = {"ada": 36, "alan": 41}
-        \\const METHODS = {0: "stored", 8: "deflated"}
-        \\const ROW: array[i64, _] = [7, 8, 9]
-        \\const ROW_ALIAS = ROW
-        \\const ROW_EQUAL: array[i64, _] = [7, 8, 9]
-        \\const EMPTY_LIST: list[i64] = []
-        \\const EMPTY_ROW: array[i64, _] = []
+        \\let TITLE = "constant text whose bytes live beyond an inline value"
+        \\let ANSWER: i64 = 40 + 2
+        \\let CHOSEN = Kind.special
+        \\let CELL = Cell(label = "row", value = ANSWER, fallback = none)
+        \\let NUMBERS: list[i64] = [3, 1, 2]
+        \\let NUMBERS_ALIAS = NUMBERS
+        \\let NUMBERS_EQUAL: list[i64] = [3, 1, 2]
+        \\let AGES = {"ada": 36, "alan": 41}
+        \\let AGES_ALIAS = AGES
+        \\let AGES_EQUAL = {"ada": 36, "alan": 41}
+        \\let METHODS = {0: "stored", 8: "deflated"}
+        \\let ROW: array[i64, _] = [7, 8, 9]
+        \\let ROW_ALIAS = ROW
+        \\let ROW_EQUAL: array[i64, _] = [7, 8, 9]
+        \\let EMPTY_LIST: list[i64] = []
+        \\let EMPTY_ROW: array[i64, _] = []
         \\
         \\func main():
         \\    assert(TITLE.contains("beyond"))
@@ -230,9 +230,9 @@ test "constants: a fresh-only reassignment loop stays mutable" {
 
 test "constants: aliases and defaults share a row; equal declarations do not" {
     try agree.ok(
-        \\const TABLE: list[i64] = [5, 8]
-        \\const ALIAS = TABLE
-        \\const EQUAL: list[i64] = [5, 8]
+        \\let TABLE: list[i64] = [5, 8]
+        \\let ALIAS = TABLE
+        \\let EQUAL: list[i64] = [5, 8]
         \\
         \\func sees_table(values: list[i64] = TABLE) -> bool:
         \\    return values == TABLE
@@ -252,7 +252,7 @@ test "constants: aliases and defaults share a row; equal declarations do not" {
 
 test "constants: a lambda may read a constant container" {
     try agree.ok(
-        \\const TABLE: list[i64] = [4, 8]
+        \\let TABLE: list[i64] = [4, 8]
         \\
         \\func apply(read: func() -> i64) -> i64:
         \\    return read()
@@ -267,12 +267,12 @@ test "constants: a lambda may read a constant container" {
 
 test "constants: unary elements retain their explicit widths" {
     try agree.ok(
-        \\const SMALL: u8 = 1
-        \\const NARROW: i16 = 2
-        \\const FRACTION: f16 = 1.5
-        \\const UNSIGNED: list[u8] = [~SMALL]
-        \\const SIGNED: list[i16] = [~NARROW, -NARROW]
-        \\const FLOATS: list[f16] = [-FRACTION]
+        \\let SMALL: u8 = 1
+        \\let NARROW: i16 = 2
+        \\let FRACTION: f16 = 1.5
+        \\let UNSIGNED: list[u8] = [~SMALL]
+        \\let SIGNED: list[i16] = [~NARROW, -NARROW]
+        \\let FLOATS: list[f16] = [-FRACTION]
         \\
         \\func main():
         \\    assert(UNSIGNED[0] == u8(254))
@@ -300,18 +300,18 @@ test "constants: every flat element value survives materialization" {
         \\    let small: u8?
         \\    let fraction: f16?
         \\
-        \\const FLAGS = [true, false, true]
-        \\const REALS: list[f64] = [1, 2.5]
-        \\const MODES = [Mode.idle, Mode.ready]
-        \\const ENTRIES = [
+        \\let FLAGS = [true, false, true]
+        \\let REALS: list[f64] = [1, 2.5]
+        \\let MODES = [Mode.idle, Mode.ready]
+        \\let ENTRIES = [
         \\    Entry(label = "first", weight = 1.5, enabled = true, mode = Mode.idle, fallback = none),
         \\    Entry(label = "second", weight = 2.5, enabled = false, mode = Mode.ready, fallback = i64(9)),
         \\]
-        \\const BY_NUMBER = {
+        \\let BY_NUMBER = {
         \\    4: Entry(label = "mapped", weight = 3.5, enabled = true, mode = Mode.ready, fallback = none),
         \\}
-        \\const NARROW = [NarrowEntry(small = 200, fraction = 1.5)]
-        \\const WORDS: array[str, _] = ["alpha", "a string longer than inline storage"]
+        \\let NARROW = [NarrowEntry(small = 200, fraction = 1.5)]
+        \\let WORDS: array[str, _] = ["alpha", "a string longer than inline storage"]
         \\
         \\func takes_byte(value: u8) -> bool:
         \\    return value == u8(200)
@@ -340,9 +340,9 @@ test "constants: every flat element value survives materialization" {
 
 test "constants: public imports keep identity and private constants stay inside" {
     const tables: agree.File = .{ .name = "tables", .source =
-        \\const SECRET = [99]
-        \\pub const PUBLIC = [1, 2, 3]
-        \\pub const PUBLIC_ALIAS = PUBLIC
+        \\let SECRET = [99]
+        \\pub let PUBLIC = [1, 2, 3]
+        \\pub let PUBLIC_ALIAS = PUBLIC
         \\
         \\pub func secret_value() -> i64:
         \\    return SECRET[0]
@@ -380,7 +380,7 @@ test "constants: public imports keep identity and private constants stay inside"
         \\struct Hidden:
         \\    let value: i64
         \\
-        \\pub const TABLE = [Hidden(value = 1)]
+        \\pub let TABLE = [Hidden(value = 1)]
         \\
         \\func main():
         \\    return
@@ -389,8 +389,8 @@ test "constants: public imports keep identity and private constants stay inside"
 }
 
 test "constants: equal same-named imports remain distinct pool rows" {
-    const left: agree.File = .{ .name = "left", .source = "pub const TABLE: list[i64] = [1, 2]\n" };
-    const right: agree.File = .{ .name = "right", .source = "pub const TABLE: list[i64] = [1, 2]\n" };
+    const left: agree.File = .{ .name = "left", .source = "pub let TABLE: list[i64] = [1, 2]\n" };
+    const right: agree.File = .{ .name = "right", .source = "pub let TABLE: list[i64] = [1, 2]\n" };
     var program = try agree.project(
         \\import left
         \\import right
@@ -405,7 +405,7 @@ test "constants: equal same-named imports remain distinct pool rows" {
 
 test "constants: a worker materializes its own constants and defaults" {
     try agree.ok(
-        \\const TABLE: list[i64] = [11, 31]
+        \\let TABLE: list[i64] = [11, 31]
         \\
         \\func from_default(values: list[i64] = TABLE) -> i64:
         \\    assert(values == TABLE)
@@ -426,28 +426,35 @@ test "constants: a worker materializes its own constants and defaults" {
 // Static front line
 // ---------------------------------------------------------------------------
 
-test "constants: file scope takes let or const, and constant maps reject duplicate keys" {
-    // A file-scope binding is a compile-time constant whether it is
-    // written `let` (the spec spelling) or `const`; both run the same
-    // on both engines.
+test "constants: file scope takes let, and constant maps reject duplicate keys" {
+    // A file-scope binding is a compile-time constant, written with the
+    // same word a function body uses.
     try agree.ok(
-        \\let LET_ONE = 1
-        \\const CONST_TWO = 2
+        \\let ONE = 1
+        \\let TWO = 2
         \\
         \\func main():
-        \\    assert(LET_ONE == 1)
-        \\    assert(CONST_TWO == 2)
+        \\    assert(ONE == 1)
+        \\    assert(TWO == 2)
         \\
     );
     // A module has no mutable globals: `var` at file scope is refused.
     try expectRefusedAt(
         "var counter = 0\n\nfunc main():\n    assert(counter == 0)\n",
         "luce.parse.top",
-        "a module has no mutable globals; a file-scope binding is a constant — write let or const",
+        "a module has no mutable globals; a file-scope binding is a constant — write let",
         "var counter",
     );
+    // And neither is `const`, the older spelling, which is kept as a
+    // keyword only to be refused by name.
     try expectRefusedAt(
-        \\const BAD = {
+        "const LIMIT = 10\n\nfunc main():\n    assert(LIMIT == 10)\n",
+        "luce.parse.top",
+        "there is no const in Luce: a file-scope binding is already a constant — write let",
+        "const LIMIT",
+    );
+    try expectRefusedAt(
+        \\let BAD = {
         \\    "same": 1,
         \\    "same": 2,
         \\}
@@ -457,8 +464,8 @@ test "constants: file scope takes let or const, and constant maps reject duplica
         \\
     , "luce.sema.const", "map key \"same\" is duplicated; it was first written on line 2", "\"same\"");
     try expectRefusedAt(
-        \\const TWO = 1 + 1
-        \\const BAD = {
+        \\let TWO = 1 + 1
+        \\let BAD = {
         \\    TWO: 1,
         \\    i64(2): 2,
         \\}
@@ -471,37 +478,37 @@ test "constants: file scope takes let or const, and constant maps reject duplica
 
 test "constants: flatness and explicit empty shapes are compile-time contracts" {
     try expectRefusedAt(
-        \\const NESTED = [[1], [2]]
+        \\let NESTED = [[1], [2]]
         \\
         \\func main():
         \\    assert(len(NESTED) == 2)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[1]");
     try expectRefusedAt(
-        \\const MAYBE: i32? = none
-        \\const BAD = [MAYBE]
+        \\let MAYBE: i32? = none
+        \\let BAD = [MAYBE]
         \\
         \\func main():
         \\    assert(len(BAD) == 1)
         \\
     , "luce.sema.const", "constant container elements cannot be optional; choose a present value, or put the optional inside an object-free struct", "MAYBE]");
     try expectRefusedAt(
-        \\const MAYBE: i32? = none
-        \\const BAD = {"answer": MAYBE}
+        \\let MAYBE: i32? = none
+        \\let BAD = {"answer": MAYBE}
         \\
         \\func main():
         \\    assert(len(BAD) == 1)
         \\
     , "luce.sema.const", "constant map values cannot be optional; choose a present value, or put the optional inside an object-free struct", "MAYBE}");
     try expectRefusedAt(
-        \\const GRID: array[i64, _, _] = [1, 2]
+        \\let GRID: array[i64, _, _] = [1, 2]
         \\
         \\func main():
         \\    assert(GRID.dim(0) == 2)
         \\
     , "luce.sema.const", "a flat bracket constant builds a rank-1 array; array[i64, _, _] has rank 2", "[1, 2]");
     try expectRefusedAt(
-        \\const EMPTY = []
+        \\let EMPTY = []
         \\
         \\func main():
         \\    assert(len(EMPTY) == 0)
@@ -510,28 +517,28 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
     // Flatness is a property of the annotated element type even when
     // the literal contains no elements to walk.
     try expectRefusedAt(
-        \\const TASKS: list[task[i64]] = []
+        \\let TASKS: list[task[i64]] = []
         \\
         \\func main():
         \\    assert(len(TASKS) == 0)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
-        \\const TASKS: array[task[i64], _] = []
+        \\let TASKS: array[task[i64], _] = []
         \\
         \\func main():
         \\    assert(TASKS.dim(0) == 0)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
-        \\const ROWS: list[list[i64]] = []
+        \\let ROWS: list[list[i64]] = []
         \\
         \\func main():
         \\    assert(len(ROWS) == 0)
         \\
     , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
-        \\const EMPTY = {}
+        \\let EMPTY = {}
         \\
         \\func main():
         \\    assert(len(EMPTY) == 0)
@@ -545,7 +552,7 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
 
 test "constants: a hidden list append traps immutable_object" {
     try agree.trapSays(
-        \\const TABLE: list[i64] = [1, 2]
+        \\let TABLE: list[i64] = [1, 2]
         \\
         \\func mutate(values: list[i64]):
         \\    values.append(3)
@@ -556,7 +563,7 @@ test "constants: a hidden list append traps immutable_object" {
     , .immutable_object, "constant container is immutable");
 
     try agree.trap(
-        \\const TABLE: list[i64] = [1, 2]
+        \\let TABLE: list[i64] = [1, 2]
         \\
         \\func mutate(values: list[i64] = TABLE):
         \\    values.append(3)
@@ -567,7 +574,7 @@ test "constants: a hidden list append traps immutable_object" {
     , .immutable_object);
 
     try agree.trap(
-        \\const TABLE: list[i64] = [1, 2]
+        \\let TABLE: list[i64] = [1, 2]
         \\
         \\func mutate(values: list[i64]):
         \\    values[0] = 9
@@ -580,7 +587,7 @@ test "constants: a hidden list append traps immutable_object" {
 
 test "constants: a worker's own root stays immutable through an unknown alias" {
     try agree.trapSays(
-        \\const TABLE: list[i64] = [1, 2]
+        \\let TABLE: list[i64] = [1, 2]
         \\
         \\func mutate(values: list[i64]):
         \\    values[0] = 9
@@ -597,7 +604,7 @@ test "constants: a worker's own root stays immutable through an unknown alias" {
 
 test "constants: hidden map, array method, and inline index writes trap" {
     try agree.trap(
-        \\const TABLE: map[str, i64] = {"a": 1}
+        \\let TABLE: map[str, i64] = {"a": 1}
         \\
         \\func mutate(values: map[str, i64]):
         \\    values["a"] = 2
@@ -607,7 +614,7 @@ test "constants: hidden map, array method, and inline index writes trap" {
         \\
     , .immutable_object);
     try agree.trap(
-        \\const ROW: array[i64, _] = [1, 2]
+        \\let ROW: array[i64, _] = [1, 2]
         \\
         \\func mutate(values: array[i64, _]):
         \\    values.fill(9)
@@ -617,7 +624,7 @@ test "constants: hidden map, array method, and inline index writes trap" {
         \\
     , .immutable_object);
     try agree.trap(
-        \\const ROW: array[i64, _] = [1, 2]
+        \\let ROW: array[i64, _] = [1, 2]
         \\
         \\func mutate(values: array[i64, _]):
         \\    values[0] = 9
@@ -632,7 +639,7 @@ test "constants: hidden sort_by reaches the immutable backstop" {
     try agree.trap(
         \\import std.lists
         \\
-        \\const TABLE: list[i64] = [3, 1, 2]
+        \\let TABLE: list[i64] = [3, 1, 2]
         \\
         \\func before(left: i64, right: i64) -> bool:
         \\    return left < right
@@ -651,7 +658,7 @@ test "constants: file.read through a parameter traps before changing the world" 
     var session = try agree.compare(
         \\import std.files
         \\
-        \\const BUFFER: array[u8, _] = [u8(0), u8(0), u8(0)]
+        \\let BUFFER: array[u8, _] = [u8(0), u8(0), u8(0)]
         \\
         \\func read(file: files.File, into: array[u8, _]) -> i64!:
         \\    return try file.read(into)

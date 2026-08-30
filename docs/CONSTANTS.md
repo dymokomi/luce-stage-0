@@ -1,11 +1,13 @@
 # File-scope constants
 
-A file-scope `const` declares a name whose value is computed once, at
+A file-scope `let` declares a name whose value is computed once, at
 compile time. A constant may hold a folded scalar — a number, a `bool`,
 a `str`, an enum member, an object-free value struct — or a flat
 container: a `list`, a `map`, or a rank-1 `array`. Function scope keeps
-`let` and `var`; file scope declares with `const`, and there is no
-top-level `var`.
+`let` and `var`; file scope keeps only `let`, because a module has no
+mutable globals and a file-scope binding is therefore always a
+constant — which is also why there is no `const`. The word was the
+older spelling and is kept as a keyword only to be refused by name.
 
 The memory model is `docs/MEMORY.md`. A scalar constant folds to a value
 that inlines wherever it is used. A **constant container** is a
@@ -17,16 +19,16 @@ program ends.
 ## Scalar constants
 
 ```luce
-const answer: i64 = 42
-const pi = 3.14159
-const greeting = "hello"
+let answer: i64 = 42
+let pi = 3.14159
+let greeting = "hello"
 
 func main():
     print(str(answer))
     print(greeting)
 ```
 
-A constant has no type until it lands on one. `const xs = 3` is `i64` by
+A constant has no type until it lands on one. `let xs = 3` is `i64` by
 the literal default; an annotation supplies the landing type, and the
 rule carries to the elements of a container (`docs/TYPES.md`). Anything
 the folder can compute is a constant: literals, other constants and
@@ -41,18 +43,18 @@ folded into the artifact beside the interned strings, materialized once
 before `main`, and held by the program root.
 
 ```luce
-const crc_table: list[i64] = [0, 1996959894, 3993919788]
-const length_bases: array[i64, _] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
-const keywords = {"and": true, "break": true, "catch": true}
+let crc_table: list[i64] = [0, 1996959894, 3993919788]
+let length_bases: array[i64, _] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+let keywords = {"and": true, "break": true, "catch": true}
 ```
 
 The three written shapes:
 
 | written | what it is |
 |---|---|
-| `const xs = [a, b, c]` | a `list[T]`, `T` from the elements or the annotation |
-| `const xs: array[i64, _] = [...]` | a rank-1 `array`, the literal supplying the dimension |
-| `const m = {k: v, ...}` | a `map[K, V]` |
+| `let xs = [a, b, c]` | a `list[T]`, `T` from the elements or the annotation |
+| `let xs: array[i64, _] = [...]` | a rank-1 `array`, the literal supplying the dimension |
+| `let m = {k: v, ...}` | a `map[K, V]` |
 
 A bracket literal is a `list` unless an `array[T, _]` annotation makes it
 a rank-1 array. An empty `[]` needs a `list[T]` or `array[T, _]`
@@ -70,8 +72,8 @@ enum Mode:
     idle
     ready
 
-const modes: list[Mode] = [Mode.idle, Mode.ready]
-const reals = [1.0, 2.5, 3.75]
+let modes: list[Mode] = [Mode.idle, Mode.ready]
+let reals = [1.0, 2.5, 3.75]
 
 func main():
     print(str(len(modes)))
@@ -92,9 +94,9 @@ compare equal; two separately written but equal constructions are
 distinct objects.
 
 ```luce
-const numbers: list[i64] = [5, 8]
-const same_numbers = numbers
-const equal: list[i64] = [5, 8]
+let numbers: list[i64] = [5, 8]
+let same_numbers = numbers
+let equal: list[i64] = [5, 8]
 
 func main():
     assert(numbers == same_numbers)
@@ -108,10 +110,10 @@ The literal is legal in both positions: at file scope it folds into a
 constant map; inside a function it builds a fresh, mutable map.
 
 ```luce
-const keywords: map[str, bool] = {
+let keywords: map[str, bool] = {
     "and": true, "break": true, "catch": true,
 }
-const method_names = {0: "stored", 8: "deflated"}
+let method_names = {0: "stored", 8: "deflated"}
 
 func main():
     print(method_names[0])
@@ -164,7 +166,7 @@ is immutable`), on both engines. A program that wants a mutable object
 builds one the ordinary way and fills it from the constant:
 
 ```luce
-const seed: list[i64] = [1, 2, 3]
+let seed: list[i64] = [1, 2, 3]
 
 func main():
     var working: list[i64] = []
@@ -188,7 +190,7 @@ marking the type `pub`, closes the surface. A `pub` folded scalar may
 still be computed from a private constant, because the value crosses the
 boundary, not the name.
 
-A file-scope `const` container may be a parameter default — the same
+A file-scope `let` container may be a parameter default — the same
 program-root reference at every call site (`docs/ARGS.md`) — and a
 capture-free lambda may name one, because reaching a program-root
 constant captures nothing (`docs/FUNCTIONS.md`).

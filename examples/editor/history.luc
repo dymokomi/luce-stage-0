@@ -13,7 +13,7 @@ pub struct Revision:
 
 # Keep undo bounded so a long session over a large file does not grow
 # without limit; the oldest revision is the first to go.
-pub const depth = 200
+pub let depth = 200
 
 pub class History:
     let past: list[Revision]

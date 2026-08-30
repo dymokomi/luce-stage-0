@@ -31,7 +31,7 @@ pub struct Theme:
     pub let pane_active: Style
     pub let match_here: Style
 
-pub const palette = Theme(
+pub let palette = Theme(
     keyword = Style(foreground = 176, bold = true),
     type_name = Style(foreground = 80),
     builtin = Style(foreground = 74),

@@ -375,7 +375,7 @@ test "the fence taxonomy is read off the info string" {
         \\n = 2
         \\```
         \\```zig
-        \\const x = 1;
+        \\let x = 1;
         \\```
         \\```luce run
         \\func main():

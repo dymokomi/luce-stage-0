@@ -130,9 +130,9 @@ test "lexer diagnostics carry the right code and location, and do not cascade" {
 
 test "parser diagnostics carry the right code and location" {
     try expectDiagnostics(
-        "const 3 = 4\n",
+        "let 3 = 4\n",
         .{},
-        &.{.{ .code = "luce.parse.expected", .line = 1, .column = 7 }},
+        &.{.{ .code = "luce.parse.expected", .line = 1, .column = 5 }},
     );
 }
 
@@ -165,7 +165,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     // They all pointed at the declaration, because a declaration
     // carried one span and every complaint reused it.  So `func
     // len():` underlined the `func` as part of a sentence about
-    // the word `len`, and `const print = 3` underlined `= 3`.  The
+    // the word `len`, and `let print = 3` underlined `= 3`.  The
     // message named one word and the caret covered a phrase, which
     // leaves the reader working out which part is meant.
     //
@@ -187,12 +187,12 @@ test "a diagnostic about a name points at the name, not at the declaration" {
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 8 }});
     try expectDiagnostics(
-        \\const print = 3
+        \\let print = 3
         \\
         \\func main():
         \\    return
         \\
-    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 7 }});
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 5 }});
     try expectDiagnostics(
         \\func main():
         \\    let len = 1
@@ -1096,7 +1096,7 @@ const geo_module: TestModule = .{ .name = "geo", .source =
 };
 
 const util_module: TestModule = .{ .name = "util", .source =
-    \\const TABLE = [1]
+    \\let TABLE = [1]
     \\
     \\func hypot(x: f64, y: f64) -> f64:
     \\    return sqrt(x * x + y * y)
@@ -1181,8 +1181,8 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\pub func visible() -> i64:
     \\    return helper() + 1
     \\
-    \\const seed = 41
-    \\pub const answer = seed + 1
+    \\let seed = 41
+    \\pub let answer = seed + 1
     \\
     \\struct Inner:
     \\    let n: i64
@@ -1269,7 +1269,7 @@ test "luce.sema.private: a private constant is withheld, and its folded value cr
     try expectProjectCompiles(
         \\import vault
         \\
-        \\const doubled = vault.answer * 2
+        \\let doubled = vault.answer * 2
         \\
         \\func main():
         \\    print(str(vault.answer + doubled))
@@ -1279,7 +1279,7 @@ test "luce.sema.private: a private constant is withheld, and its folded value cr
     try expectPrivateSaying(
         \\import vault
         \\
-        \\const stolen = vault.seed + 1
+        \\let stolen = vault.seed + 1
         \\
         \\func main():
         \\    print(str(stolen))
@@ -1710,7 +1710,7 @@ test "a namespaced constant resolves through the import that bound it" {
     // reaches it — every dotted call is parsed as a method and
     // resolved on the other path, which the next test covers.
     const constant_module: TestModule = .{ .name = "sizes", .source =
-        \\pub const width = 80
+        \\pub let width = 80
         \\
     };
     var files: TestLoader = .{ .modules = &.{constant_module} };
@@ -2639,8 +2639,8 @@ test "an import cycle compiles; what may not be circular is checked finer" {
     // means it: a constant that depends on itself through two files
     // terminates with a diagnostic rather than folding forever.
     var constants: TestLoader = .{ .modules = &.{
-        .{ .name = "a", .source = "import b\n\npub const width = b.height + 1\n" },
-        .{ .name = "b", .source = "import a\n\npub const height = a.width + 1\n" },
+        .{ .name = "a", .source = "import b\n\npub let width = b.height + 1\n" },
+        .{ .name = "b", .source = "import a\n\npub let height = a.width + 1\n" },
     } };
     var knotted = try compile_mod.compileProject(testing.allocator,
         \\import a
@@ -2674,7 +2674,7 @@ test "constants are compile-time: calls and nested objects are refused" {
         \\func answer() -> i64:
         \\    return 42
         \\
-        \\const bad = answer()
+        \\let bad = answer()
         \\
         \\func main():
         \\    return
@@ -2684,7 +2684,7 @@ test "constants are compile-time: calls and nested objects are refused" {
         \\struct Bag:
         \\    let items: list[i64]
         \\
-        \\const bad = Bag(items = [1])
+        \\let bad = Bag(items = [1])
         \\
         \\func main():
         \\    return
@@ -2694,29 +2694,29 @@ test "constants are compile-time: calls and nested objects are refused" {
 
 test "constant cycles, unknowns, and arithmetic faults are compile errors" {
     try failsWith(
-        \\const a = b + 1
-        \\const b = a + 1
+        \\let a = b + 1
+        \\let b = a + 1
         \\
         \\func main():
         \\    return
         \\
     , "luce.sema.const");
     try failsWith(
-        \\const alone = missing + 1
+        \\let alone = missing + 1
         \\
         \\func main():
         \\    return
         \\
     , "luce.sema.const");
     try failsWith(
-        \\const big = 9223372036854775807 + 1
+        \\let big = 9223372036854775807 + 1
         \\
         \\func main():
         \\    return
         \\
     , "luce.sema.const");
     try failsWith(
-        \\const broken = 1 // 0
+        \\let broken = 1 // 0
         \\
         \\func main():
         \\    return
@@ -2726,7 +2726,7 @@ test "constant cycles, unknowns, and arithmetic faults are compile errors" {
 
 test "constants share the one namespace and stay immutable" {
     try failsWith(
-        \\const twice = 2
+        \\let twice = 2
         \\
         \\func twice() -> i64:
         \\    return 2
@@ -2736,21 +2736,21 @@ test "constants share the one namespace and stay immutable" {
         \\
     , "luce.sema.duplicate");
     try failsWith(
-        \\const width = 80
+        \\let width = 80
         \\
         \\func main():
         \\    let width = 3
         \\
     , "luce.sema.duplicate");
     try failsWith(
-        \\const width = 80
+        \\let width = 80
         \\
         \\func main():
         \\    width = 3
         \\
     , "luce.sema.const");
     try failsWith(
-        \\const len = 3
+        \\let len = 3
         \\
         \\func main():
         \\    return
@@ -2762,14 +2762,14 @@ test "constants share the one namespace and stay immutable" {
     // a floating value does not land on an integer annotation, because
     // numeric conversions are explicit.
     try failsWith(
-        \\const wrong: i64 = 3.5
+        \\let wrong: i64 = 3.5
         \\
         \\func main():
         \\    return
         \\
     , "luce.sema.type");
     try failsWith(
-        \\const wrong: bool = 3
+        \\let wrong: bool = 3
         \\
         \\func main():
         \\    return

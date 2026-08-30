@@ -341,11 +341,11 @@ test "str is the text type and conversion" {
 
 test "str(x) folds in a constant, in the same bytes a run would print" {
     try agreeOk(
-        \\const count = str(42)
-        \\const ratio = str(2.5)
-        \\const flag = str(true)
-        \\const same = str("x")
-        \\const joined = count + " " + ratio + " " + flag + " " + same
+        \\let count = str(42)
+        \\let ratio = str(2.5)
+        \\let flag = str(true)
+        \\let same = str("x")
+        \\let joined = count + " " + ratio + " " + flag + " " + same
         \\
         \\func main():
         \\    assert(joined == "42 2.5 true x")
@@ -669,8 +669,8 @@ test "integers: i32 minimum is written the way it reads too" {
 
 test "integers: i64 minimum folds in a file-scope constant too" {
     try agreeOk(
-        \\const low: i64 = -9223372036854775808
-        \\const high: i64 = 9223372036854775807
+        \\let low: i64 = -9223372036854775808
+        \\let high: i64 = 9223372036854775807
         \\
         \\func main():
         \\    assert(low < high)
@@ -878,10 +878,10 @@ test "types: the language's own names are lowercase" {
 // including file-scope constants.
 test "literals: a number lands on the type its context names" {
     try agreeOk(
-        \\const whole: f64 = 7
-        \\const negative: f64 = -3
-        \\const folded: f64 = 2 * 3 + 1
-        \\const plain = 7
+        \\let whole: f64 = 7
+        \\let negative: f64 = -3
+        \\let folded: f64 = 2 * 3 + 1
+        \\let plain = 7
         \\
         \\func takes(x: f64) -> f64:
         \\    return x
@@ -1067,13 +1067,13 @@ test "explicit conversion compares an integer with infinity and NaN" {
 
 test "explicit numeric conversion folds the same way in a constant" {
     try agreeOk(
-        \\const two53: i64 = 9007199254740992
-        \\const after53: i64 = 9007199254740993
-        \\const as_f64: f64 = 9007199254740992.0
-        \\const below = f64(two53) == as_f64
-        \\const above = f64(after53) == as_f64
-        \\const ordered = as_f64 < f64(after53 + 1)
-        \\const converted = f64(1) + 2.5
+        \\let two53: i64 = 9007199254740992
+        \\let after53: i64 = 9007199254740993
+        \\let as_f64: f64 = 9007199254740992.0
+        \\let below = f64(two53) == as_f64
+        \\let above = f64(after53) == as_f64
+        \\let ordered = as_f64 < f64(after53 + 1)
+        \\let converted = f64(1) + 2.5
         \\
         \\func main():
         \\    assert(below)
@@ -1688,8 +1688,8 @@ test "a char-to-u32 conversion is a compile-time constant" {
 
 test "char-to-u32 conversions fold in file-scope constants" {
     try agreeOk(
-        \\const open_paren = u32('(')
-        \\const lambda = u32('λ')
+        \\let open_paren = u32('(')
+        \\let lambda = u32('λ')
         \\
         \\func main():
         \\    assert(open_paren == u32(40))
@@ -2488,7 +2488,7 @@ test "defaults: a constant, a str, a struct value, and none all serve" {
     // through D9, `none` where the parameter says what it is absent of.
     // Borrowed flat-container defaults are covered in constants_spec.
     try agreeOk(
-        \\const step_default = 4
+        \\let step_default = 4
         \\
         \\struct Point:
         \\    let x: i64
@@ -2582,7 +2582,7 @@ test "struct field defaults: constants and parameter defaults reach them" {
         \\    var x: i64 = 1
         \\    var y: i64 = 2
         \\
-        \\const origin = Corner()
+        \\let origin = Corner()
         \\
         \\func shifted(by: Corner = Corner(y = 5)) -> i64:
         \\    return by.x + by.y
@@ -3059,10 +3059,10 @@ test "builders accumulate text" {
 
 test "file-scope value constants fold and inline" {
     try agreeOk(
-        \\const width = 80
-        \\const midpoint = width // 2
-        \\const name = "loom"
-        \\const greeting = "hi " + name
+        \\let width = 80
+        \\let midpoint = width // 2
+        \\let name = "loom"
+        \\let greeting = "hi " + name
         \\
         \\func main():
         \\    assert(width == 80)
@@ -4114,10 +4114,10 @@ test "a late var can be assigned after a branch decides its value" {
 
 test "constants of every scalar type fold and inline" {
     try agreeOk(
-        \\const limit = 3 * 4
-        \\const ratio = 1.0 / 4.0
-        \\const enabled = true and not false
-        \\const prefix = "id_"
+        \\let limit = 3 * 4
+        \\let ratio = 1.0 / 4.0
+        \\let enabled = true and not false
+        \\let prefix = "id_"
         \\
         \\func label(n: i64) -> str:
         \\    return prefix + str(n)
@@ -4133,11 +4133,11 @@ test "constants of every scalar type fold and inline" {
 
 test "constants reference earlier constants" {
     try agreeOk(
-        \\const base = 10
-        \\const doubled = base * 2
-        \\const quadrupled = doubled * 2
-        \\const name = "core"
-        \\const full = name + "!"
+        \\let base = 10
+        \\let doubled = base * 2
+        \\let quadrupled = doubled * 2
+        \\let name = "core"
+        \\let full = name + "!"
         \\
         \\func main():
         \\    assert(doubled == 20)
@@ -5350,16 +5350,16 @@ test "short-circuit operands survive block splits everywhere" {
 
 test "file-scope constants fold every value kind" {
     try agreeOk(
-        \\const width = 80
-        \\const tau = 2.0 * pi
-        \\const pi = 3.14159
-        \\const debug = not (width > 100)
-        \\const greeting = "hello, " + "loom"
-        \\const shout = greeting
-        \\const half_width = width // 2 - 1
-        \\const truncated = i64(tau)
-        \\const widened = f64(width)
-        \\const roomy = width >= 80 and tau > 6.0
+        \\let width = 80
+        \\let tau = 2.0 * pi
+        \\let pi = 3.14159
+        \\let debug = not (width > 100)
+        \\let greeting = "hello, " + "loom"
+        \\let shout = greeting
+        \\let half_width = width // 2 - 1
+        \\let truncated = i64(tau)
+        \\let widened = f64(width)
+        \\let roomy = width >= 80 and tau > 6.0
         \\
         \\func main():
         \\    assert(width == 80)
@@ -5383,8 +5383,8 @@ test "file-scope constants: an annotated none folds to the typed absence" {
     // closes: `T?` shipped without file-scope absences, for no reason
     // beyond the folder predating it.
     try agreeOk(
-        \\const missing: i64? = none
-        \\const fallback = 4
+        \\let missing: i64? = none
+        \\let fallback = 4
         \\
         \\func main():
         \\    assert((missing else fallback) == 4)
@@ -5403,8 +5403,8 @@ test "struct constants: the Theme case" {
         \\    var comment: i64
         \\    let bold: bool
         \\
-        \\const theme = Theme(keyword = 114, comment = 238, bold = true)
-        \\const accent = theme.keyword + 1
+        \\let theme = Theme(keyword = 114, comment = 238, bold = true)
+        \\let accent = theme.keyword + 1
         \\
         \\func main():
         \\    assert(theme.keyword == 114)

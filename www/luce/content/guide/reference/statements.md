@@ -2,7 +2,7 @@
 
 ## File structure
 
-A file may contain `import` lines and file-scope `alias`, `const`,
+A file may contain `import` lines and file-scope `alias`, `let`,
 `struct`, `class`, `interface`, `enum`, `union`, and `func` declarations in any
 order. It has no executable top-level statements and no top-level `var`.
 
@@ -325,7 +325,7 @@ exposes; there is no word for the default.
 ```
 pub func name(...)
 pub alias Name = Type
-pub const name = expr
+pub let name = expr
 pub struct Name:
 pub class Name:
 pub field: Type
@@ -358,7 +358,7 @@ All are parse rules, under `luce.parse.*`.
 
 ```luce fail
 pub:
-    const value = 1
+    let value = 1
 
 func main():
     print(str(value))
@@ -598,16 +598,17 @@ behind a call that cannot fail is `luce.sema.fallible`. See
 
 ## File-scope constants
 
-File scope declares with `const`. `let` and `var` declare inside
-functions; top-level `let` is retired, and there is no top-level
-`var`.
+File scope declares with `let`, the same word a function uses. There is no
+top-level `var` — a module has no mutable globals — and no `const`: a
+file-scope binding is already a constant, so a second word for it would only
+be a word. `const` is kept as a keyword to be refused by name.
 
 ```luce run
-const width = 80
-const margin = 4
-const usable = width - margin * 2
-const title = "Luce"
-const banner = title + " console"
+let width = 80
+let margin = 4
+let usable = width - margin * 2
+let title = "Luce"
+let banner = title + " console"
 
 func main():
     print(f"{banner}: {usable} columns")
@@ -624,18 +625,18 @@ concatenation, the eight conversion constructors and `ord()`, enum
 members and conversions from enums (`i32(m)`, `str(m)`), and
 reference-free value-struct construction.
 `none` also folds when a `T?` annotation supplies the absent type; bare
-`const x = none` is refused because it supplies no `T`.
+`let x = none` is refused because it supplies no `T`.
 
 Function values, general calls, `new`, and `spawn` are **not** constant.
 
 Constants may reference each other in any order but never in a cycle.
-Every value use site inlines the fold. A `const` may also hold one flat
+Every value use site inlines the fold. A file-scope `let` may also hold one flat
 container construction:
 
 ```
-const ITEMS: list[i64] = [3, 1, 2]
-const WORDS = {"and": true, "break": true}
-const ORDER: array[i64, _] = [16, 17, 18, 0]
+let ITEMS: list[i64] = [3, 1, 2]
+let WORDS = {"and": true, "break": true}
+let ORDER: array[i64, _] = [16, 17, 18, 0]
 ```
 
 - Elements may be scalars, strings, enum values, or reference-free value

@@ -1,8 +1,8 @@
 # Global Constants
 
-A file-scope binding is a compile-time constant. Write it `let` — the spec
-spelling — or `const`; both mean the same thing at file scope, and `const` is
-being migrated to `let`. Luce evaluates it when it compiles the program. A flat
+A file-scope binding is a compile-time constant, written `let`. There is no
+`const`: a file-scope binding is already a constant, so a second word for it
+would only be a word. Luce evaluates it when it compiles the program. A flat
 list, map, or rank-one array is materialized once in the program root and is
 read-only. A module has no mutable globals, so `var` is not a file-scope
 declaration.
@@ -18,14 +18,14 @@ struct Entry:
     let label: str
     let fallback: i64?
 
-const WIDTH = 80
-const NUMBERS: list[i64] = [3, 1, 2]
-const ALIAS = NUMBERS
-const EQUAL: list[i64] = [3, 1, 2]
-const AGES = {"ada": 36, "alan": 41}
-const METHODS = {0: "stored", 8: "deflated"}
-const ORDER: array[i64, _] = [16, 17, 18, 0]
-const ENTRIES = [
+let WIDTH = 80
+let NUMBERS: list[i64] = [3, 1, 2]
+let ALIAS = NUMBERS
+let EQUAL: list[i64] = [3, 1, 2]
+let AGES = {"ada": 36, "alan": 41}
+let METHODS = {0: "stored", 8: "deflated"}
+let ORDER: array[i64, _] = [16, 17, 18, 0]
+let ENTRIES = [
     Entry(label = "missing", fallback = none),
     Entry(label = "present", fallback = 9),
 ]

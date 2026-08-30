@@ -144,8 +144,8 @@ test "aliases are transparent while file-scope constants fold" {
         \\    first
         \\    answer = 42
         \\
-        \\const ORIGIN: Position = Position(x = Count(41.4))
-        \\const SELECTED: Choice = Choice.answer
+        \\let ORIGIN: Position = Position(x = Count(41.4))
+        \\let SELECTED: Choice = Choice.answer
         \\
         \\func main():
         \\    print(str(ORIGIN.x + i64(SELECTED) - 41))

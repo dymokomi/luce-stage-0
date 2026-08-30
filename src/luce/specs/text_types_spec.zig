@@ -76,7 +76,7 @@ test "a character literal is contextual over integer widths, and stays char with
     // range pair, the match arm, the annotated const — and a literal
     // with no integer context is exactly the char it always was.
     try agree.prints(
-        \\const NEWLINE: u8 = '\n'
+        \\let NEWLINE: u8 = '\n'
         \\
         \\func classify(c: u8) -> str:
         \\    if c == '"':
@@ -250,14 +250,14 @@ test "bytes iterate as u8 and preserve empty inline and outside storage" {
 test "char and bytes work through constants and transparent aliases" {
     try expectCompiles("char alias and constant",
         \\alias Rune = char
-        \\const mark: Rune = 'λ'
+        \\let mark: Rune = 'λ'
         \\func main():
         \\    let copied = Rune(u32(mark))
         \\
     );
     try expectCompiles("bytes alias and constant",
         \\alias Data = bytes
-        \\const payload: Data = bytes("hello")
+        \\let payload: Data = bytes("hello")
         \\func main():
         \\    let copied: Data = Data(payload)
         \\
@@ -265,8 +265,8 @@ test "char and bytes work through constants and transparent aliases" {
     try agree.prints(
         \\alias Rune = char
         \\alias Data = bytes
-        \\const mark: Rune = 'λ'
-        \\const payload: Data = bytes("hello")
+        \\let mark: Rune = 'λ'
+        \\let payload: Data = bytes("hello")
         \\
         \\func main():
         \\    let copied: Data = Data(payload)

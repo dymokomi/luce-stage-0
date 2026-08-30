@@ -132,28 +132,28 @@
 # RFC 8259 §2: the six structural characters, the two quoting marks,
 # and nothing else in this module is written as a bare number.
 
-const quote_mark: char = '"'
-const backslash: char = '\\'
-const brace_open: char = '{'
-const brace_close: char = '}'
-const bracket_open: char = '['
-const bracket_close: char = ']'
-const colon: char = ':'
-const comma: char = ','
-const minus: char = '-'
-const plus: char = '+'
-const point: char = '.'
-const digit_zero: char = '0'
-const digit_nine: char = '9'
-const letter_e: char = 'e'
-const letter_e_capital: char = 'E'
-const letter_u: char = 'u'
+let quote_mark: char = '"'
+let backslash: char = '\\'
+let brace_open: char = '{'
+let brace_close: char = '}'
+let bracket_open: char = '['
+let bracket_close: char = ']'
+let colon: char = ':'
+let comma: char = ','
+let minus: char = '-'
+let plus: char = '+'
+let point: char = '.'
+let digit_zero: char = '0'
+let digit_nine: char = '9'
+let letter_e: char = 'e'
+let letter_e_capital: char = 'E'
+let letter_u: char = 'u'
 
 # RFC 8259 §9 leaves the limit to the parser. This one is half of
 # loom's call-depth policy, because a tree is walked by recursion and
 # both ends of that walk — this module and its caller — have to fit
 # inside the one budget.
-const max_depth = 64
+let max_depth = 64
 
 # --- what a value is -------------------------------------------------
 

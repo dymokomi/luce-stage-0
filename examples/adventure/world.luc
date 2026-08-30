@@ -26,7 +26,7 @@
 import std.strings
 
 # Where a thing is when it is in no room: in the player's hands.
-const carried = -1
+let carried = -1
 
 # "A brass key", "An iron crank": the article an English name takes.
 # Wrong for a handful of words and right for a table of them, which

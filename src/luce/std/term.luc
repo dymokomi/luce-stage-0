@@ -211,7 +211,7 @@ func key_of(name: str) -> Key:
         return Key.unknown
     return named
 
-const NAMES = {
+let NAMES = {
     "enter": Key.enter,
     "tab": Key.tab,
     "backspace": Key.backspace,
@@ -260,18 +260,18 @@ const NAMES = {
 # choose the correct intersection instead of overwriting one border
 # with another.
 
-pub const horizontal = "─"
-pub const vertical = "│"
-pub const top_left = "┌"
-pub const top_right = "┐"
-pub const bottom_left = "└"
-pub const bottom_right = "┘"
+pub let horizontal = "─"
+pub let vertical = "│"
+pub let top_left = "┌"
+pub let top_right = "┐"
+pub let bottom_left = "└"
+pub let bottom_right = "┘"
 
 # A light block makes a reliable one-cell shadow even on terminals
 # that do not render faint background colours consistently; programs
 # can combine it with a dim style for a softer shadow.
-pub const shadow = "░"
-pub const shadow_dark = "▒"
+pub let shadow = "░"
+pub let shadow_dark = "▒"
 
 pub func junction(top: bool, right: bool, bottom: bool, left: bool) -> str:
     if top and right and bottom and left:

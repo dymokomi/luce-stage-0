@@ -2110,7 +2110,7 @@ const mutation_source =
     \\    let x: f64
     \\    let tag: str
     \\
-    \\const seeds: list[i64] = [3, 1, 2]
+    \\let seeds: list[i64] = [3, 1, 2]
     \\
     \\func total(values: list[i64]) -> i64:
     \\    return values[0] + values[1] + values[2]
@@ -2532,9 +2532,9 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\    let method: Method
         \\    var fallback: Method?
         \\
-        \\const MODES = [Method.stored, Method.deflated]
-        \\const BINDINGS = {Method.stored: Method.deflated}
-        \\const ENTRIES = [
+        \\let MODES = [Method.stored, Method.deflated]
+        \\let BINDINGS = {Method.stored: Method.deflated}
+        \\let ENTRIES = [
         \\    Entry(method = Method.deflated, fallback = Method.stored),
         \\    Entry(method = Method.stored, fallback = none),
         \\]

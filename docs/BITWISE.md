@@ -65,8 +65,8 @@ In a constant expression the same failures are compile-time refusals rather
 than runtime traps:
 
 ```text
-const bad_count: i64 = 1 << 99
-const overflow: u8 = 128 << 1
+let bad_count: i64 = 1 << 99
+let overflow: u8 = 128 << 1
 ```
 
 ## Precedence

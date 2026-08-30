@@ -18,12 +18,12 @@
 # promises are binary64 promises. Their decimal spellings round directly
 # to the nearest binary64 value; the annotation keeps that precision part
 # of the API even though `f64` is also the context-free float default.
-pub const pi: f64 = 3.14159265358979323846
-pub const tau: f64 = 6.28318530717958647692
-pub const e: f64 = 2.71828182845904523536
+pub let pi: f64 = 3.14159265358979323846
+pub let tau: f64 = 6.28318530717958647692
+pub let e: f64 = 2.71828182845904523536
 
-const ln2: f64 = 0.69314718055994530942
-const ln10: f64 = 2.30258509299404568402
+let ln2: f64 = 0.69314718055994530942
+let ln10: f64 = 2.30258509299404568402
 
 # Round f64 halfway away from zero: round(2.5) == 3.0 and
 # round(-2.5) == -3.0. Integer conversions deliberately truncate;
@@ -132,7 +132,7 @@ pub func ipow(base: i64, exponent: i64) -> i64:
 # Sine, by range reduction to (-pi, pi] and a Taylor series.  The
 # reduction is deliberately bounded: ordinary f64 arithmetic cannot
 # preserve enough low bits of a large revolution count to answer honestly.
-const trig_limit: f64 = 10000.0
+let trig_limit: f64 = 10000.0
 
 func trig_in_domain(x: f64) -> bool:
     # `x != x` is the IEEE NaN test; infinity fails the magnitude test.

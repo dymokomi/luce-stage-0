@@ -11,7 +11,7 @@
 from termui import Key, KeyPress
 from model import Intent
 
-pub const INTENTS = {
+pub let INTENTS = {
     Key.left: Intent.move_left,
     Key.right: Intent.move_right,
     Key.up: Intent.move_up,
@@ -41,7 +41,7 @@ pub const INTENTS = {
 }
 
 # Shift held: the same motions, extending the selection.
-pub const EXTENDS = {
+pub let EXTENDS = {
     Key.left: Intent.extend_left,
     Key.right: Intent.extend_right,
     Key.up: Intent.extend_up,

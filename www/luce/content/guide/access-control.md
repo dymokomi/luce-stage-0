@@ -137,7 +137,7 @@ importer can store and pass the struct without naming its private fields.
 states its API by marking exactly the names that cross:
 
 ```luce run
-pub const width = 40
+pub let width = 40
 
 pub func banner(title: str) -> str:
     return title
@@ -194,7 +194,7 @@ There is no region form: `pub` marks one declaration at a time, so a
 
 ```luce fail
 pub:
-    const limit = 10
+    let limit = 10
 
 func main():
     print(str(limit))

@@ -511,9 +511,9 @@ const flat_constants_source =
     \\    var text: str
     \\    var rank: i64
     \\
-    \\const labels: list[Label] = [Label(text = "first", rank = 1)]
-    \\const axis: array[i64, _] = [3, 5, 8]
-    \\const lookup: map[str, i64] = {"one": 1, "two": 2}
+    \\let labels: list[Label] = [Label(text = "first", rank = 1)]
+    \\let axis: array[i64, _] = [3, 5, 8]
+    \\let lookup: map[str, i64] = {"one": 1, "two": 2}
     \\
     \\func main():
     \\    assert(labels[0].text == "first")
@@ -571,7 +571,7 @@ test "constant containers materialize once and load from the program root" {
 test "an unused constant container leaves no pool or prologue behind" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\const unused: list[i64] = [1, 2, 3]
+        \\let unused: list[i64] = [1, 2, 3]
         \\
         \\func main():
         \\    assert(2 + 2 == 4)
@@ -588,7 +588,7 @@ test "an unused constant container leaves no pool or prologue behind" {
 }
 
 const worker_constants_source =
-    \\const seeds: list[i64] = [13, 21]
+    \\let seeds: list[i64] = [13, 21]
     \\
     \\func first() -> i64:
     \\    return seeds[0]
@@ -618,7 +618,7 @@ test "every worker runtime materializes its own constant roots" {
 test "constant declaration origins survive only in debug artifacts" {
     const gpa = std.testing.allocator;
     const source =
-        \\const seeds: list[i64] = [3, 1, 2]
+        \\let seeds: list[i64] = [3, 1, 2]
         \\
         \\func main():
         \\    assert(seeds[0] == 3)
@@ -2515,7 +2515,7 @@ test "fresh container writes omit the constant guard and unknown aliases keep it
     // A parameter may be an alias of a file-scope constant, so its inline
     // store keeps the runtime's immutable_object backstop.
     const unknown = (try render(
-        \\const VALUES: array[i64, _] = [1, 2]
+        \\let VALUES: array[i64, _] = [1, 2]
         \\
         \\func change(values: array[i64, _]):
         \\    values[0] = 9

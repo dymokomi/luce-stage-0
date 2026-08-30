@@ -106,8 +106,8 @@ func helper() -> i64:
 pub func visible() -> i64:
     return helper() + 1
 
-const seed = 41
-pub const answer = seed + 1
+let seed = 41
+pub let answer = seed + 1
 ```
 
 ```luce fail
@@ -301,7 +301,7 @@ The modules are [`io`](/library/io/), [`math`](/library/math/),
 ## Multi-file programs
 
 ```luce module file=shapes.luc
-pub const unit = 1.0
+pub let unit = 1.0
 
 pub struct Rect:
     pub let width: f64

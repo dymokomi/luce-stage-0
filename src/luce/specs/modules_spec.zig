@@ -58,7 +58,7 @@ const member_kit: agree.File = .{ .name = "shapes", .source =
     \\    circle(radius: i64)
     \\    dot
     \\
-    \\pub const origin = 7
+    \\pub let origin = 7
     \\
     \\pub func span(p: Point) -> i64:
     \\    return p.x + p.y
@@ -144,7 +144,7 @@ test "a member import folds an imported constant at file scope" {
     var program = try agree.project(
         \\from shapes import origin
         \\
-        \\const doubled = origin * 2
+        \\let doubled = origin * 2
         \\
         \\func main():
         \\    assert(doubled == 14)
@@ -396,16 +396,16 @@ test "constants reach across modules through imports" {
         \\    pub let rows: i64
         \\    pub let cols: i64
         \\
-        \\pub const version = "2.0"
-        \\pub const rows = 24
-        \\pub const screen = Size(rows = rows, cols = 80)
+        \\pub let version = "2.0"
+        \\pub let rows = 24
+        \\pub let screen = Size(rows = rows, cols = 80)
         \\
     };
     var program = try agree.project(
         \\import config
         \\import std.strings
         \\
-        \\const banner = "loom " + config.version
+        \\let banner = "loom " + config.version
         \\
         \\func main():
         \\    assert(config.rows == 24)
@@ -527,7 +527,7 @@ test "a transitive package chain runs: a dependency's dependency answers inside 
             .name = "geo",
             .root = "geo-1.2.0",
             .path = ".luce/packages/geo-1.2.0/geo.luc",
-            .source = "import mathx\n\npub const label = \"geo\"\n\npub func area(w: f64, h: f64) -> f64:\n    return mathx.scale(w * h)\n",
+            .source = "import mathx\n\npub let label = \"geo\"\n\npub func area(w: f64, h: f64) -> f64:\n    return mathx.scale(w * h)\n",
         },
         .{
             .name = "mathx",
@@ -595,7 +595,7 @@ test "subfolder modules run: dots map to folders, and as picks the binding" {
         \\
     };
     const blocks: agree.File = .{ .name = "blocks.shapes", .source =
-        \\pub const faces = 6
+        \\pub let faces = 6
         \\
         \\pub func volume(edge: f64) -> f64:
         \\    return edge * edge * edge

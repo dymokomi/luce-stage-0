@@ -33,7 +33,7 @@ import std.strings
 
 # The first line, and the only version there is: a file that does not
 # open with it is not a save of this game.
-pub const tag = "adventure 1"
+pub let tag = "adventure 1"
 
 # A save file that has been read and understood, but not yet put back
 # into a realm.  It carries two lists, so it is object-carrying: the

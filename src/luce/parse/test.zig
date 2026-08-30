@@ -158,8 +158,8 @@ test "every declaration form at file scope parses into its own list" {
         \\import std.math
         \\import geo
         \\
-        \\const width = 80
-        \\const banner: str = "loom"
+        \\let width = 80
+        \\let banner: str = "loom"
         \\
         \\struct Theme:
         \\    let keyword: i64
@@ -358,11 +358,11 @@ test "struct bodies parse fields and static namespace functions" {
     try testing.expectEqualStrings("Helpers", dotted.target.name.text);
 }
 
-test "const is file-scope, while let and var are function-scope" {
+test "let declares at file scope and inside a function; const declares nowhere" {
     var parsed = try expectClean(
-        \\const width = 80
-        \\const banner: str = "loom " + version
-        \\const version = "2.0"
+        \\let width = 80
+        \\let banner: str = "loom " + version
+        \\let version = "2.0"
         \\
         \\func main():
         \\    let unused = width
@@ -375,8 +375,8 @@ test "const is file-scope, while let and var are function-scope" {
     try testing.expectEqualStrings("str", parsed.program.constants[1].annotation.?.name);
     try testing.expect(parsed.program.constants[1].value.* == .binary);
 
-    // A file-scope `let` is the spec spelling of a constant, and `pub
-    // let` exports it — both parse to the same ConstDecl `const` does.
+    // One word at both scopes: a file-scope `let` is a constant, and
+    // `pub let` exports it.
     {
         var let_parsed = try expectClean("let width = 80\n");
         defer let_parsed.deinit();
@@ -393,16 +393,22 @@ test "const is file-scope, while let and var are function-scope" {
     try expectDiagnostics("var counter = 0\n", &.{
         .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no mutable globals" },
     });
+    // `const` is a keyword with nothing behind it, kept so a reader
+    // who writes it is told the Luce word rather than given the parse
+    // error a plain identifier would produce.
+    try expectDiagnostics("const width = 80\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "there is no const in Luce" },
+    });
     try expectDiagnostics("func main():\n    const width = 80\n    let okay = 1\n", &.{
-        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "use let or var inside a function" },
+        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "there is no const in Luce" },
     });
 }
 
 test "visibility markers parse onto every declaration form, and unmarked stays private" {
     var parsed = try expectClean(
-        \\const seed = 41
-        \\pub const answer = seed + 1
-        \\const quiet = 0
+        \\let seed = 41
+        \\pub let answer = seed + 1
+        \\let quiet = 0
         \\
         \\struct Inner:
         \\    let n: i64
@@ -486,8 +492,8 @@ test "the bare underscore is refused as a declared name, everywhere one declares
     // same sentence.  The declaration still parses,
     // so each program yields exactly the one diagnostic.
     const wildcard = "_ is the array-shape wildcard";
-    try expectDiagnostics("const _ = 1\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.expected", .line = 1, .column = 7, .contains = wildcard },
+    try expectDiagnostics("let _ = 1\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 5, .contains = wildcard },
     });
     try expectDiagnostics("func _():\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = wildcard },
@@ -986,7 +992,7 @@ test "every literal form parses" {
 
 test "map literals parse in constant and runtime positions, across lines and with a trailing comma" {
     var parsed = try expectClean(
-        \\const months: map[str, i64] = {
+        \\let months: map[str, i64] = {
         \\    "jan": 1,
         \\    "feb": 1 + 1,
         \\}
@@ -1297,7 +1303,7 @@ test "a statement that runs past its newline reports once and stops" {
 }
 
 test "a file that starts indented reports the indentation, not the statement" {
-    try expectDiagnostics("    let x = 1\nconst y = 2\n", &.{
+    try expectDiagnostics("    let x = 1\nlet y = 2\n", &.{
         .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "left margin" },
     });
 }
@@ -1797,7 +1803,7 @@ test "truncated input at every prefix terminates and stays inside the source" {
     const whole =
         \\import math
         \\
-        \\const width = 80
+        \\let width = 80
         \\
         \\struct Point:
         \\    let x: f64

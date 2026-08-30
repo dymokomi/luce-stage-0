@@ -44,8 +44,8 @@ There is no standard-library-specific wording.
 declaration it exposes:
 
 ```luce
-const scale: i64 = 10             # private: geo's own business
-pub const limit: i64 = scale * 4  # exposed; folds to 44
+let scale: i64 = 10             # private: geo's own business
+pub let limit: i64 = scale * 4  # exposed; folds to 44
 
 alias InternalId = i64            # private
 pub alias UserId = i64            # exposed
@@ -221,8 +221,8 @@ inside the declaring file and what crosses the boundary is the value:
 
 ```text
 # geo.luc
-const seed: i64 = 41              # geo's own business
-pub const answer: i64 = seed + 1  # folds to 42 in geo
+let seed: i64 = 41              # geo's own business
+pub let answer: i64 = seed + 1  # folds to 42 in geo
 
 # main.luc
 import geo

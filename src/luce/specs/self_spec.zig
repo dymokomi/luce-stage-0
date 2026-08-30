@@ -266,9 +266,9 @@ test "self: writer results with owned storage survive binding and statement disc
 
 test "self: an earlier optional str argument outlives a later receiver write" {
     try agree.ok(
-        \\const first_text = "the first optional string is long enough to live in owned outside storage"
-        \\const second_text = "the second optional string is likewise long enough to live outside inline storage"
-        \\const replacement = "the replacement string is long enough to require outside owned storage too"
+        \\let first_text = "the first optional string is long enough to live in owned outside storage"
+        \\let second_text = "the second optional string is likewise long enough to live outside inline storage"
+        \\let replacement = "the replacement string is long enough to require outside owned storage too"
         \\
         \\struct Box:
         \\    var text: str?
@@ -297,8 +297,8 @@ test "self: an earlier optional str argument outlives a later receiver write" {
 
 test "self: writer arguments borrowed from the receiver outlive whole-self replacement" {
     try agree.ok(
-        \\const original = "the original receiver string is long enough to require owned outside storage"
-        \\const replacement = "the replacement receiver string is also long enough to require outside storage"
+        \\let original = "the original receiver string is long enough to require owned outside storage"
+        \\let replacement = "the replacement receiver string is also long enough to require outside storage"
         \\
         \\struct Box:
         \\    var text: str

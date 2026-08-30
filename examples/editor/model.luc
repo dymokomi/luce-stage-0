@@ -23,7 +23,7 @@ from lsp_client import Client, Diagnostic
 
 # Luce's lexer steps four columns; the editor writes spaces so what it
 # makes is immediately valid source.
-pub const indent_unit = "    "
+pub let indent_unit = "    "
 
 # The file pane's ordinary domain state. Geometry belongs to the declarative
 # view; this value only remembers which result is selected and where its
@@ -112,7 +112,7 @@ pub enum Intent:
     quit
     ignored
 
-pub const STEPS = {
+pub let STEPS = {
     Intent.move_up: -1,
     Intent.move_down: 1,
     Intent.page_up: -8,

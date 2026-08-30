@@ -217,7 +217,7 @@ enum Intent:
     stop
     nothing
 
-const bindings = {Key.left: Intent.move_left, Key.quit: Intent.stop}
+let bindings = {Key.left: Intent.move_left, Key.quit: Intent.stop}
 
 func intent(pressed: Key) -> Intent:
     return bindings.get(pressed) else Intent.nothing

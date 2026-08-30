@@ -52,7 +52,7 @@ Because a member value is an ordinary constant expression, it may be built
 from other constants and the bitwise operators:
 
 ```luce
-const base = 4
+let base = 4
 
 enum Flag:
     none_set = 0
@@ -335,8 +335,8 @@ enum Method:
     stored = 0
     deflated = 8
 
-const default_method = Method.deflated
-const default_name = str(Method.deflated)
+let default_method = Method.deflated
+let default_name = str(Method.deflated)
 
 struct Entry:
     let size: i64
@@ -375,7 +375,7 @@ enum Intent:
     move_right
     nothing
 
-const bindings = {Key.left: Intent.move_left, Key.right: Intent.move_right}
+let bindings = {Key.left: Intent.move_left, Key.right: Intent.move_right}
 
 func intent(k: Key) -> Intent:
     return bindings.get(k) else Intent.nothing
