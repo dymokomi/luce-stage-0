@@ -24,7 +24,7 @@ extern type LLVMDiagnosticInfoRef
 
 # LLVMVerifierFailureAction: C enum constants do not import; the value
 # is hand-copied from llvm-c/Analysis.h.
-const return_status_action: i32 = 2
+let return_status_action: i32 = 2
 
 # -- contexts and diagnostics ----------------------------------------------
 

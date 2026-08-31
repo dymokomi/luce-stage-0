@@ -4429,17 +4429,21 @@ const Body = struct {
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
-        // Every box starts by claiming nothing about its encoding.
-        // `fillBoxValue` overwrites this for a str with what the
-        // register knew, but the two are written at different places —
-        // the type's facts in the entry block, the value's where it is
-        // produced — and a box that only ever got the first would
-        // otherwise carry whatever the scratch held as a claim about
-        // its own bytes.  Nothing else has an encoding to claim.
-        try self.storeBoxByte(slot, box_encoding, try builder.intValue(
-            .i8,
-            @intFromEnum(runtime.Encoding.unknown),
-        ));
+        // A present `str?` carries its payload's claim, selected the
+        // same way bits and length are — `fillBoxValue` never runs for
+        // an optional (it early-returns into this function), so nothing
+        // overwrites what is written here.  Anything else claims
+        // `unknown`, which every reader treats as "walk it".
+        try self.storeBoxByte(slot, box_encoding, if (of == .str)
+            try self.wip.select(
+                .normal,
+                present,
+                try self.wip.extractValue(inner, &.{2}, "box.known"),
+                try builder.intValue(.i8, @intFromEnum(runtime.Encoding.unknown)),
+                "box.encoding",
+            )
+        else
+            try builder.intValue(.i8, @intFromEnum(runtime.Encoding.unknown)));
         try self.storeBoxField(slot, box_bits, try self.wip.select(
             .normal,
             present,
@@ -5665,41 +5669,6 @@ const Body = struct {
             Builder.Alignment.fromByteUnits(1),
             "byte",
         );
-    }
-
-    /// `s[a:b]` — a borrow of the original bytes, checked twice: in
-    /// range, and on a UTF-8 boundary at both ends.
-    fn emitStringSlice(
-        self: *Body,
-        register: mir.Register,
-        text_register: mir.Register,
-        from: mir.Register,
-        to: mir.Register,
-    ) Error!void {
-        const builder = self.module.builder;
-        const text, const length = try self.textParts(text_register, "text");
-        const first = self.produced[from].value;
-        const end = self.produced[to].value;
-        const below = try self.wip.icmp(.slt, first, try builder.intValue(.i64, 0), "below");
-        const inverted = try self.wip.icmp(.slt, end, first, "inverted");
-        const past = try self.wip.icmp(.sgt, end, length, "past.end");
-        try self.check(try self.wip.bin(
-            .@"or",
-            below,
-            try self.wip.bin(.@"or", inverted, past, "misordered"),
-            "out.of.range",
-        ), .str_bounds);
-        try self.checkBoundary(text, length, first);
-        try self.checkBoundary(text, length, end);
-        // Part of an ASCII string is an ASCII string, so the slice
-        // inherits.  Passing the source's answer through unchanged is
-        // safe for the other two as well: only `ascii` enables the fast
-        // path, and everything else means "walk it".
-        self.produced[register].value = try self.wip.buildAggregate(self.module.string_type, &.{
-            try self.wip.gep(.inbounds, .i8, text, &.{first}, "slice.at"),
-            try self.wip.bin(.@"sub nsw", end, first, "slice.length"),
-            try self.wip.extractValue(self.produced[text_register].value, &.{2}, "slice.encoding"),
-        }, "slice");
     }
 
     // -- the host table ------------------------------------------------

@@ -1726,6 +1726,18 @@ pub const Parser = struct {
     fn fieldMutability(self: *Parser) Error!?ast.FieldMutability {
         if (self.accept(.keyword_let) != null) return .immutable;
         if (self.accept(.keyword_var) != null) return .mutable;
+        // The same teaching the other two scopes give: `const` is a
+        // habit from another language, and the generic "expected let or
+        // var" would leave the reader guessing at the vocabulary.
+        if (self.peekKind() == .keyword_const) {
+            try self.report(
+                "luce.parse.field",
+                self.peek().span,
+                "there is no const in Luce: a struct's constants live at file scope as let, and a field is written let or var",
+                .{},
+            );
+            return null;
+        }
         if (self.peekKind() != .identifier or self.peekAhead(1) != .colon) {
             _ = try self.expect(.identifier, "let or var, then a field name");
             return null;

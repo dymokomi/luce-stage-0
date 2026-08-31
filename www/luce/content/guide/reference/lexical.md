@@ -95,8 +95,10 @@ struct   true     try      union   var      weak     while
 `pub` marks visibility: a declaration is private to its file unless it says
 `pub`. `self` is the receiver of a
 method. `static` marks a namespace function declared inside a struct,
-enum, or union. `const` declares a file-scope constant; `let` and `var`
-are function-scope bindings. `weak` qualifies non-owning storage. `spawn`
+enum, or union. `let` declares a binding at
+file scope (a compile-time constant) and inside a function alike; `var` is
+function-scope only, and `const` declares nothing — it is kept as a keyword
+so writing it earns a sentence naming `let` instead of a parse error. `weak` qualifies non-owning storage. `spawn`
 starts a worker call. `extern` declares a foreign function's C shape, with
 no body.
 

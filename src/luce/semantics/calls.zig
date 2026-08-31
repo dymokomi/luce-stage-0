@@ -1059,13 +1059,28 @@ fn lowerUserCall(
     }
     // A spawn always answers something — the task — so the
     // "returns nothing" sentence is not about it.
-    // A `-> never` callee never comes back, so it stands where a value
-    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
-    // value to be missing on a path that does not exist.  Saying it
-    // "returns nothing" would be answering a question about its result to
-    // a reader who declared that it has none.
-    if (info.return_type == .none and !as_statement and spawning == null and !info.diverges) {
-        try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+    //
+    // **A diverging callee is refused here too, in its own words.**  An
+    // `else` or `catch` fallback absorbs divergence *before* lowering the
+    // call (`expressions.isLeavingCall`), so a `-> never` call that
+    // reaches this check is standing somewhere that genuinely expects a
+    // value — a binding, an argument, a return — and letting it through
+    // would hand the receiver a value of type none, which no later stage
+    // can represent.  "Returns nothing" would still be the wrong
+    // sentence, though: the reader declared that it never returns at
+    // all, so the refusal says that instead, and names the places a
+    // diverging call may stand.
+    if (info.return_type == .none and !as_statement and spawning == null) {
+        if (info.diverges) {
+            try self.fail(
+                "luce.sema.call",
+                span,
+                "{s} never returns, so there is no value here to receive; a diverging call stands as its own statement, or as an else or catch fallback",
+                .{name},
+            );
+        } else {
+            try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+        }
         return null;
     }
     if (spawning) |_| {
@@ -2030,13 +2045,22 @@ fn lowerReceiverCall(
         };
         next_entry += 1;
     }
-    // A `-> never` callee never comes back, so it stands where a value
-    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
-    // value to be missing on a path that does not exist.  Saying it
-    // "returns nothing" would be answering a question about its result to
-    // a reader who declared that it has none.
-    if (info.results.len == 0 and !as_statement and !info.diverges) {
-        try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+    // The same refusal `lowerUserCall` makes, in the same two voices:
+    // an `else`/`catch` fallback has already absorbed divergence before
+    // this lowering runs (`expressions.isLeavingCall`), so a diverging
+    // method reaching a value position is refused with what the reader
+    // declared — never returns — rather than "returns nothing".
+    if (info.results.len == 0 and !as_statement) {
+        if (info.diverges) {
+            try self.fail(
+                "luce.sema.call",
+                method.span,
+                "{s} never returns, so there is no value here to receive; a diverging call stands as its own statement, or as an else or catch fallback",
+                .{method.name},
+            );
+        } else {
+            try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+        }
         return null;
     }
     if (info.results.len >= 2 and !as_statement and shape_position != .receive) {
@@ -2699,13 +2723,20 @@ fn callUser(
             .slot = @intCast(slot),
         };
     }
-    // A `-> never` callee never comes back, so it stands where a value
-    // belongs exactly as `trap("…")` does (docs/FAILURE.md): there is no
-    // value to be missing on a path that does not exist.  Saying it
-    // "returns nothing" would be answering a question about its result to
-    // a reader who declared that it has none.
-    if (info.return_type == .none and !as_statement and !info.diverges) {
-        try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+    // The same refusal `lowerUserCall` makes, in the same two voices
+    // (see the comment there): a fallback absorbs divergence before this
+    // runs, so a diverging call here is in a genuine value position.
+    if (info.return_type == .none and !as_statement) {
+        if (info.diverges) {
+            try self.fail(
+                "luce.sema.call",
+                span,
+                "{s} never returns, so there is no value here to receive; a diverging call stands as its own statement, or as an else or catch fallback",
+                .{name},
+            );
+        } else {
+            try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+        }
         return null;
     }
     const node = try recorder.recordCallNode(

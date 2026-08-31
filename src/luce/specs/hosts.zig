@@ -411,6 +411,12 @@ pub const World = struct {
     ) ?[]const u8 {
         if (self.refuse_writes) return null;
         const root = trimmedPath(parent);
+        // A real host refuses a parent that is not a directory there
+        // to write into, and the most common failure this call meets
+        // is exactly that — so the world keeps the same rule, or a
+        // spec-green program would fail on its first real run.
+        if (root.len != 0 and !self.hasDirectory(root)) return null;
+        if (self.exists(root)) return null;
         while (self.scratch_counter < 1000) {
             const candidate = std.fmt.bufPrint(
                 &self.scratch_path,

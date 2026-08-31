@@ -5977,7 +5977,7 @@ test "luce.sema.index: every shape of index says what it will accept" {
         \\    var xs = [1, 2, 3]
         \\    let bad = xs[0:1.5]
         \\
-    , "luce.sema.type", "slice bounds are i64");
+    , "luce.sema.type", "slice bounds are integer positions");
     try expectSaying(
         \\func main():
         \\    var b = builder()
@@ -9312,6 +9312,63 @@ test "R2: bare ! stays the str message form, unchanged" {
         \\negative: -3
         \\
     );
+}
+
+test "never: a diverging call standing where a value is received is refused, not crashed" {
+    // The regression the 0.29 review found: 0.26's fallback exemption
+    // let a diverging call through *every* value position, and a
+    // binding then declared a local of type none — an internal
+    // compiler error four different ways.  A fallback absorbs
+    // divergence before lowering; a receiving position refuses it, in
+    // the reader's own words.
+    try expectSaying(
+        \\func bail() -> never:
+        \\    trap("gone")
+        \\
+        \\func main():
+        \\    let x = bail()
+        \\
+    , "luce.sema.call", "bail never returns, so there is no value here to receive");
+    try expectSaying(
+        \\struct Panic:
+        \\    let code: i64
+        \\    func bail() -> never:
+        \\        trap("gone")
+        \\
+        \\func main():
+        \\    let o = Panic(code = 1)
+        \\    let x = o.bail()
+        \\
+    , "luce.sema.call", "never returns");
+    try expectSaying(
+        \\func bail() -> never!:
+        \\    error("gone")
+        \\
+        \\func main() -> !:
+        \\    let x = try bail()
+        \\
+    , "luce.sema.call", "never returns");
+    try expectSaying(
+        \\struct Panic:
+        \\    let code: i64
+        \\    static func bail() -> never:
+        \\        trap("gone")
+        \\
+        \\func main():
+        \\    let x = Panic.bail()
+        \\
+    , "luce.sema.call", "never returns");
+}
+
+test "luce.sema.call: discard of a diverging call is refused like discard of a void one" {
+    try expectSaying(
+        \\func bail() -> never:
+        \\    trap("gone")
+        \\
+        \\func main():
+        \\    discard(bail())
+        \\
+    , "luce.sema.call", "discard drops a result, and this answers none");
 }
 
 test "never: a -> never body that can fall through is refused" {

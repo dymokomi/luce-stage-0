@@ -872,6 +872,7 @@ pub const Intrinsic = enum {
             .read_line,
             .env_get,
             .shell_run,
+            .temporary_directory,
             // The C reads copy out of foreign memory into fresh
             // bytes/str storage (docs/FFI.md).
             .bytes_at,
@@ -974,7 +975,6 @@ pub const Intrinsic = enum {
             .path_modified,
             .dir_remove,
             .tree_remove,
-            .temporary_directory,
             .gpu_backend,
             .ui_window_open,
             .ui_window_surface,

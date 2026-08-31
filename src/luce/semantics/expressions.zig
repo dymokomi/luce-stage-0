@@ -743,10 +743,13 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
         });
         return null;
     }
+    // A slice bound is a position exactly as an index is, and takes
+    // the same rule (docs/STRINGS.md): any integer names one, through
+    // the same checked conversion an explicit `i64(…)` would make.
     const lowered_bounds = sequence[1..];
-    for (lowered_bounds) |value| {
-        if (!value.value_type.eql(.i64)) {
-            try self.fail("luce.sema.type", slice.span, "slice bounds are i64", .{});
+    for (lowered_bounds) |*value| {
+        if (!try assign.widenIndex(self, value)) {
+            try self.fail("luce.sema.type", slice.span, "slice bounds are integer positions", .{});
             return null;
         }
     }
@@ -1623,11 +1626,16 @@ fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
 /// because it never comes back; `trap` is a reserved name, so
 /// nothing else can wear it.
 /// Does this fallback — the right of `else` or `catch` — leave rather
-/// than answer a value?  The diverging builtins do, and so does a bare
-/// call to a `-> never` function, resolved through the collected table
-/// (the fallback is not lowered yet, so the recorded set is not read
-/// here).  A `self.method()` fallback that diverges is not recognized;
-/// it is refused as a value, which the reader fixes by binding it first.
+/// than answer a value?  The diverging builtins do; so does a bare
+/// call to a `-> never` function, a diverging method on a named local
+/// (`self.bail(…)`), and a diverging function reached through a
+/// namespace (`helper.bail(…)`, `Panic.bail(…)`) — each resolved
+/// through the collected tables without lowering anything, because the
+/// fallback has not been lowered yet.  A shape this peek cannot
+/// resolve purely — a field-access receiver, an alias namespace — is
+/// left alone: answering "no" only costs the reader a binding, and
+/// the value path now refuses a diverging callee with a sentence that
+/// says where such a call may stand.
 pub fn isLeavingCall(self: *FunctionBuilder, expression: *const ast.Expression) bool {
     return switch (expression.*) {
         // `try f(…)` leaves when `f` does: a `-> never!` callee either
@@ -1651,6 +1659,9 @@ pub fn isLeavingCall(self: *FunctionBuilder, expression: *const ast.Expression) 
         // uses.  A receiver that is not a plain name is left alone —
         // answering "no" only costs the reader a binding.
         .method => |method| {
+            if (namespacedFunction(self, method) catch null) |index| {
+                return self.analyzer.functions.items[index].diverges;
+            }
             const receiver = switch (method.target.*) {
                 .name => |name| name.text,
                 else => return false,
@@ -1663,6 +1674,55 @@ pub fn isLeavingCall(self: *FunctionBuilder, expression: *const ast.Expression) 
         },
         else => false,
     };
+}
+
+/// The function a namespaced call names — `helper.bail(…)` through an
+/// imported module, `Panic.bail(…)` through a struct or enum of this
+/// module, either head arriving by member import — or null.
+///
+/// **Purely a lookup.**  `calls.methodNamespace` is the authority on
+/// this resolution, but it reports as it goes, and this is a peek at a
+/// fallback that has not been lowered: a peek must not speak.  So the
+/// happy paths are mirrored here read-only, and every shape the mirror
+/// does not cover — an alias namespace, a member chain, a head that
+/// resolves to nothing — answers null and takes the value path, where
+/// the authority produces the diagnostic.
+fn namespacedFunction(self: *FunctionBuilder, method: ast.Method) Error!?u32 {
+    const chain = helpers.dottedChain(method.target) orelse return null;
+    const head = chain.head();
+    if (self.findLocal(head) != null) return null;
+
+    var written: std.ArrayList(u8) = .empty;
+    defer written.deinit(self.temporary());
+    var at = chain.count;
+    while (at > 0) {
+        at -= 1;
+        try written.appendSlice(self.temporary(), chain.parts[at]);
+        try written.append(self.temporary(), '.');
+    }
+    try written.appendSlice(self.temporary(), method.name);
+    const joined = written.items;
+
+    // A struct, enum, or union of this module: `Panic.bail`.
+    const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
+    if (self.analyzer.struct_names.contains(head_qualified) or
+        self.analyzer.enum_names.contains(head_qualified) or
+        self.analyzer.variant_names.contains(head_qualified))
+    {
+        const local = try naming.qualify(self.analyzer, self.prefix, joined);
+        return self.analyzer.function_names.get(local);
+    }
+    // A head that arrived by member import: `from geo import Panic`.
+    if (try naming.memberKey(self.analyzer, self.module, head)) |head_key| {
+        const full = try std.fmt.allocPrint(self.arena(), "{s}{s}", .{ head_key, joined[head.len..] });
+        return self.analyzer.function_names.get(full);
+    }
+    // An imported module: `helper.bail`.
+    if (naming.importsModule(self.analyzer, self.module, head)) {
+        const key = try self.importedName(joined);
+        return self.analyzer.function_names.get(key);
+    }
+    return null;
 }
 
 /// `a else b` — `a` when it is there, `b` when it is not.  The

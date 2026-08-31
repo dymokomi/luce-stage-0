@@ -15,6 +15,9 @@ dice_rolls.txt
 /.llvm/
 
 # Content-addressed warm artifacts: loom's `.luce/cache/` and the test
-# runner's `.luce/cache/tests/`. Deletable at any time — each entry is
-# keyed by its program's hash and rebuilt on a miss.
-.luce/cache/
+# runner's `.luce/cache/tests/`, wherever a governed project sits.
+# Deletable at any time — each entry is keyed by its program's hash and
+# rebuilt on a miss.  The leading `**/` matters: a pattern with a
+# middle slash anchors to this file's directory, which is how 58 of
+# these were once committed from `examples/editor` without a sound.
+**/.luce/cache/

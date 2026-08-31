@@ -72,7 +72,7 @@ func main():
 
 A parameter may declare a default after its type: `start: i64 = 0`. A
 default is a **folded compile-time constant** — the same folder that
-folds a file-scope `const` (`docs/CONSTANTS.md`) evaluates it once, at
+folds a file-scope `let` (`docs/CONSTANTS.md`) evaluates it once, at
 the declaration, at the parameter's own type. At each call site that
 omits the argument, the compiler materializes the same constant it would
 have produced had the value been written there, so the lowered program

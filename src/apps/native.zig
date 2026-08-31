@@ -526,6 +526,17 @@ pub fn link(
     // vary would make an otherwise canonical release archive change on
     // every assembly.  The compiler and loom binaries are Zig-linked and
     // already deterministic, so this closes the remaining product path.
+    //
+    // **Executables only, and not for want of trying.**  Extending it
+    // to a `.lc` was attempted and reverted the same day: a dylib
+    // without an LC_UUID is one this machine's `dlopen` refuses
+    // outright, so every loom run died with "not a compiled Luce
+    // program".  Dylib byte-determinism therefore still rests on
+    // `-final_output` alone (the signature identity), and the UUID
+    // varies per link — which the release archives tolerate because
+    // none of them bundles a `.lc` today.  The reproducibility product
+    // test builds both shapes and pins the executable byte-for-byte
+    // while proving the `.lc` loads (`src/apps/luce/object.zig`).
     if (kind == .executable and @import("builtin").os.tag == .macos) {
         try arguments.append(gpa, "-Wl,-no_uuid");
     }

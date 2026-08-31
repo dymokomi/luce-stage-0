@@ -113,7 +113,8 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  loom                        interactive shell\n" ++
             "  loom run PROGRAM.lc [ARGS]  run a compiled program\n" ++
             "  loom luce PROGRAM.luc [..]  compile a source file and run it\n" ++
-            "  loom PROGRAM.lc [ARGS]      shorthand for run\n",
+            "  loom PROGRAM.lc [ARGS]      shorthand for run\n" ++
+            "  loom PROGRAM.luc [ARGS]     shorthand for luce\n",
         .{},
     );
     return 1;

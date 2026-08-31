@@ -30,7 +30,7 @@ enum Colour:
 ```
 
 A member may carry `= value`, where `value` is a constant integer
-expression folded at compile time exactly as any file-scope `const` is. An
+expression folded at compile time exactly as any file-scope `let` is. An
 unvalued member takes the previous member's value plus one; an unvalued
 first member is `0`. This is the C rule: sequential from zero, explicit
 where written, and both at once.
@@ -328,7 +328,7 @@ functions can.
 ## Folding, constants and defaults
 
 A member *is* a constant, so it folds anywhere a constant folds — a
-file-scope `const`, a parameter's default, a struct field's default:
+file-scope `let`, a parameter's default, a struct field's default:
 
 ```luce
 enum Method:

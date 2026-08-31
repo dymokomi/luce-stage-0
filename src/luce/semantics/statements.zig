@@ -218,7 +218,11 @@ fn lowerExpressionStatement(self: *FunctionBuilder, expression: ast.ExpressionSt
         // untrue.  So it is lowered as a statement and then held to the
         // one thing `discard` requires: that there was a result.
         const value = (try self.lowerExpression(wanted, true)) orelse return;
-        if (value.value_type == .none and !value.diverges) {
+        // A diverging call is refused with the rest: it answers no
+        // value either, so `discard` of one claims a drop that never
+        // happens — `discard(trap("…"))` and `discard(bail())` are the
+        // same mistake and get the same sentence.
+        if (value.value_type == .none) {
             try self.fail(
                 "luce.sema.call",
                 wanted.span(),

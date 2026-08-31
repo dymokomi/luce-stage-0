@@ -55,7 +55,10 @@ func main():
     assert(text[1:3] == "👋é")
 ```
 
-Indexes are non-negative `i64` values. An out-of-range index or slice traps
+Indexes and slice bounds are non-negative integers of any width — a
+position is a position whatever type carries it, through the same checked
+conversion an explicit `i64(…)` would make, so a `u64` past `i64`'s top is
+`conversion_range` at the index. An out-of-range position traps
 `str_bounds`. The API does not pretend byte offsets are characters.
 
 ### What an index costs

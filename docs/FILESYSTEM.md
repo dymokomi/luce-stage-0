@@ -187,7 +187,8 @@ link**: a recursive delete that followed links would walk out of the tree
 it was asked to remove, which is the classic way a cleanup empties a home
 directory. `copy` and `move` are plain Luce over the byte channel and the
 name services — portable by construction, no new host promise — while the
-two removals and the two stat facts are host slots (`abi.PathFactFn`,
+two removals, the two stat facts, and the temporary-directory claim
+are host slots (`abi.PathFactFn`,
 `abi.DirRemoveFn`, `abi.TreeRemoveFn`), because no composition of the
 existing table can answer them honestly.
 

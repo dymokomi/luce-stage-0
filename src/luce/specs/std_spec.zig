@@ -1229,6 +1229,7 @@ test "files: a temporary directory is created and claimed in one act" {
         \\import std.strings
         \\
         \\func main() -> !:
+        \\    try files.make_directory("work")
         \\    let first = try files.make_temporary_directory("work", "build-")
         \\    let second = try files.make_temporary_directory("work", "build-")
         \\    # Two claims, two directories — never the same one twice.
@@ -1247,10 +1248,54 @@ test "files: a temporary directory is created and claimed in one act" {
         \\    # A name is never handed out twice, even after removal.
         \\    let third = try files.make_temporary_directory("work", "build-")
         \\    assert(third != first)
+        \\    assert(third != second)
         \\    print("claimed")
         \\
     , budget,
         \\claimed
+        \\
+    );
+}
+
+test "files: a temporary directory's path may outgrow the value it travels in" {
+    // Every path the first spec makes fits inside a LuceValue, so the
+    // interned-text heap branch and the census that audits it never
+    // ran.  This one's answers cannot fit, so the claim crosses both
+    // engines as owned outside storage and the leak census is the
+    // judge.
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    try files.make_directory("workspace/scratch-area")
+        \\    let wide = try files.make_temporary_directory("workspace/scratch-area", "build-")
+        \\    assert(len(wide) > 21)
+        \\    assert(try files.exists(wide))
+        \\    try files.remove_all(wide)
+        \\    print("outgrown")
+        \\
+    , budget,
+        \\outgrown
+        \\
+    );
+}
+
+test "files: a temporary directory needs its parent to exist" {
+    // The most common real refusal: the parent is not there.  The
+    // simulated world keeps the rule a real host enforces, so a
+    // program that forgot the make_directory learns it from a spec
+    // rather than from its first run.
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main():
+        \\    let made = files.make_temporary_directory("nowhere", "build-") catch reason:
+        \\        print(reason)
+        \\        return
+        \\    print("unexpectedly made " + made)
+        \\
+    , budget,
+        \\cannot make directory nowhere
         \\
     );
 }

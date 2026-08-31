@@ -4,6 +4,73 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.29 — the review release
+
+Every 0.22-through-0.28 change was put in front of an independent
+adversarial review — five reviewers, each attacking one risk area — and
+this release is what it found, fixed. Two findings are worth stating
+plainly rather than burying: 0.26 shipped a compiler crash, and 0.27
+shipped an ABI-visible value-layout change without bumping `abi.version`
+(the generator-hash gate prevented live corruption, but the rule the
+tree states for itself was violated; the version ledger now records the
+missed entry).
+
+- **A diverging call in a receiving position is a refusal again, not a
+  crash.** 0.26's `never`-in-fallbacks change exempted diverging callees
+  from "returns nothing" everywhere, so `let x = bail()` — and three
+  sibling shapes — crashed the compiler with an internal error. A
+  fallback absorbs divergence *before* the call is lowered; a receiving
+  position now refuses it in the reader's own words: "`bail` never
+  returns, so there is no value here to receive."
+
+- **Namespaced diverging fallbacks work now.** `x else helper.bail()`
+  and `catch Panic.bail()` — the module- and static-qualified shapes —
+  were claimed in 0.26 and did not work. The fallback peek resolves
+  namespace heads through the same tables the call does, read-only.
+
+- **Slice bounds are integer positions.** `xs[a:b]` takes any integer
+  width, through the same checked conversion an index takes — 0.26
+  widened indexes and left slices behind for no stated reason. Both
+  rules are now pinned by two-engine specifications, including the
+  `u64`-past-`i64` trap that had no spec at all.
+
+- **The `str` encoding claim is hardened.** The byte is validated at
+  the untrusted ABI boundary exactly as the tag is (a hostile box fails
+  closed as `not_owned` instead of a safety panic), a present `str?`
+  now carries its claim through a box instead of silently dropping to
+  the walk, and a dead, wrong copy of the slice lowering was deleted.
+
+- **`temporary_directory` is classified as what it is** — a service
+  answering freshly owned text, not a view. A prefix ending in `X` no
+  longer loses characters on macOS (BSD `mkdtemp` eats trailing X's;
+  the host trims them first, so the rule is the same everywhere). The
+  specification world now requires the parent directory to exist, as a
+  real host does, and the specs cover the missing-parent refusal and
+  paths too long to live inside a value.
+
+- **A long test lane runs as several processes.** Every artifact the
+  specification suite loads carries thread-local storage, and macOS
+  charges each loaded image a loader key that unloading never returns —
+  at roughly 500 the process aborts inside whichever innocent test runs
+  next. The runner now shards itself over consecutive slices, so no
+  process approaches the ceiling and a crash names its own tests. This
+  is also the finding that exonerates 0.26's reverted stack guard,
+  which was blamed for an FFI failure that was actually this ceiling.
+
+- **Housekeeping with teeth.** 58 machine-specific test-cache artifacts
+  (~168 MB) were being committed because the `.gitignore` pattern was
+  root-anchored; untracked, and the pattern fixed. `-no_uuid` now
+  covers every Darwin artifact kind, and the byte-for-byte
+  reproducibility test builds both linked shapes. A `build.luc` step
+  whose `release` is not a boolean is refused instead of silently read
+  as debug. Bundled `.lc` programs are built `--release`, which the
+  documentation had claimed all along. Six documents that still taught
+  `const`, a CLI reference documenting a `luce package` form that never
+  existed, a README installing a three-releases-old toolchain, and a
+  field-mutability rule cited to a documentation section that does not
+  exist — all corrected, with new machine-checked needles where prose
+  had none.
+
 ## 0.28 — a scratch directory you can prove is yours
 
 - **`files.make_temporary_directory(parent, prefix) -> str!`.** The one

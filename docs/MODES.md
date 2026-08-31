@@ -46,12 +46,15 @@ loom: trap: division by zero [divide_by_zero]
     at main
 ```
 
-`loom luce FILE.luc` (compile-and-run) is always a debug build — when
+`loom luce FILE.luc` (compile-and-run) builds debug — when
 the source is sitting right there, there is no reason not to know the
 line, and the compile is the part the person is waiting on.  `luce
 test` builds debug for the same reason twice over: a test artifact is
 run once and thrown away, so every second spent optimizing it is
-spent optimizing something nobody will run again.  Bundled programs
+spent optimizing something nobody will run again.  What loom *reuses*
+is decided by hash rather than mode: a `NAME.lc` already beside the
+source whose hash matches runs as it is, whichever mode built it.
+Bundled programs
 are the other case and are built `--release`.
 
 ## Semantics never change between modes

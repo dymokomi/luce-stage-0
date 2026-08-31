@@ -730,6 +730,16 @@ pub const Host = struct {
             };
             if (usable) try self.scratch_path.append(self.gpa, byte);
         }
+        // BSD's mkdtemp randomizes *every* trailing X, not the six this
+        // template appends, so a prefix ending in X would keep fewer of
+        // its own characters on macOS than on Linux.  Trimming here
+        // makes the one rule true everywhere: the host owns the tail,
+        // the caller owns what is left of the front.
+        while (self.scratch_path.items.len != 0 and
+            self.scratch_path.items[self.scratch_path.items.len - 1] == 'X')
+        {
+            self.scratch_path.items.len -= 1;
+        }
         try self.scratch_path.appendSlice(self.gpa, "XXXXXX");
         try self.scratch_path.append(self.gpa, 0);
 

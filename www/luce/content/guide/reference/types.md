@@ -115,7 +115,7 @@ its code point, and `str(character)` encodes it as UTF-8.
 
 A character literal is contextual the way a numeric literal is: written into
 an integer place it lands as that integer when the scalar fits — `c == '"'`
-over a `u8`, a `'0' .. '9'` match arm, `const NEWLINE: u8 = '\n'` — and one
+over a `u8`, a `'0' .. '9'` match arm, `let NEWLINE: u8 = '\n'` — and one
 that does not fit is a compile error. With no integer context it is a `char`.
 Only literals are contextual; a runtime `char` still reaches a number only
 through `u32(character)`.

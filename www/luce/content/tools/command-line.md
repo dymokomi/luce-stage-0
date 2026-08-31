@@ -18,7 +18,7 @@ On macOS 15 or newer with Apple Silicon, or glibc Linux 2.28+ on x86-64 or
 ARM64, install the current release with one command:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.28/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.29/install.sh | bash
 ```
 
 The release installs the stage-0 toolchain as `luce-0`, beside `loom`,
@@ -48,7 +48,7 @@ unpacked from it inherits the flag; the first run is then killed with a bare
 `Killed: 9` and no reason given. Clear it once on the unpacked directory:
 
 ```sh
-xattr -dr com.apple.quarantine luce-0.28
+xattr -dr com.apple.quarantine luce-0.29
 ```
 
 The installer does this for you, and `curl` sets no such flag in the first
@@ -70,7 +70,7 @@ luce query diagnostics FILE
 luce ir FILE [--full]
 luce test [PATH ...]
 luce install
-luce package NAME() [VERSION]
+luce package new NAME [VERSION]
 luce package version NAME VERSION
 luce package publish NAME
 ```
@@ -148,7 +148,7 @@ incompatible ABI instead of running it with the wrong assumptions.
 The current `.lcm` format is **73** (`format_version = 73`) and the
 published host ABI is **32** (`abi.version = 32`).
 They describe compatibility of intermediate modules and host services, not
-the user-facing release number. Current release label: **0.28**.
+the user-facing release number. Current release label: **0.29**.
 
 ## `loom` commands
 
@@ -164,7 +164,8 @@ loom PROGRAM.lc [ARGS]      shorthand for run
 `loom --build-info` prints the same release identity fields as the compiler.
 `loom run` loads one `.lc` file and passes the remaining words to
 `main(args)`. `loom luce` asks the `luce` compiler to build a `.luc` file,
-then runs the resulting artifact; it caches that artifact beside the source
+then runs the resulting artifact; it caches that artifact — in the project's
+`.luce/cache/` under a governing `luce.yaml`, beside the source otherwise —
 and rebuilds it when the source changes. A path ending in `.lc` or `.luc` may
 also be given without the command word.
 

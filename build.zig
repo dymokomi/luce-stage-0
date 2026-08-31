@@ -1472,6 +1472,11 @@ pub fn build(b: *std.Build) void {
         compile_program.addArg("-o");
         const artifact_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
         compile_program.addArg("--emit=library");
+        // A bundled program is a shipped artifact somebody runs, not a
+        // throwaway: it gets the mode shipped artifacts get
+        // (docs/MODES.md), which is also the claim that page makes
+        // about these exact files.
+        compile_program.addArg("--release");
         for (program.deps) |dependency| {
             compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }

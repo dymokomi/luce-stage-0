@@ -498,6 +498,15 @@ pub const Value = extern struct {
     }
 
     fn hasValidInlineOrOutsideBytes(self: Value) bool {
+        // The encoding byte is untrusted exactly as the tag is, and is
+        // checked the same way: through the raw byte, because loading
+        // an invalid value through the enum field is already undefined
+        // in Zig.  A box claiming an encoding this enum does not have
+        // is malformed and fails closed — the `not_owned` trap every
+        // other malformed box gets — rather than reaching the enum
+        // compares in `text.zig` as a safety panic.
+        const raw = std.mem.asBytes(&self)[@offsetOf(Value, "encoding")];
+        if (std.enums.fromInt(Encoding, raw) == null) return false;
         if (self.inline_length == text_outside) {
             return self.hasValidByteRun();
         }
@@ -745,6 +754,19 @@ test "an unknown ABI tag is invalid data, not a native enum panic" {
     try std.testing.expect(!held.hasValidStringRepresentation());
     try std.testing.expect(!held.ownsStorage());
     try std.testing.expect(!keyEquals(&held, &held));
+}
+
+test "an unknown encoding byte is invalid data, not a native enum panic" {
+    // The one other byte a hostile box can lie in.  A claim outside
+    // the enum is malformed data and fails closed, exactly as an
+    // unknown tag does — never a safety panic in the compares that
+    // read the field after validation.
+    var held = Value.ofStr("a run of text long enough to live outside the value");
+    std.mem.asBytes(&held)[@offsetOf(Value, "encoding")] = 3;
+    try std.testing.expect(!held.hasValidStringRepresentation());
+    var short = Value.ofStr("inline");
+    std.mem.asBytes(&short)[@offsetOf(Value, "encoding")] = 0xcc;
+    try std.testing.expect(!short.hasValidStringRepresentation());
 }
 
 test "null composite runs are valid empty ownership sentinels" {

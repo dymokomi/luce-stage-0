@@ -264,7 +264,7 @@ const trace = @import("../runtime/trace.zig");
 /// When this number moves, move the sentence below with it — the two
 /// must change together so concurrent ABI changes meet as a merge
 /// conflict here instead of silently sharing one version number.
-/// This comment last moved for version 25.
+/// This comment last moved for version 32.
 pub const version: u32 = 32;
 // 26 — the clipboard (docs/STD.md): one slot, `term_copy`, at the end
 // of the table.  A terminal host emits OSC 52 so the surrounding
@@ -293,6 +293,20 @@ pub const version: u32 = 32;
 // follow links — a symlink is removed as a link, never as what it
 // points at, because a recursive delete that followed links would
 // walk out of the tree it was asked to remove.
+// 31 — a `LuceValue` says what its text costs to index: one byte,
+// `encoding`, at offset 2, and the inline run starts at 3 and holds
+// twenty-one instead of twenty-two (docs/STRINGS.md).  A `str` whose
+// scalars are all one byte is indexed rather than walked, and the
+// answer has to travel with the value because generated code and the
+// runtime are the two halves that share it.  Nothing was appended and
+// no slot moved; the shape of the value both sides read did, so an
+// artifact built against the old shape has to be rebuilt.
+// 32 — a scratch directory you can prove is yours: one slot,
+// `temporary_directory`, at the end of the table.  `dir_create` says
+// "there is a directory here" and cannot say "I made it", so nothing
+// built on it can own a scratch area safely; this one creates and
+// claims in the same act, names itself, and is owner-only on POSIX
+// (docs/FILESYSTEM.md).
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -1307,17 +1321,3 @@ test "the host's trap callback is the runtime's reporter, not a copy of it" {
     try std.testing.expect(RaisedFn == runtime.trace.ErrorReportFn);
     try std.testing.expect(TraceFrame == runtime.trace.Frame);
 }
-// 31 — a `LuceValue` says what its text costs to index: one byte,
-// `encoding`, at offset 2, and the inline run starts at 3 and holds
-// twenty-one instead of twenty-two (docs/STRINGS.md).  A `str` whose
-// scalars are all one byte is indexed rather than walked, and the
-// answer has to travel with the value because generated code and the
-// runtime are the two halves that share it.  Nothing was appended and
-// no slot moved; the shape of the value both sides read did, so an
-// artifact built against the old shape has to be rebuilt.
-// 32 — a scratch directory you can prove is yours: one slot,
-// `temporary_directory`, at the end of the table.  `dir_create` says
-// "there is a directory here" and cannot say "I made it", so nothing
-// built on it can own a scratch area safely; this one creates and
-// claims in the same act, names itself, and is owner-only on POSIX
-// (docs/FILESYSTEM.md).

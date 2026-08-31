@@ -38,37 +38,87 @@ pub fn main(init: std.process.Init.Minimal) void {
     const args = init.args.toSlice(argument_allocator.allocator()) catch
         @panic("unable to read test-runner arguments");
     var label: []const u8 = "tests";
+    var range: ?[2]usize = null;
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--seed=")) {
             testing.random_seed = std.fmt.parseUnsigned(u32, arg["--seed=".len..], 0) catch
                 @panic("unable to parse --seed");
         } else if (std.mem.startsWith(u8, arg, "--suite=")) {
             label = arg["--suite=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--range=")) {
+            const spoken = arg["--range=".len..];
+            const comma = std.mem.indexOfScalar(u8, spoken, ',') orelse
+                @panic("unable to parse --range");
+            range = .{
+                std.fmt.parseUnsigned(usize, spoken[0..comma], 10) catch
+                    @panic("unable to parse --range"),
+                std.fmt.parseUnsigned(usize, spoken[comma + 1 ..], 10) catch
+                    @panic("unable to parse --range"),
+            };
         } else {
             std.debug.print("unrecognized test-runner argument: {s}\n", .{arg});
             std.process.exit(1);
         }
     }
 
-    const tests = builtin.test_functions;
+    const every_test = builtin.test_functions;
+
+    // **A long lane runs as several processes, and this is why.**  Each
+    // compiled specification `dlopen`s an artifact, every artifact
+    // carries thread-local storage (Zig's own runtime brings some into
+    // `libluce_rt`), and macOS charges each such image a loader key
+    // that `dlclose` never returns.  A process is good for roughly 500
+    // of them; the release gate is past that, and the day it crossed
+    // the line the symptom was an abort inside whichever innocent spec
+    // ran 476th.  So a run over more tests than one process can host
+    // becomes a parent that spawns itself over consecutive slices — the
+    // same tests, the same order, the same seed — and each child's exit
+    // returns every key and page it held.  A crash takes one shard and
+    // names its own tests instead of poisoning the whole run.
+    const shard_capacity = 256;
     const specification = std.mem.eql(u8, label, "specifications");
-    var suite_totals = [_]usize{0} ** @typeInfo(suites.Suite).@"enum".fields.len;
-    if (specification) {
+    // Classification is a property of the whole roster, so the parent
+    // holds every name to the one-owner rule before any child runs; a
+    // child sees only its slice, where an absent suite is expected.
+    if (specification and range == null) {
         var invalid = false;
-        for (tests) |test_fn| {
+        var whole_totals = [_]usize{0} ** @typeInfo(suites.Suite).@"enum".fields.len;
+        for (every_test) |test_fn| {
             if (suites.matchCount(test_fn.name) != 1) {
                 std.debug.print("[test:{s}] unclassified or overlapping: {s}\n", .{ label, test_fn.name });
                 invalid = true;
                 continue;
             }
-            suite_totals[@intFromEnum(suites.classify(test_fn.name).?)] += 1;
+            whole_totals[@intFromEnum(suites.classify(test_fn.name).?)] += 1;
         }
         for (suites.definitions) |suite| {
-            if (suite_totals[@intFromEnum(suite.suite)] != 0) continue;
+            if (whole_totals[@intFromEnum(suite.suite)] != 0) continue;
             std.debug.print("[test:{s}] empty suite: {s}\n", .{ label, suite.label });
             invalid = true;
         }
         if (invalid) std.process.exit(1);
+    }
+    if (range == null and every_test.len > shard_capacity) {
+        runShards(args, label, every_test.len, shard_capacity);
+        unreachable;
+    }
+    const bounds = range orelse [2]usize{ 0, every_test.len };
+    if (bounds[1] > every_test.len or bounds[0] > bounds[1]) {
+        std.debug.print("[test:{s}] --range {d},{d} is outside the {d} tests\n", .{
+            label, bounds[0], bounds[1], every_test.len,
+        });
+        std.process.exit(1);
+    }
+    const tests = every_test[bounds[0]..bounds[1]];
+    var suite_totals = [_]usize{0} ** @typeInfo(suites.Suite).@"enum".fields.len;
+    if (specification) {
+        // Tally this process's own slice for the queued/complete
+        // accounting; the whole-roster validation already ran above
+        // (or in the parent, for a shard).
+        for (tests) |test_fn| {
+            const suite = suites.classify(test_fn.name) orelse continue;
+            suite_totals[@intFromEnum(suite)] += 1;
+        }
     }
 
     std.debug.print("[test:{s}] starting {d} tests (seed 0x{x})\n", .{
@@ -78,10 +128,9 @@ pub fn main(init: std.process.Init.Minimal) void {
     });
     if (specification) {
         for (suites.definitions) |suite| {
-            std.debug.print("[test:{s}] queued {d} tests\n", .{
-                suite.label,
-                suite_totals[@intFromEnum(suite.suite)],
-            });
+            const queued = suite_totals[@intFromEnum(suite.suite)];
+            if (queued == 0) continue;
+            std.debug.print("[test:{s}] queued {d} tests\n", .{ suite.label, queued });
         }
     }
 
@@ -177,6 +226,55 @@ pub fn main(init: std.process.Init.Minimal) void {
         .{ label, passed, skipped, failed, leaked },
     );
     if (failed != 0 or log_error_count != 0 or leaked != 0) std.process.exit(1);
+}
+
+/// Parent mode: the same binary, the same arguments, over consecutive
+/// slices.  Children inherit this terminal, so progress and failures
+/// stream exactly as an unsharded run's would; the parent owns only
+/// the shard banners and the verdict.
+fn runShards(args: []const []const u8, label: []const u8, total: usize, capacity: usize) noreturn {
+    // Spawning wants real memory (argv duplication, an arena inside the
+    // io layer); the fixed argument buffer is for arguments alone, and
+    // the global single-threaded io carries no allocator at all.
+    const gpa = std.heap.page_allocator;
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const spawn_io = threaded.io();
+    const shards = (total + capacity - 1) / capacity;
+    std.debug.print("[test:{s}] {d} tests across {d} processes (loader key ceiling)\n", .{
+        label, total, shards,
+    });
+    var start: usize = 0;
+    var shard: usize = 0;
+    var failed = false;
+    while (start < total) : (shard += 1) {
+        const end = @min(start + capacity, total);
+        var range_word_buffer: [64]u8 = undefined;
+        const range_word = std.fmt.bufPrint(&range_word_buffer, "--range={d},{d}", .{ start, end }) catch
+            @panic("unable to render --range");
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(gpa);
+        argv.appendSlice(gpa, args) catch @panic("out of argument memory");
+        argv.append(gpa, range_word) catch @panic("out of argument memory");
+        std.debug.print("[test:{s}] shard {d}/{d}: tests {d}..{d}\n", .{
+            label, shard + 1, shards, start, end,
+        });
+        var child = std.process.spawn(spawn_io, .{
+            .argv = argv.items,
+            .stdin = .ignore,
+            .stdout = .inherit,
+            .stderr = .inherit,
+        }) catch @panic("unable to spawn a test shard");
+        const term = child.wait(spawn_io) catch @panic("unable to wait for a test shard");
+        if (term != .exited or term.exited != 0) {
+            failed = true;
+            std.debug.print("[test:{s}] shard {d}/{d} failed\n", .{ label, shard + 1, shards });
+        }
+        start = end;
+    }
+    if (failed) std.process.exit(1);
+    std.debug.print("[test:{s}] all {d} shards passed\n", .{ label, shards });
+    std.process.exit(0);
 }
 
 fn heartbeatMain(state: *Heartbeat) void {

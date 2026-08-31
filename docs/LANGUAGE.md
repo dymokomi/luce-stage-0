@@ -266,7 +266,7 @@ are not caught by `catch`. [FAILURE.md](FAILURE.md) owns the full distinction.
 
 ## Constants, modules, visibility, and packages
 
-File scope permits declarations and `const`, not mutable global `var`.
+File scope permits declarations and `let` constants, not mutable global `var`.
 Constants are folded once; supported flat list/map/rank-one-array constants
 become immutable per-runtime program roots. [CONSTANTS.md](CONSTANTS.md)
 specifies what can fold and what may escape.

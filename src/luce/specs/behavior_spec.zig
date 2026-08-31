@@ -4836,6 +4836,53 @@ test "trap: missing map key" {
     , .key_missing);
 }
 
+test "index: any integer width names a position, reading and writing" {
+    // The 0.26 headline that shipped without a spec of its own: a
+    // narrow or unsigned index converts to the position it names, on
+    // list, array, str and bytes, reads and writes alike — the 207
+    // `i64(…)` wrappers the self-host tree used to carry, gone.
+    try agree.prints(
+        \\func main():
+        \\    var xs = [10, 20, 30, 40]
+        \\    let narrow = u8(2)
+        \\    print(str(xs[narrow]))
+        \\    xs[narrow] = 33
+        \\    xs[i16(0)] += 5
+        \\    print(str(xs[u32(0)]) + " " + str(xs[2]))
+        \\    var grid = array[i64](2, 2)
+        \\    grid[u8(1), u16(1)] = 9
+        \\    print(str(grid[1, 1]))
+        \\    let text = "abcdef"
+        \\    print(str(text[u8(1)]) + str(text[i8(4)]))
+        \\    print(text[u8(1):i16(4)])
+        \\    let raw = bytes("xyz")
+        \\    print(str(raw[u16(2)]))
+        \\
+    ,
+        \\30
+        \\15 33
+        \\9
+        \\be
+        \\bcd
+        \\122
+        \\
+    );
+}
+
+test "trap: a u64 index past i64 is a conversion out of range, on both engines" {
+    // The unsigned width that can name a position no i64 can: it takes
+    // the same checked conversion an explicit `i64(x)` would, so an
+    // out-of-range index is `conversion_range` at the index rather
+    // than a silently negative position.
+    try agreeTrap(
+        \\func main():
+        \\    let xs = [1, 2, 3]
+        \\    let wild = u64(9223372036854775809)
+        \\    let bad = xs[wild]
+        \\
+    , .conversion_range);
+}
+
 test "trap: popping an empty list" {
     try agreeTrap(
         \\func main():
@@ -6437,13 +6484,46 @@ test "never: a user diverging call is the assert-unwrap in an else" {
     );
 }
 
+test "never: a diverging static and a diverging module function serve as fallbacks" {
+    // The two namespaced shapes of the same feature: `Panic.bail()`
+    // through a struct's static, and `helper.bail()` through an import
+    // is proven in modules_spec where a second module exists.  The peek
+    // that recognizes them resolves through the collected tables
+    // without lowering anything (`expressions.isLeavingCall`), so the
+    // fallback lowers as a leaving statement on both engines.
+    try agree.prints(
+        \\struct Panic:
+        \\    let code: i64
+        \\    static func bail() -> never:
+        \\        trap("gone")
+        \\
+        \\func find(present: bool) -> i64?:
+        \\    if present: return 7
+        \\    return none
+        \\
+        \\func risky(ok: bool) -> i64!:
+        \\    if not ok:
+        \\        error("refused")
+        \\    return 5
+        \\
+        \\func main():
+        \\    let a = find(true) else Panic.bail()
+        \\    let b = risky(true) catch Panic.bail()
+        \\    print(str(a + b))
+        \\
+    ,
+        \\12
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
-// let / var fields (docs/VISIBILITY.md §10.1)
+// let / var fields (docs/CLASSES.md)
 // ---------------------------------------------------------------------------
 //
 // A field written `let` is set once — at construction, or in `init` — and
 // never reassigned; a `var` field may be reassigned through a mutable path.
-// A bare field keeps the transitional mutable behavior for one release.
+// One of the two words is required: the bare spelling was retired in 0.26.
 
 test "discard: the call runs, its answer is dropped, and its objects are freed" {
     // The point of the word is that the *effect* is still wanted.  The

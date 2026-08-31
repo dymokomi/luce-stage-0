@@ -389,6 +389,20 @@ pub fn forgetName(self: *FunctionBuilder, name: []const u8) Error!void {
 /// Report a call whose callee names no declaration, offering the
 /// closest function or struct the reader could have meant.
 pub fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
+    // `discard` is reserved and real — it is a statement, and the
+    // statement walker resolves it before this table is asked
+    // (`statements.lowerExpressionStatement`).  Reaching here means it
+    // was written where a value belongs, and "unknown function" would
+    // be untrue of a word the language owns.
+    if (std.mem.eql(u8, written, "discard")) {
+        try self.fail(
+            "luce.sema.call",
+            span,
+            "discard is a statement, not an expression: it drops a result and answers nothing, so there is nothing here to receive",
+            .{},
+        );
+        return;
+    }
     if (phantomNamespace(self, written)) return;
     if (try failCapturedName(self, written, span)) return;
     var suggestion = helpers.Suggestion.init(written);

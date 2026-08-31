@@ -56,7 +56,7 @@ zig build test     # the complete owner-grouped release gate; long targets
                    # print bounded progress and a 15-second heartbeat
 ```
 
-`VERSION` is the shared public release label, currently `0.28`. During the
+`VERSION` is the shared public release label, currently `0.29`. During the
 0.x series it intentionally has two numeric components: increment the second
 component for each release, and reserve `1.0` for the point where the public
 interface is considered stable. `luce --version` and `loom --version` report
@@ -76,7 +76,7 @@ Linux 2.28+ on ARM64 and x86-64. It also installs the Luce VS Code and Cursor
 syntax extension in one step:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.23/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.29/install.sh | bash
 ```
 
 The script selects the platform archive, verifies its checksum and contents,

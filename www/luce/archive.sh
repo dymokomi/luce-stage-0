@@ -10,7 +10,9 @@
 # here, because by the time a file reaches this script it is already written:
 # the linker's LC_UUID, and the ad-hoc code signature's identifier, which is
 # taken from the name the link wrote through.  `src/apps/native.zig` settles
-# both at link time (`-no_uuid`, `-final_output`).
+# both for an executable (`-no_uuid`, `-final_output`); a dylib must keep
+# its UUID — dlopen refuses one without it — so a bundled `.lc` would vary
+# in that one load command, and none is bundled today.
 set -eu
 
 if [ "$#" -ne 3 ]; then

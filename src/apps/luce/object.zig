@@ -463,25 +463,39 @@ test "two builds of one program are the same bytes, whatever they were written t
     defer program.deinit();
 
     // Same name, two directories: one build cannot see the other, and
-    // each writes through a scratch name of its own.
-    var written: [2][]u8 = undefined;
-    for (&written, [_][]const u8{ "first", "second" }) |*bytes, where| {
-        const home = try std.fs.path.join(gpa, &.{ directory, where });
-        defer gpa.free(home);
-        try std.Io.Dir.cwd().createDirPath(testing.io, home);
-        const binary = try std.fs.path.join(gpa, &.{ home, "program" });
-        defer gpa.free(binary);
-        try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
-            .kind = .executable,
-            .output = binary,
-        }));
-        bytes.* = try std.Io.Dir.cwd().readFileAlloc(testing.io, binary, gpa, .limited(64 << 20));
-    }
-    defer for (written) |bytes| gpa.free(bytes);
+    // each writes through a scratch name of its own.  Both linked
+    // shapes are checked, but to different standards, because the
+    // platform allows different ones: an executable links `-no_uuid`
+    // and is byte-for-byte; a dylib *must* keep its LC_UUID — dlopen on
+    // this machine refuses one without it, which is how extending
+    // `-no_uuid` to `.lc` files was caught — so a `.lc` varies in that
+    // one load command and is held to the part of the promise that
+    // matters: no scratch name, and no process identity, inside the
+    // signed bytes.
+    for ([_]native.Kind{ .executable, .library }) |kind| {
+        var written: [2][]u8 = undefined;
+        for (&written, [_][]const u8{ "first", "second" }) |*bytes, where| {
+            const home = try std.fs.path.join(gpa, &.{ directory, where, @tagName(kind) });
+            defer gpa.free(home);
+            try std.Io.Dir.cwd().createDirPath(testing.io, home);
+            const binary = try std.fs.path.join(gpa, &.{ home, "program" });
+            defer gpa.free(binary);
+            try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
+                .kind = kind,
+                .output = binary,
+            }));
+            bytes.* = try std.Io.Dir.cwd().readFileAlloc(testing.io, binary, gpa, .limited(64 << 20));
+        }
+        defer for (written) |bytes| gpa.free(bytes);
 
-    try testing.expectEqualSlices(u8, written[0], written[1]);
-    // And nothing in the artifact names the file it was written through.
-    try testing.expect(std.mem.indexOf(u8, written[0], ".pending") == null);
+        if (kind == .executable) {
+            try testing.expectEqualSlices(u8, written[0], written[1]);
+        }
+        // Nothing in either artifact names the file it was written
+        // through.
+        try testing.expect(std.mem.indexOf(u8, written[0], ".pending") == null);
+        try testing.expect(std.mem.indexOf(u8, written[1], ".pending") == null);
+    }
 }
 
 test "a release executable keeps the function names and drops the lines" {

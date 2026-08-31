@@ -225,7 +225,11 @@ fn readPlan(arena: Allocator, err: *std.Io.Writer, spoken: []const u8) !?Plan {
             else
                 return sayNot(err, "a luce step's emit is not one of exe, library, object");
             step.output = textOf(fields.get("output")) orelse "";
-            step.release = if (fields.get("release")) |held| held == .bool and held.bool else false;
+            if (fields.get("release")) |held| {
+                if (held != .bool)
+                    return sayNot(err, "a luce step's release is not true or false");
+                step.release = held.bool;
+            }
             if (fields.get("links")) |carried| {
                 const inputs = arrayOf(carried) orelse
                     return sayNot(err, "a luce step's links are not an array");

@@ -898,7 +898,7 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
 /// key `m[k] = …` stores, so it must be the declared key type exactly;
 /// widening there would make `m[1]` and `m[u8(1)]` two spellings that
 /// could reach different entries.
-fn widenIndex(self: *FunctionBuilder, index: *Typed) Error!bool {
+pub fn widenIndex(self: *FunctionBuilder, index: *Typed) Error!bool {
     if (index.value_type.eql(.i64)) return true;
     if (!index.value_type.isInteger()) return false;
     index.* = try self.convertNumeric(index.*, .i64);

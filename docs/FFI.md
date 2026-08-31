@@ -240,13 +240,18 @@ must be declarable verbatim.
 
 ```text
 extern struct Rect:
-    x: i32
-    y: i32
-    w: i32
-    h: i32
+    var x: i32
+    var y: i32
+    var w: i32
+    var h: i32
 
 extern func SDL_GetRectUnion(a: Rect, b: Rect, out result: Rect) -> bool
 ```
+
+An extern struct's fields state mutability like any other struct's.
+`var` is the common case for a C-layout record — C fills it, the
+program reads and rewrites it — and `let` still means what it means, on
+the Luce side only: C, holding raw memory, promises nothing.
 
 - An `extern struct` is an **ordinary value struct** whose fields
   additionally have **C's layout**: declaration order, the target's

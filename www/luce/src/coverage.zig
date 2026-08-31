@@ -961,7 +961,7 @@ test "the public site keeps constant containers and map literals visible" {
 
     const lexical = try repository.read("www/luce/content/guide/reference/lexical.md");
     defer gpa.free(lexical);
-    try std.testing.expect(std.mem.indexOf(u8, lexical, "`const` declares a file-scope") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lexical, "`let` declares a binding at\nfile scope") != null);
     try std.testing.expect(std.mem.indexOf(u8, lexical, "map literals") != null);
 
     const expressions = try repository.read("www/luce/content/guide/reference/expressions.md");
@@ -1094,8 +1094,14 @@ test "the public release label is consistent" {
     defer gpa.free(release_text);
     const current_label = try std.fmt.allocPrint(gpa, "Current release label: **{s}**", .{version});
     defer gpa.free(current_label);
+    // The quarantine advice names the unpacked directory, which carries
+    // the version — prose the label sweep would otherwise walk past.
+    const quarantine_line = try std.fmt.allocPrint(gpa, "com.apple.quarantine luce-{s}", .{version});
+    defer gpa.free(quarantine_line);
     const references = [_]struct { path: []const u8, needle: []const u8 }{
         .{ .path = "README.md", .needle = version },
+        .{ .path = "README.md", .needle = installer_url },
+        .{ .path = "www/luce/content/tools/command-line.md", .needle = quarantine_line },
         .{ .path = "www/luce/content/index.md", .needle = installer_url },
         .{ .path = "www/luce/content/tour/index.md", .needle = installer_url },
         .{ .path = "www/luce/content/tools/command-line.md", .needle = installer_url },
