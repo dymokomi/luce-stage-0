@@ -1338,7 +1338,77 @@ test "a built program holds the advertised call depth, and the trap names the po
     defer bottomless_ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), bottomless_ran.status);
     try testing.expect(bottomless_ran.saysErr("call depth exceeded (this host allows "));
-    try testing.expect(bottomless_ran.saysErr(" frames) [call_depth_exceeded]"));
+    try testing.expect(bottomless_ran.saysErr(" MiB of stack) [call_depth_exceeded]"));
+
+    // **The other way to run out.**  Thin frames exhaust the counter;
+    // frames fattened by a destructured union payload beside a struct
+    // construction — the self-host team's own reproduction shape —
+    // exhaust the *stack*, tens of thousands of frames before the
+    // counter would speak.  Before the stack floor this was a bare
+    // SIGBUS with no code, no message, and no trace; now it is the same
+    // policy trap the counter raises, with the whole call stack behind
+    // it, and the run below proves the guard fires inside the
+    // reservation rather than after the machine has already faulted.
+    var fat_program: std.ArrayList(u8) = .empty;
+    defer fat_program.deinit(gpa);
+    try fat_program.appendSlice(gpa,
+        \\struct Big:
+        \\    let p: i64
+        \\    let q: i64
+        \\    let r: i64
+        \\    let s: i64
+        \\    let t: i64
+        \\    let u: i64
+        \\    let v: i64
+        \\    let w: i64
+        \\
+        \\union Shape:
+        \\
+    );
+    for (0..30) |member| {
+        const declared = try std.fmt.allocPrint(gpa, "    C{d}(a: i64, b: i64)\n", .{member});
+        defer gpa.free(declared);
+        try fat_program.appendSlice(gpa, declared);
+    }
+    try fat_program.appendSlice(gpa,
+        \\
+        \\func classify(s: Shape, depth: i64) -> i64:
+        \\    if depth >= 900000: return 0
+        \\    match s:
+        \\
+    );
+    for (0..30) |member| {
+        const arm = try std.fmt.allocPrint(
+            gpa,
+            "        C{d}(a, b):\n" ++
+                "            let v{d} = Big(p = a, q = b, r = {d}, s = a + b, t = a - b, u = a * 2, v = b * 2, w = {d} * 3)\n" ++
+                "            return v{d}.p + v{d}.w + classify(s, depth + 1)\n",
+            .{ member, member, member, member, member, member },
+        );
+        defer gpa.free(arm);
+        try fat_program.appendSlice(gpa, arm);
+    }
+    try fat_program.appendSlice(gpa,
+        \\
+        \\pub func main():
+        \\    print(str(classify(Shape.C0(a = 1, b = 2), 0)))
+        \\
+    );
+    try tree.write("fat.luc", fat_program.items);
+    const fat_source = try tree.at(gpa, "fat.luc");
+    defer gpa.free(fat_source);
+    var fat_build = try runLuce(gpa, &tree, &.{ "build", fat_source, "--release" }, null);
+    defer fat_build.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), fat_build.status);
+    const fat_binary = try tree.at(gpa, "fat");
+    defer gpa.free(fat_binary);
+    var fat_ran = try tree.spawn(gpa, &.{fat_binary}, .{});
+    defer fat_ran.deinit(gpa);
+    // A trap's exit, never a signal's: the whole point.
+    try testing.expectEqual(@as(u8, 1), fat_ran.status);
+    try testing.expect(fat_ran.saysErr("[call_depth_exceeded]"));
+    try testing.expect(fat_ran.saysErr("at classify"));
+    try testing.expect(fat_ran.saysErr("more frames"));
 
     // `luce test` runs its artifacts in-process, so the runner's own
     // stack carries the same promise.

@@ -420,6 +420,7 @@ const Module = struct {
         const host_at = 0;
         const rt_at = 1;
         const depth_at = 2;
+        const floor_at = 3;
     };
 
     fn deinit(self: *Module) void {
@@ -1917,9 +1918,9 @@ const Module = struct {
         }
     }
 
-    /// `i32 @luce.bound.N(ptr host, ptr rt, i64 depth, ptr receiver,
-    /// <written parameters>, ptr result)` — the shape every function
-    /// value is called through.
+    /// `i32 @luce.bound.N(ptr host, ptr rt, i64 depth, i64 floor,
+    /// ptr receiver, <written parameters>, ptr result)` — the shape
+    /// every function value is called through.
     ///
     /// For a plain function the receiver slot is one unused argument.
     /// For a bind it is the value's own environment, boxed, and this is
@@ -1936,7 +1937,7 @@ const Module = struct {
 
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
-        try parameters.appendSlice(self.gpa, &.{ .ptr, .ptr, .i64, .ptr });
+        try parameters.appendSlice(self.gpa, &.{ .ptr, .ptr, .i64, .i64, .ptr });
         for (function.locals[bound..function.parameter_count]) |parameter| {
             try parameters.append(self.gpa, try self.valueType(parameter.local_type));
         }
@@ -1966,30 +1967,31 @@ const Module = struct {
             .host = wip.arg(0),
             .runtime = wip.arg(1),
             .depth = wip.arg(2),
+            .floor = wip.arg(3),
             .entry_block = entry,
         };
         defer arm.deinit();
 
         var passed: std.ArrayList(Builder.Value) = .empty;
         defer passed.deinit(self.gpa);
-        try passed.appendSlice(self.gpa, &.{ wip.arg(0), wip.arg(1), wip.arg(2) });
+        try passed.appendSlice(self.gpa, &.{ wip.arg(0), wip.arg(1), wip.arg(2), wip.arg(3) });
         if (bound == 1) {
             try passed.append(self.gpa, if (function.locals[0].inout)
-                wip.arg(3)
+                wip.arg(4)
             else
                 try arm.unboxed(
                     function.locals[0].local_type,
-                    wip.arg(3),
+                    wip.arg(4),
                     "bound.self",
                 ));
         }
         // The written parameters stand after the receiver slot, whether
         // this adapter uses that slot or not.
         for (bound..function.parameter_count) |at| {
-            try passed.append(self.gpa, wip.arg(@intCast(4 + at - bound)));
+            try passed.append(self.gpa, wip.arg(@intCast(5 + at - bound)));
         }
         if (function.return_type != .none) {
-            try passed.append(self.gpa, wip.arg(@intCast(4 + function.parameter_count - bound)));
+            try passed.append(self.gpa, wip.arg(@intCast(5 + function.parameter_count - bound)));
         }
 
         const target = self.functions[function_index];
@@ -2041,10 +2043,10 @@ const Module = struct {
         self.cfunc_context = .{ .variable = variable };
     }
 
-    /// `{ host, rt, depth }` — the shape `CfuncContext` names the
-    /// fields of.
+    /// `{ host, rt, depth, floor }` — the shape `CfuncContext` names
+    /// the fields of.
     fn cfuncContextType(self: *Module) Error!Builder.Type {
-        return self.builder.structType(.normal, &.{ .ptr, .ptr, .i64 });
+        return self.builder.structType(.normal, &.{ .ptr, .ptr, .i64, .i64 });
     }
 
     /// The address of one field of this thread's context.
@@ -2072,12 +2074,14 @@ const Module = struct {
         host: Builder.Value,
         rt: Builder.Value,
         depth: Builder.Value,
+        floor: Builder.Value,
     ) Error!void {
         if (self.cfunc_context == null) return;
         const word = Builder.Alignment.fromByteUnits(8);
         _ = try wip.store(.normal, host, try self.cfuncContextField(wip, CfuncContext.host_at, "cfunc.host"), word);
         _ = try wip.store(.normal, rt, try self.cfuncContextField(wip, CfuncContext.rt_at, "cfunc.rt"), word);
         _ = try wip.store(.normal, depth, try self.cfuncContextField(wip, CfuncContext.depth_at, "cfunc.depth"), word);
+        _ = try wip.store(.normal, floor, try self.cfuncContextField(wip, CfuncContext.floor_at, "cfunc.floor"), word);
     }
 
     fn libcAbort(self: *Module) Error!Builder.Function.Index {
@@ -2230,11 +2234,18 @@ const Module = struct {
             word,
             "depth",
         );
+        const floor = try wip.load(
+            .normal,
+            .i64,
+            try self.cfuncContextField(&wip, CfuncContext.floor_at, "cfunc.floor"),
+            word,
+            "floor",
+        );
         const zero = try builder.intValue(.i64, 0);
 
         var arguments: std.ArrayList(Builder.Value) = .empty;
         defer arguments.deinit(self.gpa);
-        try arguments.appendSlice(self.gpa, &.{ host, rt, depth });
+        try arguments.appendSlice(self.gpa, &.{ host, rt, depth, floor });
         for (row.parameters, 0..) |parameter, at| {
             const raw = wip.arg(@intCast(at));
             switch (parameter.value_type.storage()) {
@@ -2390,11 +2401,33 @@ const Module = struct {
         const out = wip.arg(5);
         const depth = wip.arg(6);
 
+        // The worker's byte budget is born here exactly as main's is in
+        // `luce_main`: this entry frame sits at the top of a thread the
+        // host spawned with the same reservation, so its address minus
+        // the reservation, plus the margin, is the floor every frame on
+        // this thread must stay above.
+        const floor = try wip.bin(
+            .@"sub nuw",
+            try wip.cast(.ptrtoint, try wip.callIntrinsic(
+                .normal,
+                .none,
+                .frameaddress,
+                &.{.ptr},
+                &.{try self.builder.intValue(.i32, 0)},
+                "worker.frame",
+            ), .i64, "worker.word"),
+            try self.builder.intValue(
+                .i64,
+                @as(i64, @intCast(abi.stack_reserve_bytes - abi.stack_margin_bytes)),
+            ),
+            "worker.floor",
+        );
+
         // Publish this worker thread's runtime context for callbacks:
         // a callback C invokes on a worker's thread runs against that
         // worker's own runtime, never main's (docs/FFI.md,
         // docs/THREADS.md's share-nothing rule).
-        try self.publishCfuncContext(&wip, host, started, depth);
+        try self.publishCfuncContext(&wip, host, started, depth, floor);
 
         // A worker owns a runtime of its own (THREADS.md D1), so it
         // owns a program-root table of its own too.  The generated
@@ -2449,7 +2482,7 @@ const Module = struct {
 
         for (self.spawned, blocks.items) |index, block| {
             wip.cursor = .{ .block = block };
-            try self.lowerWorkerCase(&wip, entry, index, host, started, arguments, out, depth);
+            try self.lowerWorkerCase(&wip, entry, index, host, started, arguments, out, depth, floor);
         }
         try wip.finish();
     }
@@ -2472,6 +2505,7 @@ const Module = struct {
         arguments: Builder.Value,
         out: Builder.Value,
         depth: Builder.Value,
+        floor: Builder.Value,
     ) Error!void {
         const function = &self.program.functions[index];
         var arm: Body = .{
@@ -2482,6 +2516,7 @@ const Module = struct {
             .host = host,
             .runtime = started,
             .depth = depth,
+            .floor = floor,
             .entry_block = entry,
         };
         defer arm.deinit();
@@ -2491,6 +2526,7 @@ const Module = struct {
         try passed.append(self.gpa, host);
         try passed.append(self.gpa, started);
         try passed.append(self.gpa, depth);
+        try passed.append(self.gpa, floor);
         for (function.locals[0..function.parameter_count], 0..) |parameter, at| {
             const address = try wip.gep(
                 .inbounds,
@@ -2568,7 +2604,7 @@ const Module = struct {
 
         const signature_type = try self.builder.fnType(
             .i32,
-            &.{ .ptr, .ptr, .i64, .ptr, .i64 },
+            &.{ .ptr, .ptr, .i64, .ptr, .i64, .i64 },
             .normal,
         );
         const declared = try self.builder.addFunction(
@@ -2591,6 +2627,7 @@ const Module = struct {
         const which = wip.arg(2);
         const receiver = wip.arg(3);
         const depth = wip.arg(4);
+        const floor = wip.arg(5);
 
         const refused = try wip.block(1, "no.such.finalizer");
         var blocks: std.ArrayList(BlockIndex) = .empty;
@@ -2624,6 +2661,7 @@ const Module = struct {
                 .host = host,
                 .runtime = started,
                 .depth = depth,
+                .floor = floor,
                 .entry_block = entry,
             };
             defer arm.deinit();
@@ -2639,7 +2677,7 @@ const Module = struct {
                 .none,
                 target.typeOf(self.builder),
                 target.toValue(self.builder),
-                &.{ host, started, depth, self_value },
+                &.{ host, started, depth, floor, self_value },
                 "finalizer.outcome",
             ));
         }
@@ -2734,6 +2772,8 @@ const Module = struct {
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .i64);
+        try parameters.append(self.gpa, .i64); // %floor, beside %depth
+
         // The receiver slot, present whether the value carries one or
         // not: `Module.entries` says why (docs/BINDING.md D12).
         try parameters.append(self.gpa, .ptr);
@@ -2887,6 +2927,10 @@ const Module = struct {
         defer parameters.deinit(self.gpa);
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .ptr);
+        try parameters.append(self.gpa, .i64);
+        // `%floor` rides beside `%depth`: the same budget, measured in
+        // bytes — the address below which this thread's stack must not
+        // grow (see the file header).
         try parameters.append(self.gpa, .i64);
         for (function.locals[0..function.parameter_count]) |parameter| {
             try parameters.append(
@@ -3090,6 +3134,31 @@ const Module = struct {
 
         wip.cursor = .{ .block = opening };
         const limit = try wip.load(.normal, .i64, depth_slot, word, "limit");
+        // **Where the byte budget is born.**  This frame sits within a
+        // few host frames of the top of a stack the platform reserved
+        // `stack_reserve_bytes` for — the linker on macOS, the start
+        // shim's own thread on Linux, the spawn on a worker — so the
+        // floor is this address minus the reservation, held back by the
+        // margin that covers the host frames above and one frame's own
+        // extent below a check (`abi.stack_margin_bytes`).  No platform
+        // is asked, because no platform answers honestly: macOS reports
+        // the 8 MiB default for a main thread the linker gave 512 MiB.
+        const floor = try wip.bin(
+            .@"sub nuw",
+            try wip.cast(.ptrtoint, try wip.callIntrinsic(
+                .normal,
+                .none,
+                .frameaddress,
+                &.{.ptr},
+                &.{try self.builder.intValue(.i32, 0)},
+                "entry.frame",
+            ), .i64, "entry.word"),
+            try self.builder.intValue(
+                .i64,
+                @as(i64, @intCast(abi.stack_reserve_bytes - abi.stack_margin_bytes)),
+            ),
+            "stack.floor",
+        );
         const described = try self.describeFunctions();
         const started = try self.callService(
             &wip,
@@ -3124,7 +3193,7 @@ const Module = struct {
 
         // Publish the main thread's runtime context for callbacks,
         // before any Luce code can hand C a function (docs/FFI.md).
-        try self.publishCfuncContext(&wip, host, started, limit);
+        try self.publishCfuncContext(&wip, host, started, limit, floor);
 
         // Constant containers are the program root of this runtime and
         // exist before the first instruction of `main`.  Keep the old
@@ -3249,6 +3318,7 @@ const Module = struct {
                 host,
                 entry_point.toValue(self.builder),
                 limit,
+                floor,
             }, "");
         }
 
@@ -3286,6 +3356,7 @@ const Module = struct {
         try arguments.append(self.gpa, host);
         try arguments.append(self.gpa, started);
         try arguments.append(self.gpa, limit);
+        try arguments.append(self.gpa, floor);
         // `args` — the command line, built by `libluce_rt` out of the
         // two vtable slots that already carry it, so nothing is added
         // to the published ABI and `luce_main`'s signature does not
@@ -3606,6 +3677,7 @@ const Module = struct {
             .host = wip.arg(0),
             .runtime = wip.arg(1),
             .depth = wip.arg(2),
+            .floor = wip.arg(3),
         };
         defer body.deinit();
         try body.lower();
@@ -3680,6 +3752,9 @@ const Body = struct {
     /// entry block the first time this function calls anything.
     /// `.none` until then — a leaf function never subtracts.
     callee_depth: Builder.Value = .none,
+    /// The stack floor this thread's frames must stay above — `%floor`,
+    /// arg 3, constant for the thread and handed on unchanged.
+    floor: Builder.Value = .none,
     /// The IR instruction being lowered.  Read only when something
     /// goes wrong: it is what a recorded trace frame points at, and it
     /// is how the interpreter's own traceback names a position too.
@@ -3760,7 +3835,7 @@ const Body = struct {
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
 
         if (function.return_type != .none) {
-            self.result_slot = self.wip.arg(function.parameter_count + 3);
+            self.result_slot = self.wip.arg(function.parameter_count + 4);
         }
 
         const predecessors = try self.countPredecessors();
@@ -3773,6 +3848,34 @@ const Body = struct {
 
         self.seek(self.entry_block);
         try self.emitFrame();
+        // **The byte half of the depth promise, checked where the frame
+        // is.**  The counter beside every call bounds how many frames;
+        // this bounds how big they were allowed to be: a function whose
+        // frame lands below the thread's floor traps the same
+        // `call_depth_exceeded` the counter raises, with a trace,
+        // instead of letting the next store hit the guard page as a
+        // bare SIGBUS.  Checked at entry — the callee's own frame is
+        // exactly the thing the caller's counter could not see — and
+        // the margin inside the floor covers the largest single frame,
+        // so a check that passes leaves room for the body above it
+        // (`abi.stack_margin_bytes`).
+        const frame_address = try self.wip.callIntrinsic(
+            .normal,
+            .none,
+            .frameaddress,
+            &.{.ptr},
+            &.{try self.module.builder.intValue(.i32, 0)},
+            "frame.here",
+        );
+        try self.check(
+            try self.wip.icmp(
+                .ult,
+                try self.wip.cast(.ptrtoint, frame_address, .i64, "frame.word"),
+                self.floor,
+                "below.floor",
+            ),
+            .call_depth_exceeded,
+        );
         _ = try self.wip.br(self.blocks[0]);
 
         self.hoists = try loops.plan(gpa, self.module.program, function);
@@ -3892,7 +3995,7 @@ const Body = struct {
         const function = self.function;
         for (function.locals, self.local_slots, 0..) |local, *slot, index| {
             if (local.inout) {
-                self.inout = self.wip.arg(@intCast(index + 3));
+                self.inout = self.wip.arg(@intCast(index + 4));
                 slot.* = self.inout;
                 continue;
             }
@@ -3912,7 +4015,7 @@ const Body = struct {
                 continue;
             }
             const stored = if (index < function.parameter_count)
-                self.wip.arg(@intCast(index + 3))
+                self.wip.arg(@intCast(index + 4))
             else if (local.owns_storage or local.boxed_storage)
                 // A slot that owns its storage starts empty, not at
                 // the shared zero: `structZero` is one constant run
@@ -8320,6 +8423,7 @@ const Body = struct {
         try arguments.append(gpa, self.host);
         try arguments.append(gpa, self.runtime);
         try arguments.append(gpa, callee_depth);
+        try arguments.append(gpa, self.floor);
         if (receiver != .none) try arguments.append(gpa, receiver);
         for (explicit_arguments) |argument| {
             try arguments.append(gpa, self.produced[argument].value);
@@ -8555,7 +8659,7 @@ const Body = struct {
         );
         var arguments: std.ArrayList(Builder.Value) = .empty;
         defer arguments.deinit(gpa);
-        try arguments.appendSlice(gpa, &.{ self.host, self.runtime, callee_depth, payload_slot });
+        try arguments.appendSlice(gpa, &.{ self.host, self.runtime, callee_depth, self.floor, payload_slot });
         for (explicit_arguments) |argument| {
             try arguments.append(gpa, self.produced[argument].value);
         }
@@ -8736,6 +8840,7 @@ const Body = struct {
         try arguments.append(gpa, self.host);
         try arguments.append(gpa, self.runtime);
         try arguments.append(gpa, callee_depth);
+        try arguments.append(gpa, self.floor);
         // The receiver slot of the value's own run — the environment
         // the adapter unboxes, or the `none` a plain value carries
         // there and its adapter never reads.

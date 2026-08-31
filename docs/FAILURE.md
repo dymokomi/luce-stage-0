@@ -237,7 +237,7 @@ The trap codes are a closed set:
 | `assertion_failed` | `assert(condition)` saw a false condition |
 | `explicit_trap` | `trap(message)` was called |
 | `missing_return` | a function ended without returning its value |
-| `call_depth_exceeded` | the call stack reached its depth budget |
+| `call_depth_exceeded` | the call stack reached its budget — a million frames, or the bytes of the reservation, whichever ran out first |
 | `str_bounds` | a string index or slice was out of bounds |
 | `str_boundary` | a string slice split a UTF-8 sequence |
 | `host_unavailable` | an effect was used with no host service behind it |

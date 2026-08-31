@@ -580,6 +580,14 @@ so it counts differently: `%depth` is how many Luce frames are still
 allowed *including this one*, a callee is handed one less, and a call
 that would take it to zero traps `call_depth_exceeded` at exactly the
 call where the oracle's frame stack would have refused to grow.
+Beside it travels `%floor` — the same budget measured in bytes, born
+where a thread enters Luce as its entry address minus the stack
+reservation plus a margin (`abi.stack_margin_bytes`) — and every
+function's entry compares its own frame address against it.  The
+counter bounds how many frames; the floor bounds how big they were
+allowed to be, so a recursion of large frames traps
+`call_depth_exceeded` with a trace instead of hitting the guard page
+as a bare SIGBUS the machine reports and the program cannot.
 
 That is a register subtract and a compare against a constant, and the
 limit is the same whether or not LLVM inlined the callee, because the

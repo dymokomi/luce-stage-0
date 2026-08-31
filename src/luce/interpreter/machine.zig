@@ -289,7 +289,11 @@ const Nursery = struct {
         function: i64,
         receiver: *const runtime.Value,
         depth: i64,
+        floor: i64,
     ) callconv(.c) i32 {
+        // The byte floor is the native stack's guard; the oracle runs
+        // its frames on an explicit stack the counter already bounds.
+        _ = floor;
         const self: *Nursery = @ptrCast(@alignCast(context orelse {
             _ = runtime_pointer.fail(.host_unavailable) catch {};
             return runtime.workers.raised_trap;

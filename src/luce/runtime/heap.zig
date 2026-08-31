@@ -730,12 +730,16 @@ pub const FinalizerRunFn = *const fn (
     function: i64,
     receiver: *const Value,
     depth: i64,
+    floor: i64,
 ) callconv(.c) i32;
 
 pub const Finalizers = struct {
     context: ?*anyopaque = null,
     run: ?FinalizerRunFn = null,
     depth: i64 = 0,
+    /// The stack floor the finalizer's frames must stay above — the
+    /// byte half of the same budget `depth` counts (docs/CODEGEN.md).
+    floor: i64 = 0,
 
     pub fn available(self: Finalizers) bool {
         return self.run != null and self.depth >= 0;
@@ -2299,6 +2303,7 @@ pub const Runtime = struct {
             @intCast(function),
             &receiver,
             self.finalizers.depth,
+            self.finalizers.floor,
         );
         if (outcome == 0) return;
         if (!self.stopped()) _ = self.fail(.host_unavailable) catch {};

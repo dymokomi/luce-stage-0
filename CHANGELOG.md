@@ -4,6 +4,36 @@ Luce is pre-1.0. The source language, module format, host ABI, package
 manifests, and command-line surface may change between 0.x releases; each
 release is a complete toolchain rather than a compatibility promise.
 
+## 0.30 — the budget holds in bytes as well as frames
+
+- **Runaway recursion traps whatever shape its frames are.** The depth
+  counter bounds how many frames; nothing bounded how big they were,
+  so a recursion of large frames — a `match` destructuring a union
+  payload beside a struct construction, the shape a compiler's walker
+  is made of — exhausted the stack tens of thousands of frames before
+  the counter would speak, and the machine reported it as a bare
+  SIGBUS: no code, no message, no trace. Generated code now carries a
+  stack floor beside the depth: born where a thread enters Luce (entry
+  address minus the reservation, plus a quarter-MiB margin), handed
+  down beside the frame count, and compared against each function's
+  own frame address at entry. Crossing it traps `call_depth_exceeded`
+  with the full call stack behind it — one policy, enforced in frames
+  and in bytes, and the trap message now names both halves.
+
+  No platform is asked how big the stack is, because no platform
+  answers honestly — macOS reports the 8 MiB default for a main thread
+  the linker gave 512 MiB. The floor derives from the one fact both
+  sides already share.
+
+  Thin-frame programs are untouched: the advertised million frames
+  still fit, the counter still fires first, and both engines still
+  trap on the same call. The cost is one compare per function entry
+  and one register per call.
+
+  This closes the request that has led the self-host team's list since
+  0.26. The first attempt was reverted for an FFI failure that the
+  0.29 review proved was a test-harness limit, not the guard.
+
 ## 0.29 — the review release
 
 Every 0.22-through-0.28 change was put in front of an independent

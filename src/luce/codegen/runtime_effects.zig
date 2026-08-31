@@ -638,7 +638,7 @@ pub fn describe(service: Service) Effect {
         },
         .luce_rt_finalizers_install => .{
             .memory = touches_run,
-            .parameters = &.{ .run, .unknown, .unknown, .plain },
+            .parameters = &.{ .run, .unknown, .unknown, .plain, .plain },
         },
         .luce_rt_spawn => .{
             .memory = touches_heap,

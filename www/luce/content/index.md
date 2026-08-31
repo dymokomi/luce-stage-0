@@ -9,7 +9,7 @@ released toolchain for macOS or Linux.
 Run this command in Terminal:
 
 ```sh
-curl -fsSL https://luce.luciaos.com/install/0.29/install.sh | bash
+curl -fsSL https://luce.luciaos.com/install/0.30/install.sh | bash
 ```
 
 The installer downloads a checked release into `~/.local/luce` and adds

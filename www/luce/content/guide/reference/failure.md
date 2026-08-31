@@ -29,7 +29,7 @@ handler.
 | `assertion_failed` | assertion failed | `assert(false)` runs. |
 | `explicit_trap` | explicit trap | `trap(message)` runs. |
 | `missing_return` | function ended without returning a value | A defensive MIR check reaches a function that ended without a value. Correct source is rejected earlier. |
-| `call_depth_exceeded` | call depth exceeded | The call-depth budget is exhausted. |
+| `call_depth_exceeded` | call depth exceeded | The call budget is exhausted — the frame count, or the stack bytes behind it; a recursion of large frames meets the byte half tens of thousands of frames before the count. Either way the trap carries the trace. |
 | `str_bounds` | string index out of bounds | A string index or slice endpoint is outside the string. |
 | `str_boundary` | string slice splits a UTF-8 sequence | A string slice splits a UTF-8 code point. |
 | `host_unavailable` | host service unavailable | A requested host service is not implemented. |

@@ -238,6 +238,14 @@ test "the runtime library is called, not reimplemented" {
     }
 }
 
+/// The one line of rendered IR that defines the artifact tag global,
+/// so an assertion about the tag reads the tag and nothing else.
+fn tagLine(rendered: []const u8) []const u8 {
+    const at = std.mem.indexOf(u8, rendered, "@" ++ artifact.symbol).?;
+    const end = std.mem.indexOfScalarPos(u8, rendered, at, '\n') orelse rendered.len;
+    return rendered[at..end];
+}
+
 test "a release artifact carries no origin table, and a debug one does" {
     // `--release` strips the origins and changes nothing else
     // (docs/MODES.md), and the artifact is where that has to be
@@ -263,14 +271,20 @@ test "a release artifact carries no origin table, and a debug one does" {
 
     // Debug carries a table per function and says so in the tag; the
     // last two `i32`s of `artifact.Artifact` are `debug` and `reserved`.
+    // The pair is read off the tag global's own line, because a bare
+    // "i32 1, i32 0" grep over the whole module matched whatever
+    // constant pair the code generator emitted next — the stack-floor
+    // arithmetic was the one that finally collided with it.
+    const debug_tag = tagLine(debug);
+    const release_tag = tagLine(release);
     try std.testing.expect(std.mem.indexOf(u8, debug, "@luce.origins.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, debug, "i32 1, i32 0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, debug_tag, "i32 1, i32 0") != null);
 
     // Release carries neither, and its function names survive — that
     // is the whole of the difference.
     try std.testing.expect(std.mem.indexOf(u8, release, "@luce.origins.") == null);
-    try std.testing.expect(std.mem.indexOf(u8, release, "i32 1, i32 0") == null);
-    try std.testing.expect(std.mem.indexOf(u8, release, "i32 0, i32 0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, release_tag, "i32 1, i32 0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, release_tag, "i32 0, i32 0") != null);
     // The trace table stands in both, and the function names it holds
     // are still there: a stripped trap says `ratio`, only without a
     // line beside it.

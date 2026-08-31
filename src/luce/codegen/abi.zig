@@ -456,6 +456,28 @@ pub const CallDepthFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 /// program reaches; it is a promise only together with
 /// `stack_reserve_bytes`: every stack that hosts Luce frames reserves
 /// that much, so the budget trips before the native guard page does.
+/// How much of the reservation the stack-pointer guard keeps in hand.
+///
+/// **The guard is the second half of the depth promise.**  The counter
+/// traps at `default_call_depth` frames, but a frame is as big as its
+/// function makes it, and a program whose frames average past
+/// `stack_reserve_bytes / default_call_depth` exhausts the stack while
+/// the counter still reads room — which the machine reports as a bare
+/// SIGBUS with no code, no message, and no trace.  So generated code
+/// also compares its own frame address against a floor computed where
+/// a thread enters Luce: entry address minus the reservation, plus
+/// this margin.  Crossing the floor traps `call_depth_exceeded`
+/// exactly as the counter does — one policy, enforced in frames and
+/// in bytes.
+///
+/// The margin covers what one step can consume past its check: the
+/// largest frame a function can have (a struct caps at 4,096 values —
+/// about 100 KiB boxed) plus the runtime's own leaf work, and the host
+/// frames already on the stack when Luce was entered.  Generous
+/// against all three at a quarter MiB, and invisible against the
+/// reservation: 0.05% of it.
+pub const stack_margin_bytes: usize = 256 << 10;
+
 pub const default_call_depth: i64 = 1_000_000;
 
 /// The native stack under `default_call_depth` frames.  512 MiB gives

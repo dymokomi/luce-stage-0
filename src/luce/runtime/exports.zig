@@ -705,8 +705,9 @@ pub export fn luce_rt_finalizers_install(
     context: ?*anyopaque,
     run: ?heap.FinalizerRunFn,
     depth: i64,
+    floor: i64,
 ) callconv(.c) void {
-    runtime.finalizers = .{ .context = context, .run = run, .depth = depth };
+    runtime.finalizers = .{ .context = context, .run = run, .depth = depth, .floor = floor };
 }
 
 /// `spawn f(args)` — the arguments arrive as a run of boxes and are

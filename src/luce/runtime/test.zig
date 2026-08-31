@@ -8310,13 +8310,8 @@ const ClassFinalizerProbe = struct {
     saw_finalizing: bool = false,
     resurrect: bool = false,
 
-    fn run(
-        context: ?*anyopaque,
-        runtime: *Runtime,
-        function: i64,
-        receiver: *const Value,
-        depth: i64,
-    ) callconv(.c) i32 {
+    fn run(context: ?*anyopaque, runtime: *Runtime, function: i64, receiver: *const Value, depth: i64, floor: i64) callconv(.c) i32 {
+        _ = floor;
         const self: *ClassFinalizerProbe = @ptrCast(@alignCast(context.?));
         self.calls += 1;
         self.function = function;

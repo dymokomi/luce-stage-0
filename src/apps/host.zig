@@ -1464,11 +1464,15 @@ pub const Host = struct {
         self.trap_length = kept;
         // The depth trap names the policy: the runtime knows only that
         // the budget ran out, and the host is the party that set it.
+        // The budget is a pair — frames and bytes — and either half can
+        // be the one that ran out (a fat-framed recursion exhausts the
+        // stack long before the counter), so the sentence names both
+        // rather than claiming a count that was never reached.
         if (self.trap_code == .call_depth_exceeded) {
             const said = std.fmt.bufPrint(
                 &self.trap_storage,
-                "call depth exceeded (this host allows {d} frames)",
-                .{call_depth},
+                "call depth exceeded (this host allows {d} frames within {d} MiB of stack)",
+                .{ call_depth, abi.stack_reserve_bytes >> 20 },
             ) catch self.trap_storage[0..self.trap_length];
             self.trap_length = said.len;
         }
