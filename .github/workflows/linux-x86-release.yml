@@ -29,7 +29,7 @@ jobs:
             -C "$RUNNER_TEMP/luce-prefix" .
 
       - name: Upload the verified prefix
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           path: ${{ runner.temp }}/luce-linux-x86_64-prefix-${{ github.sha }}.tar.gz
           archive: false
